@@ -252,7 +252,7 @@ describe('CompatModelClient request observability', () => {
     expect(traces[1].decoded?.text).toBe('fallback')
   })
 
-  it('records transport errors without changing the model error chunk', async () => {
+  it('records transport errors and reports the unreachable request URL', async () => {
     const recorder = new LlmDebugRecorder()
     const client = new CompatModelClient({
       baseUrl: 'https://provider.example/v1',
@@ -271,7 +271,8 @@ describe('CompatModelClient request observability', () => {
     expect(trace.error).toBe('socket unavailable')
     expect(chunks).toContainEqual(expect.objectContaining({
       kind: 'error',
-      message: 'model request failed: socket unavailable',
+      message:
+        'model provider did not return a response from https://provider.example/v1/chat/completions: socket unavailable',
       failure: { category: 'network', failoverAllowed: true }
     }))
   })

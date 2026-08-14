@@ -26,6 +26,7 @@ import { createEmptyDesignSystem } from '../../../../design/canvas/design-system
 import { useDesignWorkspaceStore } from '../../../../design/design-workspace-store'
 import {
   boundsForShapeIds,
+  canvasViewportShowsContent,
   mergeLoadedCanvasDocumentWithLiveChanges,
   readStoredCanvasViewport,
   resolveCanvasSelectionAfterDocumentSync,
@@ -166,33 +167,42 @@ export function useCanvasViewportDocumentSync({
       const liveDocument = currentShapeState.documentKey === documentKey
         ? currentShapeState.document
         : initialDocument
+      const authoritativeDocument = loaded ?? createEmptyDocument()
       let doc = mergeLoadedCanvasDocumentWithLiveChanges(
-        loaded ?? createEmptyDocument(),
+        authoritativeDocument,
         liveDocument,
         initialDocument
       )
+      const liveChangesMerged = doc !== authoritativeDocument
       let addedFrameIds: string[] = []
+      let artifactFramesChanged = false
       if (htmlFrameSyncEnabled && persistenceEnabled) {
         const synced = syncDesignArtifactsToBoardDocument(doc, useDesignWorkspaceStore.getState().artifacts)
         doc = synced.document
         addedFrameIds = synced.addedFrameIds
-        if (
-          persistSync &&
-          (synced.addedFrameIds.length > 0 || synced.updatedFrameIds.length > 0 || synced.removedFrameIds.length > 0)
-        ) {
-          persistCanvasDocument(workspaceRoot, artifactId, doc, baseDir)
-        }
+        artifactFramesChanged =
+          synced.addedFrameIds.length > 0 ||
+          synced.updatedFrameIds.length > 0 ||
+          synced.removedFrameIds.length > 0
+      }
+      // Loading suppresses the normal shape-store persistence subscriber. If
+      // a tool or replay edited the temporary board while the authoritative
+      // read was pending, save the safely merged document now that the read
+      // has resolved; otherwise those visible edits disappear on restart.
+      if (persistenceEnabled && persistSync && (liveChangesMerged || artifactFramesChanged)) {
+        persistCanvasDocument(workspaceRoot, artifactId, doc, baseDir)
       }
       applyingDocumentLoad = true
       useCanvasShapeStore.getState().loadDocument(doc, documentKey, { preserveUndo: true })
       applyingDocumentLoad = false
+      const contentBounds = getCanvasDocumentContentBounds(doc)
       const storedView = readStoredCanvasViewport(viewportStorageKey)
-      if (storedView) {
+      if (storedView && (!contentBounds || canvasViewportShowsContent(storedView, contentBounds))) {
         useCanvasViewportStore.getState().setVbox(storedView)
       } else if (addedFrameIds.length > 0) {
         viewFrame = focusBoundsToFitLater(boundsForShapeIds(doc, addedFrameIds), isCancelled)
-      } else if (loaded) {
-        viewFrame = focusBoundsToFitLater(getCanvasDocumentContentBounds(doc), isCancelled)
+      } else if (loaded || contentBounds) {
+        viewFrame = focusBoundsToFitLater(contentBounds, isCancelled)
       }
     }
 

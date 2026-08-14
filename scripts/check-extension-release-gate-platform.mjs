@@ -47,13 +47,13 @@ for (const sourceRoot of implementationRoots) {
   }
 }
 
-const runtimeFactory = await text('kun/src/server/runtime-factory.ts')
+const runtimeInfoSource = await text('kun/src/server/runtime-composition-runtime.ts')
 check(
-  /extensions\s*:\s*\{[\s\S]{0,240}?enabled\s*:\s*true/.test(runtimeFactory),
+  /extensions\s*:\s*\{[\s\S]{0,240}?enabled\s*:\s*true/.test(runtimeInfoSource),
   'Kun runtime info does not expose the Extension Platform as unconditionally enabled'
 )
 check(
-  runtimeFactory.includes('SUPPORTED_EXTENSION_API_VERSIONS'),
+  runtimeInfoSource.includes('SUPPORTED_EXTENSION_API_VERSIONS'),
   'Kun runtime does not derive reported Extension API versions from the canonical SDK contract'
 )
 const serveEntry = await text('kun/src/cli/serve-entry.ts')
@@ -74,7 +74,8 @@ check(
 )
 const stageRouter = await text('src/renderer/src/components/workbench/WorkbenchStageRouter.tsx')
 check(
-  stageRouter.includes("route === 'extensions'") && stageRouter.includes('ExtensionManagementCenter'),
+  stageRouter.includes("normalizedRoute === 'extensions'") &&
+    stageRouter.includes('ExtensionManagementCenter'),
   'The public Extension management route is absent from the workbench'
 )
 
@@ -230,7 +231,13 @@ if (api) {
   }
 }
 
-const mediaProtocolSource = await text('src/main/extensions/extension-media-protocol.ts')
+const mediaProtocolSource = (await Promise.all([
+  'src/main/extensions/extension-media-protocol.ts',
+  'src/main/extensions/extension-media-protocol-registry.ts',
+  'src/main/extensions/extension-media-protocol-types.ts',
+  'src/main/extensions/extension-media-protocol-utils.ts',
+  'src/main/extensions/extension-view-sessions.ts'
+].map(text))).join('\n')
 const mediaProtocolTests = await text('src/main/extensions/extension-media-protocol.test.ts')
 for (const marker of [
   "scheme: KUN_MEDIA_SCHEME",
@@ -249,7 +256,11 @@ for (const marker of [
 ]) {
   check(mediaProtocolTests.includes(marker), `kun-media protocol tests omit security case: ${marker}`)
 }
-const mediaProcessSource = await text('kun/src/services/extension-media-process-service.ts')
+const mediaProcessSource = (await Promise.all([
+  'kun/src/services/extension-media-process-service.ts',
+  'kun/src/services/extension-media-process-service-core.ts',
+  'kun/src/services/extension-media-process-service-process-discovery.ts'
+].map(text))).join('\n')
 const mediaProcessTests = await text('kun/src/services/extension-media-process-service.test.ts')
 for (const marker of ['shell: false', "detached: process.platform !== 'win32'", 'terminateSpawnTree(child)']) {
   check(mediaProcessSource.includes(marker), `Native media process supervision omits marker: ${marker}`)
@@ -305,7 +316,12 @@ check(
     managementCenter.includes('Those systems remain separate'),
   'Extension management no longer tells users that UI appearance packs, MCP, and Skills remain separate'
 )
-const routeIndex = await text('kun/src/server/routes/index.ts')
+const routeIndex = (await Promise.all([
+  'kun/src/server/routes/index.ts',
+  'kun/src/server/routes/register-core-routes.ts',
+  'kun/src/server/routes/register-resource-routes.ts',
+  'kun/src/server/routes/register-thread-routes.ts'
+].map(text))).join('\n')
 for (const route of [
   "'/v1/mcp/oauth'",
   "'/v1/skills'",
@@ -317,8 +333,12 @@ for (const route of [
 ]) {
   check(routeIndex.includes(route), `Legacy Kun runtime route disappeared: ${route}`)
 }
+const runtimeCompositionSource = (await Promise.all([
+  'kun/src/server/runtime-composition-services.ts',
+  'kun/src/server/runtime-composition-runtime.ts'
+].map(text))).join('\n')
 for (const marker of ['mcpProviders.providers', 'buildSkillToolProviders(skillRuntime)', 'mcpServers:', 'skills:']) {
-  check(runtimeFactory.includes(marker), `Legacy Kun runtime composition disappeared: ${marker}`)
+  check(runtimeCompositionSource.includes(marker), `Legacy Kun runtime composition disappeared: ${marker}`)
 }
 const extensionBackendSources = await Promise.all(
   (await collectSourceFiles(join(root, 'kun/src/extensions'))).map(async (path) => [path, await readFile(path, 'utf8')])

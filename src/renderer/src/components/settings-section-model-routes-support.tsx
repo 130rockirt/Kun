@@ -2,7 +2,14 @@ import type { ModelRoutePoolV1 } from '@shared/app-settings'
 import type { KunRuntimeSettingsSyncStatusPayload } from '@shared/kun-gui-api'
 import type { TFunction } from 'i18next'
 import { Check, Clipboard, Code2, X } from 'lucide-react'
-import { useCallback, useEffect, useState, type DragEvent, type KeyboardEvent, type ReactElement } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { Toggle } from './settings-controls'
 import type {
@@ -35,7 +42,7 @@ export function LocalGatewayApiDialog({
   const [tab, setTab] = useState<GatewayApiTab>('chat')
   useEffect(() => {
     if (typeof globalThis.addEventListener !== 'function') return
-    const closeOnEscape = (event: KeyboardEvent): void => {
+    const closeOnEscape = (event: globalThis.KeyboardEvent): void => {
       if (event.key === 'Escape') onClose()
     }
     globalThis.addEventListener('keydown', closeOnEscape)
@@ -217,7 +224,7 @@ export function useValidatedTextDraft({
   onChange: (value: string) => void
   onFocus: () => void
   onBlur: () => void
-  onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void
+  onKeyDown: (event: ReactKeyboardEvent<HTMLInputElement>) => void
 } {
   const [draft, setDraft] = useState(value)
   const [error, setError] = useState('')

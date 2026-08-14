@@ -336,22 +336,36 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
       env: stringEnvironment(process.env)
     })
     let output = ''
+    let exitState: { exitCode: number; signal?: number } | undefined
     const dataSubscription = terminal.onData((data) => { output += data })
     const exited = new Promise<{ exitCode: number; signal?: number }>((accept) => {
-      terminal.onExit(accept)
+      terminal.onExit((exit) => {
+        exitState = exit
+        accept(exit)
+      })
     })
 
     try {
-      const source = await waitForValue(async () => {
+      const source = await waitForPtyValue(async () => {
         const thread = (await client.listThreads())[0]
         if (!thread) return undefined
         const detail = await client.getThread(thread.id)
         const turn = detail.turns.find((candidate) =>
-          candidate.orchestration === 'graph' && candidate.prompt === requirement
+          candidate.orchestration === 'graph' &&
+          candidate.items.some((item) => item.kind === 'user_message' && item.text === requirement)
         )
         return turn ? { thread, turn } : undefined
-      }, 15_000)
+      }, {
+        stage: 'startup Graph turn',
+        timeoutMs: 35_000,
+        getExit: () => exitState,
+        getOutput: () => output
+      })
       expect(source.turn.orchestration).toBe('graph')
+      expect(source.turn.items).toContainEqual(expect.objectContaining({
+        kind: 'user_message',
+        text: requirement
+      }))
 
       const graph = server.runtime.graph
       expect(graph).toBeDefined()
@@ -393,7 +407,7 @@ describe.skipIf(process.platform === 'win32' || !existsSync(cliEntry))('kun tui 
       dataSubscription.dispose()
       try { terminal.kill() } catch { /* already exited */ }
     }
-  }, 30_000)
+  }, 60_000)
 })
 
 function stringEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {

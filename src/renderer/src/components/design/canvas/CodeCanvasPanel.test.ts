@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   CodeCanvasPanel,
+  codeCanvasPanelDesignHostClass,
   codeCanvasPanelShellClass,
   codeCanvasPanelTitlebarClass,
   resolveCodeCanvasDesignSurface,
@@ -39,6 +40,17 @@ describe('CodeCanvasPanel', () => {
     expect(codeCanvasPanelTitlebarClass()).toContain('backdrop-blur-2xl')
     expect(html).toContain('data-code-canvas-titlebar="true"')
     expect(html).not.toContain('border-b border-ds-border-muted bg-white/92')
+  })
+
+  it('gives the direct Design whiteboard a flex sizing context', () => {
+    const classes = codeCanvasPanelDesignHostClass().split(' ')
+
+    expect(classes).toEqual(expect.arrayContaining([
+      'flex',
+      'flex-1',
+      'min-h-0',
+      'overflow-hidden'
+    ]))
   })
 
   it('uses the bound Design document while the cached surface hydrates', () => {

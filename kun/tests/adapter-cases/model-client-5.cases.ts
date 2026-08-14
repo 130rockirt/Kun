@@ -250,7 +250,9 @@ it('adds a proxy hint when a proxied model request fails before receiving a resp
 
     expect(chunks[0]).toMatchObject({
       kind: 'error',
-      message: 'model request failed: connect ETIMEDOUT. Check the configured model-request proxy in Settings > Providers.'
+      message:
+        'model provider did not return a response from https://api.deepseek.com/v1/chat/completions: connect ETIMEDOUT. ' +
+        'Check the configured model-request proxy in Settings > Providers.'
     })
   })
 
@@ -618,8 +620,22 @@ it('uses exponential backoff when Retry-After is absent', async () => {
 
       expect(fetchImpl).toHaveBeenCalledTimes(3)
       expect(chunks.filter((chunk) => chunk.kind === 'retrying')).toEqual([
-        { kind: 'retrying', status: 429, attempt: 1, maxAttempts: 2, delayMs: 3000 },
-        { kind: 'retrying', status: 429, attempt: 2, maxAttempts: 2, delayMs: 6000 }
+        {
+          kind: 'retrying',
+          status: 429,
+          attempt: 1,
+          maxAttempts: 2,
+          delayMs: 3000,
+          failureSummary: 'rate limited'
+        },
+        {
+          kind: 'retrying',
+          status: 429,
+          attempt: 2,
+          maxAttempts: 2,
+          delayMs: 6000,
+          failureSummary: 'rate limited'
+        }
       ])
       expect(chunks.some((chunk) => chunk.kind === 'assistant_text_delta')).toBe(true)
     } finally {

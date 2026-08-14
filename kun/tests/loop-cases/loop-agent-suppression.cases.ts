@@ -7,7 +7,7 @@ import { LocalToolHost, buildDefaultLocalTools } from '../../src/adapters/tool/l
 import { CapabilityRegistry } from '../../src/adapters/tool/capability-registry.js'
 import { buildBrowserUseToolProviders } from '../../src/adapters/tool/browser-use-tool-provider.js'
 import { CREATE_PLAN_TOOL_NAME } from '../../src/adapters/tool/create-plan-tool.js'
-import { GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME } from '../../src/adapters/tool/goal-tools.js'
+import { UPDATE_GOAL_TOOL_NAME } from '../../src/adapters/tool/goal-tools.js'
 import { FileThreadStore, FileSessionStore } from '../../src/adapters/file/index.js'
 import { RuntimeEventRecorder } from '../../src/services/runtime-event-recorder.js'
 import { ContextCompactor } from '../../src/loop/context-compactor.js'
@@ -161,7 +161,7 @@ describe('AgentLoop', () => {
     expect(JSON.stringify(items)).not.toContain('action":"invalid')
   })
 
-  it('lets a suppressed tool loop recover by using a different tool', async () => {
+  it('allows ordinary retries before the model uses a different tool', async () => {
     const requests: ModelRequest[] = []
     let echoExecutions = 0
     let alternateExecutions = 0
@@ -227,18 +227,19 @@ describe('AgentLoop', () => {
 
     await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
 
-    expect(echoExecutions).toBe(2)
+    expect(echoExecutions).toBe(3)
     expect(alternateExecutions).toBe(1)
     expect(requests[3]?.tools.map((tool) => tool.name)).toContain('alternate_lookup')
-    expect(modelRequestContextText(requests[3]!)).toContain('Tool-loop recovery:')
+    expect(modelRequestContextText(requests[3]!)).not.toContain('Tool-loop recovery:')
     expect(modelRequestContextText(requests[4]!)).not.toContain('Tool-loop recovery:')
     expect((await h.turns.getTurn(h.threadId, h.turnId))?.status).toBe('completed')
     expect(h.inflight.size()).toBe(0)
   })
 
-  it('does not reopen tools after an active-goal suppression final answer', async () => {
+  it('keeps ordinary tools available after repeated calls during an active goal', async () => {
     const requests: ModelRequest[] = []
     let executions = 0
+    let h: ReturnType<typeof makeHarness>
     const scheduleGoalResume = vi.fn(() => ({ cancel: vi.fn() }))
     const echoTool = LocalToolHost.defineTool({
       name: 'echo',
@@ -254,8 +255,21 @@ describe('AgentLoop', () => {
         return { output: { ok: executions } }
       }
     })
+    const updateGoalTool = LocalToolHost.defineTool({
+      name: UPDATE_GOAL_TOOL_NAME,
+      description: 'Update goal',
+      inputSchema: {
+        type: 'object',
+        properties: { status: { type: 'string', enum: ['complete'] } },
+        required: ['status']
+      },
+      policy: 'auto',
+      execute: async (_args, context) => ({
+        output: { goal: await h.threads.setGoal(context.threadId, { status: 'complete' }) }
+      })
+    })
     let calls = 0
-    const h = makeHarness(
+    h = makeHarness(
       {
         provider: 'storm-final-answer-model',
         model: 'storm-final-answer-model',
@@ -272,15 +286,25 @@ describe('AgentLoop', () => {
             yield { kind: 'completed', stopReason: 'tool_calls' }
             return
           }
+          if (calls === 5) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_complete_goal',
+              toolName: UPDATE_GOAL_TOOL_NAME,
+              arguments: { status: 'complete' }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
           yield {
             kind: 'assistant_text_delta',
-            text: 'The first two calls completed; the repeated calls were not executed.'
+            text: 'All four repeated echo calls completed successfully.'
           }
           yield { kind: 'completed', stopReason: 'stop' }
         }
       },
       {
-        tools: [echoTool],
+        tools: [echoTool, updateGoalTool],
         goalResume: { setTimer: scheduleGoalResume }
       }
     )
@@ -292,157 +316,24 @@ describe('AgentLoop', () => {
 
     await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
 
-    expect(executions).toBe(2)
-    expect(calls).toBe(5)
-    expect(requests[3]?.tools).toHaveLength(1)
-    expect(requests[4]?.tools).toHaveLength(0)
+    expect(executions).toBe(4)
+    expect(calls).toBe(6)
+    expect(requests[3]?.tools.map((tool) => tool.name)).toContain('echo')
+    expect(requests[4]?.tools.map((tool) => tool.name)).toContain('echo')
     expect(modelRequestContextText(requests[4]!))
-      .toContain('Tool-loop final-answer recovery:')
+      .not.toContain('Tool-loop final-answer recovery:')
     const items = await h.sessionStore.loadItems(h.threadId)
     expect(items).toContainEqual(expect.objectContaining({
       kind: 'assistant_text',
-      text: 'The first two calls completed; the repeated calls were not executed.'
+      text: 'All four repeated echo calls completed successfully.'
     }))
     expect((await h.turns.getTurn(h.threadId, h.turnId))?.status).toBe('completed')
-    expect((await h.threads.getGoal(h.threadId))?.status).toBe('active')
+    expect((await h.threads.getGoal(h.threadId))?.status).toBe('complete')
     expect(scheduleGoalResume).not.toHaveBeenCalled()
     expect(h.inflight.size()).toBe(0)
   })
 
-  it('fails and releases the turn when suppression recovery still has no answer', async () => {
-    const requests: ModelRequest[] = []
-    let executions = 0
-    const echoTool = LocalToolHost.defineTool({
-      name: 'echo',
-      description: 'Echo text',
-      inputSchema: {
-        type: 'object',
-        properties: { text: { type: 'string' } },
-        required: ['text']
-      },
-      policy: 'auto',
-      execute: async () => {
-        executions += 1
-        return { output: { ok: executions } }
-      }
-    })
-    let calls = 0
-    const h = makeHarness(
-      {
-        provider: 'storm-empty-recovery-model',
-        model: 'storm-empty-recovery-model',
-        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
-          requests.push(request)
-          calls += 1
-          if (calls <= 4) {
-            yield {
-              kind: 'tool_call_complete',
-              callId: `call_echo_${calls}`,
-              toolName: 'echo',
-              arguments: { text: 'repeat me' }
-            }
-            yield { kind: 'completed', stopReason: 'tool_calls' }
-            return
-          }
-          yield { kind: 'completed', stopReason: 'stop' }
-        }
-      },
-      { tools: [echoTool] }
-    )
-    await bootstrapThread(h)
-
-    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('failed')
-
-    expect(executions).toBe(2)
-    expect(requests[4]?.tools).toHaveLength(0)
-    const turn = await h.turns.getTurn(h.threadId, h.turnId)
-    const thread = await h.threadStore.get(h.threadId)
-    const items = await h.sessionStore.loadItems(h.threadId)
-    const terminalEvents = (await h.sessionStore.loadEventsSince(h.threadId, 0)).filter(
-      (event) =>
-        event.kind === 'turn_completed' ||
-        event.kind === 'turn_failed' ||
-        event.kind === 'turn_aborted'
-    )
-    expect(turn).toMatchObject({ status: 'failed', error: expect.stringContaining('final answer') })
-    expect(thread?.status).toBe('idle')
-    expect(h.inflight.size()).toBe(0)
-    expect(items).toContainEqual(expect.objectContaining({
-      kind: 'error',
-      code: 'tool_loop_suppressed'
-    }))
-    expect(items.some((item) => item.kind === 'assistant_text' && item.text.trim())).toBe(false)
-    expect(terminalEvents).toEqual([
-      expect.objectContaining({ kind: 'turn_failed', code: 'tool_loop_suppressed' })
-    ])
-  })
-
-  it('does not complete silently when the budget blocks suppression recovery', async () => {
-    let executions = 0
-    let modelCalls = 0
-    const echoTool = LocalToolHost.defineTool({
-      name: 'echo',
-      description: 'Echo text',
-      inputSchema: {
-        type: 'object',
-        properties: { text: { type: 'string' } },
-        required: ['text']
-      },
-      policy: 'auto',
-      execute: async () => {
-        executions += 1
-        return { output: { ok: executions } }
-      }
-    })
-    const h = makeHarness(
-      {
-        provider: 'storm-budget-model',
-        model: 'storm-budget-model',
-        async *stream(): AsyncIterable<ModelStreamChunk> {
-          modelCalls += 1
-          yield {
-            kind: 'tool_call_complete',
-            callId: `call_echo_${modelCalls}`,
-            toolName: 'echo',
-            arguments: { text: 'repeat me' }
-          }
-          if (modelCalls === 3) {
-            yield {
-              kind: 'usage',
-              usage: {
-                promptTokens: 1,
-                completionTokens: 1,
-                totalTokens: 2,
-                cacheHitRate: null,
-                turns: 1,
-                costUsd: 1
-              }
-            }
-          }
-          yield { kind: 'completed', stopReason: 'tool_calls' }
-        }
-      },
-      { tools: [echoTool] }
-    )
-    await bootstrapThread(h)
-    const thread = await h.threadStore.get(h.threadId)
-    await h.threadStore.upsert({ ...thread!, costBudgetUsd: 1 })
-
-    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('failed')
-
-    expect(modelCalls).toBe(3)
-    expect(executions).toBe(2)
-    expect((await h.turns.getTurn(h.threadId, h.turnId))).toMatchObject({
-      status: 'failed',
-      error: expect.stringContaining('final answer')
-    })
-    expect((await h.sessionStore.loadEventsSince(h.threadId, 0))).toContainEqual(
-      expect.objectContaining({ kind: 'turn_failed', code: 'tool_loop_suppressed' })
-    )
-    expect(h.inflight.size()).toBe(0)
-  })
-
-  it('suppresses the third identical Graph run inspection within a turn', async () => {
+  it('allows repeated identical Graph run inspections within a turn', async () => {
     let executions = 0
     const inspectTool = LocalToolHost.defineTool({
       name: 'graph_control_run',
@@ -497,16 +388,10 @@ describe('AgentLoop', () => {
     )
 
     expect(status).toBe('completed')
-    expect(executions).toBe(2)
-    expect(thirdCall).toMatchObject({ kind: 'tool_call', status: 'failed' })
-    expect(stormResult?.kind === 'tool_result' ? stormResult.isError : false).toBe(true)
-    expect(stormResult?.kind === 'tool_result' ? JSON.stringify(stormResult.output) : '')
-      .toContain('repeat-loop guard suppressed')
-    expect(events.find((event) => event.kind === 'tool_storm_suppressed')).toMatchObject({
-      kind: 'tool_storm_suppressed',
-      callId: 'call_graph_inspect_3',
-      toolName: 'graph_control_run'
-    })
+    expect(executions).toBe(3)
+    expect(thirdCall).toMatchObject({ kind: 'tool_call', status: 'completed' })
+    expect(stormResult?.kind === 'tool_result' ? stormResult.isError : true).toBe(false)
+    expect(events.some((event) => event.kind === 'tool_storm_suppressed')).toBe(false)
   })
 
 	  it('can disable the storm breaker through loop config', async () => {

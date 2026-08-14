@@ -3,114 +3,25 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { FileThreadStore } from '../adapters/file/file-thread-store.js'
-import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
-import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
-import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
-import { ContextCompactor } from '../loop/context-compactor.js'
-import { InflightTracker } from '../loop/inflight-tracker.js'
-import { SteeringQueue } from '../loop/steering-queue.js'
-import { SequentialIdGenerator } from '../ports/id-generator.js'
 import { createThreadRecord } from '../domain/thread.js'
 import { createTurnRecord } from '../domain/turn.js'
 import { makeUserItem } from '../domain/item.js'
-import {
-  DesignTaskProfileInputSchema,
-  type DesignDocumentTarget,
-  type DesignTaskProfileInput
-} from '../contracts/design-task-profile.js'
+import { DesignTaskProfileInputSchema } from '../contracts/design-task-profile.js'
 import { StartTurnRequest } from '../contracts/turns.js'
-import { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import {
   DesignProfileLockedError,
   TaskSurfaceLockedError,
-  TurnService
 } from './turn-service.js'
+import { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import { ThreadService } from './thread-service.js'
-
-const nowIso = () => '2026-08-12T12:00:00.000Z'
-
-function target(suffix = 'source'): DesignDocumentTarget {
-  return { documentId: `doc_${suffix}`, boardArtifactId: `board_${suffix}` }
-}
-
-function profile(
-  documentTarget: DesignDocumentTarget = target(),
-  outputMedium: 'html' | 'image' = 'html'
-): DesignTaskProfileInput {
-  return {
-    version: 1,
-    documentTarget,
-    outputMedium,
-    target: 'web',
-    preset: 'ios',
-    presetSource: 'explicit',
-    context: {
-      designType: 'product',
-      brandColor: '#2563eb',
-      tone: ['professional'],
-      radius: 'rounded',
-      density: 'cozy',
-      fontStyle: 'system'
-    }
-  }
-}
-
-function harness(sessionStore = new InMemorySessionStore()) {
-  const threadStore = new InMemoryThreadStore()
-  const eventBus = new InMemoryEventBus()
-  const ids = new SequentialIdGenerator()
-  const events = new RuntimeEventRecorder({
-    eventBus,
-    sessionStore,
-    allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
-    nowIso
-  })
-  const turns = new TurnService({
-    threadStore,
-    sessionStore,
-    events,
-    inflight: new InflightTracker(),
-    steering: new SteeringQueue(),
-    compactor: new ContextCompactor(),
-    ids,
-    nowIso
-  })
-  const threads = new ThreadService({ threadStore, sessionStore, events, ids, nowIso })
-  return { threadStore, sessionStore, eventBus, ids, turns, threads }
-}
-
-class FailFirstAppendStore extends InMemorySessionStore {
-  private fails = true
-
-  override async appendItem(...args: Parameters<InMemorySessionStore['appendItem']>): Promise<void> {
-    if (this.fails) {
-      this.fails = false
-      throw new Error('first append failed')
-    }
-    await super.appendItem(...args)
-  }
-}
-
-class ControlledFailureSessionStore extends InMemorySessionStore {
-  failNextEvent = false
-  failNextSessionSnapshot = false
-
-  override async appendEvent(...args: Parameters<InMemorySessionStore['appendEvent']>): Promise<void> {
-    if (this.failNextEvent) {
-      this.failNextEvent = false
-      throw new Error('injected event failure')
-    }
-    await super.appendEvent(...args)
-  }
-
-  override async upsertSession(...args: Parameters<InMemorySessionStore['upsertSession']>): Promise<void> {
-    if (this.failNextSessionSnapshot) {
-      this.failNextSessionSnapshot = false
-      throw new Error('injected session snapshot failure')
-    }
-    await super.upsertSession(...args)
-  }
-}
+import {
+  ControlledFailureSessionStore,
+  FailFirstAppendStore,
+  harness,
+  nowIso,
+  profile,
+  target
+} from './design-task-profile.test-helpers.js'
 
 describe('Design task profile contracts', () => {
   it('accepts missing legacy metadata and rejects malformed new profiles', () => {

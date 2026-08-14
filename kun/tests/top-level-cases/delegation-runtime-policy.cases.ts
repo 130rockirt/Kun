@@ -159,16 +159,14 @@ describe('DelegationRuntime', () => {
         description: 'Workspace-specific API contract review',
         toolPolicy: 'inherit'
       }),
-      expect.objectContaining({
-        id: 'workspace-only',
-        name: 'Workspace Only',
-        toolPolicy: 'readOnly'
-      }),
       expect.objectContaining({ id: 'design-only' })
     ]))
     expect(discoveredOutput.profiles).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'primary' }),
-      expect.objectContaining({ id: 'code-only' })
+      expect.objectContaining({ id: 'code-only' }),
+      // Workspace-only profiles default to Code unless they explicitly
+      // declare another surface in frontmatter.
+      expect.objectContaining({ id: 'workspace-only' })
     ]))
     expect(JSON.stringify(discovered.item.output)).not.toContain('Workspace-only role body.')
 

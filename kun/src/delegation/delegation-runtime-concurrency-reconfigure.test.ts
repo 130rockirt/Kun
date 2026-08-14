@@ -107,7 +107,10 @@ describe('DelegationRuntime live concurrency reconfiguration', () => {
     const signal = new AbortController().signal
     const runs = ['1', '2', '3'].map((prompt) => run(runtime, prompt, signal))
     await waitFor(() => started.length === 1)
-    expect(started).toEqual(['1'])
+    // Admission is capped at one here; concurrent callers may reach the
+    // shared slot in any order before a FIFO waiter exists.
+    expect(started).toHaveLength(1)
+    expect(['1', '2', '3']).toContain(started[0])
 
     runtime.setMemoryPressureParallelLimit(undefined)
     await waitFor(() => started.length === 3)

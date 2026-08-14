@@ -7,7 +7,6 @@ import {
   useImageGenerationProgressStore
 } from '../../../design/canvas/canvas-image-generation-progress'
 import { requestCodeCanvasPanelFocus } from '../../../lib/code-canvas-panel-event'
-import { zoomCanvasToContent } from '../../../design/canvas/canvas-focus'
 import { CanvasViewport } from './CanvasViewport'
 import { PropertiesPanel } from './PropertiesPanel'
 import {
@@ -34,7 +33,10 @@ import {
 import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
 import { normalizeDesignWorkspaceRoot } from '../../../design/design-workspace-lifecycle'
 import { displayDrawingTitle } from '../../../design/design-drawing-title'
-import { findDesignBoardArtifact } from '../../../design/design-board'
+import {
+  findDesignBoardArtifact,
+  findDesignBoardArtifactById
+} from '../../../design/design-board'
 import {
   cloneDesignDocumentForFork,
   type PreparedDesignDocumentFork
@@ -78,6 +80,10 @@ export function codeCanvasPanelShellClass(className?: string): string {
 
 export function codeCanvasPanelTitlebarClass(): string {
   return 'pointer-events-auto flex h-10 max-w-[calc(100%-72px)] min-w-0 items-center gap-1.5 rounded-full border border-ds-border bg-white/82 px-1.5 shadow-[0_16px_42px_rgba(20,47,95,0.13)] backdrop-blur-2xl dark:bg-ds-card/84 dark:shadow-none'
+}
+
+export function codeCanvasPanelDesignHostClass(): string {
+  return 'relative flex min-h-0 flex-1 overflow-hidden'
 }
 
 export function resolveCodeCanvasDesignSurface(options: {
@@ -286,17 +292,29 @@ export function CodeCanvasPanel({
     undefined,
     'code'
   )
-  useCanvasImageGenerationProgress(Boolean(activeDesignSurface), {
-    onRetry: (prompt) => {
-      if (prompt.trim()) onRequestImageRegenerate?.(prompt.trim())
-    },
-    onFirstSuccess: () => zoomCanvasToContent(48)
-  })
-  const failedGenerations = failedImageGenerationEntries()
-
   const designDoc = activeDesignSurface
     ? designDocuments.find((document) => document.id === activeDesignSurface.documentId) ?? null
     : null
+  const designBoardArtifact = activeDesignSurface && designDoc
+    ? activeDesignSurface.boardArtifactId
+      ? findDesignBoardArtifactById(designDoc.artifacts, activeDesignSurface.boardArtifactId)
+      : findDesignBoardArtifact(designDoc.artifacts)
+    : null
+  const expectedDesignCanvasDocumentKey = designDoc && designBoardArtifact
+    ? canvasDocumentKey(
+        workspaceRoot,
+        designBoardArtifact.id,
+        `.kun-design/${designDoc.id}`
+      )
+    : undefined
+  useCanvasImageGenerationProgress(Boolean(activeDesignSurface && expectedDesignCanvasDocumentKey), {
+    expectedCanvasDocumentKey: expectedDesignCanvasDocumentKey,
+    onRetry: (prompt) => {
+      if (prompt.trim()) onRequestImageRegenerate?.(prompt.trim())
+    }
+  })
+  const failedGenerations = failedImageGenerationEntries()
+
   const designDocTitle = designDoc ? displayDrawingTitle(designDoc, t('designUntitledDrawing')) : ''
   const returnToCanonicalDocument = useCallback(() => {
     if (!activeDesignSurface?.canonicalDocumentId || !activeThreadId) return
@@ -413,7 +431,7 @@ export function CodeCanvasPanel({
           </div>
         </div>
 
-        <div className="relative min-h-0 flex-1 overflow-hidden">
+        <div className={codeCanvasPanelDesignHostClass()}>
           {designDoc ? (
             <DesignDocumentCanvasSurface
               workspaceRoot={workspaceRoot}

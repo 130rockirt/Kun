@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultKunRuntimeSettings, normalizeAppSettings } from '@shared/app-settings'
+import type { AppSettingsV1 } from '@shared/app-settings'
 import { useChatStore } from '../store/chat-store'
 import type { ChatState } from '../store/chat-store-types'
 import { createGuiPlanArtifact, useGuiPlanStore } from '../plan/plan-store'
@@ -144,7 +145,7 @@ describe('workbench plan build orchestration', () => {
       kunGui.getSettings = vi.fn(async () => normalizeAppSettings({
         version: 1,
         agents: { kun: defaultKunRuntimeSettings() }
-      }))
+      } as AppSettingsV1))
     }
     let controller: ReturnType<typeof useWorkbenchPlanController> | null = null
     const setComposerMode = options.setComposerMode ?? vi.fn()
@@ -236,7 +237,7 @@ describe('workbench plan build orchestration', () => {
       }
     })
     useChatStore.setState({ composerOrchestration: 'direct' })
-    const sendMessage = vi.fn(async () => true)
+    const sendMessage = vi.fn<ChatState['sendMessage']>(async () => true)
     const controller = controllerHarness({ sendMessage })
 
     await act(async () => {

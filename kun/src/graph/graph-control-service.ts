@@ -514,12 +514,6 @@ export class GraphControlService {
         ]
       : resources
     for (const [index, input] of cleanupInputs.entries()) {
-      const alreadyRecorded = run.cleanup.some((entry) =>
-        entry.resourceKind === input.resourceKind &&
-        entry.resourceId === input.resourceId &&
-        entry.state === input.state
-      )
-      if (alreadyRecorded) continue
       const cleanup: GraphCleanupRecordV1 = {
         version: GRAPH_CONTRACT_VERSION,
         id: this.nextId('graph_cleanup'),
@@ -528,13 +522,25 @@ export class GraphControlService {
         retryCount: 0,
         updatedAt: this.nowIso()
       }
-      run = (await this.options.store.append(run.id, {
-        expectedSeq: run.lastEventSeq,
-        graphRevision: run.currentRevision,
-        commandId: `${command.commandId}_${index}`,
-        idempotencyKey: `${command.idempotencyKey}:${input.resourceKind}:${input.resourceId}`,
-        event: { type: 'cleanup_updated', payload: { cleanup } }
-      })).state
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        if (run.cleanup.some((entry) =>
+          entry.resourceKind === input.resourceKind &&
+          entry.resourceId === input.resourceId &&
+          entry.state === input.state)) break
+        try {
+          run = (await this.options.store.append(run.id, {
+            expectedSeq: run.lastEventSeq,
+            graphRevision: run.currentRevision,
+            commandId: `${command.commandId}_${index}`,
+            idempotencyKey: `${command.idempotencyKey}:${input.resourceKind}:${input.resourceId}`,
+            event: { type: 'cleanup_updated', payload: { cleanup } }
+          })).state
+          break
+        } catch (error) {
+          if (!(error instanceof GraphRunConflictError) || attempt === 7) throw error
+          run = await this.get(run.id)
+        }
+      }
     }
     return run
   }

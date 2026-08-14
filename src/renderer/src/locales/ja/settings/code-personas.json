@@ -1,0 +1,12 @@
+{
+  "codeAgentPresets": "ペルソナ",
+  "codeAgentPresetsDesc": "Code エージェントで再利用できる作業スタイルです。選択したペルソナは各メッセージとともに送信され、口調と作業方法だけを導きます。ツールの付与や権限の変更は行いません。",
+  "codeAgentPresetNamePlaceholder": "ペルソナ名",
+  "codeAgentPersonaPlaceholder": "このペルソナを選択したとき、エージェントはどのように振る舞うべきですか？",
+  "codeAgentPresetRemove": "ペルソナを削除",
+  "codeAgentPresetAdd": "ペルソナを追加",
+  "codeAgentIconPickerTitle": "アイコンを選択",
+  "codeAgentIconSearchPlaceholder": "アイコンを検索…",
+  "codeAgentIconPickerEmpty": "一致するアイコンはありません",
+  "codeAgentIconPickerMore": "{{total}} 件中 {{shown}} 件を表示 — 入力を続けて絞り込んでください"
+}

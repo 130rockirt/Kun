@@ -104,6 +104,59 @@ describe('GraphControlService', () => {
     ]))
   })
 
+  it('retries cleanup persistence when a concurrent write advances cancellation', async () => {
+    const { control: creator, store } = await fixture()
+    await creator.create({
+      runId: 'run_cleanup_race',
+      threadId: 'thread_1',
+      projectId: 'project_1',
+      sourceTurnId: 'turn_1',
+      plan: testGraphPlan(),
+      commandId: 'create_cleanup_race',
+      idempotencyKey: 'create_cleanup_race',
+      start: true
+    })
+    const control = new GraphControlService({
+      store,
+      config: () => testGraphConfig(),
+      cleanupResources: async (run) => {
+        const latest = (await store.get(run.id))!
+        await store.append(run.id, {
+          expectedSeq: latest.lastEventSeq,
+          graphRevision: latest.currentRevision,
+          commandId: 'concurrent_cleanup_race',
+          idempotencyKey: 'concurrent_cleanup_race',
+          event: {
+            type: 'cleanup_updated',
+            payload: {
+              cleanup: {
+                version: GRAPH_CONTRACT_VERSION,
+                id: 'graph_cleanup_concurrent',
+                runId: run.id,
+                resourceKind: 'worker',
+                resourceId: 'concurrent-worker',
+                state: 'orphaned',
+                retryCount: 0,
+                updatedAt: TEST_GRAPH_NOW
+              }
+            }
+          }
+        })
+        return []
+      }
+    })
+
+    await expect(control.cancel('run_cleanup_race', {
+      commandId: 'cancel_cleanup_race',
+      idempotencyKey: 'cancel_cleanup_race'
+    })).resolves.toMatchObject({ status: 'cancelled' })
+    const cancelled = (await store.get('run_cleanup_race'))!
+    expect(cancelled.cleanup).toEqual(expect.arrayContaining([
+      expect.objectContaining({ resourceKind: 'worker', state: 'orphaned' }),
+      expect.objectContaining({ resourceKind: 'journal', state: 'completed' })
+    ]))
+  })
+
   it('durably upgrades an in-flight pause to cancellation without allowing downgrade', async () => {
     const { control: creator, store } = await fixture()
     await creator.create({

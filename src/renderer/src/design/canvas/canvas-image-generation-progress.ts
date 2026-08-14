@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { requestCodeCanvasPanelOpen } from '../../lib/code-canvas-panel-event'
+import { focusViewportOnIds } from './canvas-focus'
 import { useCanvasShapeStore } from './canvas-shape-store'
 import { createDefaultShape } from './canvas-types'
 
@@ -104,7 +105,9 @@ function createPlaceholderShape(toolCallId: string): string {
   const placed = Object.values(store.document.objects).find(
     (candidate) => candidate.name === placeholderName(toolCallId, false)
   )
-  return placed?.id ?? shape.id
+  const placedId = placed?.id ?? shape.id
+  focusViewportOnIds([placedId])
+  return placedId
 }
 
 function markPlaceholderFailed(shapeId: string, toolCallId: string): void {
@@ -250,30 +253,46 @@ export const useImageGenerationProgressStore = create<ImageGenerationProgressSta
 export function useCanvasImageGenerationProgress(
   enabled: boolean,
   callbacks?: {
+    expectedCanvasDocumentKey?: string
     onRetry?: (prompt: string) => void
     onFirstSuccess?: () => void
   }
 ): void {
   const callbacksRef = useRef(callbacks)
   callbacksRef.current = callbacks
+  const expectedCanvasDocumentKey = callbacks?.expectedCanvasDocumentKey
   useEffect(() => {
     if (!enabled) return
-    useImageGenerationProgressStore.setState({
-      entries: imageGenerationEntriesFromShapes()
-    })
+    const canvasDocumentReady = (): boolean => (
+      !expectedCanvasDocumentKey ||
+      useCanvasShapeStore.getState().documentKey === expectedCanvasDocumentKey
+    )
     const apply = (): void => {
+      if (!canvasDocumentReady()) return
       const result = reconcileImageGenerationProgress(useChatStore.getState().blocks)
       useImageGenerationProgressStore.getState().replaceEntries(result.entries)
       if (result.opened) requestCodeCanvasPanelOpen()
       if (result.succeeded) callbacksRef.current?.onFirstSuccess?.()
     }
-    apply()
-    const unsubscribe = useChatStore.subscribe(apply)
+    const seedAndApply = (): void => {
+      if (!canvasDocumentReady()) return
+      useImageGenerationProgressStore.setState({
+        entries: imageGenerationEntriesFromShapes()
+      })
+      apply()
+    }
+    seedAndApply()
+    const unsubscribeChat = useChatStore.subscribe(apply)
+    const unsubscribeCanvas = useCanvasShapeStore.subscribe((state, previous) => {
+      if (state.documentLoadRevision === previous.documentLoadRevision) return
+      seedAndApply()
+    })
     return () => {
-      unsubscribe()
+      unsubscribeChat()
+      unsubscribeCanvas()
       useImageGenerationProgressStore.setState({ entries: {} })
     }
-  }, [enabled])
+  }, [enabled, expectedCanvasDocumentKey])
 }
 
 /** Failed placeholder entries for a host-rendered retry chip. */

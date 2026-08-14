@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { useChatStore } from '../../store/chat-store'
+import type { ChatState } from '../../store/chat-store-types'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
 import { KnowledgeBasePicker } from './KnowledgeBasePicker'
 
@@ -23,18 +24,18 @@ function setReactActEnvironment(value: boolean): void {
 describe('KnowledgeBasePicker interactions', () => {
   let container: HTMLDivElement
   let root: Root
-  let setError: ReturnType<typeof vi.fn>
-  let setMounts: ReturnType<typeof vi.fn>
-  let openWrite: ReturnType<typeof vi.fn>
+  let setError: ReturnType<typeof vi.fn<ChatState['setError']>>
+  let setMounts: ReturnType<typeof vi.fn<ChatState['setThreadKnowledgeBases']>>
+  let openWrite: ReturnType<typeof vi.fn<ChatState['openWrite']>>
 
   beforeEach(() => {
     setReactActEnvironment(true)
     container = document.createElement('div')
     document.body.append(container)
     root = createRoot(container)
-    setError = vi.fn()
-    setMounts = vi.fn(async () => true)
-    openWrite = vi.fn(async () => undefined)
+    setError = vi.fn<ChatState['setError']>()
+    setMounts = vi.fn<ChatState['setThreadKnowledgeBases']>(async () => true)
+    openWrite = vi.fn<ChatState['openWrite']>(async () => undefined)
     useChatStore.setState({
       activeThreadId: 'thr_1',
       threads: [{

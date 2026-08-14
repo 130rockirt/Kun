@@ -1,0 +1,12 @@
+{
+  "codeAgentPresets": "पर्सोना",
+  "codeAgentPresetsDesc": "Code एजेंट के लिए दोबारा उपयोग किए जा सकने वाले कार्य-रुख। चुना हुआ पर्सोना हर संदेश के साथ भेजा जाता है और केवल लहजे व कार्य शैली को निर्देशित करता है — यह टूल या अनुमतियाँ नहीं देता।",
+  "codeAgentPresetNamePlaceholder": "पर्सोना नाम",
+  "codeAgentPersonaPlaceholder": "यह पर्सोना चुने जाने पर एजेंट को कैसा व्यवहार करना चाहिए?",
+  "codeAgentPresetRemove": "पर्सोना हटाएँ",
+  "codeAgentPresetAdd": "पर्सोना जोड़ें",
+  "codeAgentIconPickerTitle": "आइकन चुनें",
+  "codeAgentIconSearchPlaceholder": "आइकन खोजें…",
+  "codeAgentIconPickerEmpty": "कोई मिलान वाला आइकन नहीं",
+  "codeAgentIconPickerMore": "{{total}} में से {{shown}} दिखाए जा रहे हैं — खोज सीमित करने के लिए लिखते रहें"
+}

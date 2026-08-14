@@ -496,7 +496,8 @@ describe('provider quota registry and refresh', () => {
     expect(resolveGrokCredential).toHaveBeenNthCalledWith(
       2,
       expect.anything(),
-      'grok-rejected-access'
+      'grok-rejected-access',
+      expect.objectContaining({ fetcher })
     )
     expect(fetcher).toHaveBeenCalledTimes(2)
   })

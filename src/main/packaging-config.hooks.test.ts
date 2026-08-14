@@ -406,7 +406,7 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
     expect(installerScript).not.toContain('Stop-Process -Id')
 
     expect(migrationScript).toContain("'ResolveUpdateScope', 'ResolveUninstaller', 'StopProcesses'")
-    expect(migrationScript).toContain("'CleanupInPlaceLeftovers', 'UpdatePath'")
+    expect(migrationScript).toContain("'CleanupInPlaceLeftovers', 'CleanupJournal', 'UpdatePath'")
     expect(migrationScript).toContain('function Invoke-CleanupInPlaceLeftovers')
     expect(migrationScript).toContain('function Test-RetainedInPlaceKnownEntry')
     expect(migrationScript).toContain("Get-EnvironmentValue 'KUN_INSTALLER_IN_PLACE_UPDATE'")

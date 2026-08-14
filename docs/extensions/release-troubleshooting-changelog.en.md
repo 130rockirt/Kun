@@ -196,7 +196,7 @@ The Changelog records public Extension API, not Kun internal refactors. Each ent
 The public surface snapshots below are computed from package entries, public exports, and reachable `.d.ts` declarations. Update them only after this section explains the compatibility impact; changing a hash is not itself a Changelog entry.
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:257f85cddba6ed5025266aca8f51cd5253867136b4c9c14ae8a4058c731f1149 -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:a7d676f0869a5c40f73bff7b30e567e7c5efa0536b0650b1fd30ee82551d6cf8 -->
 <!-- sdk-surface-snapshot @kun/extension-react@1.2.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
 <!-- sdk-surface-snapshot @kun/extension-test@1.2.0 sha256:fccbdd3fb3400ce179f8d6c3ae1d191bfe3488ef125577423f3d2b3f4fad851d -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
@@ -221,7 +221,7 @@ Added:
 
 Changed:
 
-- `ComposerContextProvenance` adds a Host-generated `workspace-selection` variant for the built-in file preview to attach bounded, path-free document selections as one-turn chat context. Extension request shapes and existing provenance require no migration.
+- `ComposerContextProvenance` and the public `WorkspaceViewComposerContextProvenanceSchema` add a Host-generated `workspace-selection` variant for the built-in file preview to attach bounded, path-free document selections as one-turn chat context. Extension request shapes and existing provenance require no migration.
 - `ModelProviderRequest.generation.toolChoice` now accepts `{ type: 'tool', name }` in addition to `auto` / `none` / `required`, allowing a request to force one declared named tool. The field remains optional, so existing requests need no migration.
 - `ViewContribution.showInRightRail` is an optional boolean that defaults to `true`. A right-sidebar View may set it to `false` to remain available from Extension management or commands without staying in Code's right rail; existing Manifests need no migration.
 - `MediaApi.readText()` raises public `MAX_MEDIA_TEXT_BYTES` from 512 KiB to 2 MiB while retaining strict UTF-8, a caller-tightenable `maxBytes`, opaque handles, and path-free results.

@@ -1,0 +1,12 @@
+{
+  "codeAgentPresets": "페르소나",
+  "codeAgentPresetsDesc": "Code 에이전트에서 재사용할 수 있는 작업 태도입니다. 선택한 페르소나는 각 메시지와 함께 전송되며 말투와 작업 방식만 안내합니다. 도구를 부여하거나 권한을 변경하지 않습니다.",
+  "codeAgentPresetNamePlaceholder": "페르소나 이름",
+  "codeAgentPersonaPlaceholder": "이 페르소나를 선택했을 때 에이전트가 어떻게 행동해야 하나요?",
+  "codeAgentPresetRemove": "페르소나 제거",
+  "codeAgentPresetAdd": "페르소나 추가",
+  "codeAgentIconPickerTitle": "아이콘 선택",
+  "codeAgentIconSearchPlaceholder": "아이콘 검색…",
+  "codeAgentIconPickerEmpty": "일치하는 아이콘이 없습니다",
+  "codeAgentIconPickerMore": "{{total}}개 중 {{shown}}개 표시 — 계속 입력하여 범위를 좁히세요"
+}

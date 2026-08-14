@@ -90,7 +90,7 @@ The following region is calculated by `node scripts/generate-extension-api-refer
 <!-- BEGIN GENERATED SDK EXPORTS -->
 | SDK package | Version | Public entry points | Public exports | Public surface SHA-256 |
 | --- | --- | --- | --- | --- |
-| `@kun/extension-api` | `1.2.0` | `.`<br>`./manifest.schema.json` | 497 | `257f85cddba6ed5025266aca8f51cd5253867136b4c9c14ae8a4058c731f1149` |
+| `@kun/extension-api` | `1.2.0` | `.`<br>`./manifest.schema.json` | 498 | `a7d676f0869a5c40f73bff7b30e567e7c5efa0536b0650b1fd30ee82551d6cf8` |
 | `@kun/extension-react` | `1.2.0` | `.` | 22 | `e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322` |
 | `@kun/extension-test` | `1.2.0` | `.` | 16 | `fccbdd3fb3400ce179f8d6c3ae1d191bfe3488ef125577423f3d2b3f4fad851d` |
 
@@ -102,7 +102,7 @@ The following region is calculated by `node scripts/generate-extension-api-refer
 | `@kun/extension-api` | `client` | `ExtensionHostClient` | — |
 | `@kun/extension-api` | `common` | `ContributionIdSchema`<br>`ExtensionIdentitySchema`<br>`extensionIdOf`<br>`ExtensionIdSchema`<br>`ExtensionNameSchema`<br>`JsonObjectSchema`<br>`JsonValueSchema`<br>`LocalIdSchema`<br>`PageInfoSchema`<br>`PageRequestSchema`<br>`PublisherSchema`<br>`qualifiedContributionId`<br>`RelativePathSchema`<br>`SEMVER_PATTERN`<br>`SemverRangeSchema`<br>`SemverSchema` | `ExtensionIdentity`<br>`JsonObject`<br>`JsonPrimitive`<br>`JsonValue`<br>`PageInfo`<br>`PageRequest` |
 | `@kun/extension-api` | `compatibility` | `ApiNegotiationRequestSchema`<br>`ApiNegotiationResultSchema`<br>`CompatibilityDiagnosticSchema`<br>`CompatibilityDimensionSchema`<br>`CompatibilityReportSchema`<br>`negotiateApiVersion`<br>`supportedApiMajors` | `ApiNegotiationRequest`<br>`ApiNegotiationResult`<br>`CompatibilityDiagnostic`<br>`CompatibilityDimension`<br>`CompatibilityReport` |
-| `@kun/extension-api` | `composer-context` | `ComposerContextAttachmentRequestSchema`<br>`ComposerContextAttachmentSchema`<br>`ComposerContextProvenanceSchema`<br>`ComposerContextReferenceSchema`<br>`DevPreviewComposerContextProvenanceSchema`<br>`ExtensionComposerContextProvenanceSchema`<br>`MAX_COMPOSER_CONTEXT_ATTACHMENTS`<br>`MAX_COMPOSER_CONTEXT_REFERENCE_BYTES` | `ComposerContextAttachment`<br>`ComposerContextAttachmentRequest`<br>`ComposerContextProvenance` |
+| `@kun/extension-api` | `composer-context` | `ComposerContextAttachmentRequestSchema`<br>`ComposerContextAttachmentSchema`<br>`ComposerContextProvenanceSchema`<br>`ComposerContextReferenceSchema`<br>`DevPreviewComposerContextProvenanceSchema`<br>`ExtensionComposerContextProvenanceSchema`<br>`MAX_COMPOSER_CONTEXT_ATTACHMENTS`<br>`MAX_COMPOSER_CONTEXT_REFERENCE_BYTES`<br>`WorkspaceViewComposerContextProvenanceSchema` | `ComposerContextAttachment`<br>`ComposerContextAttachmentRequest`<br>`ComposerContextProvenance` |
 | `@kun/extension-api` | `content-scripts` | `HostContentScriptContextSchema`<br>`HostContentScriptDiagnosticSchema` | `HostContentScriptContext`<br>`HostContentScriptDiagnostic`<br>`KunHostContentScriptApi` |
 | `@kun/extension-api` | `errors` | `DiagnosticSchema`<br>`EXTENSION_ERROR_CODES`<br>`ExtensionApiError`<br>`ExtensionErrorCodeSchema`<br>`ExtensionErrorSchema` | `Diagnostic`<br>`ExtensionErrorCode`<br>`ExtensionErrorData` |
 | `@kun/extension-api` | `extension-context` | `createExtensionContext` | `ExtensionContext` |

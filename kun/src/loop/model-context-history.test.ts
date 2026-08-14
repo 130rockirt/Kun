@@ -112,6 +112,31 @@ describe('append-only model context history', () => {
     expect(first.item.text).toContain('Persona before restart')
   })
 
+  it('advances context after an empty model step leaves no assistant item', () => {
+    const first = resolveModelContextUpdate({
+      ...base,
+      stepIndex: 0,
+      contextBlocks: [{ kind: 'runtime-context', authority: 'runtime', content: 'Initial step' }],
+      history: []
+    })
+    expect(first).not.toBeNull()
+    if (!first) return
+
+    const recovery = resolveModelContextUpdate({
+      ...base,
+      stepIndex: 1,
+      contextBlocks: [{ kind: 'model-recovery', authority: 'runtime', content: 'Recover now' }],
+      history: [first.item]
+    })
+
+    expect(recovery?.existing).toBe(false)
+    expect(recovery?.item.stepIndex).toBe(1)
+    expect(recovery?.item.text).toContain('Recover now')
+    expect(recovery?.item.text).toContain(
+      'kind="runtime-context" authority="runtime" state="inactive"'
+    )
+  })
+
   it('carries unchanged block state across user turns without duplicating content', () => {
     const first = resolveModelContextUpdate({
       threadId: base.threadId,

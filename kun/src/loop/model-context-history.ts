@@ -45,13 +45,14 @@ export function resolveModelContextUpdate(input: {
       : []
   )
   const latest = contexts.at(-1)
-  if (latest && !input.history.slice(latest.index + 1).some(
+  if (latest && input.stepIndex <= latest.item.stepIndex && !input.history.slice(latest.index + 1).some(
     (item) => item.turnId === input.turnId && item.kind !== 'model_context'
   )) {
     // The host persists a capsule immediately before dispatch. If nothing for
     // this turn follows it, a crash may have happened before the request was
     // accepted; replay those exact bytes rather than regenerating volatile
-    // context. Once model/tool history follows, the capsule is already spent.
+    // context. A higher caller step index proves the loop advanced even when
+    // an empty model response left no assistant item after the capsule.
     return { item: latest.item, existing: true }
   }
   const stepIndex = Math.max(

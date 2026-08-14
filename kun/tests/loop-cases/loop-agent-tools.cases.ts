@@ -481,7 +481,7 @@ describe('AgentLoop', () => {
     })
   })
 
-	  it('suppresses repeated identical tool calls within a turn', async () => {
+	  it('allows repeated identical ordinary tool calls within a turn', async () => {
 	    let executions = 0
     const echoTool = LocalToolHost.defineTool({
       name: 'echo',
@@ -533,15 +533,9 @@ describe('AgentLoop', () => {
     )
 
     expect(status).toBe('completed')
-    expect(executions).toBe(2)
-    expect(thirdCall).toMatchObject({ kind: 'tool_call', status: 'failed' })
-	    expect(stormResult?.kind === 'tool_result' ? stormResult.isError : false).toBe(true)
-	    expect(stormResult?.kind === 'tool_result' ? JSON.stringify(stormResult.output) : '')
-	      .toContain('repeat-loop guard suppressed')
-	    expect(events.find((event) => event.kind === 'tool_storm_suppressed')).toMatchObject({
-	      kind: 'tool_storm_suppressed',
-	      callId: 'call_echo_3',
-	      toolName: 'echo'
-	    })
+	    expect(executions).toBe(3)
+	    expect(thirdCall).toMatchObject({ kind: 'tool_call', status: 'completed' })
+	    expect(stormResult?.kind === 'tool_result' ? stormResult.isError : true).toBe(false)
+	    expect(events.some((event) => event.kind === 'tool_storm_suppressed')).toBe(false)
 	  })
 })

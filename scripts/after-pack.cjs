@@ -111,6 +111,16 @@ const BETTER_SQLITE_BUILD_PATHS = [
   'build/Release/obj.target',
   'build/Release/test_extension.node'
 ]
+const KUN_ROOT_HOISTED_DEPENDENCY_PATHS = [
+  '@computer-use',
+  '@napi-rs',
+  'quickjs-wasi'
+]
+const KUN_ROOT_HOISTED_VERSION_ANCHORS = [
+  '@computer-use/nut-js',
+  '@napi-rs/canvas',
+  'quickjs-wasi'
+]
 const REQUIRED_BUNDLED_EXTENSION_IDS = [
   'kun-examples.presentation-studio',
   'kun-examples.social-media-sidebar'
@@ -262,10 +272,39 @@ function prunePackedTesseractResources(context) {
   console.log('[after-pack] Kept only Node LSTM Tesseract cores and the configured English model.')
 }
 
+function prunePackedHoistedKunDependencies(context) {
+  const root = unpackedAppRoot(context)
+  const modules = join(root, 'node_modules')
+  const kunModules = join(root, 'kun', 'node_modules')
+  for (const packageName of KUN_ROOT_HOISTED_VERSION_ANCHORS) {
+    const relativeManifest = join(...packageName.split('/'), 'package.json')
+    const rootManifest = join(modules, relativeManifest)
+    const duplicateManifest = join(kunModules, relativeManifest)
+    assertExists(rootManifest, `root-hoisted package manifest ${packageName}`)
+    assertExists(duplicateManifest, `duplicate Kun package manifest ${packageName}`)
+    const rootVersion = JSON.parse(readFileSync(rootManifest, 'utf8')).version
+    const duplicateVersion = JSON.parse(readFileSync(duplicateManifest, 'utf8')).version
+    if (!rootVersion || rootVersion !== duplicateVersion) {
+      throw new Error(
+        `[after-pack] Cannot hoist ${packageName}: root=${rootVersion}, Kun=${duplicateVersion}`
+      )
+    }
+  }
+  for (const relativePath of KUN_ROOT_HOISTED_DEPENDENCY_PATHS) {
+    const rootDependency = join(modules, relativePath)
+    const duplicate = join(kunModules, relativePath)
+    assertExists(rootDependency, `root-hoisted runtime dependency ${relativePath}`)
+    if (!existsSync(duplicate)) continue
+    rmSync(duplicate, { recursive: true, force: true })
+    console.log(`[after-pack] Removed root-hoisted Kun dependency duplicate: ${relativePath}`)
+  }
+}
+
 function prunePackedApplicationPayload(context) {
   prunePackedClaudeCodeBinary(context)
   prunePackedBetterSqliteBuildFiles(context)
   prunePackedTesseractResources(context)
+  prunePackedHoistedKunDependencies(context)
 }
 
 function assertMissing(path, label) {
@@ -326,6 +365,10 @@ function validatePackedApplicationPayload(context) {
     join(modules, '@tesseract.js-data', 'eng', '4.0.0_best_int'),
     'unused Tesseract 4.0.0_best_int model'
   )
+  for (const relativePath of KUN_ROOT_HOISTED_DEPENDENCY_PATHS) {
+    assertExists(join(modules, relativePath), `root-hoisted runtime dependency ${relativePath}`)
+    assertMissing(join(kunModules, relativePath), `duplicate Kun dependency ${relativePath}`)
+  }
 }
 
 function validateBundledKunRuntime(context) {
@@ -603,6 +646,7 @@ exports._internals = {
   prunePackedClaudeCodeBinary,
   prunePackedBetterSqliteBuildFiles,
   prunePackedTesseractResources,
+  prunePackedHoistedKunDependencies,
   prunePackedApplicationPayload,
   validatePackedApplicationPayload,
   validateBundledKunRuntime,
@@ -620,6 +664,8 @@ exports._internals = {
   linuxRealExecutableName,
   TESSERACT_NODE_LSTM_ALIASES,
   TESSERACT_LSTM_CORE_FILES,
-  BETTER_SQLITE_BUILD_PATHS
+  BETTER_SQLITE_BUILD_PATHS,
+  KUN_ROOT_HOISTED_DEPENDENCY_PATHS,
+  KUN_ROOT_HOISTED_VERSION_ANCHORS
 }
 exports.default = afterPack

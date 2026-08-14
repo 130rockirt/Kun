@@ -8,6 +8,7 @@ import {
 } from '../../../../design/canvas/canvas-types'
 import { canvasDocumentKey } from '../../../../design/canvas/canvas-persistence'
 import { useCanvasShapeStore } from '../../../../design/canvas/canvas-shape-store'
+import { useCanvasViewportStore } from '../../../../design/canvas/canvas-viewport-store'
 import type { DesignArtifact } from '../../../../design/design-types'
 import { useDesignWorkspaceStore } from '../../../../design/design-workspace-store'
 
@@ -98,6 +99,49 @@ describe('loadCanvasDocumentWithinDeadline', () => {
     await act(async () => renderer.unmount())
   })
 
+  it('fits loaded content instead of restoring a saved camera that makes the board blank', async () => {
+    const document = createEmptyDocument()
+    const image = createDefaultShape('image', -300, -300)
+    image.width = 600
+    image.height = 600
+    document.objects[image.id] = { ...image, parentId: document.rootId }
+    document.objects[document.rootId]!.children.push(image.id)
+    persistence.loadCanvasDocument.mockResolvedValue(document)
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: vi.fn(() => JSON.stringify({ x: 402, y: 631, width: 805, height: 1_222 })),
+        setItem: vi.fn()
+      }
+    })
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+      callback(0)
+      return 1
+    }))
+    useCanvasViewportStore.setState({
+      containerWidth: 800,
+      containerHeight: 600,
+      vbox: { x: -400, y: -300, width: 800, height: 600 }
+    })
+    const Harness = () => {
+      useCanvasViewportDocumentSync({
+        workspaceRoot: '/workspace', artifactId: 'board', viewportStorageKey: 'view',
+        documentKey: 'visible-board', htmlFrameSyncEnabled: false,
+        designArtifacts: [], persistenceEnabled: false
+      })
+      return null
+    }
+    let renderer!: ReactTestRenderer
+    await act(async () => { renderer = create(createElement(Harness)) })
+    await act(async () => { await Promise.resolve() })
+
+    const view = useCanvasViewportStore.getState().vbox
+    expect(view.x).toBeLessThanOrEqual(-300)
+    expect(view.y).toBeLessThanOrEqual(-300)
+    expect(view.x + view.width).toBeGreaterThanOrEqual(300)
+    expect(view.y + view.height).toBeGreaterThanOrEqual(300)
+    await act(async () => renderer.unmount())
+  })
+
   it('does not certify a rejected read as safe for approval actions', async () => {
     persistence.loadCanvasDocument.mockRejectedValue(new Error('read failed'))
     const onDocumentLoadStateChange = vi.fn()
@@ -166,7 +210,7 @@ describe('loadCanvasDocumentWithinDeadline', () => {
     await act(async () => renderer.unmount())
   })
 
-  it('does not persist shape edits before the authoritative read lands', async () => {
+  it('defers shape persistence until the late authoritative read can be merged safely', async () => {
     vi.useFakeTimers()
     let resolveRead!: (document: CanvasDocument | null) => void
     persistence.loadCanvasDocument.mockImplementation(
@@ -185,14 +229,17 @@ describe('loadCanvasDocumentWithinDeadline', () => {
     await act(async () => { renderer = create(createElement(Harness)) })
     await act(async () => { await vi.advanceTimersByTimeAsync(4_100) })
 
-    await act(async () => {
-      useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), documentKey)
-    })
+    const liveShape = createDefaultShape('rect', 24, 36)
+    liveShape.id = 'live-before-authoritative-read'
+    await act(async () => { useCanvasShapeStore.getState().addShape(liveShape) })
     expect(persistence.persistCanvasDocument).not.toHaveBeenCalled()
     await act(async () => {
       resolveRead(createEmptyDocument())
       await Promise.resolve()
+      await Promise.resolve()
     })
+    expect(persistence.persistCanvasDocument).toHaveBeenCalledTimes(1)
+    expect(persistence.persistCanvasDocument.mock.calls[0]?.[2].objects[liveShape.id]).toBeTruthy()
     await act(async () => renderer.unmount())
   })
 

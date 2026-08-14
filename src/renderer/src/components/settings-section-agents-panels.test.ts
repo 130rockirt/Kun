@@ -158,7 +158,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       'Computer control',
       'Browser',
       'Graph mode',
-      'Isolated worktree',
+      'Prompt-managed worktree',
       'Fast Context',
       'PPT agent'
     ])
@@ -185,7 +185,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       .toEqual([false, true, true, true, true, true, true])
   })
 
-  it('defaults isolated plan builds off and persists opt-in from Laboratory', () => {
+  it('defaults prompt-managed plan builds off and persists opt-in from Laboratory', () => {
     const updateKun = vi.fn()
     let renderer!: ReactTestRenderer
     act(() => {
@@ -199,7 +199,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     })
     const toggle = panel.findByProps({
       role: 'switch',
-      'aria-label': 'Enable isolated plan builds'
+      'aria-label': 'Enable prompt-managed plan worktrees'
     })
     expect(toggle.props['aria-checked']).toBe(false)
 

@@ -242,6 +242,9 @@ describe("PiTuiApplication shared provider authentication", () => {
   it('shows the complete shared GUI catalog and submits a masked Grok callback result', async () => {
     const current = detail()
     const initial = modelSnapshot()
+    const catalog = providerCatalogEntries()
+    const subscriptionCount = catalog.filter((entry) => entry.authType !== 'api-key').length
+    const apiCount = catalog.filter((entry) => entry.authType === 'api-key').length
     const grokProfile = {
       id: 'grok-subscription',
       accountId: 'account:grok-subscription',
@@ -317,8 +320,8 @@ describe("PiTuiApplication shared provider authentication", () => {
       await waitFor(() => sanitizeTerminalText(outputText).includes('KUN / Connect'))
       input.emit('data', '\r')
       await waitFor(() =>
-        outputText.includes('17 subscriptions') &&
-        outputText.includes('10 APIs') &&
+        outputText.includes(`${subscriptionCount} subscriptions`) &&
+        outputText.includes(`${apiCount} APIs`) &&
         outputText.includes('Google Antigravity 订阅') &&
         outputText.includes('Cursor 订阅')
       )

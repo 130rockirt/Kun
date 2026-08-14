@@ -12,6 +12,7 @@ const LEGACY_DRAFT_PLAN_INTRO = 'DeepSeek GUI is asking you to draft a GUI-owned
 const LEGACY_REFINE_PLAN_INTRO = 'DeepSeek GUI is asking you to revise an existing GUI-owned implementation plan.'
 const BUILD_PLAN_INTRO = 'Please execute the GUI plan described in the structured context below.'
 const BUILD_GRAPH_PLAN_INTRO = 'Execute the GUI plan described in the structured context below using Graph orchestration.'
+const LEGACY_BUILD_PLAN_INTRO = 'Please read and execute the GUI plan file at'
 const DRAFT_PLAN_DISPLAY_PREFIX = 'Create plan:'
 const REFINE_PLAN_DISPLAY_PREFIX = 'Revise plan:'
 const BUILD_PLAN_DISPLAY_PREFIX = 'Build plan:'
@@ -197,6 +198,7 @@ export function getGuiPlanPromptKind(text: string): GuiPlanPromptKind | null {
   if (
     normalized.includes(BUILD_PLAN_INTRO) ||
     normalized.includes(BUILD_GRAPH_PLAN_INTRO) ||
+    normalized.includes(LEGACY_BUILD_PLAN_INTRO) ||
     normalized.startsWith(BUILD_PLAN_DISPLAY_PREFIX) ||
     normalized === 'Build GUI plan'
   ) {
@@ -217,7 +219,8 @@ export function formatGuiPlanPromptForDisplay(text: string): string | null {
   }
   if (
     normalized.includes(BUILD_PLAN_INTRO) ||
-    normalized.includes(BUILD_GRAPH_PLAN_INTRO)
+    normalized.includes(BUILD_GRAPH_PLAN_INTRO) ||
+    normalized.includes(LEGACY_BUILD_PLAN_INTRO)
   ) {
     const encodedContext = readSectionBetween(
       normalized,

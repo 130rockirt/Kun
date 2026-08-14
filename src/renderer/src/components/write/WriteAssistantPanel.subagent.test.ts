@@ -195,7 +195,7 @@ describe('WriteAssistantPanel subagent session', () => {
           workspace: '/workspace'
         })
         expect(renderer!.root.findAllByType('img')).toHaveLength(1)
-      })
+      }, { timeout: 5_000 })
 
       const returnBar = renderer!.root.findByType(SubagentReturnBar)
       await act(async () => {

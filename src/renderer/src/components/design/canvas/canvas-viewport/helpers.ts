@@ -222,6 +222,19 @@ export function writeStoredCanvasViewport(key: string, vbox: ViewBox): void {
   }
 }
 
+/**
+ * A persisted camera is only useful when it still exposes some document
+ * content. Design boards can be rebound while their async document load is in
+ * flight; restoring an older, empty-space camera after that load makes a
+ * healthy whiteboard look completely blank.
+ */
+export function canvasViewportShowsContent(vbox: ViewBox, bounds: Rect): boolean {
+  return (
+    Math.max(vbox.x, bounds.x) < Math.min(vbox.x + vbox.width, bounds.x + bounds.width) &&
+    Math.max(vbox.y, bounds.y) < Math.min(vbox.y + vbox.height, bounds.y + bounds.height)
+  )
+}
+
 export function boundsForShapeIds(doc: CanvasDocument, ids: readonly string[]): Rect | null {
   let minX = Infinity
   let minY = Infinity

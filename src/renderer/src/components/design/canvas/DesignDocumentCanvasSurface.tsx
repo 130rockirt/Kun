@@ -181,7 +181,7 @@ export function DesignDocumentCanvasSurface({
 
   if (!boardArtifact || !documentIsActive) {
     return (
-      <div className="ds-stage-design-canvas relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden bg-ds-main text-sm text-ds-faint">
+      <div className="ds-stage-design-canvas relative flex h-full min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden bg-ds-main text-sm text-ds-faint w-full">
         {lockedBoardMissing
           ? 'The whiteboard bound to this Design task is unavailable.'
           : 'Loading design board...'}
@@ -190,7 +190,7 @@ export function DesignDocumentCanvasSurface({
   }
 
   return (
-    <div className="ds-stage-design-canvas relative min-h-0 min-w-0 flex-1 overflow-hidden bg-ds-main">
+    <div className="ds-stage-design-canvas relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-ds-main w-full">
       <CanvasViewport
         workspaceRoot={workspaceRoot}
         artifactId={boardArtifact.id}

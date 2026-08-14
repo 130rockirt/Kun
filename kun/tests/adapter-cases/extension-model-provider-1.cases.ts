@@ -181,7 +181,7 @@ it('normalizes full Kun requests and validates ordered provider streams', async 
 
     expect(captured).toMatchObject({
       binding: { providerId: h.provider.id, accountId: h.account.id, modelId: 'custom-model' },
-      instructions: ['Kun stable system prompt', 'Extension profile overlay'],
+      instructions: ['Kun stable system prompt'],
       tools: [{ name: 'read' }],
       generation: { reasoningEffort: 'high' }
     })
@@ -189,7 +189,13 @@ it('normalizes full Kun requests and validates ordered provider streams', async 
       expect.objectContaining({ role: 'user', content: expect.arrayContaining([
         { type: 'text', text: 'Hello custom provider' },
         { type: 'image', mimeType: 'image/png', data: 'aGVsbG8=' }
-      ]) })
+      ]) }),
+      // Request-level context stays chronological so it cannot destabilize
+      // the provider's cacheable instruction prefix.
+      expect.objectContaining({
+        role: 'user',
+        content: [{ type: 'text', text: 'Extension profile overlay' }]
+      })
     ]))
     expect(chunks).toEqual([
       { kind: 'assistant_reasoning_delta', text: 'thinking' },

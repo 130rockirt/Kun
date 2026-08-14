@@ -15,6 +15,7 @@ describe('seedUsageCarryover', () => {
         peak = Math.max(peak, active)
         await new Promise((resolve) => setTimeout(resolve, 5))
         active -= 1
+        yield* []
       }
     } as unknown as SessionStore
     const threadStore = {

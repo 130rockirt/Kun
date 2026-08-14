@@ -102,7 +102,7 @@ describe('restricted development Preview capture', () => {
     ['external guest type', () => harness({ getType: vi.fn(() => 'window') }), (value: ReturnType<typeof harness>) => ({ event: value.event, request: value.request })],
     ['wrong owner', () => harness({ hostWebContents: { id: 99 } }), (value: ReturnType<typeof harness>) => ({ event: value.event, request: value.request })],
     ['wrong partition', () => harness({ session: {} }), (value: ReturnType<typeof harness>) => ({ event: value.event, request: value.request })],
-    ['non-local URL', () => harness({ getURL: vi.fn(() => 'https://example.com/') }), (value: ReturnType<typeof harness>) => ({ event: value.event, request: { ...value.request, url: 'https://example.com/' } })],
+    ['cloud metadata URL', () => harness({ getURL: vi.fn(() => 'http://169.254.169.254/') }), (value: ReturnType<typeof harness>) => ({ event: value.event, request: { ...value.request, url: 'http://169.254.169.254/' } })],
     ['URL race', () => harness({ getURL: vi.fn(() => 'http://localhost:3001/') }), (value: ReturnType<typeof harness>) => ({ event: value.event, request: value.request })],
     ['out of bounds crop', () => harness(), (value: ReturnType<typeof harness>) => ({ event: value.event, request: { ...value.request, rect: { x: 300, y: 800, width: 200, height: 100 } } })]
   ])('rejects %s', async (_label, make, select) => {

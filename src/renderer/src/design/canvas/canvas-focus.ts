@@ -46,7 +46,7 @@ export function focusViewportOnIds(ids: string[]): void {
     bounds.y >= v.y &&
     bounds.x + bounds.width <= v.x + v.width &&
     bounds.y + bounds.height <= v.y + v.height
-  if (!inside) vp.zoomToFit(bounds, 80)
+  if (!inside) vp.zoomToFit(bounds, 80, { maxZoom: 1, minZoom: 0.04 })
 }
 
 export function zoomCanvasToContent(padding = 40): boolean {

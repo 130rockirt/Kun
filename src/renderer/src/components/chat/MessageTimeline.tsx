@@ -45,6 +45,7 @@ import {
 } from './message-timeline-jump-preview'
 import { MemoMessageTurn } from './message-timeline-conversation-turn'
 import type { MessageTimelineProps } from './message-timeline-props'
+import { ThreadHydrationLoading } from './ThreadHydrationLoading'
 
 export {
   TimelineJumpPreviewTitle,
@@ -441,15 +442,7 @@ export function MessageTimeline({
         timelineBottomPaddingClass()
       }`}>
         {activeThreadId && threadLoadingId === activeThreadId ? (
-          <div
-            data-testid="thread-hydration-skeleton"
-            aria-busy="true"
-            className="flex flex-col gap-4 py-4"
-          >
-            <div className="h-5 w-32 animate-pulse rounded bg-ds-border/60" />
-            <div className="h-20 w-4/5 animate-pulse rounded-2xl bg-ds-border/40" />
-            <div className="ml-auto h-14 w-3/5 animate-pulse rounded-2xl bg-ds-border/30" />
-          </div>
+          <ThreadHydrationLoading />
         ) : !hasContent || !activeThreadId ? (
           <MessageTimelineEmptyHero
             route={heroRoute}

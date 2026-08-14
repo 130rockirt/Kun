@@ -243,7 +243,9 @@ describe('FileSessionStore', () => {
   it('compacts usage events by retention window while preserving a carryover baseline', async () => {
     const sessionStore = new FileSessionStore({
       dataDir,
-      compactionDelayMs: 0,
+      // Keep background compaction from racing the fixture appends. The
+      // explicit flush below executes the single coalesced rewrite.
+      compactionDelayMs: 60_000,
       usageEventCompaction: {
         maxBytes: 1,
         retentionDays: 365,

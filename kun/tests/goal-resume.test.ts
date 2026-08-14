@@ -172,18 +172,25 @@ describe('goal auto-resume (issue #370)', () => {
   it('does not auto-resume when the goal turn completes normally', async () => {
     const timer = makeCapturingTimer()
     let h: Harness
+    let calls = 0
     h = makeHarness(
       {
         provider: 'goal-done',
         model: 'goal-done',
         async *stream(): AsyncIterable<ModelStreamChunk> {
-          yield {
-            kind: 'tool_call_complete',
-            callId: 'call_done',
-            toolName: UPDATE_GOAL_TOOL_NAME,
-            arguments: { status: 'complete' }
+          calls += 1
+          if (calls === 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_done',
+              toolName: UPDATE_GOAL_TOOL_NAME,
+              arguments: { status: 'complete' }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
           }
-          yield { kind: 'completed', stopReason: 'tool_calls' }
+          yield { kind: 'assistant_text_delta', text: 'Goal completed.' }
+          yield { kind: 'completed', stopReason: 'stop' }
         }
       },
       { tools: [...buildDefaultLocalTools(), ...makeGoalTools(() => h)], goalResume: { setTimer: timer.setTimer } }
