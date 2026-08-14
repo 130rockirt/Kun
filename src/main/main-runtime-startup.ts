@@ -9,7 +9,6 @@ import {
   isKunChildRunning,
   waitForKunStartupSettled
 } from './kun-process'
-import { killStaleKunOnPort } from './kun-process-ports'
 import { clearHistoricalKunServeProcesses } from './runtime/kun-serve-process-cleanup'
 import { managedKunHostCanAutoStart } from './managed-runtime-startup-policy'
 import { logWarn } from './logger'
@@ -143,12 +142,10 @@ export async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSett
 }
 
 /**
- * Startup restart policy: every GUI launch replaces the shared serve with a
- * fresh process built from the current bundle before any client attaches.
- * A serve left behind by a previous app run (older build, stale discovery,
- * or legacy GUI-private process) must never serve the new version. Unlike
- * the ordinary ensure path, this intentionally replaces an active turn — the
- * GUI is the authoritative owner once the app is open.
+ * Startup restart policy: every GUI launch replaces all current-user Kun
+ * serve processes with a fresh process built from the current bundle before
+ * any client attaches. This intentionally replaces active turns because the
+ * GUI is the authoritative owner once the app is opened.
  *
  * Automatic-startup disabled: attach-only, exactly like a plain ensure.
  */
@@ -158,19 +155,7 @@ export async function ensureKunServeFreshOnStartup(
   const requested = runtimeSupervisor.latestOr(settings)
   if (!managedKunHostCanAutoStart(requested)) return requested
   runtimeSupervisor.setManagedRuntimeExpected(true)
-  // A legacy GUI-private serve (or a manual `kun serve`) from a previous app
-  // run can still hold the configured port without shared discovery. Reclaim
-  // it before the replacement launch so the historical process cannot block
-  // or shadow the fresh runtime. Non-Kun listeners are never touched.
-  const runtime = getKunRuntimeSettings(requested)
-  const reclaimed = await killStaleKunOnPort(runtime.port)
-  if (reclaimed) {
-    logWarn(
-      'runtime-start',
-      `reclaimed configured port ${runtime.port} from a stale kun serve before startup`
-    )
-  }
-  await replaceKunServe(requested)
+  await restartAllKunServeProcesses(requested)
   return requested
 }
 
@@ -209,12 +194,13 @@ export async function replaceKunServe(settings: AppSettingsV1): Promise<void> {
 }
 
 /**
- * User-confirmed broad restart. Stop the current discovered owner through the
- * authenticated replacement path, then clear any remaining current-user
- * historical `kun serve` processes before electing one fresh runtime.
+ * Broad restart used by GUI startup and explicit user actions. Stop the
+ * current discovered owner through the authenticated replacement path, then
+ * clear any remaining current-user historical `kun serve` processes before
+ * electing one fresh runtime.
  *
- * This is intentionally separate from updater/startup replacement so those
- * lifecycle paths do not interrupt another flavor or data-directory owner.
+ * Ordinary health recovery remains separate so transient failures do not
+ * interrupt another client or data-directory owner.
  */
 export async function restartAllKunServeProcesses(
   settings: AppSettingsV1

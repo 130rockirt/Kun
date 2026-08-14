@@ -28,12 +28,8 @@ import type { RightPanelMode } from './chat/WorkbenchTopBar'
 import { BUILTIN_RIGHT_PANEL_IDS } from '../extensions/contribution-ids'
 import type { GuiPlanMessageContext, SendMessageOverrides } from '../store/chat-store-types'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
-import {
-  planWorktreeContextKey,
-  planWorktreeHostPlanId,
-  usePlanWorktreeStore
-} from '../plan/plan-worktree-store'
-import { usePlanWorktreePreflight } from '../plan/use-plan-worktree-preflight'
+import { usePlanWorktreePreferenceStore } from '../plan/plan-worktree-preference-store'
+import { usePlanWorktreePreference } from '../plan/use-plan-worktree-preference'
 
 type PlanResultMatch = {
   blockId: string
@@ -64,7 +60,7 @@ type WorkbenchPlanControllerOptions = {
   setComposerMode: ChatState['setComposerMode']
   setRightPanelMode: Dispatch<SetStateAction<RightPanelMode>>
   setRightSidebarWidth: Dispatch<SetStateAction<number>>
-  t: (key: string) => string
+  t: (key: string, options?: Record<string, unknown>) => string
   workspaceRoot: string
   onPlanBuildStarted?: (plan: GuiPlanArtifact) => void | Promise<void>
 }
@@ -180,7 +176,7 @@ export function useWorkbenchPlanController({
 }: WorkbenchPlanControllerOptions) {
   const activeGuiPlan = useGuiPlanStore((s) => s.activePlan)
   const activeThreadId = useChatStore((s) => s.activeThreadId)
-  usePlanWorktreePreflight(activeGuiPlan, activeThreadId)
+  usePlanWorktreePreference(activeGuiPlan)
   const latestPlanBlock = useMemo(() => latestSuccessfulPlanBlock(blocks), [blocks])
   const planTurnInFlightThreadIdRef = useRef<string | null>(null)
   const lastLoadedPlanBlockIdRef = useRef<string | null>(null)
@@ -333,98 +329,54 @@ export function useWorkbenchPlanController({
       setError(t('graphModeDisabledHint'))
       return
     }
-    const isolation = usePlanWorktreeStore.getState().plans[plan.id]
-    const useWorktree = isolation?.featureEnabled === true && isolation.useWorktree === true
-    if (useWorktree) {
-      const contextKey = planWorktreeContextKey({
-        planId: plan.id,
-        workspaceRoot: plan.workspaceRoot,
-        sourceThreadId: chatState.activeThreadId
-      })
-      if (!isolation?.initialized || isolation.preflight.status === 'loading') {
-        setError(t('planWorktreePreflightLoading'))
-        return
-      }
-      if (
-        isolation.preflight.status !== 'ready' ||
-        isolation.preflight.contextKey !== contextKey ||
-        !isolation.preflight.result.eligible
-      ) {
-        const message = isolation.preflight.status === 'ready'
-          ? isolation.preflight.result.message
-          : isolation.preflight.status === 'error'
-            ? isolation.preflight.message
-            : t('planWorktreePreflightRequired')
-        setError(message || t('planWorktreePreflightRequired'))
-        return
-      }
-      if (!chatState.activeThreadId) {
-        setError(t('planWorktreeSourceThreadRequired'))
-        return
-      }
-    }
+    const preference = usePlanWorktreePreferenceStore.getState().plans[plan.id]
+    const usePromptWorktree = orchestration === 'direct' &&
+      preference?.initialized === true &&
+      preference.featureEnabled &&
+      preference.usePromptWorktree
     const saved = await savePlanContentToDisk(plan, snapshot.content)
     if (!saved) return
-    setComposerMode('agent')
-    const prompt = buildPlanBuildPrompt(plan.relativePath, snapshot.content, orchestration)
+
+    let prompt = buildPlanBuildPrompt(plan.relativePath, snapshot.content, orchestration)
     const labelKey = orchestration === 'graph' ? 'planBuildGraph' : 'planBuildDirect'
-    if (useWorktree) {
-      const operationId = usePlanWorktreeStore.getState().beginBuild(plan.id)
-      if (!operationId) {
-        setError(t('planWorktreeBuildAlreadyStarting'))
+    let displayText = `${t(labelKey)}: ${plan.relativePath}`
+    if (usePromptWorktree) {
+      let branchResult: Awaited<ReturnType<typeof window.kunGui.getGitBranches>>
+      try {
+        branchResult = await window.kunGui.getGitBranches(plan.workspaceRoot)
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error))
         return
       }
-      const currentIsolation = usePlanWorktreeStore.getState().plans[plan.id]
-      const result = await useChatStore.getState().startIsolatedPlanBuild({
-        operationId,
-        planId: planWorktreeHostPlanId(plan.id),
-        planRelativePath: plan.relativePath,
-        planTitle: plan.featureName,
-        sourceThreadId: chatState.activeThreadId!,
-        sourceWorkspaceRoot: plan.workspaceRoot,
-        orchestration,
-        prompt,
-        displayText: `${t(labelKey)}: ${plan.relativePath}`,
-        goalObjective: `Implement and validate the authoritative embedded plan "${plan.featureName}" in the isolated plan worktree.`,
-        ...(currentIsolation?.branchPrefix ? { branchPrefix: currentIsolation.branchPrefix } : {})
+      if (!branchResult.ok) {
+        setError(branchResult.message)
+        return
+      }
+      const targetBranch = branchResult.currentBranch?.trim()
+      if (!targetBranch) {
+        setError(t('planWorktreeDetachedHead'))
+        return
+      }
+      if (useChatStore.getState().activeThreadId !== chatState.activeThreadId) {
+        setError(t('planWorktreeTaskChanged'))
+        return
+      }
+      prompt = buildPlanBuildPrompt(plan.relativePath, snapshot.content, orchestration, {
+        repositoryRoot: branchResult.repositoryRoot,
+        targetBranch,
+        branchPrefix: preference.branchPrefix,
+        dirtyCount: branchResult.dirtyCount,
+        planTitle: plan.featureName
       })
-      if (!result.ok) {
-        usePlanWorktreeStore.getState().failBuild(
-          plan.id,
-          operationId,
-          result.message,
-          result.run
-        )
-        // A failed prepare that never attached an execution thread cannot
-        // have admitted the implementation turn. Continue with the exact
-        // embedded plan on the source thread so a broken worktree runtime
-        // does not make plan execution unavailable. Once a thread is bound,
-        // keep failing closed: its admission may have succeeded even if a
-        // response was lost, and a source-workspace retry could duplicate it.
-        if (
-          result.run && !result.run.executionThreadId &&
-          useChatStore.getState().activeThreadId === chatState.activeThreadId
-        ) {
-          usePlanWorktreeStore.getState().setUseWorktree(plan.id, false)
-          const sent = await sendMessage(prompt, 'agent', {
-            displayText: `${t(labelKey)}: ${plan.relativePath}`,
-            orchestration
-          })
-          if (sent) {
-            setError(t('planWorktreeCurrentWorkspaceWarning'))
-            await onPlanBuildStarted?.(plan)
-            return
-          }
-        }
-        setError(result.message)
-        return
-      }
-      usePlanWorktreeStore.getState().finishBuild(plan.id, operationId, result.run)
-      await onPlanBuildStarted?.(plan)
-      return
+      displayText = t('planWorktreeBuildDisplay', {
+        branch: targetBranch,
+        title: plan.featureName
+      })
     }
+
+    setComposerMode('agent')
     const sent = await sendMessage(prompt, 'agent', {
-      displayText: `${t(labelKey)}: ${plan.relativePath}`,
+      displayText,
       orchestration
     })
     if (sent) {

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   defaultKunRuntimeSettings,
-  getKunRuntimeSettings,
   normalizeAppSettings,
   type AppSettingsV1
 } from '../shared/app-settings'
@@ -17,7 +16,6 @@ const harness = vi.hoisted(() => {
   const probeRuntimeApi = vi.fn(async () => ({ ok: true as const }))
   const noteRuntimeHealthy = vi.fn()
   const waitForKunStartupSettled = vi.fn(async () => undefined)
-  const killStaleKunOnPort = vi.fn(async () => false)
   const clearHistoricalKunServeProcesses = vi.fn(async (): Promise<{
     matchedPids: number[]
     terminatedPids: number[]
@@ -44,7 +42,6 @@ const harness = vi.hoisted(() => {
     clearHistoricalKunServeProcesses,
     ensureReplacementRunning,
     ensureRunning,
-    killStaleKunOnPort,
     mainState,
     noteRuntimeHealthy,
     probeRuntimeApi,
@@ -72,9 +69,6 @@ vi.mock('./runtime/kun-adapter', () => ({
 vi.mock('./kun-process', () => ({
   isKunChildRunning: () => false,
   waitForKunStartupSettled: harness.waitForKunStartupSettled
-}))
-vi.mock('./kun-process-ports', () => ({
-  killStaleKunOnPort: harness.killStaleKunOnPort
 }))
 vi.mock('./runtime/kun-serve-process-cleanup', () => ({
   clearHistoricalKunServeProcesses: harness.clearHistoricalKunServeProcesses
@@ -128,8 +122,6 @@ beforeEach(() => {
   harness.probeRuntimeApi.mockClear()
   harness.noteRuntimeHealthy.mockClear()
   harness.waitForKunStartupSettled.mockClear()
-  harness.killStaleKunOnPort.mockReset()
-  harness.killStaleKunOnPort.mockResolvedValue(false)
   harness.clearHistoricalKunServeProcesses.mockReset()
   harness.clearHistoricalKunServeProcesses.mockResolvedValue({
     matchedPids: [],
@@ -220,20 +212,19 @@ describe('startup Kun serve restart', () => {
 
     expect(result).toBe(current)
     expect(harness.runtimeSupervisor.setManagedRuntimeExpected).toHaveBeenCalledWith(true)
-    expect(harness.killStaleKunOnPort).toHaveBeenCalledWith(getKunRuntimeSettings(current).port)
     expect(harness.runtimeSupervisor.replace).toHaveBeenCalledOnce()
+    expect(harness.clearHistoricalKunServeProcesses).toHaveBeenCalledOnce()
     expect(harness.stopSharedForReplacementAndWait).toHaveBeenCalledWith(current)
     expect(harness.ensureReplacementRunning).toHaveBeenCalledWith(current)
     expect(harness.ensureRunning).not.toHaveBeenCalled()
   })
 
-  it('reclaims the configured port from a stale serve before the replacement launch', async () => {
-    harness.killStaleKunOnPort.mockResolvedValue(true)
+  it('clears historical Kun serve processes before the replacement launch', async () => {
     const current = settings()
 
     await ensureKunServeFreshOnStartup(current)
 
-    expect(harness.killStaleKunOnPort).toHaveBeenCalledWith(getKunRuntimeSettings(current).port)
+    expect(harness.clearHistoricalKunServeProcesses).toHaveBeenCalledOnce()
     expect(harness.runtimeSupervisor.replace).toHaveBeenCalledOnce()
   })
 
@@ -247,8 +238,8 @@ describe('startup Kun serve restart', () => {
 
     expect(result).toBe(current)
     expect(harness.runtimeSupervisor.setManagedRuntimeExpected).not.toHaveBeenCalled()
-    expect(harness.killStaleKunOnPort).not.toHaveBeenCalled()
     expect(harness.runtimeSupervisor.replace).not.toHaveBeenCalled()
+    expect(harness.clearHistoricalKunServeProcesses).not.toHaveBeenCalled()
     expect(harness.stopSharedForReplacementAndWait).not.toHaveBeenCalled()
   })
 })

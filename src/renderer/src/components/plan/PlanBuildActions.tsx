@@ -1,13 +1,9 @@
 import { useEffect, useState, type ReactElement } from 'react'
-import { GitBranch, Hammer, Loader2, RefreshCw, Share2, TriangleAlert } from 'lucide-react'
+import { GitBranch, Hammer, Share2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { useGuiPlanStore } from '../../plan/plan-store'
-import {
-  planWorktreeRunIsTerminal,
-  usePlanWorktreeStore
-} from '../../plan/plan-worktree-store'
-import { PlanWorktreeLifecycle } from './PlanWorktreeLifecycle'
+import { usePlanWorktreePreferenceStore } from '../../plan/plan-worktree-preference-store'
 
 type Props = {
   disabled: boolean
@@ -27,29 +23,23 @@ export function PlanBuildActions({
   const { t } = useTranslation('common')
   const activePlanId = useGuiPlanStore((state) => state.activePlan?.id)
   const resolvedPlanId = planId || activePlanId || ''
-  const worktree = usePlanWorktreeStore((state) =>
+  const preference = usePlanWorktreePreferenceStore((state) =>
     resolvedPlanId ? state.plans[resolvedPlanId] : undefined)
-  const setUseWorktree = usePlanWorktreeStore((state) => state.setUseWorktree)
-  const retryPreflight = usePlanWorktreeStore((state) => state.retryPreflight)
-  const [selectedOrchestration, setSelectedOrchestration] = useState<PlanBuildOrchestration>('direct')
+  const setUsePromptWorktree = usePlanWorktreePreferenceStore(
+    (state) => state.setUsePromptWorktree
+  )
+  const [selectedOrchestration, setSelectedOrchestration] =
+    useState<PlanBuildOrchestration>('direct')
+
   useEffect(() => {
     if (!graphEnabled) setSelectedOrchestration('direct')
   }, [graphEnabled])
-  const featureEnabled = worktree?.featureEnabled === true
-  const settingsPending = Boolean(resolvedPlanId && !worktree?.initialized)
-  const isolatedBlocked = Boolean(
-    featureEnabled && worktree?.useWorktree && (
-      worktree.preflight.status !== 'ready' || !worktree.preflight.result.eligible
-    )
-  )
-  const buildDisabled = disabled || settingsPending || Boolean(worktree?.building) || isolatedBlocked || Boolean(
-    worktree?.run && !planWorktreeRunIsTerminal(worktree.run)
-  )
-  const orchestrationDisabled = disabled || Boolean(worktree?.building) || Boolean(
-    worktree?.run && !planWorktreeRunIsTerminal(worktree.run)
-  )
 
-  const worktreeControl = resolvedPlanId && worktree?.initialized && featureEnabled ? (
+  const settingsPending = Boolean(resolvedPlanId && !preference?.initialized)
+  const buildDisabled = disabled || settingsPending
+  const graphSelected = variant === 'card' && selectedOrchestration === 'graph'
+
+  const worktreeControl = resolvedPlanId && preference?.initialized && preference.featureEnabled ? (
     <div
       data-plan-worktree-control
       className={variant === 'card'
@@ -59,16 +49,16 @@ export function PlanBuildActions({
       <button
         type="button"
         role="switch"
-        aria-checked={worktree.useWorktree}
-        aria-label={t('planWorktreeUseIsolated')}
-        onClick={() => setUseWorktree(resolvedPlanId, !worktree.useWorktree)}
-        disabled={worktree.building}
+        aria-checked={preference.usePromptWorktree}
+        aria-label={t('planWorktreeUsePrompt')}
+        onClick={() => setUsePromptWorktree(resolvedPlanId, !preference.usePromptWorktree)}
+        disabled={graphSelected}
         className={`relative h-5 w-9 shrink-0 rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
-          worktree.useWorktree ? 'bg-accent' : 'bg-ds-faint'
-        } disabled:opacity-45`}
+          preference.usePromptWorktree ? 'bg-accent' : 'bg-ds-faint'
+        } disabled:cursor-not-allowed disabled:opacity-45`}
       >
         <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
-          worktree.useWorktree ? 'translate-x-4' : 'translate-x-0'
+          preference.usePromptWorktree ? 'translate-x-4' : 'translate-x-0'
         }`} />
       </button>
       {variant === 'panel' ? (
@@ -76,62 +66,15 @@ export function PlanBuildActions({
       ) : null}
       <div className="min-w-0">
         <div className="text-[12.5px] font-medium text-ds-ink">
-          {t('planWorktreeUseIsolated')}
+          {t('planWorktreeUsePrompt')}
         </div>
-        {worktree.useWorktree ? (
-          worktree.preflight.status === 'loading' ? (
-            <div className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-ds-muted">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              {t('planWorktreeChecking')}
-            </div>
-          ) : worktree.preflight.status === 'ready' && worktree.preflight.result.eligible ? (
-            <div
-              className={`mt-0.5 truncate text-[11px] ${
-                variant === 'card'
-                  ? 'text-ds-muted'
-                  : 'font-mono text-emerald-700 dark:text-emerald-300'
-              }`}
-              title={t('planWorktreeTargetBranch', {
-                branch: worktree.preflight.result.targetBranch ?? '-'
-              })}
-            >
-              {variant === 'card'
-                ? t('planWorktreeSafeHint')
-                : t('planWorktreeTargetBranch', {
-                    branch: worktree.preflight.result.targetBranch ?? '-'
-                  })}
-              {variant === 'panel' && worktree.preflight.result.sourceIsLinkedWorktree
-                ? ` · ${t('planWorktreeLinkedSource')}`
-                : ''}
-            </div>
-          ) : (
-            <div className="mt-0.5 inline-flex min-w-0 items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300">
-              <TriangleAlert className="h-3 w-3 shrink-0" />
-              <span className="truncate">
-                {worktree.preflight.status === 'ready'
-                  ? worktree.preflight.result.message || t('planWorktreeUnavailable')
-                  : worktree.preflight.status === 'error'
-                    ? worktree.preflight.message
-                    : t('planWorktreeChecking')}
-              </span>
-              {worktree.preflight.status === 'error' || worktree.preflight.status === 'ready' ? (
-                <button
-                  type="button"
-                  onClick={() => retryPreflight(resolvedPlanId)}
-                  className="rounded p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-                  aria-label={t('planWorktreeRetryPreflight')}
-                  title={t('planWorktreeRetryPreflight')}
-                >
-                  <RefreshCw className="h-3 w-3" />
-                </button>
-              ) : null}
-            </div>
-          )
-        ) : (
-          <div className="mt-0.5 text-[11px] text-ds-muted">
-            {t('planWorktreeCurrentWorkspaceWarning')}
-          </div>
-        )}
+        <div className={`mt-0.5 text-[11px] ${graphSelected ? 'text-amber-700 dark:text-amber-300' : 'text-ds-muted'}`}>
+          {graphSelected
+            ? t('planWorktreeGraphUnsupported')
+            : preference.usePromptWorktree
+              ? t('planWorktreePromptHint')
+              : t('planWorktreeCurrentWorkspaceWarning')}
+        </div>
       </div>
     </div>
   ) : null
@@ -164,7 +107,7 @@ export function PlanBuildActions({
                 type="button"
                 data-plan-build-orchestration="direct"
                 aria-pressed={selectedOrchestration === 'direct'}
-                disabled={orchestrationDisabled}
+                disabled={disabled}
                 onClick={() => setSelectedOrchestration('direct')}
                 className={modeButtonClass('direct')}
                 title={t('planBuildDirectHint')}
@@ -177,7 +120,7 @@ export function PlanBuildActions({
                   type="button"
                   data-plan-build-orchestration="graph"
                   aria-pressed={selectedOrchestration === 'graph'}
-                  disabled={orchestrationDisabled}
+                  disabled={disabled}
                   onClick={() => setSelectedOrchestration('graph')}
                   className={modeButtonClass('graph')}
                   title={t('planBuildGraphHint')}
@@ -200,7 +143,6 @@ export function PlanBuildActions({
             {t('planBuildStart')}
           </button>
         </div>
-        {resolvedPlanId ? <PlanWorktreeLifecycle planId={resolvedPlanId} compact /> : null}
       </div>
     )
   }
@@ -229,7 +171,7 @@ export function PlanBuildActions({
           <button
             type="button"
             data-plan-build-orchestration="graph"
-            disabled={buildDisabled}
+            disabled={disabled}
             onClick={() => onBuild('graph')}
             className="inline-flex h-9 w-full min-w-0 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 text-[13px] font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-indigo-500 dark:hover:bg-indigo-400"
             aria-label={t('planBuildGraph')}
@@ -240,9 +182,6 @@ export function PlanBuildActions({
           </button>
         ) : null}
       </div>
-      {resolvedPlanId ? (
-        <PlanWorktreeLifecycle planId={resolvedPlanId} compact={false} />
-      ) : null}
     </div>
   )
 }

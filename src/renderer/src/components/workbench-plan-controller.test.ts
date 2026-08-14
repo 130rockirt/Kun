@@ -1,15 +1,15 @@
 import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { defaultKunRuntimeSettings, normalizeAppSettings } from '@shared/app-settings'
 import { useChatStore } from '../store/chat-store'
-import type { ChatState, IsolatedPlanBuildResult } from '../store/chat-store-types'
+import type { ChatState } from '../store/chat-store-types'
 import { createGuiPlanArtifact, useGuiPlanStore } from '../plan/plan-store'
 import {
-  planWorktreeContextKey,
-  resetPlanWorktreeStoreForTests,
-  usePlanWorktreeStore
-} from '../plan/plan-worktree-store'
-import type { PlanWorktreeRunRecord } from '@shared/plan-worktree'
+  resetPlanWorktreePreferenceStoreForTests,
+  usePlanWorktreePreferenceStore
+} from '../plan/plan-worktree-preference-store'
+import { rendererRuntimeClient } from '../agent/runtime-client'
 import {
   buildDraftGuiPlanTurnOverrides,
   buildGuiPlanTurnOverrides,
@@ -98,8 +98,10 @@ describe('workbench plan build orchestration', () => {
   let renderer: ReactTestRenderer | null = null
 
   beforeEach(() => {
-    resetPlanWorktreeStoreForTests()
+    rendererRuntimeClient.invalidateSettings()
+    resetPlanWorktreePreferenceStoreForTests()
     useChatStore.setState({
+      activeThreadId: 'thread-current',
       busy: false,
       runtimeConnection: 'ready',
       graphEnabled: true,
@@ -121,12 +123,13 @@ describe('workbench plan build orchestration', () => {
       operationStatus: 'ready',
       error: null
     })
-    usePlanWorktreeStore.getState().initializePlan(plan.id, false)
+    usePlanWorktreePreferenceStore.getState().initializePlan(plan.id, false, 'codex/')
   })
 
   afterEach(() => {
     act(() => renderer?.unmount())
     renderer = null
+    rendererRuntimeClient.invalidateSettings()
     vi.unstubAllGlobals()
   })
 
@@ -135,6 +138,13 @@ describe('workbench plan build orchestration', () => {
     setComposerMode?: ChatState['setComposerMode']
     setError?: ChatState['setError']
   }): ReturnType<typeof useWorkbenchPlanController> {
+    const kunGui = (window as unknown as { kunGui: Record<string, unknown> }).kunGui
+    if (!kunGui.getSettings) {
+      kunGui.getSettings = vi.fn(async () => normalizeAppSettings({
+        version: 1,
+        agents: { kun: defaultKunRuntimeSettings() }
+      }))
+    }
     let controller: ReturnType<typeof useWorkbenchPlanController> | null = null
     const setComposerMode = options.setComposerMode ?? vi.fn()
     const setError = options.setError ?? vi.fn()
