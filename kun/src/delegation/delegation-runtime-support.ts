@@ -40,11 +40,13 @@ import { withManagerDataMutex } from '../manager/data-mutex.js'
 import {
   ChildSecuritySnapshot,
   ChildRunRecord,
+  isResumableChildRun,
   type ChildRunAggregate,
   type ChildRunExecutor,
   type ChildRunLifecycleMetadata,
   type ChildReturnFormat
 } from './delegation-runtime-contracts.js'
+import type { MaterializedChildResult } from './child-result-materializer.js'
 
 export function childPptWorkflowSnapshot(scope: PptWorkflowScope): {
   workflowId: string
@@ -220,6 +222,70 @@ export function childContractError(
     return 'child contract requires evidence but none was returned'
   }
   return undefined
+}
+
+export function buildFailedChildRecord(
+  current: ChildRunRecord,
+  input: {
+    signal: AbortSignal
+    runtimeRestart: boolean
+    abort: ReturnType<typeof childAbortOutcome>
+    parentTurnId: string
+    childId: string
+    startedAt: string
+    finishedAt: string
+    childResult?: MaterializedChildResult
+    usage?: ChildRunRecord['usage']
+    toolInvocations?: number
+    previewChars: number
+  }
+): ChildRunRecord {
+  const childResult = input.childResult
+  const ownedDirectionBundle = ownedPptChildBundle(childResult?.directionBundle, input.childId)
+    ? childResult?.directionBundle
+    : undefined
+  const ownedReviewBundle = ownedPptChildBundle(childResult?.reviewBundle, input.childId)
+    ? childResult?.reviewBundle
+    : undefined
+  return ChildRunRecord.parse({
+    ...current,
+    status: input.runtimeRestart ? 'failed' : input.signal.aborted ? 'aborted' : 'failed',
+    terminationReason: input.signal.aborted || input.runtimeRestart
+      ? input.abort.terminationReason
+      : 'child_error',
+    resumable: input.signal.aborted && isResumableChildRun(current),
+    ...(childResult ? {
+      summary: childResult.summary,
+      summaryTruncated: childResult.summaryTruncated,
+      resultRef: childResult.resultRef,
+      resultUnavailableReason: childResult.resultUnavailableReason
+    } : {}),
+    ...(ownedDirectionBundle !== undefined ? {
+      directionBundle: ownedDirectionBundle,
+      directionBundleParentTurnId: input.parentTurnId
+    } : {}),
+    ...(ownedReviewBundle !== undefined ? {
+      reviewBundle: ownedReviewBundle,
+      reviewBundleParentTurnId: input.parentTurnId
+    } : {}),
+    ...(childResult?.deckArtifact !== undefined ? {
+      deckArtifact: childResult.deckArtifact,
+      deckArtifactParentTurnId: input.parentTurnId
+    } : {}),
+    ...(childResult?.evidencePack !== undefined ? { evidencePack: childResult.evidencePack } : {}),
+    // Failed/aborted children keep the usage they accrued before failure
+    // (issue #1155); a child that never reached a model request reports zero.
+    ...(input.usage !== undefined ? { usage: input.usage } : {}),
+    ...(input.toolInvocations !== undefined ? { toolInvocations: input.toolInvocations } : {}),
+    error: input.abort.error.slice(0, input.previewChars),
+    durationMs: (current.durationMs ?? 0) + Math.max(0, Date.parse(input.finishedAt) - Date.parse(input.startedAt)),
+    updatedAt: input.finishedAt
+  })
+}
+
+function ownedPptChildBundle(value: unknown, childId: string): boolean {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) &&
+    (value as Record<string, unknown>).childId === childId
 }
 
 export function fingerprintProfile(profile: SubagentProfileConfig): string {

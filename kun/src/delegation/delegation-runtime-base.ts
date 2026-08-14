@@ -58,6 +58,7 @@ import {
 } from './delegation-runtime-contracts.js'
 import {
   aggregateChildRuns,
+  buildFailedChildRecord,
   childAbortOutcome,
   childActivityFromEvent,
   childContractError,
@@ -499,6 +500,7 @@ export abstract class DelegationRuntimeBase {
 
     const startedAt = this.now()
     let unsubscribeActivity: (() => void) | undefined
+    let usageBeforeRun: ChildRunRecord['usage'] | undefined
     try {
       const queuedMs = elapsedMs(args.queuedAt, startedAt)
       record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
@@ -514,7 +516,7 @@ export abstract class DelegationRuntimeBase {
       unsubscribeActivity = this.options.eventBus?.subscribe(record.id, (event) => {
         void this.projectChildActivity(args.state, event)
       })
-      const usageBeforeRun = record.usage
+      usageBeforeRun = record.usage
       const executor: ChildRunExecutor = this.options.executor ?? defaultExecutor
       const result = await executeWithParentSignal(args.signal, (signal) => executor({
           ...(args.resumeChild ? { resumeChild: true } : {}),
@@ -595,43 +597,30 @@ export abstract class DelegationRuntimeBase {
       const finishedAt = this.now()
       const runtimeRestart = isHostShutdownTurnSuspension(args.signal)
       const abort = childAbortOutcome(args.signal, runtimeRestart, error)
-      const childResult = error instanceof ChildResultExecutionError
-        ? error.result
-        : undefined
-      const failedDirectionBundle = ownedPptChildBundle(childResult?.directionBundle, record.id)
-        ? childResult?.directionBundle
-        : undefined
-      const failedReviewBundle = ownedPptChildBundle(childResult?.reviewBundle, record.id)
-        ? childResult?.reviewBundle
-        : undefined
-      record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
-        ...current,
-        status: runtimeRestart ? 'failed' : args.signal.aborted ? 'aborted' : 'failed',
-        terminationReason: args.signal.aborted || runtimeRestart ? abort.terminationReason : 'child_error',
-        resumable: args.signal.aborted && isResumableChildRun(current),
-        ...(childResult ? {
-          summary: childResult.summary,
-          summaryTruncated: childResult.summaryTruncated,
-          resultRef: childResult.resultRef,
-          resultUnavailableReason: childResult.resultUnavailableReason
-        } : {}),
-        ...(failedDirectionBundle !== undefined ? {
-          directionBundle: failedDirectionBundle,
-          directionBundleParentTurnId: args.parentTurnId
-        } : {}),
-        ...(failedReviewBundle !== undefined ? {
-          reviewBundle: failedReviewBundle,
-          reviewBundleParentTurnId: args.parentTurnId
-        } : {}),
-        ...(childResult?.deckArtifact !== undefined ? {
-          deckArtifact: childResult.deckArtifact,
-          deckArtifactParentTurnId: args.parentTurnId
-        } : {}),
-        ...(childResult?.evidencePack !== undefined ? { evidencePack: childResult.evidencePack } : {}),
-        error: abort.error.slice(0, CHILD_RESULT_PREVIEW_CHARS),
-        durationMs: (current.durationMs ?? 0) + elapsedMs(startedAt, finishedAt),
-        updatedAt: finishedAt
+      const failedError = error instanceof ChildResultExecutionError ? error : undefined
+      const childResult = failedError?.result
+      record = await this.commitChildState(args.state, (current) => buildFailedChildRecord(current, {
+        signal: args.signal,
+        runtimeRestart,
+        abort,
+        parentTurnId: args.parentTurnId,
+        childId: record.id,
+        startedAt,
+        finishedAt,
+        ...(childResult ? { childResult } : {}),
+        ...(failedError?.usage !== undefined ? { usage: failedError.usage } : {}),
+        ...(failedError?.toolInvocations !== undefined
+          ? { toolInvocations: failedError.toolInvocations }
+          : {}),
+        previewChars: CHILD_RESULT_PREVIEW_CHARS
       }))
+      // Settle usage for failed/aborted children too: tokens burned before the
+      // failure are real cost and must reach the parent aggregate exactly once
+      // (issue #1155). Same delta mechanism as the success path, so resume and
+      // retry never double-count, and zero-usage failures stay zero.
+      if (usageBeforeRun !== undefined && failedError?.usage !== undefined) {
+        this.recordExternalUsage(record, subtractChildUsage(record.usage, usageBeforeRun))
+      }
       return record
     } finally {
       try {
@@ -682,9 +671,4 @@ export abstract class DelegationRuntimeBase {
     await operation
     return committed
   }
-}
-
-function ownedPptChildBundle(value: unknown, childId: string): boolean {
-  return typeof value === 'object' && value !== null && !Array.isArray(value) &&
-    (value as Record<string, unknown>).childId === childId
 }

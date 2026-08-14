@@ -447,6 +447,13 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     }
     console.warn(`[kun] foreground subagent turn settled child=${thread.id} turn=${started.turnId} status=${status}`)
     const items = await sessionStore.loadItems(thread.id)
+    // Settlement snapshot for every terminal status: failed and aborted runs
+    // must still report the tokens they already burned (issue #1155).
+    const childUsage = usage.forThread(thread.id)
+    const toolInvocations = items.filter(
+      (item) => item.turnId === started.turnId && item.kind === 'tool_call'
+    ).length
+    const settlement = { usage: childUsage, toolInvocations }
     const result = await materializeChildResult({
       content: childResultSource(items, started.turnId, status),
       childId: thread.id,
@@ -489,19 +496,16 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
         event.severity !== 'info'
     )
     if (runtimeError?.kind === 'error') {
-      throw new ChildResultExecutionError(runtimeError.message, structuredResult)
+      throw new ChildResultExecutionError(runtimeError.message, structuredResult, settlement)
     }
     if (executionError !== undefined) {
-      throw new ChildResultExecutionError(childExecutionErrorMessage(executionError), structuredResult)
+      throw new ChildResultExecutionError(childExecutionErrorMessage(executionError), structuredResult, settlement)
     }
-    const toolInvocations = items.filter(
-      (item) => item.turnId === started.turnId && item.kind === 'tool_call'
-    ).length
     const evidence = input.returnFormat === 'evidence'
       ? childToolEvidence(items, started.turnId)
       : undefined
     if (status !== 'completed') {
-      throw new ChildResultExecutionError(result.summary || `child agent ${status}`, structuredResult)
+      throw new ChildResultExecutionError(result.summary || `child agent ${status}`, structuredResult, settlement)
     }
     return {
       ...result,
@@ -510,7 +514,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(deckArtifact !== undefined ? { deckArtifact } : {}),
       ...(evidence ? { evidence } : {}),
       ...(evidencePack ? { evidencePack } : {}),
-      usage: usage.forThread(thread.id),
+      usage: childUsage,
       toolInvocations,
       // Only a stable role system prompt changes the immutable prefix.
       // Host workflow control is private chronological model context.

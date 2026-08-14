@@ -1,7 +1,7 @@
 import type { TurnItem } from '../contracts/items.js'
 import type { ArtifactStore } from '../artifacts/artifact-store.js'
 import { ContextEstimator } from '../loop/context-estimator.js'
-import type { ChildResultRef } from './delegation-runtime-contracts.js'
+import type { ChildResultRef, ChildRunRecord } from './delegation-runtime-contracts.js'
 import { PptReviewBundleV1 } from '../ppt/ppt-review-manifest.js'
 import { PptDirectionBundleV1 } from '../ppt/ppt-direction-workflow.js'
 import {
@@ -30,14 +30,22 @@ export type MaterializedChildResult = {
 
 export class ChildResultExecutionError extends Error {
   readonly result: MaterializedChildResult
+  /** Cumulative child-thread usage at failure time; settlement input, not a display field. */
+  readonly usage?: ChildRunRecord['usage']
+  readonly toolInvocations?: number
 
   constructor(
     message: string,
-    result: MaterializedChildResult
+    result: MaterializedChildResult,
+    settlement?: { usage?: ChildRunRecord['usage']; toolInvocations?: number }
   ) {
     super(message)
     this.name = 'ChildResultExecutionError'
     this.result = validatedFailureResult(result)
+    // Kept as error-owned fields (not inside `result`) so validatedFailureResult
+    // never strips the usage settlement the runtime must still account for.
+    this.usage = settlement?.usage
+    this.toolInvocations = settlement?.toolInvocations
   }
 }
 
