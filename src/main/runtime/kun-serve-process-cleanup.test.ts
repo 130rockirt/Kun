@@ -48,7 +48,7 @@ describe('Kun serve process snapshot parsing', () => {
     ]))).toEqual([{ pid: 203, parentPid: 10, command: 'kun-runtime' }])
   })
 
-  it('uses UID-filtered ps on Unix and SID-filtered CIM on Windows', async () => {
+  it('uses UID-filtered ps on Unix and candidate-filtered CIM on Windows', async () => {
     const unixRun = vi.fn(async () => ({ stdout: '' }))
     await listCurrentUserProcesses({
       platform: 'linux',
@@ -67,6 +67,13 @@ describe('Kun serve process snapshot parsing', () => {
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_CURRENT_USER_PROCESS_SCRIPT],
       expect.objectContaining({ windowsHide: true })
+    )
+    expect(WINDOWS_CURRENT_USER_PROCESS_SCRIPT).toContain('-Filter')
+    expect(WINDOWS_CURRENT_USER_PROCESS_SCRIPT).toContain("Name = 'node.exe'")
+    expect(WINDOWS_CURRENT_USER_PROCESS_SCRIPT).toContain("Name = 'electron.exe'")
+    expect(WINDOWS_CURRENT_USER_PROCESS_SCRIPT).toContain("Name LIKE 'kun%.exe'")
+    expect(WINDOWS_CURRENT_USER_PROCESS_SCRIPT).not.toContain(
+      'Get-CimInstance Win32_Process | ForEach-Object'
     )
     expect(WINDOWS_CURRENT_USER_PROCESS_SCRIPT).toContain('GetOwnerSid')
     expect(WINDOWS_CURRENT_USER_PROCESS_SCRIPT).toContain('$currentSid')
