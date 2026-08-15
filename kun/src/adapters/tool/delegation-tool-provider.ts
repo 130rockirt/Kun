@@ -62,8 +62,15 @@ export function buildDelegationToolProviders(
           properties: {
             label: { type: 'string', description: 'A distinct 2-4 word UI title for this child.' },
             prompt: { type: 'string', description: 'The task for the child agent.' },
-            resumeChildId: { type: 'string', description: 'Existing interrupted child id to continue instead of creating a new child.' },
-            expectedResumeCount: { type: 'integer', minimum: 0, description: 'Last observed resumeCount for stale/double-submit protection.' },
+            resumeChildId: {
+              type: 'string',
+              description: 'Exact existing interrupted child id to continue. Omit this field entirely for a new child; never send an empty string or a sentinel such as "new".'
+            },
+            expectedResumeCount: {
+              type: 'integer',
+              minimum: 0,
+              description: 'Last observed resumeCount for stale/double-submit protection. Set only with resumeChildId; omit it entirely for a new child.'
+            },
             ...modeProperties,
             detach: { type: 'boolean', description: 'Run in the background and return after the child is queued.' },
             returnFormat: { type: 'string', enum: ['summary', 'evidence'] }
@@ -389,15 +396,21 @@ function parseResumeArgs(
   args: Record<string, unknown>,
   context: ToolHostContext
 ): ResumeArgs | undefined | Error {
-  const childId = stringValue(args.resumeChildId)
+  const rawChildId = args.resumeChildId
+  const childId = stringValue(rawChildId)
   const rawCount = args.expectedResumeCount
   const expectedResumeCount = typeof rawCount === 'number' && Number.isInteger(rawCount) && rawCount >= 0
     ? rawCount
     : undefined
   if (!childId) {
-    if (args.resumeChildId !== undefined) return new Error('resumeChildId must be a non-empty string')
-    if (rawCount !== undefined) return new Error('expectedResumeCount requires resumeChildId')
     if (context.subagentResume) return new Error('this turn must resume the requested child instead of creating a new one')
+    const neutralEmptyChildId = typeof rawChildId === 'string' && rawChildId.trim().length === 0
+    if (rawChildId !== undefined && !neutralEmptyChildId) {
+      return new Error('resumeChildId must be a non-empty string; omit it to create a new child')
+    }
+    if (rawCount !== undefined && rawCount !== 0) {
+      return new Error('expectedResumeCount requires resumeChildId; omit both fields to create a new child')
+    }
     return undefined
   }
   if (rawCount !== undefined && expectedResumeCount === undefined) {
@@ -405,7 +418,12 @@ function parseResumeArgs(
   }
   const creationOnly = ['label', 'profile', 'custom_agent', 'detach', 'returnFormat']
     .find((key) => args[key] !== undefined)
-  if (creationOnly) return new Error(`${creationOnly} is unavailable when resumeChildId is set`)
+  if (creationOnly) {
+    return new Error(
+      `${creationOnly} is unavailable when resumeChildId is set; ` +
+      'omit resumeChildId and expectedResumeCount to create a new child'
+    )
+  }
   if (context.subagentResume) {
     if (childId !== context.subagentResume.childId) {
       return new Error(`this turn may only resume child ${context.subagentResume.childId}`)
@@ -626,6 +644,7 @@ function buildDelegateTaskDescription(runtime: DelegationRuntime): string {
   return [
     'Run a standalone child agent and return its result.',
     modeDescription,
+    'For a new child, omit resumeChildId and expectedResumeCount entirely; never use empty or "new" sentinel values.',
     'Child model, provider, and reasoning strength remain host-controlled and are not tool-call arguments.',
     'Issue multiple calls in one message for independent parallel work.',
     `Children default to the "${runtime.defaultToolPolicy}" tool policy and can never recursively delegate.`

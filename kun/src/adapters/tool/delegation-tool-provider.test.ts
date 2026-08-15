@@ -23,6 +23,9 @@ describe('delegate_task observability output', () => {
     expect(properties).toHaveProperty('profile')
     expect(properties).toHaveProperty('resumeChildId')
     expect(properties).toHaveProperty('expectedResumeCount')
+    expect(properties?.resumeChildId?.description).toContain('Omit this field entirely for a new child')
+    expect(properties?.expectedResumeCount?.description).toContain('omit it entirely for a new child')
+    expect(delegateTool?.description).toContain('omit resumeChildId and expectedResumeCount entirely')
     expect(properties).not.toHaveProperty('custom_agent')
     expect(delegateTool?.inputSchema.required).toEqual(['prompt'])
 
@@ -371,7 +374,86 @@ describe('delegate_task observability output', () => {
       resumeChildId: 'child_other',
       expectedResumeCount: 1
     }, resumeContext)).resolves.toMatchObject({ isError: true })
+
+    await expect(tool.execute({
+      prompt: 'invalid override',
+      resumeChildId: 'child_resume',
+      expectedResumeCount: 1,
+      returnFormat: 'evidence'
+    }, resumeContext)).resolves.toMatchObject({
+      isError: true,
+      output: { error: expect.stringContaining('omit resumeChildId and expectedResumeCount') }
+    })
     expect(resumeChild).toHaveBeenCalledTimes(1)
+  })
+
+  it('creates a new child when a provider materializes neutral resume placeholders', async () => {
+    const resumeChild = vi.fn()
+    const runChild = vi.fn(async (input: Parameters<DelegationRuntime['runChild']>[0]) => ({
+      id: 'child_review',
+      parentThreadId: input.parentThreadId,
+      parentTurnId: input.parentTurnId,
+      launcher: 'delegate_task' as const,
+      label: input.label,
+      prompt: input.prompt,
+      profile: input.inlineProfile?.id,
+      profileSnapshot: input.inlineProfile?.profile,
+      security: { sandboxRoot: '/workspace', memoryEnabled: false },
+      approvalReviewer: 'user' as const,
+      status: 'completed' as const,
+      resumable: false,
+      summary: 'No findings.',
+      evidence: ['Reviewed the targeted provider change.'],
+      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      returnFormat: 'evidence' as const,
+      createdAt: '2026-08-15T00:00:00.000Z',
+      updatedAt: '2026-08-15T00:00:01.000Z'
+    }))
+    const runtime = {
+      enabled: () => true,
+      useExistingAgents: true,
+      defaultToolPolicy: 'inherit',
+      resolveProfileSnapshot: vi.fn(async () => ({
+        id: 'code-reviewer',
+        source: 'builtin' as const,
+        profile: { name: 'Code Reviewer', toolPolicy: 'readOnly' as const }
+      })),
+      runChild,
+      resumeChild
+    } as unknown as DelegationRuntime
+    const tool = buildDelegationToolProviders(runtime)[0]!.tools[0]!
+
+    const result = await tool.execute({
+      detach: false,
+      expectedResumeCount: 0,
+      label: 'Provider fix review',
+      profile: 'code-reviewer',
+      prompt: 'Review the targeted provider fix without modifying files.',
+      resumeChildId: '',
+      returnFormat: 'evidence'
+    }, context())
+
+    expect(result).toMatchObject({
+      isError: false,
+      output: { childId: 'child_review', status: 'completed', returnFormat: 'evidence' }
+    })
+    expect(resumeChild).not.toHaveBeenCalled()
+    expect(runChild).toHaveBeenCalledTimes(1)
+    expect(runChild).toHaveBeenCalledWith(expect.objectContaining({
+      label: 'Provider fix review',
+      returnFormat: 'evidence',
+      inlineProfile: expect.objectContaining({ id: 'code-reviewer' })
+    }))
+
+    await expect(tool.execute({
+      prompt: 'Invalid orphaned count',
+      profile: 'code-reviewer',
+      expectedResumeCount: 1
+    }, context())).resolves.toMatchObject({
+      isError: true,
+      output: { error: expect.stringContaining('omit both fields') }
+    })
+    expect(runChild).toHaveBeenCalledTimes(1)
   })
 
   it('rejects custom arguments in existing-profile mode and stale arguments that cross custom-only mode', async () => {
