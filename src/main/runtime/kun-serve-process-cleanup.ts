@@ -46,7 +46,8 @@ const PROCESS_TABLE_MAX_BUFFER = 16 * 1024 * 1024
 
 export const WINDOWS_CURRENT_USER_PROCESS_SCRIPT = [
   '$currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
-  '$items = Get-CimInstance Win32_Process | ForEach-Object {',
+  "$candidates = Get-CimInstance Win32_Process -Filter \"Name = 'node.exe' OR Name = 'electron.exe' OR Name LIKE 'kun%.exe'\"",
+  '$items = $candidates | ForEach-Object {',
   '  $owner = Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction SilentlyContinue',
   '  if ($owner.Sid -eq $currentSid) {',
   '    [pscustomobject]@{',
