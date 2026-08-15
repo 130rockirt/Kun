@@ -137,6 +137,7 @@ import {
   markUnreadCompletion,
   retainUnreadCompletions
 } from './unread-completions'
+import { threadRefreshSelection } from './chat-store-thread-refresh-selection'
 
 type SseAbortRef = { current: AbortController | null }
 
@@ -589,8 +590,7 @@ export function createNavigationWorkspaceActions(
           isWriteAssistantThread(activeThread, writeRegistry) ||
           isClawThread(activeThread, get().clawChannels) ||
           isInternalDeepSeekGuiWorkspace(activeThread.workspace))
-      const shouldClearSelection =
-        activeThreadId != null && !displayThreads.some((thread) => thread.id === activeThreadId)
+      const { shouldClearSelection } = threadRefreshSelection(get(), displayThreads)
       if (shouldClearSelection) {
         sseAbortRef.current?.abort()
         sseAbortRef.current = null
@@ -604,10 +604,7 @@ export function createNavigationWorkspaceActions(
         rememberedCodeThreadId &&
         !threads.some((thread) => thread.id === rememberedCodeThreadId && thread.archived !== true)
       )
-      const validIds = new Set([
-        ...displayThreads.map((thread) => thread.id),
-        ...Object.keys(get().sideConversations ?? {})
-      ])
+      const { validIds } = threadRefreshSelection(get(), displayThreads)
       const reconciledCompletedWatchIds = new Set(
         [...reconciledStateById.entries()]
           .filter(([id, state]) => {
