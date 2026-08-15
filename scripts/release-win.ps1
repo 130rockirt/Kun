@@ -294,6 +294,7 @@ if ($Publish -or $PromoteR2) {
     "Kun-TUI-$ReleaseVersion-mac-arm64.tar.gz",
     "Kun-TUI-$ReleaseVersion-mac-x64.tar.gz",
     "Kun-TUI-$ReleaseVersion-win-x64.zip",
+    "Kun-TUI-$ReleaseVersion-linux-arm64.tar.gz",
     "Kun-TUI-$ReleaseVersion-linux-x64.tar.gz",
     'release-tui.json',
     'SHA256SUMS-tui.txt'

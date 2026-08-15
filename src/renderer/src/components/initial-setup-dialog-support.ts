@@ -145,6 +145,23 @@ function initialSetupModelConnectionResponse(body: string): InitialSetupModelCon
   return initialSetupModelConnectionsSnapshot(JSON.parse(body))
 }
 
+function initialSetupModelConnectionRequestError(response: {
+  status: number
+  body: string
+}): Error {
+  try {
+    const parsed = JSON.parse(response.body) as { code?: unknown; message?: unknown }
+    const code = typeof parsed.code === 'string' ? parsed.code : ''
+    const message = typeof parsed.message === 'string' ? parsed.message : ''
+    if (code === UNREADABLE_CREDENTIAL_KEY_ERROR_CODE || message.includes(UNREADABLE_CREDENTIAL_KEY_ERROR_CODE)) {
+      return new Error(`${UNREADABLE_CREDENTIAL_KEY_ERROR_CODE}: ${message || 'protected credential key is unreadable'}`)
+    }
+  } catch {
+    // Preserve the existing status-only error for malformed or unrelated response bodies.
+  }
+  return new Error(`Shared model connection request failed (HTTP ${response.status})`)
+}
+
 export async function commitInitialSetupRegistryCredentials(
   drafts: InitialSetupDrafts,
   options: {
@@ -169,7 +186,7 @@ export async function commitInitialSetupRegistryCredentials(
       async (operationToken) => {
         const listed = await request('/v1/model-connections', 'GET')
         if (!listed.ok) {
-          throw new Error(`Shared model connection request failed (HTTP ${listed.status})`)
+          throw initialSetupModelConnectionRequestError(listed)
         }
         let snapshot = initialSetupModelConnectionResponse(listed.body)
         if (!snapshot.providers.some((provider) => provider.id === providerId)) return
@@ -181,7 +198,7 @@ export async function commitInitialSetupRegistryCredentials(
           )
           if (fenced.ok) return
           if (fenced.status !== 409 || attempt === 1) {
-            throw new Error(`Shared model connection request failed (HTTP ${fenced.status})`)
+            throw initialSetupModelConnectionRequestError(fenced)
           }
           const conflict = JSON.parse(fenced.body) as { snapshot?: unknown }
           snapshot = initialSetupModelConnectionsSnapshot(conflict.snapshot)
@@ -199,7 +216,7 @@ export async function commitInitialSetupRegistryCredentials(
       replacement.generation,
       async (credential, operationToken, isCurrent) => {
         const listed = await request('/v1/model-connections', 'GET')
-        if (!listed.ok) throw new Error(`Shared model connection request failed (HTTP ${listed.status})`)
+        if (!listed.ok) throw initialSetupModelConnectionRequestError(listed)
         let snapshot = initialSetupModelConnectionResponse(listed.body)
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!isCurrent()) return snapshot
@@ -211,7 +228,7 @@ export async function commitInitialSetupRegistryCredentials(
                 JSON.stringify({ expectedRevision: snapshot.revision, operationToken })
               )
               if (!fenced.ok) {
-                throw new Error(`Shared model connection request failed (HTTP ${fenced.status})`)
+                throw initialSetupModelConnectionRequestError(fenced)
               }
               snapshot = initialSetupModelConnectionResponse(fenced.body)
             if (!isCurrent()) return snapshot
@@ -260,13 +277,13 @@ export async function commitInitialSetupRegistryCredentials(
           }
           if (response.ok) return initialSetupModelConnectionResponse(response.body)
           if (response.status !== 409) {
-            throw new Error(`Shared model connection request failed (HTTP ${response.status})`)
+            throw initialSetupModelConnectionRequestError(response)
           }
           const conflict = JSON.parse(response.body) as { snapshot?: unknown }
           snapshot = initialSetupModelConnectionsSnapshot(conflict.snapshot)
           if (!isCurrent()) return snapshot
           if (attempt === 1) {
-            throw new Error(`Shared model connection request failed (HTTP ${response.status})`)
+            throw initialSetupModelConnectionRequestError(response)
           }
         }
         return snapshot
@@ -275,7 +292,7 @@ export async function commitInitialSetupRegistryCredentials(
   }
   await enqueueSharedModelMutation(async () => {
     const listed = await request('/v1/model-connections', 'GET')
-    if (!listed.ok) throw new Error(`Shared model connection request failed (HTTP ${listed.status})`)
+    if (!listed.ok) throw initialSetupModelConnectionRequestError(listed)
     let snapshot = initialSetupModelConnectionResponse(listed.body)
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const selected = snapshot.providers.find((provider) => provider.id === options.selectedProviderId)
@@ -288,7 +305,7 @@ export async function commitInitialSetupRegistryCredentials(
       }))
       if (response.ok) return initialSetupModelConnectionResponse(response.body)
       if (response.status !== 409 || attempt === 1) {
-        throw new Error(`Shared model connection request failed (HTTP ${response.status})`)
+        throw initialSetupModelConnectionRequestError(response)
       }
       const conflict = JSON.parse(response.body) as { snapshot?: unknown }
       snapshot = initialSetupModelConnectionsSnapshot(conflict.snapshot)

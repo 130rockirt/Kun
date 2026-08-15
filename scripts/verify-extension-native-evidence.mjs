@@ -16,8 +16,15 @@ const TUI_RELEASE_ASSET = new RegExp(
   `^Kun-TUI-(${VERSION_PART})-(?:` +
   'mac-(?:arm64|x64)\\.tar\\.gz|' +
   'win-x64\\.zip|' +
-  'linux-x64\\.tar\\.gz' +
+  'linux-(?:arm64|x64)\\.tar\\.gz' +
   ')(?:\\.sha256|\\.json)?$'
+)
+// Linux ARM64 packages are validated host-natively by
+// verify-linux-package-architecture.mjs; this legacy Extension evidence bundle
+// remains bound to the original three platform jobs and treats those canonical
+// assets as a separate same-version release contract.
+const LINUX_ARM64_RELEASE_ASSET = new RegExp(
+  `^Kun-(${VERSION_PART})-linux-arm64\\.(?:AppImage(?:\\.blockmap)?|deb)$`
 )
 
 const FINAL_ARTIFACTS = [
@@ -119,12 +126,18 @@ export async function verifyNativeEvidenceBundle({
   const finalFiles = new Map()
   const ancillaryFiles = []
   const tuiFiles = []
+  const linuxArm64Files = []
   for (const file of files) {
     const name = basename(file)
     if (TUI_NAMED_RELEASE_ASSET.test(name)) {
       const match = name.match(TUI_RELEASE_ASSET)
       if (!match) throw new Error(`Downloaded release contains unexpected Kun-named asset: ${name}`)
       tuiFiles.push({ name, version: match[1] })
+      continue
+    }
+    const linuxArm64 = name.match(LINUX_ARM64_RELEASE_ASSET)
+    if (linuxArm64) {
+      linuxArm64Files.push({ name, version: linuxArm64[1] })
       continue
     }
     if (!KUN_NAMED_RELEASE_ASSET.test(name)) continue
@@ -206,6 +219,11 @@ export async function verifyNativeEvidenceBundle({
       throw new Error(`Standalone TUI asset version does not match GUI artifacts: ${tui.name}`)
     }
   }
+  for (const asset of linuxArm64Files) {
+    if (asset.version !== version) {
+      throw new Error(`Linux ARM64 asset version does not match native evidence: ${asset.name}`)
+    }
+  }
   for (const ancillary of ancillaryFiles) {
     const ancillaryVersion = ancillary.name.match(ancillary.rule.ancillaryPattern)?.[1]
     if (ancillaryVersion !== version) {
@@ -222,7 +240,8 @@ export async function verifyNativeEvidenceBundle({
       relative(root, (byBasename.get(`extension-native-evidence-${platform}.json`) ?? [])[0])
         .split(sep).join('/')
     ),
-    artifacts: [...recordedFiles].sort()
+    artifacts: [...recordedFiles].sort(),
+    supplementalArtifacts: linuxArm64Files.map(({ name }) => name).sort()
   }
 }
 

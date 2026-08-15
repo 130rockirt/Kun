@@ -358,4 +358,27 @@ describe('InitialSetupDialog completion flow', () => {
     ))).toBe(true)
     expect(isUnreadableCredentialKeyError(new Error('Kun runtime is offline'))).toBe(false)
   })
+
+  it('preserves unreadable credential identity from an HTTP 0 registry failure', async () => {
+    const request = vi.fn(async () => ({
+      ok: false,
+      status: 0,
+      body: JSON.stringify({
+        code: 'credential_key_unreadable',
+        message: 'existing DPAPI-protected OAuth key could not be decrypted'
+      })
+    }))
+    const deepseek = defaultModelProviderSettings().providers[0]!
+
+    const result = commitInitialSetupRegistryCredentials({
+      deepseek: { apiKey: 'new-key', baseUrl: 'https://api.deepseek.com' }
+    }, {
+      profiles: [deepseek],
+      selectedProviderId: deepseek.id,
+      selectedModel: deepseek.models[0]!
+    }, request)
+
+    await expect(result).rejects.toSatisfy(isUnreadableCredentialKeyError)
+    await expect(result).rejects.not.toThrow('Shared model connection request failed (HTTP 0)')
+  })
 })

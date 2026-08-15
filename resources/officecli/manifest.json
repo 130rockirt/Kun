@@ -23,6 +23,12 @@
       "sha256": "4a542155ce3e1b0c211ba117d5d3bc6c25357d74fd5ba55786f1c29c12ac866e",
       "url": "https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.141/officecli-linux-x64"
     },
+    "linux-arm64": {
+      "name": "officecli-linux-arm64",
+      "size": 34655751,
+      "sha256": "0aa4f01ec47de12f2bead5b98835d329179ba0cf7de9a9dd27bdd59aadfde9bf",
+      "url": "https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.141/officecli-linux-arm64"
+    },
     "win32-x64": {
       "name": "officecli-win-x64.exe",
       "size": 33300392,

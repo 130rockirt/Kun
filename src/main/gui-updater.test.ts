@@ -106,6 +106,12 @@ function platformManifestName(): string {
 }
 
 describe('checkGuiUpdate feed URL', () => {
+  it('uses architecture-specific Linux update metadata', async () => {
+    const { platformManifestName: manifestName } = await import('./gui-updater-support')
+    expect(manifestName('linux', 'x64')).toBe('latest-linux.yml')
+    expect(manifestName('linux', 'arm64')).toBe('latest-linux-arm64.yml')
+  })
+
   it('prefers the kun-agent update feed when metadata is reachable', async () => {
     process.env.DEEPSEEK_GUI_ALLOW_UNSIGNED_UPDATES = '1'
     const fetchMock = vi.fn().mockResolvedValue({ ok: true })

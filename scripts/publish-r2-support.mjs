@@ -23,8 +23,9 @@ export const PLATFORM_SPECS = {
   },
   linux: {
     updateFile: 'latest-linux.yml',
+    updateFiles: ['latest-linux.yml', 'latest-linux-arm64.yml'],
     // Auto-update stays on AppImage; deb is a Debian-family installer sidecar.
-    assetPattern: /^Kun-.+-linux-(?:x86_64\.AppImage(\.blockmap)?|amd64\.deb)$/
+    assetPattern: /^Kun-.+-linux-(?:(?:x86_64|arm64)\.AppImage(\.blockmap)?|(?:amd64|arm64)\.deb)$/
   }
 }
 
@@ -356,19 +357,24 @@ export function classifyDownload(fileName, platform) {
     return { platform, arch: 'x64', format: extension, label: 'Windows x64 installer' }
   }
   if (extension === 'deb') {
-    return { platform, arch: 'x64', format: extension, label: 'Linux x64 deb' }
+    const arch = fileName.includes('-arm64.') ? 'arm64' : 'x64'
+    return { platform, arch, format: extension, label: `Linux ${arch} deb` }
   }
-  return { platform, arch: 'x64', format: extension, label: 'Linux x64 AppImage' }
+  const arch = fileName.includes('-arm64.') ? 'arm64' : 'x64'
+  return { platform, arch, format: extension, label: `Linux ${arch} AppImage` }
 }
 
 export function collectRequiredSidecarAssets({ entries, platform, tagVersion }) {
   if (platform !== 'linux') return []
 
-  const expected = `Kun-${tagVersion}-linux-amd64.deb`
-  const candidates = entries.filter((name) => /^Kun-.+-linux-amd64\.deb$/.test(name)).sort()
-  if (candidates.length !== 1 || candidates[0] !== expected) {
+  const expected = [
+    `Kun-${tagVersion}-linux-amd64.deb`,
+    `Kun-${tagVersion}-linux-arm64.deb`
+  ]
+  const candidates = entries.filter((name) => /^Kun-.+-linux-(?:amd64|arm64)\.deb$/.test(name)).sort()
+  if (candidates.length !== expected.length || candidates.some((name, index) => name !== expected[index])) {
     throw new Error(
-      `Expected exactly one Linux deb sidecar named ${expected}, ` +
+      `Expected Linux deb sidecars ${expected.join(', ')}, ` +
       `found ${candidates.length}: ${candidates.join(', ') || '(none)'}`
     )
   }

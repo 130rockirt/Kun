@@ -25,6 +25,7 @@ const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1_000
 const STANDALONE_TUI_TARGETS = new Set([
   'darwin-arm64',
   'darwin-x64',
+  'linux-arm64',
   'linux-x64',
   'win32-x64'
 ])
@@ -112,10 +113,11 @@ export function parseTuiUpdateManifest(
   }
   const artifacts = value.artifacts.map((artifact) => parseArtifact(artifact))
   const targets = new Set(artifacts.map((artifact) => artifact.target))
-  const expectedTargets = ['darwin-arm64', 'darwin-x64', 'linux-x64', 'win32-x64']
+  const expectedTargets = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'win32-x64']
   const expectedFiles = new Map([
     ['darwin-arm64', `Kun-TUI-${value.version}-mac-arm64.tar.gz`],
     ['darwin-x64', `Kun-TUI-${value.version}-mac-x64.tar.gz`],
+    ['linux-arm64', `Kun-TUI-${value.version}-linux-arm64.tar.gz`],
     ['linux-x64', `Kun-TUI-${value.version}-linux-x64.tar.gz`],
     ['win32-x64', `Kun-TUI-${value.version}-win-x64.zip`]
   ])

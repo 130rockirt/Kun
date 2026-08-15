@@ -92,6 +92,15 @@ export function InitialSetupDialog(): ReactElement {
     setForm(next)
   }
 
+  const reportSetupError = (setupError: unknown): void => {
+    if (isUnreadableCredentialKeyError(setupError)) {
+      setCredentialRecoveryRequired(true)
+      setError(t('firstRunCredentialRecoveryError'))
+      return
+    }
+    setError(setupError instanceof Error ? setupError.message : String(setupError))
+  }
+
   useEffect(() => {
     let cancelled = false
     void rendererRuntimeClient
@@ -138,7 +147,7 @@ export function InitialSetupDialog(): ReactElement {
       probeRuntime,
       closeInitialSetup
     }).catch((e: unknown) => {
-      setError(e instanceof Error ? e.message : String(e))
+      reportSetupError(e)
     }).finally(() => {
       setSaving(false)
     })
@@ -232,12 +241,7 @@ export function InitialSetupDialog(): ReactElement {
         fallbackRuntimeError: t('common:runtimeFetchFailed')
       })
     } catch (e) {
-      if (isUnreadableCredentialKeyError(e)) {
-        setCredentialRecoveryRequired(true)
-        setError(t('firstRunCredentialRecoveryError'))
-      } else {
-        setError(e instanceof Error ? e.message : String(e))
-      }
+      reportSetupError(e)
     } finally {
       setSaving(false)
     }

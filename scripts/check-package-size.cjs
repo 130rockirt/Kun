@@ -47,7 +47,7 @@ function packagedAppPath(distDir, platform, arch) {
     return join(distDir, arch === 'arm64' ? 'mac-arm64' : 'mac', 'Kun.app')
   }
   if (platform === 'win32') return join(distDir, 'win-unpacked')
-  return join(distDir, 'linux-unpacked')
+  return join(distDir, arch === 'arm64' ? 'linux-arm64-unpacked' : 'linux-unpacked')
 }
 
 function resourcesPath(appPath, platform) {

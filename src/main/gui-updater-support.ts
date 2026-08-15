@@ -298,9 +298,12 @@ export function isVersionGreater(latest: string, current: string): boolean {
   return false
 }
 
-export function platformManifestName(): string {
-  if (process.platform === 'darwin') return 'latest-mac.yml'
-  if (process.platform === 'linux') return 'latest-linux.yml'
+export function platformManifestName(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch
+): string {
+  if (platform === 'darwin') return 'latest-mac.yml'
+  if (platform === 'linux') return arch === 'arm64' ? 'latest-linux-arm64.yml' : 'latest-linux.yml'
   return 'latest.yml'
 }
 

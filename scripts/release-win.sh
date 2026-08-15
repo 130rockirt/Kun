@@ -166,6 +166,7 @@ verify_tui_github_assets() {
     "Kun-TUI-${RELEASE_VERSION}-mac-arm64.tar.gz" \
     "Kun-TUI-${RELEASE_VERSION}-mac-x64.tar.gz" \
     "Kun-TUI-${RELEASE_VERSION}-win-x64.zip" \
+    "Kun-TUI-${RELEASE_VERSION}-linux-arm64.tar.gz" \
     "Kun-TUI-${RELEASE_VERSION}-linux-x64.tar.gz" \
     "release-tui.json" \
     "SHA256SUMS-tui.txt"; do

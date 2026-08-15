@@ -164,8 +164,8 @@ test('automated release workflows use build gates while local release paths reta
 
   if (buildOnlyCi) {
     for (const [label, workflow, jobs] of [
-      ['stable release', release, ['build-macos', 'build-windows', 'build-linux', 'build-tui']],
-      ['daily prerelease', daily, ['build-macos', 'build-windows', 'build-linux', 'build-tui']]
+      ['stable release', release, ['build-macos', 'build-windows', 'build-linux', 'build-linux-arm64', 'build-tui']],
+      ['daily prerelease', daily, ['build-macos', 'build-windows', 'build-linux', 'build-linux-arm64', 'build-tui']]
     ]) {
       assert.equal(workflow.jobs.validate, undefined, `${label} must not define a validation job`)
       assert.equal(workflow.jobs['verify-macos-x64'], undefined, `${label} must not define a macOS verification job`)
@@ -195,7 +195,12 @@ test('automated release workflows use build gates while local release paths reta
       }
     }
     const prFailureNeeds = pr.jobs['request-changes-on-failure']?.needs ?? []
-    assert.deepEqual(prFailureNeeds.sort(), ['package', 'package-macos', 'package-windows'])
+    assert.deepEqual(prFailureNeeds.sort(), [
+      'package',
+      'package-linux-arm64',
+      'package-macos',
+      'package-windows'
+    ])
   } else {
   assertPublishDependencies(release, 'stable release')
   assertPublishDependencies(daily, 'daily prerelease')
