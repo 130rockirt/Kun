@@ -37,15 +37,16 @@ describe('standalone TUI self-update', () => {
     expect(standaloneTuiTarget('darwin', 'arm64')).toBe('darwin-arm64')
     expect(standaloneTuiTarget('darwin', 'x64')).toBe('darwin-x64')
     expect(standaloneTuiTarget('linux', 'x64')).toBe('linux-x64')
+    expect(standaloneTuiTarget('linux', 'arm64')).toBe('linux-arm64')
     expect(standaloneTuiTarget('win32', 'x64')).toBe('win32-x64')
-    expect(standaloneTuiTarget('linux', 'arm64')).toBeUndefined()
+    expect(standaloneTuiTarget('linux', 'arm')).toBeUndefined()
   })
 
   it('accepts a stable manifest only when it matches the shared release contract', () => {
     const current = release()
     const manifest = parseTuiUpdateManifest(latest(), current)
     expect(manifest.version).toBe('1.2.4')
-    expect(manifest.artifacts).toHaveLength(4)
+    expect(manifest.artifacts).toHaveLength(5)
     expect(() => parseTuiUpdateManifest(
       { ...latest(), channel: 'frontier' },
       current
@@ -228,6 +229,7 @@ function latest() {
     artifacts: [
       artifact('darwin-arm64', 'mac', 'arm64', 'tar.gz'),
       artifact('darwin-x64', 'mac', 'x64', 'tar.gz'),
+      artifact('linux-arm64', 'linux', 'arm64', 'tar.gz'),
       artifact('linux-x64', 'linux', 'x64', 'tar.gz'),
       artifact('win32-x64', 'win', 'x64', 'zip')
     ]
@@ -292,6 +294,7 @@ async function updateArchive(parent: string, target: string): Promise<string> {
 function targetName(target: string): string {
   if (target === 'darwin-arm64') return 'mac-arm64.tar.gz'
   if (target === 'darwin-x64') return 'mac-x64.tar.gz'
+  if (target === 'linux-arm64') return 'linux-arm64.tar.gz'
   if (target === 'linux-x64') return 'linux-x64.tar.gz'
   throw new Error(`Unsupported Unix test target: ${target}`)
 }

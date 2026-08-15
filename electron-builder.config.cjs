@@ -85,6 +85,7 @@ const appId = developmentFlavor
   ? 'com.xingyuzhong.deepseekgui.dv'
   : 'com.xingyuzhong.deepseekgui'
 const productName = developmentFlavor ? 'kun-dv' : 'Kun'
+const linuxBuildArch = normalizeOptionalLinuxBuildArch(process.env.KUN_LINUX_BUILD_ARCH)
 
 function normalizeUpdateChannel(raw) {
   const value = String(raw || '').trim()
@@ -96,6 +97,13 @@ function normalizeAppFlavor(raw) {
   const value = String(raw || '').trim()
   if (value === 'production' || value === 'development') return value
   throw new Error(`KUN_APP_FLAVOR must be "production" or "development", got: ${raw}`)
+}
+
+function normalizeOptionalLinuxBuildArch(raw) {
+  const value = String(raw || '').trim()
+  if (!value) return undefined
+  if (value === 'x64' || value === 'arm64') return value
+  throw new Error(`KUN_LINUX_BUILD_ARCH must be "x64" or "arm64", got: ${raw}`)
 }
 
 if (releaseAppVersion && !semverVersionPattern.test(releaseAppVersion)) {
@@ -185,7 +193,14 @@ module.exports = {
     '!**/tsconfig*.json',
     '!**/README*',
     '!**/CHANGELOG*',
-    'packages/create-kun-extension/templates/**/*'
+    'packages/create-kun-extension/templates/**/*',
+    // @computer-use/libnut-linux currently publishes an x86-64 libnut.node
+    // even though its npm metadata also declares arm64. Keep that incompatible
+    // binary out of ARM64 packages; HostController already degrades the optional
+    // Computer Use backend when its runtime-only import is unavailable.
+    ...(linuxBuildArch === 'arm64'
+      ? ['!**/node_modules/@computer-use/libnut-linux/**/*']
+      : [])
     // node_modules/openclaw (the vendor/openclaw-shim file: dep) must ship:
     // the WeChat bridge imports @tencent-weixin/openclaw-weixin/dist at
     // runtime to send media, and that chain resolves openclaw/plugin-sdk/*.
@@ -305,8 +320,8 @@ module.exports = {
     // AppImage covers generic Linux; deb covers Debian-family installers such as
     // openKylin / Ubuntu that expect apt/software-store packages.
     target: [
-      { target: 'AppImage', arch: ['x64'] },
-      { target: 'deb', arch: ['x64'] }
+      { target: 'AppImage', arch: ['arm64', 'x64'] },
+      { target: 'deb', arch: ['arm64', 'x64'] }
     ]
   },
   // Override electron-builder's sandbox-disabling default desktop argument.

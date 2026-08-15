@@ -634,8 +634,8 @@ if (buildOnlyCi) {
   const release = parseYaml(releaseWorkflow)
   const daily = parseYaml(dailyWorkflow)
   for (const [label, workflow, buildJobs] of [
-    ['Stable release', release, ['build-macos', 'build-windows', 'build-linux', 'build-tui']],
-    ['Daily prerelease', daily, ['build-macos', 'build-windows', 'build-linux', 'build-tui']]
+    ['Stable release', release, ['build-macos', 'build-windows', 'build-linux', 'build-linux-arm64', 'build-tui']],
+    ['Daily prerelease', daily, ['build-macos', 'build-windows', 'build-linux', 'build-linux-arm64', 'build-tui']]
   ]) {
     check(!workflow.jobs.validate, `${label} must not define a validation job`)
     check(!workflow.jobs['verify-macos-x64'], `${label} must not define a macOS artifact verification job`)
@@ -657,6 +657,7 @@ if (buildOnlyCi) {
   }
   for (const [jobId, buildCommand] of [
     ['package', 'npm run dist:linux'],
+    ['package-linux-arm64', 'npm run dist:linux:arm64'],
     ['package-macos', 'npm run dist:mac'],
     ['package-windows', 'npm run dist:win']
   ]) {
@@ -672,8 +673,9 @@ if (buildOnlyCi) {
     ? prWorkflowDocument.jobs['request-changes-on-failure'].needs
     : []
   check(
-    prFailureNeeds.length === 3 &&
-      ['package', 'package-macos', 'package-windows'].every((jobId) => prFailureNeeds.includes(jobId)),
+    prFailureNeeds.length === 4 &&
+      ['package', 'package-linux-arm64', 'package-macos', 'package-windows']
+        .every((jobId) => prFailureNeeds.includes(jobId)),
     'PR failure feedback must depend only on platform builds'
   )
 }

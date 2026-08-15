@@ -20,6 +20,7 @@ test('resolves platform-specific unpacked application paths', () => {
   assert.match(packagedAppPath('/dist', 'darwin', 'x64'), /mac[\\/]Kun\.app$/u)
   assert.match(packagedAppPath('/dist', 'win32', 'x64'), /win-unpacked$/u)
   assert.match(packagedAppPath('/dist', 'linux', 'x64'), /linux-unpacked$/u)
+  assert.match(packagedAppPath('/dist', 'linux', 'arm64'), /linux-arm64-unpacked$/u)
 })
 
 test('parses explicit report and enforcement arguments', () => {

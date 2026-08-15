@@ -153,7 +153,6 @@ test('rejects missing, duplicate, and symlinked downloaded release files', async
 
 test('rejects every extra native-looking release asset outside the seven-file allowlist', async (t) => {
   for (const name of [
-    'Kun-1.2.3-linux-arm64.AppImage',
     'Kun-1.2.3-win-arm64.exe',
     'Kun-1.2.3-win-x64.EXE',
     'Kun-1.2.3-win-x64.MSI',
@@ -173,6 +172,33 @@ test('rejects every extra native-looking release asset outside the seven-file al
       }), /unexpected Kun-named asset: Kun-/i)
     })
   }
+})
+
+test('allows canonical same-version Linux ARM64 assets under their native package gate', async (t) => {
+  const root = await fixture(t)
+  for (const name of [
+    'Kun-1.2.3-linux-arm64.AppImage',
+    'Kun-1.2.3-linux-arm64.AppImage.blockmap',
+    'Kun-1.2.3-linux-arm64.deb'
+  ]) await writeFile(join(root, name), 'verified by the Linux ARM64 package gate')
+
+  const result = await verifyNativeEvidenceBundle({
+    directory: root,
+    expectedCommit: COMMIT,
+    expectedVersion: VERSION
+  })
+  assert.deepEqual(result.supplementalArtifacts, [
+    'Kun-1.2.3-linux-arm64.AppImage',
+    'Kun-1.2.3-linux-arm64.AppImage.blockmap',
+    'Kun-1.2.3-linux-arm64.deb'
+  ])
+
+  await writeFile(join(root, 'Kun-9.9.9-linux-arm64.deb'), 'stale ARM package')
+  await assert.rejects(verifyNativeEvidenceBundle({
+    directory: root,
+    expectedCommit: COMMIT,
+    expectedVersion: VERSION
+  }), /Linux ARM64 asset version does not match/)
 })
 
 test('allows only canonical same-version blockmaps as unrecorded ancillary assets', async (t) => {
@@ -200,6 +226,7 @@ test('allows canonical same-version standalone TUI assets for separate contract 
     'Kun-TUI-1.2.3-mac-arm64.tar.gz.json',
     'Kun-TUI-1.2.3-mac-x64.tar.gz',
     'Kun-TUI-1.2.3-win-x64.zip',
+    'Kun-TUI-1.2.3-linux-arm64.tar.gz',
     'Kun-TUI-1.2.3-linux-x64.tar.gz'
   ]) {
     await writeFile(join(root, name), 'verified by the standalone TUI release contract')
@@ -218,10 +245,4 @@ test('allows canonical same-version standalone TUI assets for separate contract 
   }), /TUI asset version does not match GUI artifacts/)
 
   await rm(join(root, 'Kun-TUI-9.9.9-win-x64.zip'))
-  await writeFile(join(root, 'Kun-TUI-1.2.3-linux-arm64.tar.gz'), 'unsupported TUI')
-  await assert.rejects(verifyNativeEvidenceBundle({
-    directory: root,
-    expectedCommit: COMMIT,
-    expectedVersion: VERSION
-  }), /unexpected Kun-named asset/)
 })

@@ -15,6 +15,7 @@ test('maps the supported standalone TUI targets to canonical release names', () 
   const targets = [
     [resolveTuiTarget('darwin', 'arm64'), 'Kun-TUI-1.2.3-mac-arm64.tar.gz'],
     [resolveTuiTarget('darwin', 'x64'), 'Kun-TUI-1.2.3-mac-x64.tar.gz'],
+    [resolveTuiTarget('linux', 'arm64'), 'Kun-TUI-1.2.3-linux-arm64.tar.gz'],
     [resolveTuiTarget('linux', 'x64'), 'Kun-TUI-1.2.3-linux-x64.tar.gz'],
     [resolveTuiTarget('win32', 'x64'), 'Kun-TUI-1.2.3-win-x64.zip']
   ]
@@ -24,7 +25,6 @@ test('maps the supported standalone TUI targets to canonical release names', () 
 })
 
 test('rejects unsupported target architectures', () => {
-  assert.throws(() => resolveTuiTarget('linux', 'arm64'), /Unsupported standalone TUI target/)
   assert.throws(() => resolveTuiTarget('win32', 'arm64'), /Unsupported standalone TUI target/)
 })
 

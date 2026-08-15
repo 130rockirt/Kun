@@ -268,6 +268,17 @@ describe('electron-builder Kun packaging', () => {
     ]))
   })
 
+  it('excludes the upstream x64-only libnut binary from Linux ARM64 packages', () => {
+    const unsupportedLibnutPattern = '!**/node_modules/@computer-use/libnut-linux/**/*'
+    const armConfig = loadBuilderConfigWithEnv({ KUN_LINUX_BUILD_ARCH: 'arm64' })
+    const x64Config = loadBuilderConfigWithEnv({ KUN_LINUX_BUILD_ARCH: 'x64' })
+
+    expect(armConfig.files).toContain(unsupportedLibnutPattern)
+    expect(x64Config.files).not.toContain(unsupportedLibnutPattern)
+    expect(() => loadBuilderConfigWithEnv({ KUN_LINUX_BUILD_ARCH: 'ia32' }))
+      .toThrow(/KUN_LINUX_BUILD_ARCH must be "x64" or "arm64"/)
+  })
+
   it('ships third-party notices with packaged applications', () => {
     expect(builderConfig.extraResources).toEqual(expect.arrayContaining([{
       from: 'THIRD_PARTY_NOTICES.md',
@@ -306,6 +317,7 @@ describe('electron-builder Kun packaging', () => {
     expect(Object.keys(manifest.assets).sort()).toEqual([
       'darwin-arm64',
       'darwin-x64',
+      'linux-arm64',
       'linux-x64',
       'win32-x64'
     ])

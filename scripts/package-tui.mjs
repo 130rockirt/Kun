@@ -31,6 +31,7 @@ const TAG = /^(?:v\d+\.\d+\.\d+|dev-\d{8}\.\d{4})$/
 const TARGETS = {
   'darwin-arm64': { os: 'mac', arch: 'arm64', format: 'tar.gz' },
   'darwin-x64': { os: 'mac', arch: 'x64', format: 'tar.gz' },
+  'linux-arm64': { os: 'linux', arch: 'arm64', format: 'tar.gz' },
   'linux-x64': { os: 'linux', arch: 'x64', format: 'tar.gz' },
   'win32-x64': { os: 'win', arch: 'x64', format: 'zip' }
 }

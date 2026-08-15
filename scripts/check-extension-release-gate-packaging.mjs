@@ -367,7 +367,8 @@ check(
   'Linux packaging and native smokes must retain user namespace and seccomp sandboxing'
 )
 check(
-  electronBuilderConfig.includes("{ target: 'deb', arch: ['x64'] }") &&
-    String(rootPackage.scripts?.['dist:linux'] || '').includes('deb'),
+  electronBuilderConfig.includes("{ target: 'deb', arch: ['arm64', 'x64'] }") &&
+    String(rootPackage.scripts?.['dist:linux:x64'] || '').includes('deb') &&
+    String(rootPackage.scripts?.['dist:linux:arm64'] || '').includes('deb'),
   'Linux packaging must ship both AppImage and deb for Debian-family installers'
 )

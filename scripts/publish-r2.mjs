@@ -41,22 +41,28 @@ export {
   releaseVersionForTag
 } from './publish-r2-support.mjs'
 
-async function collectPlatformRelease({ distDir, platform, tag, channel, config }) {
+export async function collectPlatformRelease({ distDir, platform, tag, channel, config }) {
   const spec = PLATFORM_SPECS[platform]
   if (!spec) throw new Error(`Unsupported platform: ${platform}`)
 
   const entries = await readdir(distDir)
-  const updatePath = join(distDir, spec.updateFile)
-  const updateText = await readFile(updatePath, 'utf8')
-  const updateMetadata = parseUpdateYml(updateText)
+  const updateFiles = spec.updateFiles ?? [spec.updateFile]
+  const updateDocuments = await Promise.all(updateFiles.map(async (fileName) => ({
+    fileName,
+    metadata: parseUpdateYml(await readFile(join(distDir, fileName), 'utf8'))
+  })))
   const releaseVersion = releaseVersionForTag(tag)
-  if (updateMetadata.version !== releaseVersion) {
-    throw new Error(
-      `${spec.updateFile} version ${updateMetadata.version} does not match ${tag}. Rebuild with KUN_APP_VERSION=${releaseVersion} (legacy DEEPSEEK_GUI_APP_VERSION is also accepted).`
-    )
+  for (const document of updateDocuments) {
+    if (document.metadata.version !== releaseVersion) {
+      throw new Error(
+        `${document.fileName} version ${document.metadata.version} does not match ${tag}. Rebuild with KUN_APP_VERSION=${releaseVersion} (legacy DEEPSEEK_GUI_APP_VERSION is also accepted).`
+      )
+    }
   }
 
-  const referenced = new Set(updateMetadata.files.map((file) => basename(file.url)))
+  const referenced = new Set(updateDocuments.flatMap(({ metadata }) =>
+    metadata.files.map((file) => basename(file.url))
+  ))
   const sidecarAssets = collectRequiredSidecarAssets({
     entries,
     platform,
@@ -69,9 +75,11 @@ async function collectPlatformRelease({ distDir, platform, tag, channel, config 
     }
   }
 
-  const fileNames = Array.from(new Set([spec.updateFile, ...assets, ...referenced])).sort()
+  const fileNames = Array.from(new Set([...updateFiles, ...assets, ...referenced])).sort()
   const files = []
-  const downloadByName = new Map(updateMetadata.files.map((file) => [basename(file.url), file]))
+  const downloadByName = new Map(updateDocuments.flatMap(({ metadata }) =>
+    metadata.files.map((file) => [basename(file.url), file])
+  ))
 
   for (const fileName of fileNames) {
     const path = join(distDir, fileName)
@@ -89,14 +97,14 @@ async function collectPlatformRelease({ distDir, platform, tag, channel, config 
       sha256,
       sha512,
       contentType: contentType(fileName),
-      updateMetadata: fileName === spec.updateFile,
+      updateMetadata: updateFiles.includes(fileName),
       // deb is outside electron-updater metadata but is still a public installer.
       downloadable: downloadByName.has(fileName) || fileName.endsWith('.deb')
     })
   }
 
   const filesByName = new Map(files.map((file) => [file.fileName, file]))
-  const updateDownloads = updateMetadata.files.map((file) => {
+  const updateDownloads = [...downloadByName.values()].map((file) => {
     const fileName = basename(file.url)
     const local = filesByName.get(fileName)
     if (!local) throw new Error(`Missing collected file: ${fileName}`)
@@ -135,13 +143,18 @@ async function collectPlatformRelease({ distDir, platform, tag, channel, config 
     tag,
     channel,
     platform,
-    version: updateMetadata.version,
-    releaseDate: updateMetadata.releaseDate,
+    version: releaseVersion,
+    releaseDate: updateDocuments.map(({ metadata }) => metadata.releaseDate).filter(Boolean).sort().at(-1),
     generatedAt: new Date().toISOString(),
     updateMetadata: {
       fileName: spec.updateFile,
       archiveUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'releases', tag, spec.updateFile),
-      latestUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'latest', spec.updateFile)
+      latestUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'latest', spec.updateFile),
+      alternates: updateFiles.slice(1).map((fileName) => ({
+        fileName,
+        archiveUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'releases', tag, fileName),
+        latestUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'latest', fileName)
+      }))
     },
     files,
     downloads
@@ -164,14 +177,15 @@ export async function collectTuiRelease({ distDir, tag, channel, config }) {
     typeof manifest?.commit !== 'string' ||
     !/^[a-f0-9]{40}$/.test(manifest.commit) ||
     !Array.isArray(manifest?.artifacts) ||
-    manifest.artifacts.length !== 4
+    manifest.artifacts.length !== 5
   ) {
     throw new Error('release-tui.json does not match the requested release')
   }
-  const expectedTargets = new Set(['darwin-arm64', 'darwin-x64', 'linux-x64', 'win32-x64'])
+  const expectedTargets = new Set(['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'win32-x64'])
   const expectedNames = new Map([
     ['darwin-arm64', `Kun-TUI-${artifactVersionForTag(tag)}-mac-arm64.tar.gz`],
     ['darwin-x64', `Kun-TUI-${artifactVersionForTag(tag)}-mac-x64.tar.gz`],
+    ['linux-arm64', `Kun-TUI-${artifactVersionForTag(tag)}-linux-arm64.tar.gz`],
     ['linux-x64', `Kun-TUI-${artifactVersionForTag(tag)}-linux-x64.tar.gz`],
     ['win32-x64', `Kun-TUI-${artifactVersionForTag(tag)}-win-x64.zip`]
   ])
@@ -399,6 +413,26 @@ export function validatePromotionContract({
     ) {
       throw new Error('GUI platform manifest is incompatible with the requested release')
     }
+    if (manifest.platform === 'linux') {
+      const requiredLinuxFiles = new Set([
+        `Kun-${artifactVersionForTag(tag)}-linux-x86_64.AppImage`,
+        `Kun-${artifactVersionForTag(tag)}-linux-amd64.deb`,
+        `Kun-${artifactVersionForTag(tag)}-linux-arm64.AppImage`,
+        `Kun-${artifactVersionForTag(tag)}-linux-arm64.deb`,
+        'latest-linux.yml',
+        'latest-linux-arm64.yml'
+      ])
+      for (const file of manifest.files) requiredLinuxFiles.delete(file?.fileName)
+      const alternateMetadata = manifest.updateMetadata?.alternates ?? []
+      const hasArmMetadata = alternateMetadata.some((entry) => (
+        entry?.fileName === 'latest-linux-arm64.yml'
+      ))
+      if (requiredLinuxFiles.size !== 0 || !hasArmMetadata) {
+        throw new Error(
+          `Linux GUI manifest is missing required x64/ARM64 release files: ${[...requiredLinuxFiles].join(', ') || 'ARM64 update metadata'}`
+        )
+      }
+    }
     manifestPlatforms.add(manifest.platform)
   }
   if (manifestPlatforms.size !== platformSet.size ||
@@ -409,6 +443,7 @@ export function validatePromotionContract({
     const expectedTuiTargets = new Set([
       'darwin-arm64',
       'darwin-x64',
+      'linux-arm64',
       'linux-x64',
       'win32-x64'
     ])
@@ -539,7 +574,15 @@ async function promoteRelease({ flags, dryRun }) {
           manifest.platform,
           {
             fileName: manifest.updateMetadata.fileName,
-            url: joinUrl(config.publicBaseUrl, target.basePath, 'latest', manifest.updateMetadata.fileName)
+            url: joinUrl(config.publicBaseUrl, target.basePath, 'latest', manifest.updateMetadata.fileName),
+            ...(Array.isArray(manifest.updateMetadata.alternates) && manifest.updateMetadata.alternates.length > 0
+              ? {
+                  alternates: manifest.updateMetadata.alternates.map((entry) => ({
+                    fileName: entry.fileName,
+                    url: joinUrl(config.publicBaseUrl, target.basePath, 'latest', entry.fileName)
+                  }))
+                }
+              : {})
           }
         ])
       ),

@@ -14,6 +14,7 @@ const COMMIT = 'b'.repeat(40)
 const DEFINITIONS = [
   ['darwin-arm64', 'darwin', 'mac', 'arm64', 'tar.gz'],
   ['darwin-x64', 'darwin', 'mac', 'x64', 'tar.gz'],
+  ['linux-arm64', 'linux', 'linux', 'arm64', 'tar.gz'],
   ['linux-x64', 'linux', 'linux', 'x64', 'tar.gz'],
   ['win32-x64', 'win32', 'win', 'x64', 'zip']
 ]

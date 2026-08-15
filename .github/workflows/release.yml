@@ -184,7 +184,7 @@ jobs:
             dist/latest.yml
 
   build-linux:
-    name: Build Linux
+    name: Build Linux (x64)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     needs:
@@ -234,6 +234,62 @@ jobs:
             dist/Kun-*-linux-amd64.deb
             dist/latest-linux.yml
 
+  build-linux-arm64:
+    name: Build Linux (ARM64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    needs:
+      - prepare
+    env:
+      KUN_APP_VERSION: ${{ needs.prepare.outputs.version }}
+      KUN_UPDATE_CHANNEL: stable
+      DEEPSEEK_GUI_APP_VERSION: ${{ needs.prepare.outputs.version }}
+      DEEPSEEK_GUI_UPDATE_CHANNEL: stable
+      RELEASE_CHANNEL: stable
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Check out merge commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools rpm fakeroot dpkg build-essential python3 cmake file
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Linux ARM64 AppImage and deb
+        run: npm run dist:linux:arm64
+
+      - name: Verify Linux ARM64 package architecture
+        run: >-
+          node ./scripts/verify-linux-package-architecture.mjs
+          --version "${{ needs.prepare.outputs.version }}"
+          --arch arm64
+          --dist dist
+
+      - name: Upload Linux ARM64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-arm64
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/Kun-*-linux-arm64.AppImage
+            dist/Kun-*-linux-arm64.AppImage.blockmap
+            dist/Kun-*-linux-arm64.deb
+            dist/latest-linux-arm64.yml
+
   build-tui:
     name: Build standalone TUI (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
@@ -252,6 +308,8 @@ jobs:
             target: win32-x64
           - runner: ubuntu-22.04
             target: linux-x64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
     env:
       KUN_APP_VERSION: ${{ needs.prepare.outputs.version }}
       KUN_ARTIFACT_VERSION: ${{ needs.prepare.outputs.version }}
@@ -315,6 +373,7 @@ jobs:
       - build-macos
       - build-windows
       - build-linux
+      - build-linux-arm64
       - build-tui
     env:
       GH_TOKEN: ${{ github.token }}
@@ -373,13 +432,17 @@ jobs:
             "Kun-*-win-x64.exe"
             "Kun-*-linux-x86_64.AppImage"
             "Kun-*-linux-amd64.deb"
+            "Kun-*-linux-arm64.AppImage"
+            "Kun-*-linux-arm64.deb"
             "latest-mac.yml"
             "latest.yml"
             "latest-linux.yml"
+            "latest-linux-arm64.yml"
             "Kun-TUI-${RELEASE_VERSION}-mac-arm64.tar.gz"
             "Kun-TUI-${RELEASE_VERSION}-mac-x64.tar.gz"
             "Kun-TUI-${RELEASE_VERSION}-win-x64.zip"
             "Kun-TUI-${RELEASE_VERSION}-linux-x64.tar.gz"
+            "Kun-TUI-${RELEASE_VERSION}-linux-arm64.tar.gz"
           )
 
           for pattern in "${required[@]}"; do
@@ -408,7 +471,10 @@ jobs:
       - name: Generate release notes
         run: |
           set -euo pipefail
-          if [[ -n "${PREVIOUS_TAG}" ]]; then
+          curated_notes="release/release-v${RELEASE_VERSION}.md"
+          if [[ -f "${curated_notes}" ]]; then
+            cp "${curated_notes}" release-notes.md
+          elif [[ -n "${PREVIOUS_TAG}" ]]; then
             node ./scripts/generate-release-notes.cjs "${PREVIOUS_TAG}" > release-notes.md
           else
             node ./scripts/generate-release-notes.cjs > release-notes.md
@@ -425,8 +491,8 @@ jobs:
             echo "- Branch: \`master\`"
             echo "- Commit: \`${GITHUB_SHA::7}\`"
             echo "- macOS: Developer ID signed and notarized"
-            echo "- Platforms: macOS arm64/x64, Windows x64, Linux x64 AppImage/deb"
-            echo "- Standalone TUI: macOS arm64/x64, Windows x64, Linux x64"
+            echo "- Platforms: macOS arm64/x64, Windows x64, Linux arm64/x64 AppImage/deb"
+            echo "- Standalone TUI: macOS arm64/x64, Windows x64, Linux arm64/x64"
           } >> release-notes.md
 
       - name: Ensure release tag

@@ -11,6 +11,7 @@ import yauzl from 'yauzl'
 const TARGETS = new Map([
   ['darwin-arm64', { os: 'mac', arch: 'arm64', format: 'tar.gz' }],
   ['darwin-x64', { os: 'mac', arch: 'x64', format: 'tar.gz' }],
+  ['linux-arm64', { os: 'linux', arch: 'arm64', format: 'tar.gz' }],
   ['linux-x64', { os: 'linux', arch: 'x64', format: 'tar.gz' }],
   ['win32-x64', { os: 'win', arch: 'x64', format: 'zip' }]
 ])

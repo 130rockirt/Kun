@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import {
   artifactVersionForTag,
+  collectPlatformRelease,
   collectRequiredSidecarAssets,
   collectTuiRelease,
   releaseVersionForTag,
@@ -18,22 +19,25 @@ test('requires exactly one Linux deb sidecar matching the release tag', () => {
       entries: [
         'Kun-1.2.3-linux-x86_64.AppImage',
         'Kun-1.2.3-linux-amd64.deb',
+        'Kun-1.2.3-linux-arm64.AppImage',
+        'Kun-1.2.3-linux-arm64.deb',
         'latest-linux.yml'
       ],
       platform: 'linux',
       tagVersion: '1.2.3'
     }),
-    ['Kun-1.2.3-linux-amd64.deb']
+    ['Kun-1.2.3-linux-amd64.deb', 'Kun-1.2.3-linux-arm64.deb']
   )
 
   for (const entries of [
     [],
     ['Kun-1.2.2-linux-amd64.deb'],
-    ['Kun-1.2.2-linux-amd64.deb', 'Kun-1.2.3-linux-amd64.deb']
+    ['Kun-1.2.3-linux-amd64.deb'],
+    ['Kun-1.2.3-linux-amd64.deb', 'Kun-1.2.2-linux-arm64.deb']
   ]) {
     assert.throws(
       () => collectRequiredSidecarAssets({ entries, platform: 'linux', tagVersion: '1.2.3' }),
-      /Expected exactly one Linux deb sidecar named Kun-1\.2\.3-linux-amd64\.deb/
+      /Expected Linux deb sidecars Kun-1\.2\.3-linux-amd64\.deb, Kun-1\.2\.3-linux-arm64\.deb/
     )
   }
 })
@@ -45,6 +49,61 @@ test('does not require Linux sidecars for other platforms', () => {
   )
 })
 
+test('collects separate x64 and ARM64 Linux update metadata', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'publish-r2-linux-'))
+  try {
+    const assets = [
+      'Kun-1.2.3-linux-x86_64.AppImage',
+      'Kun-1.2.3-linux-x86_64.AppImage.blockmap',
+      'Kun-1.2.3-linux-amd64.deb',
+      'Kun-1.2.3-linux-arm64.AppImage',
+      'Kun-1.2.3-linux-arm64.AppImage.blockmap',
+      'Kun-1.2.3-linux-arm64.deb'
+    ]
+    for (const name of assets) await writeFile(join(directory, name), `bytes:${name}`)
+    const metadata = (appImage) => [
+      'version: 1.2.3',
+      'files:',
+      `  - url: ${appImage}`,
+      '    sha512: Zml4dHVyZQ==',
+      '    size: 7',
+      'releaseDate: 2026-08-15T00:00:00.000Z',
+      ''
+    ].join('\n')
+    await writeFile(
+      join(directory, 'latest-linux.yml'),
+      metadata('Kun-1.2.3-linux-x86_64.AppImage')
+    )
+    await writeFile(
+      join(directory, 'latest-linux-arm64.yml'),
+      metadata('Kun-1.2.3-linux-arm64.AppImage')
+    )
+
+    const release = await collectPlatformRelease({
+      distDir: directory,
+      platform: 'linux',
+      tag: 'v1.2.3',
+      channel: 'stable',
+      config: {
+        prefix: 'deepseek-gui',
+        publicBaseUrl: 'https://downloads.example.test'
+      }
+    })
+
+    assert.deepEqual(
+      release.downloads.map(({ arch, format }) => `${arch}:${format}`).sort(),
+      ['arm64:AppImage', 'arm64:deb', 'x64:AppImage', 'x64:deb']
+    )
+    assert.deepEqual(
+      release.files.filter((file) => file.updateMetadata).map((file) => file.fileName).sort(),
+      ['latest-linux-arm64.yml', 'latest-linux.yml']
+    )
+    assert.equal(release.updateMetadata.alternates[0].fileName, 'latest-linux-arm64.yml')
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('derives one GUI/TUI version pair from stable and Daily tags', () => {
   assert.equal(releaseVersionForTag('v1.2.3'), '1.2.3')
   assert.equal(artifactVersionForTag('v1.2.3'), '1.2.3')
@@ -52,12 +111,13 @@ test('derives one GUI/TUI version pair from stable and Daily tags', () => {
   assert.equal(artifactVersionForTag('dev-20260729.1200'), '20260729.1200')
 })
 
-test('collects exactly four same-version standalone TUI targets', async () => {
+test('collects exactly five same-version standalone TUI targets', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'publish-r2-tui-'))
   try {
     const definitions = [
       ['darwin-arm64', 'mac', 'arm64', 'tar.gz'],
       ['darwin-x64', 'mac', 'x64', 'tar.gz'],
+      ['linux-arm64', 'linux', 'arm64', 'tar.gz'],
       ['linux-x64', 'linux', 'x64', 'tar.gz'],
       ['win32-x64', 'win', 'x64', 'zip']
     ]
@@ -98,7 +158,7 @@ test('collects exactly four same-version standalone TUI targets', async () => {
         publicBaseUrl: 'https://downloads.example.test'
       }
     })
-    assert.equal(release.files.length, 6)
+    assert.equal(release.files.length, 7)
     assert.deepEqual(
       release.manifest.artifacts.map((artifact) => artifact.target).sort(),
       definitions.map(([target]) => target).sort()
@@ -108,15 +168,30 @@ test('collects exactly four same-version standalone TUI targets', async () => {
   }
 })
 
-test('gates joint promotion on all GUI platforms and all four TUI targets', () => {
+test('gates joint promotion on all GUI platforms and all five TUI targets', () => {
   const platforms = ['mac', 'win', 'linux']
   const platformManifests = platforms.map((platform) => ({
     version: '1.2.3',
     tag: 'v1.2.3',
     channel: 'stable',
     platform,
-    files: [],
-    downloads: []
+    files: platform === 'linux'
+      ? [
+          'Kun-1.2.3-linux-x86_64.AppImage',
+          'Kun-1.2.3-linux-amd64.deb',
+          'Kun-1.2.3-linux-arm64.AppImage',
+          'Kun-1.2.3-linux-arm64.deb',
+          'latest-linux.yml',
+          'latest-linux-arm64.yml'
+        ].map((fileName) => ({ fileName }))
+      : [],
+    downloads: [],
+    updateMetadata: platform === 'linux'
+      ? {
+          fileName: 'latest-linux.yml',
+          alternates: [{ fileName: 'latest-linux-arm64.yml' }]
+        }
+      : { fileName: platform === 'mac' ? 'latest-mac.yml' : 'latest.yml' }
   }))
   const tuiManifest = {
     version: '1.2.3',
@@ -126,6 +201,7 @@ test('gates joint promotion on all GUI platforms and all four TUI targets', () =
     artifacts: [
       { target: 'darwin-arm64' },
       { target: 'darwin-x64' },
+      { target: 'linux-arm64' },
       { target: 'linux-x64' },
       { target: 'win32-x64' }
     ]
@@ -157,4 +233,16 @@ test('gates joint promotion on all GUI platforms and all four TUI targets', () =
     },
     requireTui: true
   }), /TUI manifest is incompatible/)
+  assert.throws(() => validatePromotionContract({
+    tag: 'v1.2.3',
+    channel: 'stable',
+    platforms,
+    platformManifests: platformManifests.map((manifest) => (
+      manifest.platform === 'linux'
+        ? { ...manifest, files: manifest.files.filter((file) => !file.fileName.includes('arm64')) }
+        : manifest
+    )),
+    tuiManifest,
+    requireTui: true
+  }), /Linux GUI manifest is missing required x64\/ARM64 release files/)
 })
