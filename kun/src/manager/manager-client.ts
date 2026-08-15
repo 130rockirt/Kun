@@ -35,22 +35,17 @@ import {
   type ManagerDiscoveryRecord
 } from './manager-discovery.js'
 import { sameCanonicalPath } from './canonical-path.js'
-import { KUN_MANAGER_CAPABILITIES } from './service-manager.js'
 import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-lease.js'
+import {
+  resolveServiceManager
+} from './manager-resolution.js'
+export {
+  resolveServiceManager,
+  resolveServiceManagerForMigration
+} from './manager-resolution.js'
 const START_TIMEOUT_MS = 30_000
 const POLL_MS = 100
 const LEGACY_HANDOVER_TIMEOUT_MS = 5 * 60_000
-const ManagerHealthSchema = z.object({
-  status: z.literal('ok'),
-  service: z.literal('kun-service-manager'),
-  protocolVersion: z.literal(KUN_MANAGER_PROTOCOL_VERSION),
-  instanceId: z.string(),
-  pid: z.number().int().positive(),
-  startedAt: z.string().datetime(),
-  serviceVersion: z.string(),
-  buildId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  capabilities: z.array(z.string())
-})
 export type ServiceManagerConnection = {
   discovery: ManagerDiscoveryRecord
 }
@@ -177,32 +172,6 @@ export class ManagerResourceLeaseClient {
         body: { ownerFlavor: this.flavor, ownerInstanceId: this.instanceId }
       }
     )
-  }
-}
-
-export async function resolveServiceManager(
-  controlDir = defaultKunControlDir(),
-  fetchImpl: typeof fetch = fetch
-): Promise<ServiceManagerConnection | null> {
-  const discovery = await readManagerDiscovery(controlDir).catch(() => null)
-  if (!discovery || !safeManagerUrl(discovery) || !processIsAlive(discovery.pid)) return null
-  try {
-    const response = await fetchImpl(`${discovery.baseUrl}/health`, {
-      signal: AbortSignal.timeout(2_000)
-    })
-    if (!response.ok) return null
-    const health = ManagerHealthSchema.parse(await response.json())
-    if (
-      health.instanceId !== discovery.instanceId ||
-      health.pid !== discovery.pid ||
-      health.startedAt !== discovery.startedAt ||
-      health.serviceVersion !== discovery.serviceVersion ||
-      health.buildId !== discovery.buildId ||
-      !KUN_MANAGER_CAPABILITIES.every((capability) => health.capabilities.includes(capability))
-    ) return null
-    return { discovery }
-  } catch {
-    return null
   }
 }
 
@@ -675,8 +644,7 @@ import {
   delay,
   processIsAlive,
   requestManagerResponse,
-  requireManagerJson,
-  safeManagerUrl
+  requireManagerJson
 } from './manager-client-support.js'
 export {
   defaultManagerControlDirForTests,

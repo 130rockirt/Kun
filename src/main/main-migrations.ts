@@ -34,7 +34,7 @@ import {
   ManagerRevisionedDocumentClient,
   readManagerRuntime,
   requestManagerJson,
-  resolveServiceManager,
+  resolveServiceManagerForMigration,
   type ServiceManagerConnection
 } from '../../kun/src/manager/manager-client.js'
 import {
@@ -214,7 +214,8 @@ function managerProcessIsAlive(pid: number): boolean {
 }
 
 async function drainCanonicalRuntimeMigrationWriters(): Promise<void> {
-  const manager = await resolveServiceManager(defaultKunControlDir(), fetch)
+  const controlDir = defaultKunControlDir()
+  const manager = await resolveServiceManagerForMigration(controlDir, fetch)
   if (manager) {
     await interruptStorageRelocationWork(manager)
     await Promise.all((['production', 'development'] as const).map((runtimeFlavor) =>
@@ -222,7 +223,7 @@ async function drainCanonicalRuntimeMigrationWriters(): Promise<void> {
     ))
     await shutdownServiceManagerAndWait(manager)
   } else {
-    const unresolved = await readManagerDiscovery(defaultKunControlDir()).catch(() => null)
+    const unresolved = await readManagerDiscovery(controlDir).catch(() => null)
     if (unresolved && managerProcessIsAlive(unresolved.pid)) {
       throw new Error(
         `active_writer: Kun Service Manager ${unresolved.pid} is alive but could not be ` +
