@@ -57,6 +57,7 @@ export type BrowserUseNetworkPolicyOptions = {
   mode: BrowserUseMode
   exactLocalOrigin?: string
   resolve?: BrowserUseDnsResolver
+  dnsTimeoutMs?: number
 }
 
 export type BrowserUsePolicyProxyOptions = BrowserUseNetworkPolicyOptions & {
@@ -127,6 +128,33 @@ export function normalizeBrowserUseOrigin(rawUrl: string, mode: BrowserUseMode):
   return url.origin
 }
 
+export const BROWSER_USE_DNS_TIMEOUT_MS = 10_000
+
+async function resolveBrowserUseAddressWithDeadline(
+  hostname: string,
+  options: BrowserUseNetworkPolicyOptions
+): Promise<readonly BrowserUseResolvedAddress[]> {
+  let timer: NodeJS.Timeout | undefined
+  const lookup = Promise.resolve()
+    .then(() => (options.resolve ?? systemBrowserUseDnsResolver)(hostname))
+  // A stalled getaddrinfo (for example behind an unresponsive VPN DNS) must
+  // never hold the policy proxy's CONNECT decision open forever.
+  lookup.catch(() => undefined)
+  try {
+    return await Promise.race([
+      lookup,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new BrowserUseNetworkPolicyError(
+          'dns_timeout',
+          'Browser Use destination DNS resolution timed out.'
+        )), options.dnsTimeoutMs ?? BROWSER_USE_DNS_TIMEOUT_MS)
+      })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export async function resolveBrowserUseNetworkTarget(
   rawUrl: string | URL,
   options: BrowserUseNetworkPolicyOptions
@@ -179,7 +207,7 @@ export async function resolveBrowserUseNetworkTarget(
 
   const literalFamily = isIP(hostname)
   const rawAddresses = literalFamily === 0
-    ? await (options.resolve ?? systemBrowserUseDnsResolver)(hostname)
+    ? await resolveBrowserUseAddressWithDeadline(hostname, options)
     : [{ address: hostname, family: literalFamily as 4 | 6 }]
   if (rawAddresses.length === 0) {
     throw new BrowserUseNetworkPolicyError('dns_empty', 'Destination DNS returned no addresses.')

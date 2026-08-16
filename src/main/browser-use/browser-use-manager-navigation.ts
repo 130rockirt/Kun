@@ -122,6 +122,13 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
       this.publish(entry)
       await tab.view.webContents.loadURL(rawUrl)
       this.assertOperationActive(entry, signal, tab)
+      this.audit(entry, {
+        category: 'execution',
+        action: 'open',
+        origin,
+        sanitizedPath: pathOnly(rawUrl),
+        outcome: 'success'
+      }, tab.id)
       return resultOk('opened', `Opened ${sanitizeBrowserUseUrl(rawUrl)}.`, entry)
     } catch (error) {
       if (
@@ -143,7 +150,14 @@ export abstract class BrowserUseManagerNavigation extends BrowserUseManagerFound
         errorCode: 'navigation_failed'
       })
       this.publish(entry)
-      return resultError('navigation_failed', 'The authorized page failed to load.', entry)
+      const detail = errorMessage(error).slice(0, 512) || openedTab?.error?.slice(0, 512)
+      return resultError(
+        'navigation_failed',
+        detail
+          ? `The authorized page failed to load: ${detail}`
+          : 'The authorized page failed to load.',
+        entry
+      )
     }
   }
 
