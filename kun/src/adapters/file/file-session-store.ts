@@ -46,6 +46,7 @@ const DEFAULT_ITEMS_CACHE_MAX_BYTES = 16 * 1024 * 1024
 const DEFAULT_ITEM_HISTORY_COMPACTION_MIN_BYTES = 4 * 1024 * 1024
 const HIGHEST_SEQ_CACHE_MAX_THREADS = 256
 const ITEM_HISTORY_REVISION_MAX_THREADS = 512
+const EVENT_HISTORY_REVISION_MAX_THREADS = 512
 // A valid model tool argument may contain 1 MiB of JSON, whose escaping can
 // nearly double the persisted item event. Unresolved `__raw` strings are
 // summarized before persistence, while replay remains bounded for valid calls.
@@ -71,6 +72,8 @@ export class FileSessionStore implements SessionStore {
   /** Opaque revisions used to fence stale read-compute-rewrite snapshots. */
   private readonly itemHistoryRevisions = new Map<string, number>()
   private nextItemHistoryRevision = 0
+  private readonly eventHistoryRevisions = new Map<string, number>()
+  private nextEventHistoryRevision = 0
   private readonly highestSeqCache = new Map<string, { seq: number; size: number; mtimeMs: number }>()
   private readonly writeQueues = new Map<string, Promise<unknown>>()
   private readonly compactionScheduler: SessionCompactionScheduler
@@ -136,6 +139,7 @@ export class FileSessionStore implements SessionStore {
       await this.ensureDir(this.threadDir(threadId))
       const path = this.eventsPath(threadId)
       await appendFile(path, `${JSON.stringify(event)}\n`, { encoding: 'utf-8', mode: 0o600 })
+      this.bumpEventHistoryRevision(threadId)
       const info = await stat(path)
       this.cacheHighestSeq(threadId, event.seq, info, { preserveHigher: true })
     })
@@ -232,21 +236,18 @@ export class FileSessionStore implements SessionStore {
     }
     // Scan unlocked so appendItem/updateItem are not queued behind a 350MB parse.
     const revisionBefore = this.itemHistoryRevision(threadId)
-    const parsed = await readLatestItemsFromJsonl(path, { rejectMalformed: true })
+    const parsed = await readLatestItemsFromJsonl(path)
     const contents = parsed.items.map((item) => JSON.stringify(item)).join('\n')
     const output = contents ? `${contents}\n` : ''
     const afterBytes = Buffer.byteLength(output, 'utf-8')
-    if (afterBytes >= info.size) {
-      this.cacheItems(threadId, parsed.items)
-      return {
-        compacted: false,
-        beforeBytes: info.size,
-        afterBytes: info.size,
-        itemCount: parsed.items.length
-      }
-    }
     return this.withThreadWrite(threadId, async () => {
-      if (this.itemHistoryRevision(threadId) !== revisionBefore) {
+      const currentInfo = await stat(path).catch(() => null)
+      if (
+        this.itemHistoryRevision(threadId) !== revisionBefore ||
+        !currentInfo ||
+        currentInfo.size !== info.size ||
+        currentInfo.mtimeMs !== info.mtimeMs
+      ) {
         // A concurrent append invalidated the snapshot; coalesce another pass.
         this.scheduleItemHistoryCompaction(threadId)
         return {
@@ -256,7 +257,20 @@ export class FileSessionStore implements SessionStore {
           itemCount: parsed.items.length
         }
       }
-      await this.atomicWrite(path, output)
+      const malformedCount = parsed.malformedCount + (parsed.incompleteTrailingRecord ? 1 : 0)
+      if (malformedCount > 0) {
+        throw new Error(`item history contains ${malformedCount} malformed record(s)`)
+      }
+      if (afterBytes >= currentInfo.size) {
+        this.cacheItems(threadId, parsed.items)
+        return {
+          compacted: false,
+          beforeBytes: currentInfo.size,
+          afterBytes: currentInfo.size,
+          itemCount: parsed.items.length
+        }
+      }
+      await atomicWriteFile(path, output, { allowDirectWriteFallback: false })
       this.bumpItemsVersion(threadId)
       this.cacheItems(threadId, parsed.items)
       this.bumpItemHistoryRevision(threadId)
@@ -452,6 +466,7 @@ export class FileSessionStore implements SessionStore {
     this.itemsCacheBytes.clear()
     this.itemsCacheVersion.clear()
     this.itemHistoryRevisions.clear()
+    this.eventHistoryRevisions.clear()
     this.highestSeqCache.clear()
   }
 
@@ -459,6 +474,7 @@ export class FileSessionStore implements SessionStore {
     this.removeCachedItems(threadId)
     this.itemsCacheVersion.delete(threadId)
     this.itemHistoryRevisions.delete(threadId)
+    this.eventHistoryRevisions.delete(threadId)
     this.highestSeqCache.delete(threadId)
   }
 
@@ -496,6 +512,26 @@ export class FileSessionStore implements SessionStore {
       this.itemHistoryRevisions.delete(oldest)
     }
     return this.nextItemHistoryRevision
+  }
+
+  private eventHistoryRevision(threadId: string): number {
+    const revision = this.eventHistoryRevisions.get(threadId)
+    if (revision === undefined) return this.bumpEventHistoryRevision(threadId)
+    this.eventHistoryRevisions.delete(threadId)
+    this.eventHistoryRevisions.set(threadId, revision)
+    return revision
+  }
+
+  private bumpEventHistoryRevision(threadId: string): number {
+    this.nextEventHistoryRevision += 1
+    this.eventHistoryRevisions.delete(threadId)
+    this.eventHistoryRevisions.set(threadId, this.nextEventHistoryRevision)
+    while (this.eventHistoryRevisions.size > EVENT_HISTORY_REVISION_MAX_THREADS) {
+      const oldest = this.eventHistoryRevisions.keys().next().value
+      if (oldest === undefined) break
+      this.eventHistoryRevisions.delete(oldest)
+    }
+    return this.nextEventHistoryRevision
   }
 
   private cacheItems(threadId: string, items: TurnItem[]): void {
@@ -618,11 +654,29 @@ export class FileSessionStore implements SessionStore {
     const path = this.eventsPath(threadId)
     const info = await stat(path).catch(() => null)
     if (!info || info.size <= this.usageEventCompaction.maxBytes) return
+    const revisionBefore = this.eventHistoryRevision(threadId)
+    let conflicted = false
     const compacted = await compactUsageEventsJsonlFile(path, {
       nowIso: this.usageEventCompaction.nowIso(),
       retentionDays: this.usageEventCompaction.retentionDays,
-      maxRecordBytes: DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES
+      maxRecordBytes: DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES,
+      commitReplacement: (replace) => this.withThreadWrite(threadId, async () => {
+        const currentInfo = await stat(path).catch(() => null)
+        if (
+          this.eventHistoryRevision(threadId) !== revisionBefore ||
+          !currentInfo ||
+          currentInfo.size !== info.size ||
+          currentInfo.mtimeMs !== info.mtimeMs
+        ) {
+          conflicted = true
+          return false
+        }
+        await replace()
+        this.bumpEventHistoryRevision(threadId)
+        return true
+      })
     })
+    if (conflicted) this.scheduleUsageEventCompaction(threadId)
     if (!compacted) return
     // Size/mtime changed; drop the stale high-water cache entry so the next
     // highestSeq() rescans against the rewritten file.

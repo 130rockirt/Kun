@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readdir, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -144,12 +144,49 @@ describe('compactUsageEventsJsonlFile', () => {
     await expect(compactUsageEventsJsonlFile(path, {
       nowIso: '2026-06-03T00:00:00.000Z',
       retentionDays: 30,
-      maxRecordBytes: 1024 * 1024
+      maxRecordBytes: 1024 * 1024,
+      commitReplacement: async (replace) => {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        expect((await readdir(root)).some((name) => name.endsWith('.tmp'))).toBe(true)
+        await replace()
+        return true
+      }
     })).resolves.toBe(true)
 
     const rewritten = (await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
     // Keep the heartbeat, the latest pre-cutoff usage anchor, and the latest usage.
     expect(rewritten.map((event) => event.seq)).toEqual([1, 3, 4])
+  })
+
+  it('discards its temporary rewrite when a concurrent append invalidates the snapshot', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-usage-compact-conflict-'))
+    roots.push(root)
+    const path = join(root, 'events.jsonl')
+    const lines = [
+      { kind: 'usage', seq: 1, timestamp: '2024-01-01T00:00:00.000Z', threadId: 'thr' },
+      { kind: 'usage', seq: 2, timestamp: '2024-01-02T00:00:00.000Z', threadId: 'thr' },
+      { kind: 'heartbeat', seq: 3, timestamp: '2026-01-01T00:00:00.000Z', threadId: 'thr' }
+    ]
+    await writeFile(path, `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`, 'utf8')
+
+    await expect(compactUsageEventsJsonlFile(path, {
+      nowIso: '2026-06-03T00:00:00.000Z',
+      retentionDays: 30,
+      maxRecordBytes: 1024 * 1024,
+      commitReplacement: async () => {
+        await appendFile(path, `${JSON.stringify({
+          kind: 'heartbeat',
+          seq: 4,
+          timestamp: '2026-01-01T00:00:01.000Z',
+          threadId: 'thr'
+        })}\n`)
+        return false
+      }
+    })).resolves.toBe(false)
+
+    const preserved = (await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
+    expect(preserved.map((event) => event.seq)).toEqual([1, 2, 3, 4])
+    expect((await readdir(root)).filter((name) => name.endsWith('.tmp'))).toEqual([])
   })
 })
 
