@@ -89,6 +89,41 @@ describe('Runtime data migration lock', () => {
     ))
   })
 
+  it('reclaims a writer claim after its PID is reused by another process', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-runtime-migration-lock-'))
+    roots.push(root)
+    const dataDir = join(root, 'runtime')
+    const claimsPath = runtimeDataDirClaimsPath(dataDir)
+    const token = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const stalePath = join(claimsPath, `claim-701-${token}.json`)
+    await mkdir(claimsPath, { recursive: true })
+    await writeFile(stalePath, JSON.stringify({
+      schemaVersion: 1,
+      kind: 'runtime',
+      pid: 701,
+      token,
+      startedAt: '2026-08-16T00:00:00.000Z',
+      processIdentity: 'win32-v1:original-process',
+      dataDir
+    }))
+    let inspectedIdentity: string | undefined
+
+    const lock = await acquireRuntimeDataDirMigrationLock(dataDir, {
+      pid: 702,
+      processIsAlive: (pid, record) => {
+        if (pid === 701) {
+          inspectedIdentity = record?.processIdentity
+          return record?.processIdentity === 'win32-v1:reused-process'
+        }
+        return pid === 702
+      }
+    })
+
+    expect(inspectedIdentity).toBe('win32-v1:original-process')
+    await expect(readFile(stalePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await lock.release()
+  })
+
   it('fails closed on unknown or non-regular claim entries', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-runtime-migration-lock-'))
     roots.push(root)

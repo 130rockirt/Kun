@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { link, mkdir, open, readFile, readdir, rename, rm, unlink } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
+import {
+  isValidRuntimeProcessIdentity,
+  runtimeProcessIdentity,
+  runtimeProcessIsAlive,
+  type RuntimeProcessIsAlive
+} from './runtime-process-identity.js'
 
 export const RUNTIME_DATA_DIR_MIGRATION_LOCK_SUFFIX = '.kun-runtime-migration.lock'
 export const RUNTIME_DATA_DIR_OWNER_FILE = '.kun-runtime-owner.json'
@@ -14,6 +20,7 @@ type RuntimeDataDirWriterClaimRecord = {
   pid: number
   token: string
   startedAt: string
+  processIdentity?: string
   dataDir: string
 }
 
@@ -27,6 +34,7 @@ type RuntimeDataDirMigrationLockOwner = {
   pid: number
   token: string
   startedAt: string
+  processIdentity?: string
   dataDir: string
 }
 
@@ -35,6 +43,7 @@ type RuntimeDataDirOwner = {
   pid: number
   token: string
   startedAt: string
+  processIdentity?: string
 }
 
 function isErrno(error: unknown, code: string): boolean {
@@ -42,15 +51,6 @@ function isErrno(error: unknown, code: string): boolean {
     error !== null &&
     'code' in error &&
     (error as NodeJS.ErrnoException).code === code
-}
-
-function defaultProcessIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return !isErrno(error, 'ESRCH')
-  }
 }
 
 function parseOwner(raw: string): RuntimeDataDirMigrationLockOwner | null {
@@ -62,6 +62,7 @@ function parseOwner(raw: string): RuntimeDataDirMigrationLockOwner | null {
       typeof parsed.token === 'string' &&
       parsed.token.length > 0 &&
       typeof parsed.startedAt === 'string' &&
+      isValidRuntimeProcessIdentity(parsed.processIdentity) &&
       typeof parsed.dataDir === 'string' &&
       parsed.dataDir.length > 0
       ? parsed as RuntimeDataDirMigrationLockOwner
@@ -79,7 +80,8 @@ function parseRuntimeOwner(raw: string): RuntimeDataDirOwner | null {
       (parsed.pid ?? 0) > 0 &&
       typeof parsed.token === 'string' &&
       parsed.token.length > 0 &&
-      typeof parsed.startedAt === 'string'
+      typeof parsed.startedAt === 'string' &&
+      isValidRuntimeProcessIdentity(parsed.processIdentity)
       ? parsed as RuntimeDataDirOwner
       : null
   } catch {
@@ -102,6 +104,7 @@ function parseWriterClaim(raw: string): RuntimeDataDirWriterClaimRecord | null {
       typeof parsed.token === 'string' &&
       parsed.token.length > 0 &&
       typeof parsed.startedAt === 'string' &&
+      isValidRuntimeProcessIdentity(parsed.processIdentity) &&
       typeof parsed.dataDir === 'string' &&
       parsed.dataDir.length > 0
       ? parsed as RuntimeDataDirWriterClaimRecord
@@ -165,23 +168,25 @@ export async function acquireRuntimeDataDirWriterClaim(
   options: {
     pid?: number
     now?: () => Date
-    processIsAlive?: (pid: number) => boolean
+    processIsAlive?: RuntimeProcessIsAlive
     afterClaimCreated?: (path: string) => void | Promise<void>
   } = {}
 ): Promise<RuntimeDataDirWriterClaim> {
   const pid = options.pid ?? process.pid
   const now = options.now ?? (() => new Date())
-  const processIsAlive = options.processIsAlive ?? defaultProcessIsAlive
+  const processIsAlive = options.processIsAlive ?? runtimeProcessIsAlive
   const canonicalDataDir = resolve(dataDir)
   const claimsPath = runtimeDataDirClaimsPath(canonicalDataDir)
   const token = randomUUID()
   const path = join(claimsPath, writerClaimFilename(pid, token))
+  const processIdentity = runtimeProcessIdentity(pid)
   const record: RuntimeDataDirWriterClaimRecord = {
     schemaVersion: 1,
     kind,
     pid,
     token,
     startedAt: now().toISOString(),
+    ...(processIdentity ? { processIdentity } : {}),
     dataDir: canonicalDataDir
   }
   await mkdir(claimsPath, { recursive: true, mode: 0o700 })
@@ -229,7 +234,7 @@ export async function acquireRuntimeDataDirWriterClaim(
         }
         throw new Error(`Kun Runtime writer claim is invalid: ${contenderPath}`)
       }
-      if (processIsAlive(contender.pid)) {
+      if (processIsAlive(contender.pid, contender)) {
         if (writerClaimsConflict(kind, contender.kind)) {
           throw new Error(claimConflictMessage(contender, dataDir))
         }
@@ -328,12 +333,12 @@ export async function assertRuntimeDataDirMigrationInactive(
   dataDir: string,
   options: {
     pid?: number
-    processIsAlive?: (pid: number) => boolean
+    processIsAlive?: RuntimeProcessIsAlive
     beforeStaleReclaim?: (path: string, expectedRaw: string) => void | Promise<void>
   } = {}
 ): Promise<void> {
   const pid = options.pid ?? process.pid
-  const processIsAlive = options.processIsAlive ?? defaultProcessIsAlive
+  const processIsAlive = options.processIsAlive ?? runtimeProcessIsAlive
   const path = runtimeDataDirMigrationLockPath(dataDir)
   for (;;) {
     let raw: string
@@ -349,7 +354,7 @@ export async function assertRuntimeDataDirMigrationInactive(
     if (!owner) {
       throw new Error(`Kun Runtime migration lock is invalid: ${path}`)
     }
-    if (processIsAlive(owner.pid)) {
+    if (processIsAlive(owner.pid, owner)) {
       throw new Error(
         `Kun Runtime data migration is active in process ${owner.pid}: ${dataDir}`
       )
@@ -365,12 +370,12 @@ export async function assertRuntimeDataDirLeaseInactive(
   dataDir: string,
   options: {
     pid?: number
-    processIsAlive?: (pid: number) => boolean
+    processIsAlive?: RuntimeProcessIsAlive
     beforeStaleReclaim?: (path: string, expectedRaw: string) => void | Promise<void>
   } = {}
 ): Promise<void> {
   const pid = options.pid ?? process.pid
-  const processIsAlive = options.processIsAlive ?? defaultProcessIsAlive
+  const processIsAlive = options.processIsAlive ?? runtimeProcessIsAlive
   const path = runtimeDataDirOwnerPath(dataDir)
   for (;;) {
     let raw: string
@@ -384,7 +389,7 @@ export async function assertRuntimeDataDirLeaseInactive(
     }
     const owner = parseRuntimeOwner(raw)
     if (!owner) throw new Error(`Kun Runtime data directory owner record is invalid: ${path}`)
-    if (processIsAlive(owner.pid)) {
+    if (processIsAlive(owner.pid, owner)) {
       throw new Error(
         `Kun Runtime data directory is already owned by active process ${owner.pid}: ${dataDir}`
       )
@@ -408,13 +413,13 @@ export async function acquireRuntimeDataDirMigrationLock(
   options: {
     pid?: number
     now?: () => Date
-    processIsAlive?: (pid: number) => boolean
+    processIsAlive?: RuntimeProcessIsAlive
     beforeStaleReclaim?: (path: string, expectedRaw: string) => void | Promise<void>
   } = {}
 ): Promise<RuntimeDataDirMigrationLock> {
   const pid = options.pid ?? process.pid
   const now = options.now ?? (() => new Date())
-  const processIsAlive = options.processIsAlive ?? defaultProcessIsAlive
+  const processIsAlive = options.processIsAlive ?? runtimeProcessIsAlive
   const path = runtimeDataDirMigrationLockPath(dataDir)
   await mkdir(dirname(path), { recursive: true, mode: 0o700 })
   const writerClaim = await acquireRuntimeDataDirWriterClaim(dataDir, 'migration', {
@@ -432,11 +437,13 @@ export async function acquireRuntimeDataDirMigrationLock(
     await writerClaim.release().catch(() => undefined)
     throw error
   }
+  const processIdentity = runtimeProcessIdentity(pid)
   const owner: RuntimeDataDirMigrationLockOwner = {
     schemaVersion: 1,
     pid,
     token: randomUUID(),
     startedAt: now().toISOString(),
+    ...(processIdentity ? { processIdentity } : {}),
     dataDir: resolve(dataDir)
   }
   try {
