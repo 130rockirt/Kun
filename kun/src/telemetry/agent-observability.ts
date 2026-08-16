@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto'
-import { appendFile, chmod, mkdir } from 'node:fs/promises'
+import { appendFile, mkdir } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import type { RuntimeEvent } from '../contracts/events.js'
 import type { UsageSnapshot } from '../contracts/usage.js'
 import type { ObservabilityConfig } from '../config/kun-config.js'
 import type { RuntimeEventObserver } from '../services/runtime-event-recorder.js'
 import { OtlpHttpJsonAgentObservabilitySink } from './otlp-http-json-sink.js'
+import { applyPosixMode } from '../security/posix-permissions.js'
 
 export type AgentObservabilityAttributeValue = string | number | boolean | string[]
 
@@ -59,11 +60,11 @@ export class JsonlAgentObservabilitySink implements AgentObservabilitySink {
 
   async emit(span: AgentObservabilitySpan): Promise<void> {
     this.ready ??= mkdir(dirname(this.outputPath), { recursive: true, mode: 0o700 })
-      .then(async () => { await chmod(dirname(this.outputPath), 0o700) })
+      .then(async () => { await applyPosixMode(dirname(this.outputPath), 0o700) })
     await this.ready
     await appendFile(this.outputPath, JSON.stringify({ span }) + '\n', { encoding: 'utf8', mode: 0o600 })
     if (!this.hardened) {
-      await chmod(this.outputPath, 0o600)
+      await applyPosixMode(this.outputPath, 0o600)
       this.hardened = true
     }
   }

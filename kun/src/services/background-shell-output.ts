@@ -1,6 +1,7 @@
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createWriteStream, type WriteStream } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { applyPosixMode } from '../security/posix-permissions.js'
 
 /** Shared per-thread folder for all background shell logs (alongside messages.jsonl). */
 export const BACKGROUND_SHELL_OUTPUT_SUBDIR = 'background-shells'
@@ -105,7 +106,7 @@ export class BackgroundShellOutputWriter {
   async open(): Promise<void> {
     await this.ensureOutputDir()
     await writeFile(this.paths.outputFilePath, '', { encoding: 'utf-8', mode: 0o600 })
-    await chmod(this.paths.outputFilePath, 0o600)
+    await applyPosixMode(this.paths.outputFilePath, 0o600)
     this.stream = createWriteStream(this.paths.outputFilePath, { flags: 'a', mode: 0o600 })
   }
 
@@ -132,7 +133,7 @@ export class BackgroundShellOutputWriter {
     if (!this.stream) {
       await this.ensureOutputDir()
       await writeFile(this.paths.outputFilePath, '', { encoding: 'utf-8', mode: 0o600 })
-      await chmod(this.paths.outputFilePath, 0o600)
+      await applyPosixMode(this.paths.outputFilePath, 0o600)
       return
     }
     const stream = this.stream
@@ -166,6 +167,6 @@ export class BackgroundShellOutputWriter {
 
   private async ensureOutputDir(): Promise<void> {
     await mkdir(this.paths.outputDir, { recursive: true, mode: 0o700 })
-    await chmod(this.paths.outputDir, 0o700)
+    await applyPosixMode(this.paths.outputDir, 0o700)
   }
 }

@@ -1,5 +1,4 @@
 import {
-  chmodSync,
   closeSync,
   constants,
   copyFileSync,
@@ -43,6 +42,7 @@ import {
   inspectMigrationJournalVerifiedCandidate,
   migrationJournalPhaseCanProveStaging
 } from './runtime-data-dir-recovery-discovery'
+import { applyPosixModeSync } from '../../kun/src/security/posix-permissions.js'
 import {
   stringArraysEqual
 } from './runtime-data-dir-recovery-evidence'
@@ -354,14 +354,14 @@ export function copyRuntimeTree(sourcePath: string, targetPath: string): void {
       symlinkSync(readlinkSync(sourceEntry), targetEntry)
     } else if (metadata.isFile()) {
       copyFileSync(sourceEntry, targetEntry, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE)
-      chmodSync(targetEntry, metadata.mode & 0o7777)
+      applyPosixModeSync(targetEntry, metadata.mode & 0o7777)
       utimesSync(targetEntry, metadata.atime, metadata.mtime)
       fsyncFileBestEffort(targetEntry)
     } else {
       throw new Error('copy source contains an unsupported entry')
     }
   }
-  chmodSync(targetPath, source.mode & 0o7777)
+  applyPosixModeSync(targetPath, source.mode & 0o7777)
   utimesSync(targetPath, source.atime, source.mtime)
   fsyncDirectoryBestEffort(targetPath)
 }
