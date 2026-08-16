@@ -44,6 +44,12 @@ const SLOW_LOAD_ITEMS_LOG_MS = 1_000
 const ITEMS_CACHE_MAX_THREADS = 4
 const DEFAULT_ITEMS_CACHE_MAX_BYTES = 16 * 1024 * 1024
 const DEFAULT_ITEM_HISTORY_COMPACTION_MIN_BYTES = 4 * 1024 * 1024
+/**
+ * Tail window a lock-free content search reads per thread. Kept well under
+ * the compaction threshold so search stays cheap on logs large enough that
+ * `loadItems` would rewrite them.
+ */
+const DEFAULT_ITEM_TEXT_SEARCH_MAX_BYTES = 512 * 1024
 const HIGHEST_SEQ_CACHE_MAX_THREADS = 256
 const ITEM_HISTORY_REVISION_MAX_THREADS = 512
 // A valid model tool argument may contain 1 MiB of JSON, whose escaping can
@@ -338,6 +344,87 @@ export class FileSessionStore implements SessionStore {
   async loadItems(threadId: string): Promise<TurnItem[]> {
     if (!isSafeThreadId(threadId)) return []
     return this.withThreadWrite(threadId, () => this.loadItemsUnlocked(threadId))
+  }
+
+  /**
+   * Bounded, lock-free scan for the first item text containing `query`.
+   *
+   * Deliberately does not reuse `loadItems`: that path takes the per-thread
+   * write queue and schedules a rewrite for logs at or above the compaction
+   * threshold, so driving it from a search would let a keystroke contend with
+   * an in-flight turn and queue a multi-megabyte rewrite (#621). This reads
+   * the tail of messages.jsonl directly, biasing toward recent messages, and
+   * neither mutates nor schedules anything.
+   */
+  async searchItemText(
+    threadId: string,
+    query: string,
+    options: { maxBytes?: number } = {}
+  ): Promise<string | null> {
+    if (!isSafeThreadId(threadId)) return null
+    const needle = query.toLowerCase()
+    if (!needle) return null
+
+    const cached = this.itemsCache.get(threadId)
+    if (cached) return firstMatchingItemText(cached, needle)
+
+    const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? DEFAULT_ITEM_TEXT_SEARCH_MAX_BYTES))
+    const path = this.messagesPath(threadId)
+    const info = await stat(path).catch(() => null)
+    if (!info || info.size === 0) return null
+    // Reading the tail keeps the work bounded on huge logs while covering the
+    // most recent conversation, which is what a palette query is looking for.
+    const start = Math.max(0, info.size - maxBytes)
+
+    return new Promise<string | null>((resolvePromise) => {
+      const stream = createReadStream(path, { encoding: 'utf-8', start })
+      let remainder = ''
+      // A non-zero start almost certainly lands mid-record; drop that partial
+      // first line rather than reporting a truncated snippet.
+      let skipPartialLine = start > 0
+      let settled = false
+
+      const finish = (value: string | null): void => {
+        if (settled) return
+        settled = true
+        stream.destroy()
+        resolvePromise(value)
+      }
+
+      const acceptLine = (line: string): string | null => {
+        if (skipPartialLine) {
+          skipPartialLine = false
+          return null
+        }
+        // Cheap pre-filter: only parse records whose raw JSON could match.
+        if (!line || !line.toLowerCase().includes(needle)) return null
+        let item: TurnItem
+        try {
+          item = JSON.parse(line) as TurnItem
+        } catch {
+          return null
+        }
+        const text = searchableItemText(item)
+        // The raw hit may have been a field name or id rather than content.
+        return text && text.toLowerCase().includes(needle) ? text : null
+      }
+
+      stream.on('data', (chunk: string | Buffer) => {
+        remainder += typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
+        let newline = remainder.indexOf('\n')
+        while (newline >= 0) {
+          const match = acceptLine(remainder.slice(0, newline).trim())
+          remainder = remainder.slice(newline + 1)
+          if (match !== null) {
+            finish(match)
+            return
+          }
+          newline = remainder.indexOf('\n')
+        }
+      })
+      stream.on('error', () => finish(null))
+      stream.on('close', () => finish(acceptLine(remainder.trim())))
+    })
   }
 
   async loadItemPage(
@@ -638,4 +725,26 @@ export class FileSessionStore implements SessionStore {
       return false
     }
   }
+}
+
+/**
+ * Item kinds whose text a content search may read. Tool calls, results, and
+ * internal bookkeeping stay out so a search never surfaces raw tool payloads.
+ */
+function searchableItemText(item: TurnItem): string | null {
+  switch (item.kind) {
+    case 'user_message':
+    case 'assistant_text':
+      return item.text
+    default:
+      return null
+  }
+}
+
+function firstMatchingItemText(items: readonly TurnItem[], lowerCaseNeedle: string): string | null {
+  for (const item of items) {
+    const text = searchableItemText(item)
+    if (text && text.toLowerCase().includes(lowerCaseNeedle)) return text
+  }
+  return null
 }

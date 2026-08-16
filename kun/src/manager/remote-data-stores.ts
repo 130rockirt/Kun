@@ -304,6 +304,18 @@ export class ManagerRemoteSessionStore implements SessionStore {
     return ItemPageSchema.parse(await this.call('loadItemPage', { threadId, options }))
   }
 
+  async searchItemText(
+    threadId: string,
+    query: string,
+    options?: { maxBytes?: number }
+  ): Promise<string | null> {
+    return z.string().nullable().parse(await this.call('searchItemText', {
+      threadId,
+      query,
+      ...(options?.maxBytes === undefined ? {} : { maxBytes: options.maxBytes })
+    }))
+  }
+
   async loadSession(threadId: string): Promise<AgentSession | null> {
     return AgentSessionSchema.nullable().parse(await this.call('loadSession', { threadId })) as AgentSession | null
   }

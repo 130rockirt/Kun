@@ -57,7 +57,8 @@ export const ThreadStoreOperationSchema = z.enum([
 export const SessionStoreOperationSchema = z.enum([
   'appendEvent', 'appendItem', 'rewriteItems', 'loadItemSnapshot',
   'rewriteItemsIfRevision', 'updateItem', 'compactItems', 'loadEventsSince',
-  'loadItems', 'loadItemPage', 'loadSession', 'upsertSession', 'highestSeq', 'allocateEventSeq',
+  'loadItems', 'searchItemText', 'loadItemPage', 'loadSession', 'upsertSession',
+  'highestSeq', 'allocateEventSeq',
   'loadUsageRecords', 'loadLatestUsageSnapshots', 'resetMemory', 'clearThreadMemory'
 ])
 export const ArtifactStoreOperationSchema = z.enum([

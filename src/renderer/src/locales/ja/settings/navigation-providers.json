@@ -320,6 +320,8 @@
   "shortcutToggleTerminalDesc": "端子パネルを開閉します。",
   "shortcutSettings": "設定",
   "shortcutSettingsDesc": "設定を開きます。",
+  "shortcutCommandPalette": "コマンドパレット",
+  "shortcutCommandPaletteDesc": "コマンドパレットを開いて、コマンド、会話、設定を検索します。",
   "shortcutQuit": "やめる",
   "shortcutQuitDesc": "アプリを終了します。",
   "shortcutUndo": "元に戻す",

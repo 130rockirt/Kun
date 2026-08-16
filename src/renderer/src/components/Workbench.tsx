@@ -11,7 +11,16 @@ import { useWorkbenchComposerSubmitController } from './workbench/useWorkbenchCo
 import { useWorkbenchNavigationController } from './workbench/useWorkbenchNavigationController'
 import { useWorkbenchDesignRuntime } from './workbench/useWorkbenchDesignRuntime'
 import { useWorkbenchExecutionSettings } from './workbench/useWorkbenchExecutionSettings'
-import { useWorkbenchKeyboardShortcuts } from './workbench/useWorkbenchKeyboardShortcuts'
+import {
+  runWorkbenchShortcutCommand,
+  useWorkbenchKeyboardShortcuts
+} from './workbench/useWorkbenchKeyboardShortcuts'
+import { getSlashQuery, COMPOSER_FOCUS_REQUEST_EVENT } from './chat/floating-composer-commands'
+import { resolveKeyboardShortcutBindings } from '@shared/keyboard-shortcuts'
+import { useKeyboardShortcutSettings } from '../lib/keyboard-shortcut-settings'
+import { useCommandPaletteStore } from '../palette/palette-store'
+import { useWorkbenchCommandPalette } from '../palette/useWorkbenchCommandPalette'
+import { CommandPaletteOverlay } from '../palette/CommandPaletteOverlay'
 import { useWorkbenchChatStoreState } from './workbench/useWorkbenchChatStoreState'
 import { useWorkbenchDerivedState } from './workbench/useWorkbenchDerivedState'
 import { useWorkbenchWriteAssistantRuntime } from './workbench/useWorkbenchWriteAssistantRuntime'
@@ -103,12 +112,14 @@ const extensionSurfaceLayoutStorage = {
 
 export function Workbench(): ReactElement {
   const { t, i18n } = useTranslation('common')
+  const { t: tSettings } = useTranslation('settings')
   const {
     threads, threadSearch, showArchivedThreads, activeThreadId, activeThreadRelation,
     activeThreadParentId, selectThread, createThread, createConversation, blocks,
     liveReasoning, liveAssistant, error, runtimeErrorDetail, runtimeStatus, busy,
     currentTurnOrchestration,
     route, pluginHostRoute, workspaceRoot, conversationWorkspaceRoot, runtimeConnection,
+    codeWorkspaceRoots, selectWorkspaceRoot,
     setRoute, openCode, openWrite, openDesign, ensureWriteThreadForWorkspace,
     ensureDesignThreadForWorkspace, createWriteThread, clearDesignHistory, openSettings,
     openPlugins, openClaw, openSchedule, openWorkflow, chooseWorkspace, clawChannels,
@@ -391,7 +402,15 @@ export function Workbench(): ReactElement {
     if (!linkedSddDraft) return
     void openSddRequirementDraftFromHistory(linkedSddDraft)
   }, [linkedSddDraft, openSddRequirementDraftFromHistory])
-  useWorkbenchKeyboardShortcuts({
+  const slashMenuOpen = getSlashQuery(input) !== null
+  const keyboardShortcuts = useKeyboardShortcutSettings()
+  const shortcutPlatform = typeof window === 'undefined' ? undefined : window.kunGui?.platform
+  const keyboardShortcutBindings = useMemo(
+    () => resolveKeyboardShortcutBindings(keyboardShortcuts, shortcutPlatform),
+    [keyboardShortcuts, shortcutPlatform]
+  )
+  const openPalette = useCommandPaletteStore((state) => state.openPalette)
+  const shortcutCommandContext = useMemo(() => ({
     composerMode,
     setComposerMode,
     handleGuiPlanCommand,
@@ -403,6 +422,17 @@ export function Workbench(): ReactElement {
     setUseWorktreePool,
     worktreeBranch,
     navigationLocked: designDrawingCreationSubmitting
+  }), [
+    chooseWorkspace, composerMode, createThread, designDrawingCreationSubmitting,
+    handleGuiPlanCommand, openSettings, setComposerMode, setUseWorktreePool,
+    toggleTerminal, useWorktreePool, worktreeBranch
+  ])
+
+  useWorkbenchKeyboardShortcuts({
+    ...shortcutCommandContext,
+    slashMenuOpen,
+    openCommandPalette: openPalette,
+    keyboardShortcutBindings
   })
   const showDevPreviewCard =
     route === 'chat' &&
@@ -646,7 +676,111 @@ export function Workbench(): ReactElement {
     implementDesignInCode, selectCanvasShape, handleDesignHtmlElementAsContext,
     handleDesignRuntimeQualityFindings, handleDesignQualityRepairRequest
   })
-  return <WorkbenchContent context={{
+  const paletteRuntimeReady = runtimeConnection === 'ready'
+  const commandPalette = useWorkbenchCommandPalette({
+    handlers: {
+      route: (target) => {
+        switch (target) {
+          case 'chat': openCodeMode(); break
+          case 'write': openWriteMode(); break
+          case 'design': openDesignMode(); break
+          case 'settings': openSettings(); break
+          case 'plugins': openPluginsView(); break
+          case 'extensions': openExtensionsView(); break
+          case 'claw': openClaw(); break
+          case 'schedule': openScheduleView(); break
+          case 'workflow': openWorkflowView(); break
+        }
+      },
+      settings: (section) => openSettings(section),
+      thread: (threadId) => {
+        void openThread(threadId)
+      },
+      workspace: (root) => {
+        void selectWorkspaceRoot(root)
+      },
+      'shortcut-command': (commandId) => {
+        runWorkbenchShortcutCommand(commandId, shortcutCommandContext)
+      },
+      'slash-command': (_commandId, insertText) => {
+        const draft = input.trim()
+        // Never overwrite a pending draft. A trailing space marks the
+        // argument-taking commands (goal, research, btw), where the draft
+        // becomes the argument; the rest would be broken by trailing text.
+        const takesArgument = insertText.endsWith(' ')
+        if (draft && !takesArgument) {
+          setError(t('paletteComposerBusy'))
+          return
+        }
+        const focusComposer = (): void => {
+          window.dispatchEvent(new CustomEvent(COMPOSER_FOCUS_REQUEST_EVENT))
+        }
+        setInput(draft && takesArgument ? insertText + draft : insertText)
+        if (route === 'chat') {
+          focusComposer()
+        } else {
+          void openCode()
+          window.setTimeout(focusComposer, 0)
+        }
+      },
+      'extension-view': (entryId) => {
+        const entry = extensionRightRailItems.find((candidate) => candidate.id === entryId)
+        if (!entry) return false
+        return selectRightRailExtension(entry)
+      },
+      compose: (text) => {
+        const focusComposer = (): void => {
+          window.dispatchEvent(new CustomEvent(COMPOSER_FOCUS_REQUEST_EVENT))
+        }
+        // Only offered with an empty composer, so this cannot clobber a draft.
+        setInput(text)
+        if (route === 'chat') {
+          focusComposer()
+        } else {
+          void openCode()
+          window.setTimeout(focusComposer, 0)
+        }
+      },
+      'select-model': (modelId, providerId) => {
+        setComposerModel(modelId, providerId)
+      },
+      'thread-action': (action, threadId) => {
+        if (action === 'archive') {
+          void archiveThread(threadId, true)
+          return
+        }
+        void pinThread(threadId, action === 'pin')
+      },
+      unavailable: () => setError(t('paletteTargetUnavailable'))
+    },
+    t,
+    tSettings,
+    route,
+    workspaceRoot: activeSkillWorkspace,
+    threads: codeThreads,
+    codeWorkspaceRoots,
+    runtimeReady: paletteRuntimeReady,
+    busy,
+    activeThreadId,
+    activeThreadArchived: threads.find((thread) => thread.id === activeThreadId)?.archived === true,
+    canOpenGoalPanel: paletteRuntimeReady && route !== 'claw',
+    canCreateNewThread: paletteRuntimeReady && route !== 'claw' && Boolean(activeSkillWorkspace),
+    hasPlanCommand: route !== 'claw',
+    hasBtwCommand: route !== 'claw',
+    hideBtwCommand: false,
+    hasReviewCommand: route !== 'claw',
+    skillCommands: runtimeSkills,
+    disabledSkillIds,
+    extensionRightRailItems,
+    shortcutBindings: keyboardShortcutBindings,
+    hasComposerDraft: input.trim().length > 0,
+    composerModel,
+    composerModelGroups,
+    activeThreadPinned: threads.find((thread) => thread.id === activeThreadId)?.pinned === true
+  })
+
+  return <>
+    <WorkbenchContent context={{
     shellRef, extensionHostContextMenus, activeExtensionCenterView, route, setWorkspaceContextMenu,
     leftSidebarCollapsed, leftSidebarWidth, codeThreads, activeThreadId, sidebarView,
     connectPhoneSidebarOpen, activeExtensionLeftSidebar, extensionWorkspaceRoot,
@@ -677,6 +811,23 @@ export function Workbench(): ReactElement {
     messageContributionsForSurface,
     openCodeRightTool, currentSideRunningCount, extensionRightRailItems, selectRightRailExtension,
     imageAnnotationHost, planOverlay, openManagedExtensionView, activeExtensionAuxiliaryPanel,
-    workspaceContextMenu, activeGuiPlan
+    workspaceContextMenu, activeGuiPlan,
+    onOpenCommandPalette: openPalette
   }} />
+    {commandPalette.open ? (
+      <CommandPaletteOverlay
+        query={commandPalette.query}
+        matchTerm={commandPalette.matchTerm}
+        scope={commandPalette.scope}
+        scopeLabel={commandPalette.scopeLabel}
+        groups={commandPalette.groups}
+        results={commandPalette.results}
+        contentSearchPending={commandPalette.contentSearchPending}
+        sourceLabel={commandPalette.sourceLabelFor}
+        onQueryChange={commandPalette.setQuery}
+        onActivate={commandPalette.activate}
+        onClose={commandPalette.close}
+      />
+    ) : null}
+  </>
 }

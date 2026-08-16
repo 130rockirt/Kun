@@ -2,6 +2,31 @@ import type { ReactElement } from 'react'
 import type { ReviewTarget } from '../../agent/types'
 
 export type BuiltinSlashCommandId = 'new' | 'plan' | 'goal' | 'research' | 'review' | 'compact' | 'fork' | 'archive' | 'restore' | 'btw'
+
+/**
+ * Window event dispatched when another surface (such as the command
+ * palette) wants the composer textarea focused without sending.
+ */
+export const COMPOSER_FOCUS_REQUEST_EVENT = 'kun:focus-composer'
+
+/**
+ * Canonical composer text each builtin slash command inserts when
+ * activated from the command palette. Trailing spaces keep inline-argument
+ * commands (goal, research, btw) in their argument-taking form; the send
+ * path's existing parsers interpret the text exactly like typed input.
+ */
+export const CANONICAL_SLASH_COMMAND_TEXT: Record<BuiltinSlashCommandId, string> = {
+  new: '/new',
+  plan: '/plan',
+  goal: '/goal ',
+  research: '/research ',
+  review: '/review',
+  compact: '/compact',
+  fork: '/fork',
+  archive: '/archive',
+  restore: '/restore',
+  btw: '/btw '
+}
 export type SkillSlashCommandId = `skill:${string}`
 export type SlashCommandId = BuiltinSlashCommandId | SkillSlashCommandId
 

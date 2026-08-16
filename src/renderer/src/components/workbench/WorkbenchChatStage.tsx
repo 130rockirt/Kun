@@ -76,6 +76,7 @@ export type WorkbenchChatStageProps = {
   onBeginTerminalResize: PointerEventHandler<HTMLDivElement>
   onToggleTerminal: () => void
   onToggleRightWorkspace: () => void
+  onOpenCommandPalette?: () => void
   onOpenRequirementDraft?: () => void
   extensionTopBarActions?: readonly RegisteredContribution<'actions.topBar'>[]
   extensionComposerActions?: readonly RegisteredContribution<'actions.composer'>[]
@@ -138,6 +139,7 @@ export function WorkbenchChatStage({
   onBeginTerminalResize,
   onToggleTerminal,
   onToggleRightWorkspace,
+  onOpenCommandPalette,
   onOpenRequirementDraft,
   extensionTopBarActions = [],
   extensionComposerActions = [],
@@ -229,6 +231,7 @@ export function WorkbenchChatStage({
                 onToggleTerminal={onToggleTerminal}
                 rightWorkspaceExpanded={rightWorkspaceExpanded}
                 onToggleRightWorkspace={onToggleRightWorkspace}
+                onOpenCommandPalette={onOpenCommandPalette}
               />
             </div>
           </div>

@@ -579,4 +579,112 @@ function parseListThreadsOptions(
   }
 }
 
+/**
+ * Deep-search route: scans the message content of recent conversations for
+ * a literal term and returns one snippet per matching thread. Content never
+ * leaves the local data dir.
+ *
+ * Deliberately not workspace-scoped: "where did I discuss this?" is usually
+ * asked without remembering which project it was in. Each match carries its
+ * workspace so callers can show which project it came from. The bounds below
+ * are therefore shared across every project, and a busy project can crowd out
+ * a quieter one.
+ *
+ * Every bound here exists because this runs on a palette keystroke. The scan
+ * uses the store's lock-free `searchItemText` capability rather than
+ * `loadItems`, which would take each thread's write queue and compact logs
+ * past the compaction threshold (#621). Stores without that capability report
+ * no matches instead of falling back to the blocking path.
+ */
+const THREAD_CONTENT_SEARCH_MAX_THREADS = 40
+const THREAD_CONTENT_SEARCH_DEFAULT_MATCHES = 12
+const THREAD_CONTENT_SEARCH_MAX_QUERY_CHARS = 256
+const THREAD_CONTENT_SEARCH_CANDIDATE_POOL = 500
+/** Wall-clock ceiling for one scan; partial results beat a stalled palette. */
+export const THREAD_CONTENT_SEARCH_BUDGET_MS = 400
+
+const ContentSearchQuery = z.object({
+  q: z.string().min(1).max(THREAD_CONTENT_SEARCH_MAX_QUERY_CHARS),
+  limit: z.preprocess((value) => {
+    if (typeof value !== 'string' || value.trim() === '') return undefined
+    return Number(value)
+  }, z.number().int().positive().max(20).optional())
+})
+
+export type ThreadContentMatch = {
+  threadId: string
+  title: string
+  workspace: string
+  snippet: string
+  updatedAt: string
+}
+
+export type ThreadContentSearchResponse = { matches: ThreadContentMatch[] }
+
+export type ThreadContentSearchStore = Pick<SessionStore, 'searchItemText'>
+
+export function snippetAroundMatch(text: string, query: string): string {
+  const index = text.toLowerCase().indexOf(query.toLowerCase())
+  if (index < 0) return text.slice(0, 160)
+  const start = Math.max(0, index - 60)
+  const end = Math.min(text.length, index + query.length + 100)
+  return ((start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : ''))
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export async function contentSearchThreads(
+  service: ThreadService,
+  sessionStore: ThreadContentSearchStore,
+  request: Request,
+  now: () => number = () => Date.now()
+): Promise<JsonResponse> {
+  const url = new URL(request.url)
+  const parsed = ContentSearchQuery.safeParse(Object.fromEntries(url.searchParams.entries()))
+  if (!parsed.success) {
+    return validationError('invalid content search query', parsed.error.issues)
+  }
+  const search = sessionStore.searchItemText
+  if (!search) return jsonResponse({ matches: [] } satisfies ThreadContentSearchResponse)
+
+  const query = parsed.data.q
+  const matchLimit = parsed.data.limit ?? THREAD_CONTENT_SEARCH_DEFAULT_MATCHES
+  const deadline = now() + THREAD_CONTENT_SEARCH_BUDGET_MS
+
+  // `list` already excludes archived and deleted threads and orders by
+  // recency; the status filter and sort here keep the route correct on its
+  // own terms rather than depending on that as an invariant.
+  const threads = await service.list({ limit: THREAD_CONTENT_SEARCH_CANDIDATE_POOL })
+  const candidates = threads
+    .filter((thread) => thread.status !== 'archived' && thread.status !== 'deleted')
+    .sort((left, right) => sortableTime(right.updatedAt) - sortableTime(left.updatedAt))
+    .slice(0, THREAD_CONTENT_SEARCH_MAX_THREADS)
+
+  const matches: ThreadContentMatch[] = []
+  for (const thread of candidates) {
+    if (matches.length >= matchLimit || now() >= deadline) break
+    let text: string | null
+    try {
+      text = await search.call(sessionStore, thread.id, query)
+    } catch {
+      continue
+    }
+    if (!text) continue
+    matches.push({
+      threadId: thread.id,
+      title: thread.title.trim() || thread.id,
+      workspace: thread.workspace,
+      snippet: snippetAroundMatch(text, query),
+      updatedAt: thread.updatedAt
+    })
+  }
+  return jsonResponse({ matches } satisfies ThreadContentSearchResponse)
+}
+
+/** Unparsable timestamps sort last instead of poisoning the comparator. */
+function sortableTime(value: string): number {
+  const parsed = Date.parse(value)
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
 void z

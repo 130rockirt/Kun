@@ -320,6 +320,8 @@
   "shortcutToggleTerminalDesc": "打开或关闭终端面板。",
   "shortcutSettings": "设置",
   "shortcutSettingsDesc": "打开设置。",
+  "shortcutCommandPalette": "命令面板",
+  "shortcutCommandPaletteDesc": "打开命令面板，搜索命令、会话和设置。",
   "shortcutQuit": "退出",
   "shortcutQuitDesc": "退出应用。",
   "shortcutUndo": "撤销",

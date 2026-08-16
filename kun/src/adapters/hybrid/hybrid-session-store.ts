@@ -106,6 +106,14 @@ export class HybridSessionStore implements SessionStore {
     return this.delegate.loadItemPage(threadId, options)
   }
 
+  async searchItemText(
+    threadId: string,
+    query: string,
+    options?: { maxBytes?: number }
+  ): Promise<string | null> {
+    return this.delegate.searchItemText?.(threadId, query, options) ?? null
+  }
+
   async loadSession(threadId: string): Promise<AgentSession | null> {
     return this.delegate.loadSession(threadId)
   }

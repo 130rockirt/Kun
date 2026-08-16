@@ -225,6 +225,7 @@ export class LifecycleFencedSessionStore implements SessionStore {
   readonly scheduleUsageEventCompaction?: SessionStore['scheduleUsageEventCompaction']
   readonly flushScheduledCompaction?: SessionStore['flushScheduledCompaction']
   readonly loadItemPage?: SessionStore['loadItemPage']
+  readonly searchItemText?: SessionStore['searchItemText']
 
   constructor(
     readonly raw: SessionStore,
@@ -249,6 +250,11 @@ export class LifecycleFencedSessionStore implements SessionStore {
     }
     if (raw.loadLatestUsageSnapshots) {
       this.loadLatestUsageSnapshots = (options) => raw.loadLatestUsageSnapshots!(options)
+    }
+    if (raw.searchItemText) {
+      // Read-only and lock-free by contract, so it takes no lifecycle lease.
+      this.searchItemText = (threadId, query, options) =>
+        raw.searchItemText!(threadId, query, options)
     }
     if (raw.compactItems) {
       this.compactItems = (threadId, options) =>

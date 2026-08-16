@@ -1,5 +1,6 @@
 import type { Router } from '../router.js'
 import {
+  contentSearchThreads,
   createThread,
   clearThreadGoal,
   clearThreadTodos,
@@ -58,6 +59,11 @@ export function registerThreadRoutes(
   router.add('POST', '/v1/threads', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return createThread(runtime.threadService, request)
+  })
+  // Static content-search suffix must be registered before `/:id`.
+  router.add('GET', '/v1/threads/content-search', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return contentSearchThreads(runtime.threadService, runtime.sessionStore, request)
   })
   // This static suffix must be registered before `/:id`, because Router uses
   // first-match ordering for parameterized paths.

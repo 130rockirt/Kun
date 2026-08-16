@@ -477,6 +477,22 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
         const { threadId } = parseThreadId(value)
         return this.sessionStore.loadItems(threadId)
       }
+      case 'searchItemText': {
+        const body = z.object({
+          threadId: ThreadIdSchema,
+          query: z.string(),
+          maxBytes: z.number().int().positive().optional()
+        }).strict().parse(value)
+        // The owning store keeps the lock-free guarantee; a manager-backed
+        // runtime without it reports no match rather than falling back to the
+        // blocking item-load path.
+        if (!this.sessionStore.searchItemText) return null
+        return this.sessionStore.searchItemText(
+          body.threadId,
+          body.query,
+          body.maxBytes === undefined ? undefined : { maxBytes: body.maxBytes }
+        )
+      }
       case 'loadItemPage': {
         const body = z.object({
           threadId: ThreadIdSchema,
