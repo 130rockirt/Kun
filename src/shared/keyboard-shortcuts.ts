@@ -127,6 +127,16 @@ export const KEYBOARD_SHORTCUT_COMMANDS = [
     labelKey: 'shortcutToggleMaximize',
     descriptionKey: 'shortcutToggleMaximizeDesc',
     defaultBindings: []
+  },
+  // Registered last on purpose: `findKeyboardShortcutCommand` resolves the
+  // first command whose bindings match, so any command a user has bound to
+  // the palette's chord keeps its own behavior.
+  {
+    id: 'command-palette',
+    labelKey: 'shortcutCommandPalette',
+    descriptionKey: 'shortcutCommandPaletteDesc',
+    defaultBindings: ['Ctrl+K'],
+    platformDefaultBindings: { darwin: ['Meta+K'] }
   }
 ] as const satisfies readonly KeyboardShortcutCommandDefinition[]
 

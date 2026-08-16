@@ -320,6 +320,8 @@
   "shortcutToggleTerminalDesc": "เปิดหรือปิดแผงขั้วต่อ",
   "shortcutSettings": "การตั้งค่า",
   "shortcutSettingsDesc": "เปิดการตั้งค่า",
+  "shortcutCommandPalette": "แถบคำสั่ง",
+  "shortcutCommandPaletteDesc": "เปิดแถบคำสั่งเพื่อค้นหาคำสั่ง การสนทนา และการตั้งค่า",
   "shortcutQuit": "เลิก",
   "shortcutQuitDesc": "ออกจากแอป",
   "shortcutUndo": "เลิกทำ",

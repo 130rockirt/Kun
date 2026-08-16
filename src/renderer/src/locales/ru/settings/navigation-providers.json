@@ -320,6 +320,8 @@
   "shortcutToggleTerminalDesc": "Открыть или закрыть панель терминала.",
   "shortcutSettings": "Настройки",
   "shortcutSettingsDesc": "Открыть настройки.",
+  "shortcutCommandPalette": "Палитра команд",
+  "shortcutCommandPaletteDesc": "Открыть палитру команд для поиска команд, бесед и настроек.",
   "shortcutQuit": "Выйти",
   "shortcutQuitDesc": "Выйти из приложения.",
   "shortcutUndo": "Отменить",

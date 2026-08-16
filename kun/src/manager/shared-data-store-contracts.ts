@@ -112,6 +112,7 @@ export type ManagerSessionStoreOperation =
   | 'compactItems'
   | 'loadEventsSince'
   | 'loadItems'
+  | 'searchItemText'
   | 'loadItemPage'
   | 'loadSession'
   | 'upsertSession'

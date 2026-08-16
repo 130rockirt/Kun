@@ -174,6 +174,15 @@ async function sharedDefaultModelSelection(): Promise<{
  * reconnection, and approval policy decisions. DTO and chat-block
  * mapping live in `kun-contract.ts` and `kun-mapper.ts`.
  */
+/** One conversation whose message content matched a deep-search term. */
+export type ThreadContentMatch = {
+  threadId: string
+  title: string
+  workspace: string
+  snippet: string
+  updatedAt: string
+}
+
 export class KunRuntimeProvider extends KunRuntimeThreadServices implements AgentProvider {
   readonly id = 'kun' as const
   readonly displayName = 'Kun'
@@ -197,6 +206,35 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
     if (!threads.ok) {
       throw runtimeErrorToError(readRuntimeError(threads.body, `failed to list threads (${threads.status || 0})`))
     }
+  }
+
+  /**
+   * Deep-search conversation message content across recent threads in every
+   * project. Returns one snippet per matching conversation, most recently
+   * updated first; each match carries the workspace it belongs to.
+   */
+  async searchThreadContent(
+    query: string,
+    options: { limit?: number } = {}
+  ): Promise<ThreadContentMatch[]> {
+    const normalized = query.trim()
+    if (!normalized) return []
+    const params = new URLSearchParams({
+      q: normalized,
+      limit: String(options.limit ?? 12)
+    })
+    const response = await rendererRuntimeClient.runtimeRequest(
+      '/v1/threads/content-search?' + params.toString(),
+      'GET'
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to search thread content'))
+    }
+    const body = readRuntimeJson<{ matches: ThreadContentMatch[] }>(
+      response.body,
+      'runtime returned an invalid thread content search response'
+    )
+    return Array.isArray(body.matches) ? body.matches : []
   }
 
   async listThreads(options: ThreadListOptions = {}): Promise<NormalizedThread[]> {

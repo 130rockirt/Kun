@@ -320,6 +320,8 @@
   "shortcutToggleTerminalDesc": "Open or close the terminal panel.",
   "shortcutSettings": "Settings",
   "shortcutSettingsDesc": "Open settings.",
+  "shortcutCommandPalette": "Command palette",
+  "shortcutCommandPaletteDesc": "Open the command palette to search commands, conversations, and settings.",
   "shortcutQuit": "Quit",
   "shortcutQuitDesc": "Quit the app.",
   "shortcutUndo": "Undo",

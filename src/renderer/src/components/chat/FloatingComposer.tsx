@@ -48,6 +48,7 @@ import {
 } from '../../lib/composer-file-references'
 import {
   buildResearchPrompt,
+  COMPOSER_FOCUS_REQUEST_EVENT,
   getGoalPanelDraftObjective,
   getSlashQuery,
   parseBtwCommand,
@@ -393,6 +394,12 @@ export function FloatingComposer({
     [codeAgentPresets]
   )
   const draft = useComposerDraft({ input, canCompose: canEditComposer })
+  const { focusComposer } = draft
+  useEffect(() => {
+    const onFocusRequest = (): void => focusComposer()
+    window.addEventListener(COMPOSER_FOCUS_REQUEST_EVENT, onFocusRequest)
+    return () => window.removeEventListener(COMPOSER_FOCUS_REQUEST_EVENT, onFocusRequest)
+  }, [focusComposer])
   const inputHistory = useComposerInputHistory()
   const slashQuery = getSlashQuery(input)
   const [composerMenuOpen, setComposerMenuOpen] = useState(false)

@@ -197,18 +197,25 @@ export function useWorkbenchExtensionSurfaces({
     selectExtensionSurface(view.id)
   }, [leftSidebarCollapsed, openRightPanelTab, selectExtensionSurface, setRoute, setRightPanelMode, toggleLeftSidebar])
 
-  const selectRightRailExtension = useCallback((entry: ExtensionRightRailViewEntry): void => {
+  /**
+   * Returns whether the selection actually opened a View or started permission
+   * review, so callers such as the command palette can report an unavailable
+   * target instead of silently doing nothing.
+   */
+  const selectRightRailExtension = useCallback((entry: ExtensionRightRailViewEntry): boolean => {
     const runnable = workbenchContributionRegistry.get(entry.id, contributionContext)
     if (isExtensionWorkbenchView(runnable) && runnable.point === 'views.rightSidebar') {
       openExtensionSurface(runnable)
-      return
+      return true
     }
-    if (entry.owner.kind !== 'extension' || entry.workspaceTrusted || !extensionWorkspaceRoot) return
+    if (entry.owner.kind !== 'extension' || entry.workspaceTrusted || !extensionWorkspaceRoot) {
+      return false
+    }
 
     const extensionId = entry.owner.extensionId
     const loadContext = extensionContributionLoadContext
     const currentAuthorization = extensionAuthorizationInFlightRef.current
-    if (currentAuthorization && sameExtensionContributionLoadContext(currentAuthorization.context, loadContext)) return
+    if (currentAuthorization && sameExtensionContributionLoadContext(currentAuthorization.context, loadContext)) return true
     const authorization = { extensionId, context: loadContext }
     extensionAuthorizationInFlightRef.current = authorization
     const contextIsCurrent = (): boolean => sameExtensionContributionLoadContext(
@@ -244,6 +251,7 @@ export function useWorkbenchExtensionSurfaces({
         }
       }
     })()
+    return true
   }, [
     contributionContext, extensionContributionLoadContext, extensionContributionLoadContextRef,
     extensionWorkspaceRoot, openExtensionSurface, setError, t

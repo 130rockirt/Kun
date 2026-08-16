@@ -4,9 +4,12 @@ import {
   findKeyboardShortcutCommand,
   keyboardEventToShortcut,
   resolveKeyboardShortcutBindings,
-  type KeyboardShortcutCommandId
+  type KeyboardShortcutBindingsV1,
+  type KeyboardShortcutCommandId,
+  type KeyboardShortcutEventLike
 } from '@shared/keyboard-shortcuts'
 import { useKeyboardShortcutSettings } from '../../lib/keyboard-shortcut-settings'
+import { isNativeDialogOpen } from '../../lib/native-dialog-activity'
 
 const DESKTOP_SHORTCUT_COMMANDS: Partial<Record<KeyboardShortcutCommandId, DesktopCommand>> = {
   quit: 'quit',
@@ -39,7 +42,7 @@ export function isWorkbenchNavigationShortcutLocked(
   )
 }
 
-type UseWorkbenchKeyboardShortcutsInput = {
+export type WorkbenchShortcutCommandContext = {
   composerMode: ComposerMode
   setComposerMode: (mode: ComposerMode) => void
   handleGuiPlanCommand: () => void | Promise<unknown>
@@ -53,6 +56,87 @@ type UseWorkbenchKeyboardShortcutsInput = {
   navigationLocked?: boolean
 }
 
+/**
+ * Runs a workbench shortcut command through the exact same behavior the
+ * keydown handler uses. The command palette dispatches its
+ * 'shortcut-command' entries through this function so activation is
+ * identical to pressing the chord.
+ */
+export function runWorkbenchShortcutCommand(
+  commandId: KeyboardShortcutCommandId,
+  context: WorkbenchShortcutCommandContext
+): void {
+  if (isWorkbenchNavigationShortcutLocked(commandId, context.navigationLocked === true)) return
+
+  if (commandId === 'toggle-plan-mode') {
+    if (context.composerMode === 'plan') {
+      context.setComposerMode('agent')
+    } else {
+      context.setComposerMode('plan')
+      void context.handleGuiPlanCommand()
+    }
+    return
+  }
+  if (commandId === 'new-chat') {
+    void context.createThread({ useWorktreePool: context.useWorktreePool, worktreeBranch: context.worktreeBranch })
+    if (context.useWorktreePool) context.setUseWorktreePool(false)
+    return
+  }
+  if (commandId === 'choose-workspace') {
+    void context.chooseWorkspace()
+    return
+  }
+  if (commandId === 'toggle-terminal') {
+    context.toggleTerminal()
+    return
+  }
+  if (commandId === 'settings') {
+    context.openSettings()
+    return
+  }
+
+  const desktopCommand = DESKTOP_SHORTCUT_COMMANDS[commandId]
+  if (desktopCommand && typeof window.kunGui?.runDesktopCommand === 'function') {
+    void window.kunGui.runDesktopCommand(desktopCommand)
+  }
+}
+
+export type WorkbenchShortcutKeyDownEvent = KeyboardShortcutEventLike & {
+  defaultPrevented: boolean
+  repeat: boolean
+  isComposing: boolean
+}
+
+/**
+ * Resolves a keydown event to the shortcut command it should run, applying
+ * invocation suppression. Default-prevented, repeated, and IME-composing
+ * events never resolve. The command palette additionally yields while the
+ * composer slash-command menu is open or a native dialog owns input, leaving
+ * the event unconsumed in both cases.
+ */
+export function resolveWorkbenchShortcutKeyDown(
+  event: WorkbenchShortcutKeyDownEvent,
+  bindings: Required<KeyboardShortcutBindingsV1>,
+  options: { slashMenuOpen: boolean; nativeDialogOpen?: boolean }
+): KeyboardShortcutCommandId | null {
+  if (event.defaultPrevented || event.repeat || event.isComposing) return null
+  const commandId = findKeyboardShortcutCommand(bindings, keyboardEventToShortcut(event))
+  if (!commandId) return null
+  if (commandId === 'command-palette' && (options.slashMenuOpen || options.nativeDialogOpen)) {
+    return null
+  }
+  return commandId
+}
+
+type UseWorkbenchKeyboardShortcutsInput = WorkbenchShortcutCommandContext & {
+  /** Suppresses command-palette invocation while the composer slash menu is open. */
+  slashMenuOpen?: boolean
+  /** Opens the palette; omitted in environments without the palette surface. */
+  openCommandPalette?: () => void
+  /** Pre-resolved bindings shared with other consumers (e.g. the palette). */
+  keyboardShortcutBindings?: Required<KeyboardShortcutBindingsV1>
+}
+
 export function useWorkbenchKeyboardShortcuts({
   composerMode,
   setComposerMode,
@@ -64,61 +148,50 @@ export function useWorkbenchKeyboardShortcuts({
   useWorktreePool,
   setUseWorktreePool,
   worktreeBranch,
-  navigationLocked = false
+  navigationLocked = false,
+  slashMenuOpen = false,
+  openCommandPalette,
+  keyboardShortcutBindings: providedBindings
 }: UseWorkbenchKeyboardShortcutsInput): void {
   const keyboardShortcuts = useKeyboardShortcutSettings()
   const shortcutPlatform = typeof window === 'undefined' ? undefined : window.kunGui?.platform
-  const keyboardShortcutBindings = useMemo(
+  const resolvedBindings = useMemo(
     () => resolveKeyboardShortcutBindings(keyboardShortcuts, shortcutPlatform),
     [keyboardShortcuts, shortcutPlatform]
   )
+  const keyboardShortcutBindings = providedBindings ?? resolvedBindings
 
   useEffect(() => {
-    const runDesktopShortcut = (command: DesktopCommand): void => {
-      if (typeof window.kunGui?.runDesktopCommand !== 'function') return
-      void window.kunGui.runDesktopCommand(command)
-    }
-
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented || event.repeat || event.isComposing) return
-      const commandId = findKeyboardShortcutCommand(
-        keyboardShortcutBindings,
-        keyboardEventToShortcut(event)
-      )
+      const commandId = resolveWorkbenchShortcutKeyDown(event, keyboardShortcutBindings, {
+        slashMenuOpen,
+        nativeDialogOpen: isNativeDialogOpen()
+      })
       if (!commandId) return
+
+      if (commandId === 'command-palette') {
+        // Only consume the chord when there is a palette to open, so a build
+        // without the surface leaves the key to whatever else may handle it.
+        if (!openCommandPalette) return
+        event.preventDefault()
+        openCommandPalette()
+        return
+      }
       event.preventDefault()
 
-      if (isWorkbenchNavigationShortcutLocked(commandId, navigationLocked)) return
-
-      if (commandId === 'toggle-plan-mode') {
-        if (composerMode === 'plan') {
-          setComposerMode('agent')
-        } else {
-          setComposerMode('plan')
-          void handleGuiPlanCommand()
-        }
-        return
-      }
-      if (commandId === 'new-chat') {
-        void createThread({ useWorktreePool, worktreeBranch })
-        if (useWorktreePool) setUseWorktreePool(false)
-        return
-      }
-      if (commandId === 'choose-workspace') {
-        void chooseWorkspace()
-        return
-      }
-      if (commandId === 'toggle-terminal') {
-        toggleTerminal()
-        return
-      }
-      if (commandId === 'settings') {
-        openSettings()
-        return
-      }
-
-      const desktopCommand = DESKTOP_SHORTCUT_COMMANDS[commandId]
-      if (desktopCommand) runDesktopShortcut(desktopCommand)
+      runWorkbenchShortcutCommand(commandId, {
+        composerMode,
+        setComposerMode,
+        handleGuiPlanCommand,
+        createThread,
+        chooseWorkspace,
+        toggleTerminal,
+        openSettings,
+        useWorktreePool,
+        setUseWorktreePool,
+        worktreeBranch,
+        navigationLocked
+      })
     }
 
     window.addEventListener('keydown', onKeyDown, true)
@@ -130,9 +203,11 @@ export function useWorkbenchKeyboardShortcuts({
     handleGuiPlanCommand,
     keyboardShortcutBindings,
     navigationLocked,
+    openCommandPalette,
     openSettings,
     setComposerMode,
     setUseWorktreePool,
+    slashMenuOpen,
     toggleTerminal,
     useWorktreePool,
     worktreeBranch

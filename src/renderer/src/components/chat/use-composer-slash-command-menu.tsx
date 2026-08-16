@@ -18,6 +18,7 @@ import {
   Target
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import type { AppRoute } from '../../store/chat-store-types'
 import {
   COMPACT_COMMAND_ALIASES,
@@ -110,7 +111,31 @@ export function useComposerSlashCommandMenu(options: Options) {
   }
 }
 
-function useComposerSlashCommands({
+export type ComposerSlashCommandCatalogInput = {
+  t: TFunction
+  route: AppRoute
+  runtimeReady: boolean
+  busy: boolean
+  activeThreadId: string | null
+  activeThreadArchived: boolean
+  canOpenGoalPanel: boolean
+  canCreateNewThread: boolean
+  workspaceRoot: string
+  hasPlanCommand: boolean
+  hasBtwCommand: boolean
+  hideBtwCommand: boolean
+  hasReviewCommand: boolean
+  skillCommands: ComposerSkillCommand[]
+  disabledSkillIds?: string[]
+}
+
+/**
+ * The single slash-command catalog builder. The composer slash menu and
+ * the command palette consume this same function so a new command reaches
+ * both surfaces without a second registration.
+ */
+export function buildComposerSlashCommands({
+  t,
   route,
   runtimeReady,
   busy,
@@ -125,9 +150,7 @@ function useComposerSlashCommands({
   hasReviewCommand,
   skillCommands,
   disabledSkillIds
-}: Options): SlashCommand[] {
-  const { t } = useTranslation('common')
-  return useMemo(() => {
+}: ComposerSlashCommandCatalogInput): SlashCommand[] {
     const threadActionDisabled = !runtimeReady || busy || !activeThreadId
     const disabledSkills = disabledSkillIdSet(disabledSkillIds)
     const commands: SlashCommand[] = []
@@ -263,23 +286,62 @@ function useComposerSlashCommands({
           })
     }
     return commands
-  }, [
-    activeThreadArchived,
-    activeThreadId,
-    busy,
-    canCreateNewThread,
-    canOpenGoalPanel,
-    disabledSkillIds,
-    hasBtwCommand,
-    hasPlanCommand,
-    hasReviewCommand,
-    hideBtwCommand,
+}
+
+function useComposerSlashCommands(options: Options): SlashCommand[] {
+  const { t } = useTranslation('common')
+  const {
     route,
     runtimeReady,
+    busy,
+    activeThreadId,
+    activeThreadArchived,
+    canOpenGoalPanel,
+    canCreateNewThread,
+    workspaceRoot,
+    hasPlanCommand,
+    hasBtwCommand,
+    hideBtwCommand,
+    hasReviewCommand,
     skillCommands,
-    t,
-    workspaceRoot
-  ])
+    disabledSkillIds
+  } = options
+  return useMemo(
+    () => buildComposerSlashCommands({
+      t,
+      route,
+      runtimeReady,
+      busy,
+      activeThreadId,
+      activeThreadArchived,
+      canOpenGoalPanel,
+      canCreateNewThread,
+      workspaceRoot,
+      hasPlanCommand,
+      hasBtwCommand,
+      hideBtwCommand,
+      hasReviewCommand,
+      skillCommands,
+      disabledSkillIds
+    }),
+    [
+      activeThreadArchived,
+      activeThreadId,
+      busy,
+      canCreateNewThread,
+      canOpenGoalPanel,
+      disabledSkillIds,
+      hasBtwCommand,
+      hasPlanCommand,
+      hasReviewCommand,
+      hideBtwCommand,
+      route,
+      runtimeReady,
+      skillCommands,
+      t,
+      workspaceRoot
+    ]
+  )
 }
 
 function comparablePath(path: string | undefined): string {
