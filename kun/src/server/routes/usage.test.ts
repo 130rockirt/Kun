@@ -84,15 +84,17 @@ describe('usageJsonResponse', () => {
     expect(responses.map((response) => response.status)).toEqual([200, 200])
   })
 
-  it('includes active, archived, and side threads in model usage while excluding deleted threads', async () => {
+  it('includes active and archived threads while excluding side and deleted threads from model usage', async () => {
+    // `threadService.list({ includeArchived: true })` keeps side threads out by
+    // default (they are already settled into the parent aggregate exactly once),
+    // and the route drops deleted threads defensively. Records for excluded
+    // threads must not reach the model aggregation.
     const list = vi.fn(async () => [
       { id: 'thread-active', model: 'deepseek-v4', status: 'completed', relation: 'primary' },
       { id: 'thread-archived', model: 'glm-5.2', status: 'archived', relation: 'primary' },
-      { id: 'thread-side', model: 'qwen3-coder', status: 'completed', relation: 'side' },
       { id: 'thread-gemini', model: 'gemini-3-pro', status: 'completed', relation: 'primary' },
       { id: 'thread-claude', model: 'claude-opus-4', status: 'completed', relation: 'primary' },
-      { id: 'thread-custom', model: 'custom/model', status: 'completed', relation: 'primary' },
-      { id: 'thread-deleted', model: 'deleted-model', status: 'deleted', relation: 'primary' }
+      { id: 'thread-custom', model: 'custom/model', status: 'completed', relation: 'primary' }
     ])
     const records = [
       ['thread-active', 'deepseek-v4', 700],
@@ -125,15 +127,15 @@ describe('usageJsonResponse', () => {
     const body = JSON.parse(response.body) as { buckets: Array<{ model: string }> }
 
     expect(response.status).toBe(200)
-    expect(list).toHaveBeenCalledWith({ includeArchived: true, includeSide: true })
+    expect(list).toHaveBeenCalledWith({ includeArchived: true })
     expect(body.buckets.map((bucket) => bucket.model)).toEqual([
       'deepseek-v4',
       'glm-5.2',
-      'qwen3-coder',
       'gemini-3-pro',
       'claude-opus-4',
       'custom/model'
     ])
+    expect(body.buckets.map((bucket) => bucket.model)).not.toContain('qwen3-coder')
     expect(body.buckets.map((bucket) => bucket.model)).not.toContain('deleted-model')
   })
 
