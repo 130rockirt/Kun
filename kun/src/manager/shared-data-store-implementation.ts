@@ -481,7 +481,8 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
         const body = z.object({
           threadId: ThreadIdSchema,
           query: z.string(),
-          maxBytes: z.number().int().positive().optional()
+          maxBytes: z.number().int().positive().optional(),
+          deadlineAtMs: z.number().int().nonnegative().optional()
         }).strict().parse(value)
         // The owning store keeps the lock-free guarantee; a manager-backed
         // runtime without it reports no match rather than falling back to the
@@ -490,7 +491,10 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
         return this.sessionStore.searchItemText(
           body.threadId,
           body.query,
-          body.maxBytes === undefined ? undefined : { maxBytes: body.maxBytes }
+          {
+            ...(body.maxBytes === undefined ? {} : { maxBytes: body.maxBytes }),
+            ...(body.deadlineAtMs === undefined ? {} : { deadlineAtMs: body.deadlineAtMs })
+          }
         )
       }
       case 'loadItemPage': {

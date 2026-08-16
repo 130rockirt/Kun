@@ -67,6 +67,12 @@ export type ItemHistoryPage = {
   itemBytes: number
 }
 
+export type ItemTextSearchOptions = {
+  maxBytes?: number
+  /** Epoch deadline after which the scan must stop and report no match. */
+  deadlineAtMs?: number
+}
+
 /**
  * Port for persisted per-thread activity.
  *
@@ -156,7 +162,7 @@ export interface SessionStore {
   searchItemText?(
     threadId: string,
     query: string,
-    options?: { maxBytes?: number }
+    options?: ItemTextSearchOptions
   ): Promise<string | null>
   loadSession(threadId: string): Promise<AgentSession | null>
   upsertSession(session: AgentSession): Promise<void>

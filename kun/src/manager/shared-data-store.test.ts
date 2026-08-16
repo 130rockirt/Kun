@@ -49,6 +49,9 @@ describe('manager shared data store', () => {
     await expect(store.executeSession('searchItemText', {
       threadId: thread.id, query: 'absent'
     })).resolves.toBeNull()
+    await expect(store.executeSession('searchItemText', {
+      threadId: thread.id, query: 'checkout', deadlineAtMs: Date.now() - 1
+    })).resolves.toBeNull()
     await store.close()
   })
 

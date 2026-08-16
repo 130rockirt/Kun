@@ -1,6 +1,5 @@
 import type { Router } from '../router.js'
 import {
-  contentSearchThreads,
   createThread,
   clearThreadGoal,
   clearThreadTodos,
@@ -16,6 +15,7 @@ import {
   setThreadTodos,
   updateThread
 } from './threads.js'
+import { contentSearchThreads } from './thread-content-search.js'
 import { summarizeThread } from './threads-summarize.js'
 import {
   compactTurn,

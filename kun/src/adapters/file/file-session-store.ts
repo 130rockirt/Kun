@@ -8,6 +8,7 @@ import type {
   ItemHistoryCompactionResult,
   ItemHistoryCommit,
   ItemHistorySnapshot,
+  ItemTextSearchOptions,
   SessionStore
 } from '../../ports/session-store.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
@@ -28,6 +29,7 @@ import {
   buildPublicItemHistoryPage
 } from '../../services/item-history-page.js'
 import { SessionCompactionScheduler } from './session-compaction-scheduler.js'
+import { searchItemTextFile } from './file-session-text-search.js'
 
 export { readLatestItemsFromJsonl } from './file-session-jsonl.js'
 
@@ -359,71 +361,16 @@ export class FileSessionStore implements SessionStore {
   async searchItemText(
     threadId: string,
     query: string,
-    options: { maxBytes?: number } = {}
+    options: ItemTextSearchOptions = {}
   ): Promise<string | null> {
     if (!isSafeThreadId(threadId)) return null
-    const needle = query.toLowerCase()
-    if (!needle) return null
-
-    const cached = this.itemsCache.get(threadId)
-    if (cached) return firstMatchingItemText(cached, needle)
-
     const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? DEFAULT_ITEM_TEXT_SEARCH_MAX_BYTES))
-    const path = this.messagesPath(threadId)
-    const info = await stat(path).catch(() => null)
-    if (!info || info.size === 0) return null
-    // Reading the tail keeps the work bounded on huge logs while covering the
-    // most recent conversation, which is what a palette query is looking for.
-    const start = Math.max(0, info.size - maxBytes)
-
-    return new Promise<string | null>((resolvePromise) => {
-      const stream = createReadStream(path, { encoding: 'utf-8', start })
-      let remainder = ''
-      // A non-zero start almost certainly lands mid-record; drop that partial
-      // first line rather than reporting a truncated snippet.
-      let skipPartialLine = start > 0
-      let settled = false
-
-      const finish = (value: string | null): void => {
-        if (settled) return
-        settled = true
-        stream.destroy()
-        resolvePromise(value)
-      }
-
-      const acceptLine = (line: string): string | null => {
-        if (skipPartialLine) {
-          skipPartialLine = false
-          return null
-        }
-        // Cheap pre-filter: only parse records whose raw JSON could match.
-        if (!line || !line.toLowerCase().includes(needle)) return null
-        let item: TurnItem
-        try {
-          item = JSON.parse(line) as TurnItem
-        } catch {
-          return null
-        }
-        const text = searchableItemText(item)
-        // The raw hit may have been a field name or id rather than content.
-        return text && text.toLowerCase().includes(needle) ? text : null
-      }
-
-      stream.on('data', (chunk: string | Buffer) => {
-        remainder += typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
-        let newline = remainder.indexOf('\n')
-        while (newline >= 0) {
-          const match = acceptLine(remainder.slice(0, newline).trim())
-          remainder = remainder.slice(newline + 1)
-          if (match !== null) {
-            finish(match)
-            return
-          }
-          newline = remainder.indexOf('\n')
-        }
-      })
-      stream.on('error', () => finish(null))
-      stream.on('close', () => finish(acceptLine(remainder.trim())))
+    return searchItemTextFile({
+      path: this.messagesPath(threadId),
+      query,
+      maxBytes,
+      cachedItems: this.itemsCache.get(threadId),
+      options
     })
   }
 
@@ -725,26 +672,4 @@ export class FileSessionStore implements SessionStore {
       return false
     }
   }
-}
-
-/**
- * Item kinds whose text a content search may read. Tool calls, results, and
- * internal bookkeeping stay out so a search never surfaces raw tool payloads.
- */
-function searchableItemText(item: TurnItem): string | null {
-  switch (item.kind) {
-    case 'user_message':
-    case 'assistant_text':
-      return item.text
-    default:
-      return null
-  }
-}
-
-function firstMatchingItemText(items: readonly TurnItem[], lowerCaseNeedle: string): string | null {
-  for (const item of items) {
-    const text = searchableItemText(item)
-    if (text && text.toLowerCase().includes(lowerCaseNeedle)) return text
-  }
-  return null
 }

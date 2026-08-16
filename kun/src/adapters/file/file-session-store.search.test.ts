@@ -121,4 +121,14 @@ describe('FileSessionStore.searchItemText', () => {
     await expect(store.searchItemText('../escape', 'anything')).resolves.toBeNull()
     await expect(store.searchItemText('thread_ok', '')).resolves.toBeNull()
   })
+
+  it('does not start or return a scan after its deadline', async () => {
+    const { store } = await newStore()
+    const threadId = 'thread_expired'
+    await store.appendItem(threadId, makeUserItem({
+      id: 'i1', turnId: 't1', threadId, text: 'checkout after deadline'
+    }))
+    await expect(store.searchItemText(threadId, 'checkout', { deadlineAtMs: Date.now() - 1 }))
+      .resolves.toBeNull()
+  })
 })

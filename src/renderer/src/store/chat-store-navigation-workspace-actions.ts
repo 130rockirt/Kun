@@ -147,11 +147,7 @@ type StoreActionContext = {
   sseAbortRef: SseAbortRef
 }
 
-let bootPromise: Promise<void> | null = null
 let refreshThreadsGeneration = 0
-let clawChannelActivityUnsubscribe: (() => void) | null = null
-let runtimeStatusUnsubscribe: (() => void) | null = null
-let trayActionUnsubscribe: (() => void) | null = null
 
 export function createNavigationWorkspaceActions(
   { set, get, sseAbortRef }: StoreActionContext

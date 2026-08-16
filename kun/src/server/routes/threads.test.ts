@@ -1,20 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  contentSearchThreads,
   forkThread,
   getThread,
   getThreadState,
   getThreadTimeline,
-  snippetAroundMatch,
-  updateThread,
-  THREAD_CONTENT_SEARCH_BUDGET_MS
+  updateThread
 } from './threads.js'
 import { buildRouter } from './index.js'
 import type { ServerRuntime } from './server-runtime.js'
 import { createThreadRecord } from '../../domain/thread.js'
 import { createTurnRecord } from '../../domain/turn.js'
 import { makeGoalContextItem, makeUserItem } from '../../domain/item.js'
-import type { TurnItem } from '../../contracts/items.js'
 import { createApprovalRequest } from '../../domain/approval.js'
 import { InMemoryApprovalGate } from '../../adapters/in-memory-approval-gate.js'
 import { InMemoryUserInputGate } from '../../adapters/in-memory-user-input-gate.js'
@@ -597,173 +593,4 @@ describe('GET /v1/threads/:id active-owner forwarding (#1053)', () => {
     const rejected = await match.handler(unauthorized, { params: match.params })
     expect(rejected.status).toBe(401)
   })
-
-describe('contentSearchThreads', () => {
-  it('returns one snippet per matching conversation, most recently updated first', async () => {
-    const newer = createThreadRecord({
-      id: 'thr_newer', title: 'Payment gateway', workspace: '/tmp', model: 'deepseek-chat', status: 'idle'
-    })
-    const older = createThreadRecord({
-      id: 'thr_older', title: 'Docs rewrite', workspace: '/tmp', model: 'deepseek-chat', status: 'idle'
-    })
-    const none = createThreadRecord({
-      id: 'thr_none', title: 'Nothing', workspace: '/tmp', model: 'deepseek-chat', status: 'idle'
-    })
-    const archived = createThreadRecord({
-      id: 'thr_archived', title: 'Archived hit', workspace: '/tmp', model: 'deepseek-chat', status: 'archived'
-    })
-    newer.updatedAt = '2026-08-15T03:00:00.000Z'
-    older.updatedAt = '2026-08-15T02:00:00.000Z'
-    none.updatedAt = '2026-08-15T01:00:00.000Z'
-    archived.updatedAt = '2026-08-15T04:00:00.000Z'
-    const service = {
-      list: async () => [none, archived, older, newer]
-    } as unknown as ThreadService
-    const sessionStore = {
-      searchItemText: async (threadId: string): Promise<string | null> => {
-        if (threadId === 'thr_newer') return 'Let us redesign the checkout flow end to end.'
-        if (threadId === 'thr_older') return 'checkout must be faster'
-        if (threadId === 'thr_archived') return 'checkout checkout checkout'
-        return null
-      }
-    }
-    const response = await contentSearchThreads(
-      service,
-      sessionStore,
-      new Request('http://kun.local/v1/threads/content-search?q=checkout')
-    )
-    expect(response.status).toBe(200)
-    const body = JSON.parse(response.body) as { matches: Array<{ threadId: string; title: string; workspace: string; snippet: string; updatedAt: string }> }
-    expect(body.matches.map((match) => match.threadId)).toEqual(['thr_newer', 'thr_older'])
-    expect(body.matches[0].title).toBe('Payment gateway')
-    expect(body.matches[0].workspace).toBe('/tmp')
-    expect(body.matches[0].snippet.toLowerCase()).toContain('checkout')
-  })
-
-  it('never drives the blocking loadItems path', async () => {
-    const thread = createThreadRecord({
-      id: 'thr_only', title: 'Only', workspace: '/tmp', model: 'deepseek-chat', status: 'idle'
-    })
-    const service = { list: async () => [thread] } as unknown as ThreadService
-    const loadItems = vi.fn(async (): Promise<TurnItem[]> => [
-      makeUserItem({ id: 'i0', turnId: 't0', threadId: 'thr_only', text: 'checkout' })
-    ])
-    // A store exposing only the blocking path reports no matches rather than
-    // taking per-thread write queues and compacting logs on a keystroke.
-    const response = await contentSearchThreads(
-      service,
-      { loadItems } as unknown as Parameters<typeof contentSearchThreads>[1],
-      new Request('http://kun.local/v1/threads/content-search?q=checkout')
-    )
-    expect(response.status).toBe(200)
-    expect(JSON.parse(response.body)).toEqual({ matches: [] })
-    expect(loadItems).not.toHaveBeenCalled()
-  })
-
-  it('searches every project and reports which one each match came from', async () => {
-    const here = createThreadRecord({
-      id: 'thr_here', title: 'This project', workspace: '/repo/app', model: 'deepseek-chat', status: 'idle'
-    })
-    const elsewhere = createThreadRecord({
-      id: 'thr_elsewhere', title: 'Other project', workspace: '/repo/other', model: 'deepseek-chat', status: 'idle'
-    })
-    here.updatedAt = '2026-08-15T02:00:00.000Z'
-    elsewhere.updatedAt = '2026-08-15T03:00:00.000Z'
-    const service = { list: async () => [here, elsewhere] } as unknown as ThreadService
-    const sessionStore = { searchItemText: async (): Promise<string | null> => 'checkout here' }
-    const response = await contentSearchThreads(
-      service,
-      sessionStore,
-      new Request('http://kun.local/v1/threads/content-search?q=checkout')
-    )
-    const body = JSON.parse(response.body) as {
-      matches: Array<{ threadId: string; workspace: string }>
-    }
-    // Recency alone orders them; the workspace rides along so the caller can
-    // show which project a match belongs to.
-    expect(body.matches.map((match) => match.threadId)).toEqual(['thr_elsewhere', 'thr_here'])
-    expect(body.matches.map((match) => match.workspace)).toEqual(['/repo/other', '/repo/app'])
-  })
-
-  it('stops scanning once the time budget is spent', async () => {
-    const threads = Array.from({ length: 10 }, (_, index) => {
-      const record = createThreadRecord({
-        id: 'thr_' + index, title: 'T' + index, workspace: '/tmp', model: 'deepseek-chat', status: 'idle'
-      })
-      record.updatedAt = '2026-08-15T0' + index + ':00:00.000Z'
-      return record
-    })
-    const service = { list: async () => threads } as unknown as ThreadService
-    const searchItemText = vi.fn(async (): Promise<string | null> => 'checkout')
-    // Reads: deadline stamp, first candidate check (in budget), second check
-    // (spent). Exactly one of the ten candidates is scanned.
-    const clock = [0, 0, THREAD_CONTENT_SEARCH_BUDGET_MS + 1]
-    const response = await contentSearchThreads(
-      service,
-      { searchItemText },
-      new Request('http://kun.local/v1/threads/content-search?q=checkout'),
-      () => clock.shift() ?? THREAD_CONTENT_SEARCH_BUDGET_MS + 1
-    )
-    const body = JSON.parse(response.body) as { matches: Array<{ threadId: string }> }
-    expect(body.matches).toHaveLength(1)
-    expect(searchItemText).toHaveBeenCalledTimes(1)
-  })
-
-  it('rejects empty and oversized queries with 400', async () => {
-    const service = { list: async () => [] } as unknown as ThreadService
-    const sessionStore = { searchItemText: async () => null }
-    const empty = await contentSearchThreads(
-      service, sessionStore, new Request('http://kun.local/v1/threads/content-search')
-    )
-    expect(empty.status).toBe(400)
-    const oversized = await contentSearchThreads(
-      service,
-      sessionStore,
-      new Request('http://kun.local/v1/threads/content-search?q=' + 'x'.repeat(257))
-    )
-    expect(oversized.status).toBe(400)
-  })
-
-  it('tolerates threads whose items cannot be scanned', async () => {
-    const broken = createThreadRecord({
-      id: 'thr_broken', title: 'Broken', workspace: '/tmp', model: 'deepseek-chat', status: 'idle'
-    })
-    const fine = createThreadRecord({
-      id: 'thr_fine', title: 'Fine', workspace: '/tmp', model: 'deepseek-chat', status: 'idle'
-    })
-    broken.updatedAt = '2026-08-15T03:00:00.000Z'
-    fine.updatedAt = '2026-08-15T02:00:00.000Z'
-    const service = {
-      list: async () => [broken, fine]
-    } as unknown as ThreadService
-    const sessionStore = {
-      searchItemText: async (threadId: string): Promise<string | null> => {
-        if (threadId === 'thr_broken') throw new Error('corrupt')
-        return 'checkout once more'
-      }
-    }
-    const response = await contentSearchThreads(
-      service,
-      sessionStore,
-      new Request('http://kun.local/v1/threads/content-search?q=checkout')
-    )
-    const body = JSON.parse(response.body) as { matches: Array<{ threadId: string }> }
-    expect(body.matches.map((match) => match.threadId)).toEqual(['thr_fine'])
-  })
-})
-
-describe('snippetAroundMatch', () => {
-  it('windows the snippet around the first match and elides the edges', () => {
-    const text = 'a'.repeat(300) + ' checkout ' + 'b'.repeat(300)
-    const snippet = snippetAroundMatch(text, 'checkout')
-    expect(snippet).toContain('checkout')
-    expect(snippet.startsWith('…')).toBe(true)
-    expect(snippet.endsWith('…')).toBe(true)
-    expect(snippet.length).toBeLessThan(180)
-  })
-
-  it('returns the head of the text when nothing matches', () => {
-    expect(snippetAroundMatch('plain text without match', 'zzz')).toBe('plain text without match')
-  })
-})
 })
