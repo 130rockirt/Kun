@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { chmod, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { AttachmentsCapabilityConfig } from '../contracts/capabilities.js'
@@ -10,6 +10,7 @@ import type {
   AttachmentVisualPreview
 } from '../contracts/attachments.js'
 import { AttachmentMetadata as AttachmentMetadataSchema } from '../contracts/attachments.js'
+import { applyPosixMode } from '../security/posix-permissions.js'
 
 const ATTACHMENT_ID_PATTERN = /^att_[0-9a-f]{24}$/
 const PendingAttachmentLeaseSchema = z.object({
@@ -422,7 +423,7 @@ export class FileAttachmentStore implements AttachmentStore {
 
   private async ensureRoot(): Promise<void> {
     await mkdir(this.options.rootDir, { recursive: true, mode: 0o700 })
-    await chmod(this.options.rootDir, 0o700)
+    await applyPosixMode(this.options.rootDir, 0o700)
   }
 }
 

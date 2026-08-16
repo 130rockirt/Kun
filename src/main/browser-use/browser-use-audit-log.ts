@@ -1,12 +1,12 @@
 import {
   appendFile,
-  chmod,
   mkdir,
   rename,
   stat,
   unlink
 } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { applyPosixMode } from '../../../kun/src/security/posix-permissions.js'
 
 export const BROWSER_USE_AUDIT_MAX_FILE_BYTES = 5 * 1024 * 1024
 export const BROWSER_USE_AUDIT_MAX_ARCHIVES = 2
@@ -38,7 +38,7 @@ export async function appendBrowserUseAuditLine(
 
   const auditDirectory = dirname(auditPath)
   await mkdir(auditDirectory, { recursive: true, mode: 0o700 })
-  await chmod(auditDirectory, 0o700)
+  await applyPosixMode(auditDirectory, 0o700)
   const currentBytes = await fileSize(auditPath)
   if (currentBytes > maxFileBytes) {
     await unlinkIfPresent(auditPath)
@@ -46,7 +46,7 @@ export async function appendBrowserUseAuditLine(
     await rotateAuditFiles(auditPath, maxArchives)
   }
   await appendFile(auditPath, payload, { encoding: 'utf8', mode: 0o600 })
-  await chmod(auditPath, 0o600)
+  await applyPosixMode(auditPath, 0o600)
 }
 
 async function rotateAuditFiles(auditPath: string, maxArchives: number): Promise<void> {
@@ -92,7 +92,7 @@ async function unlinkIfPresent(path: string): Promise<void> {
 
 async function chmodIfPresent(path: string, mode: number): Promise<void> {
   try {
-    await chmod(path, mode)
+    await applyPosixMode(path, mode)
   } catch (error) {
     if (!isMissingFile(error)) throw error
   }

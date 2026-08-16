@@ -1,7 +1,8 @@
-import { chmod, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import { applyPosixMode } from '../security/posix-permissions.js'
 import {
   ModelReasoningEffort,
   SubagentProfileConfig,
@@ -470,7 +471,7 @@ export class FileDelegationStore {
 
   private async ensureRoot(): Promise<void> {
     await mkdir(this.rootDir, { recursive: true, mode: 0o700 })
-    await chmod(this.rootDir, 0o700)
+    await applyPosixMode(this.rootDir, 0o700)
   }
 }
 
