@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { chmod, lstat, mkdir, rm } from 'node:fs/promises'
+import { lstat, mkdir, rm } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Transform } from 'node:stream'
@@ -13,6 +13,7 @@ import {
   type DataMigrationPackageEntryKind,
   type PackageRelativePath
 } from '../../shared/data-migration'
+import { applyPosixMode } from '../../../kun/src/security/posix-permissions.js'
 
 const FIXED_ZIP_TIME = new Date('1980-01-01T00:00:00.000Z')
 const DEFAULT_FILE_MODE = 0o100600
@@ -241,7 +242,7 @@ export async function extractZip64ArchiveEntries(input: {
 }): Promise<{ bytes: number; entries: number }> {
   const root = resolve(input.destinationRoot)
   await mkdir(root, { recursive: true, mode: 0o700 })
-  await chmod(root, 0o700)
+  await applyPosixMode(root, 0o700)
   const declarations = new Map(input.entries.map((entry) => [entry.path, entry]))
   const extracted = new Set<string>()
   let bytes = 0
@@ -295,7 +296,7 @@ export async function extractZip64ArchiveEntries(input: {
         await rm(outputPath, { force: true }).catch(() => undefined)
         throw new Error(`Kunpack extracted entry integrity mismatch: ${declaration.path}`)
       }
-      await chmod(outputPath, 0o600 | ((declaration.mode ?? 0) & 0o111))
+      await applyPosixMode(outputPath, 0o600 | ((declaration.mode ?? 0) & 0o111))
       extracted.add(declaration.path)
       bytes += entryBytes
       entries += 1

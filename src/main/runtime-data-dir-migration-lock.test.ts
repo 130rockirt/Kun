@@ -227,6 +227,41 @@ describe('canonical Runtime migration startup lock', () => {
     })).toThrow(/claim is not a regular file/)
   })
 
+  it('reclaims a common writer claim after its PID is reused', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-main-migration-lock-'))
+    roots.push(root)
+    const dataDir = join(root, '.kun', 'data')
+    const claimsPath = runtimeDataDirClaimsPath(dataDir)
+    const token = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const stalePath = join(claimsPath, `claim-561-${token}.json`)
+    await mkdir(claimsPath, { recursive: true })
+    await writeFile(stalePath, JSON.stringify({
+      schemaVersion: 1,
+      kind: 'runtime',
+      pid: 561,
+      token,
+      startedAt: '2026-08-16T00:00:00.000Z',
+      processIdentity: 'win32-v1:original-process',
+      dataDir
+    }))
+    let inspectedIdentity: string | undefined
+
+    const migration = acquireCanonicalRuntimeMigrationLock([dataDir], {
+      pid: 562,
+      processIsAlive: (pid, record) => {
+        if (pid === 561) {
+          inspectedIdentity = record?.processIdentity
+          return record?.processIdentity === 'win32-v1:reused-process'
+        }
+        return pid === 562
+      }
+    })
+
+    expect(inspectedIdentity).toBe('win32-v1:original-process')
+    await expect(readFile(stalePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    migration.release()
+  })
+
   it('preserves a replacement lock observed during stale reclamation', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-main-migration-lock-'))
     roots.push(root)

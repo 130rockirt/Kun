@@ -131,6 +131,41 @@ describe('HybridThreadStore filesystem surface fallback', () => {
   })
 })
 
+describe('HybridThreadStore SQLite pagination', () => {
+  it('uses the index count for filtered pages without scanning JSONL', async () => {
+    const { store } = await createStore()
+    const records = [
+      createThreadRecord({ id: 'thread_alpha', title: 'Alpha', workspace: '/tmp/a', model: 'test-model' }),
+      createThreadRecord({ id: 'thread_beta', title: 'Beta', workspace: '/tmp/a', model: 'test-model' }),
+      createThreadRecord({ id: 'thread_other', title: 'Alpha other', workspace: '/tmp/b', model: 'test-model' })
+    ]
+    await Promise.all(records.map((record) => store.upsert(record)))
+    const source = store as unknown as { listFromFilesystem(): Promise<unknown[]> }
+    const filesystemScan = vi.spyOn(source, 'listFromFilesystem')
+
+    try {
+      const first = await store.listPage({
+        workspace: '/tmp/a', search: 'a', includeArchived: true, limit: 1
+      })
+      expect(first).toMatchObject({ total: 2, hasMore: true })
+      expect(first.threads).toHaveLength(1)
+      expect(first.nextCursor).toEqual(expect.any(String))
+
+      const second = await store.listPage({
+        workspace: '/tmp/a', search: 'a', includeArchived: true,
+        limit: 1, cursor: first.nextCursor
+      })
+      expect(second).toMatchObject({ hasMore: false })
+      expect(second.threads).toHaveLength(1)
+      expect(second).not.toHaveProperty('total')
+      expect(filesystemScan).not.toHaveBeenCalled()
+    } finally {
+      filesystemScan.mockRestore()
+      store.close()
+    }
+  })
+})
+
 function legacyWorkThread(id: string, title: string): ThreadRecord {
   const turnId = `${id}_turn`
   const prompt = '[写作上下文]\n交互约定: 需要更多信息时通常直接用普通文本向用户提问。仅当当前激活的专用工作流明确要求结构化确认（例如 PPT 视觉评审）时，调用该工作流提供的确认工具；其他写作任务不要滥用结构化交互。\n\n润色当前文件'

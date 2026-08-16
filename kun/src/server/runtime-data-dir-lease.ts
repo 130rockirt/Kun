@@ -8,6 +8,12 @@ import {
   reclaimLockFileIfUnchanged,
   runtimeDataDirOwnerPath
 } from './runtime-data-dir-migration-lock.js'
+import {
+  isValidRuntimeProcessIdentity,
+  runtimeProcessIdentity,
+  runtimeProcessIsAlive,
+  type RuntimeProcessIsAlive
+} from './runtime-process-identity.js'
 
 export { RUNTIME_DATA_DIR_OWNER_FILE } from './runtime-data-dir-migration-lock.js'
 
@@ -16,6 +22,7 @@ type RuntimeDataDirOwner = {
   pid: number
   token: string
   startedAt: string
+  processIdentity?: string
 }
 
 export type RuntimeDataDirLease = {
@@ -96,15 +103,6 @@ function isErrno(error: unknown, code: string): boolean {
     (error as NodeJS.ErrnoException).code === code
 }
 
-function defaultProcessIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return !isErrno(error, 'ESRCH')
-  }
-}
-
 function parseOwner(raw: string): RuntimeDataDirOwner | null {
   try {
     const parsed = JSON.parse(raw) as Partial<RuntimeDataDirOwner>
@@ -113,7 +111,8 @@ function parseOwner(raw: string): RuntimeDataDirOwner | null {
       (parsed.pid ?? 0) > 0 &&
       typeof parsed.token === 'string' &&
       parsed.token.length > 0 &&
-      typeof parsed.startedAt === 'string'
+      typeof parsed.startedAt === 'string' &&
+      isValidRuntimeProcessIdentity(parsed.processIdentity)
       ? parsed as RuntimeDataDirOwner
       : null
   } catch {
@@ -144,7 +143,7 @@ async function writeOwnerExclusively(path: string, owner: RuntimeDataDirOwner): 
 type RuntimeDataDirLeaseOptions = {
   pid?: number
   now?: () => Date
-  processIsAlive?: (pid: number) => boolean
+  processIsAlive?: RuntimeProcessIsAlive
   beforeStaleReclaim?: (path: string, expectedRaw: string) => void | Promise<void>
 }
 
@@ -155,7 +154,7 @@ async function acquireRuntimeDataDirWriterLease(
 ): Promise<RuntimeDataDirLease> {
   const pid = options.pid ?? process.pid
   const now = options.now ?? (() => new Date())
-  const processIsAlive = options.processIsAlive ?? defaultProcessIsAlive
+  const processIsAlive = options.processIsAlive ?? runtimeProcessIsAlive
   const path = runtimeDataDirOwnerPath(dataDir)
   const writerClaim = await acquireRuntimeDataDirWriterClaim(dataDir, claimKind, {
     pid,
@@ -166,11 +165,13 @@ async function acquireRuntimeDataDirWriterLease(
   // Check both sides of owner-file creation. If a migration wins between the
   // checks, this contender removes only its token-matched owner record and
   // exits before constructing any persistent Runtime stores.
+  const processIdentity = runtimeProcessIdentity(pid)
   const owner: RuntimeDataDirOwner = {
     schemaVersion: 1,
     pid,
     token: randomUUID(),
-    startedAt: now().toISOString()
+    startedAt: now().toISOString(),
+    ...(processIdentity ? { processIdentity } : {})
   }
   let ownerCreated = false
   let dataDirCreated = false
@@ -203,7 +204,7 @@ async function acquireRuntimeDataDirWriterLease(
       if (!existing) {
         throw new Error(`Kun Runtime data directory owner record is invalid: ${path}`)
       }
-      if (processIsAlive(existing.pid)) {
+      if (processIsAlive(existing.pid, existing)) {
         throw new Error(
           `Kun Runtime data directory is already owned by active process ${existing.pid}: ${dataDir}`
         )

@@ -436,6 +436,49 @@ describe('chat-store navigation workspace selection', () => {
     expect(harness.state.threads.some((item) => item.id === ordinarySide.id)).toBe(false)
   })
 
+  it.each([
+    ['while its detail is loading', 'primary', 'thr_subagent'],
+    ['after its side relation loads', 'side', null]
+  ] as const)('preserves an active subagent process %s across inventory refresh', async (
+    _label,
+    relation,
+    threadLoadingId
+  ) => {
+    const source = thread({ id: 'thr_source', title: 'Source', workspace: '/project' })
+    const child = {
+      ...thread({ id: 'thr_subagent', title: 'Subagent', workspace: '/project' }),
+      relation: 'side' as const,
+      parentThreadId: source.id
+    }
+    registryMock.getProvider.mockReturnValue({
+      listThreads: vi.fn(async () => [source, child]),
+      getThreadDetail: vi.fn(async () => ({ blocks: [] }))
+    })
+    vi.stubGlobal('window', {
+      localStorage: new MemoryStorage(),
+      kunGui: { getSettings: vi.fn(async () => ({ write: { workspaces: [] } })) }
+    })
+    const harness = buildHarness()
+    harness.state.activeThreadId = child.id
+    harness.state.activeThreadRelation = relation
+    harness.state.activeThreadParentId = source.id
+    harness.state.threadLoadingId = threadLoadingId
+    harness.state.blocks = [{ kind: 'assistant', id: 'child_output', text: 'Child transcript' }]
+    harness.state.threads = [source]
+    harness.state.watchTurnCompletion = { [child.id]: true }
+    harness.state.unreadThreadIds = { [child.id]: true }
+
+    await harness.actions.refreshThreads()
+
+    expect(harness.state.activeThreadId).toBe(child.id)
+    expect(harness.state.blocks).toEqual([
+      { kind: 'assistant', id: 'child_output', text: 'Child transcript' }
+    ])
+    expect(harness.state.threads.map((item) => item.id)).toEqual([source.id])
+    expect(harness.state.watchTurnCompletion).toEqual({ [child.id]: true })
+    expect(harness.state.unreadThreadIds).toEqual({ [child.id]: true })
+  })
+
   it('openDesign keeps the Code timeline and routes into its shared workbench', () => {
     const harness = buildHarness()
     harness.state.activeThreadId = 'thr_code'

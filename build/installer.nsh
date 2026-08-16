@@ -29,6 +29,7 @@ Var /GLOBAL KunInstallerCurrentPid
 !ifdef BUILD_UNINSTALLER
 Var /GLOBAL KunInstallerStopAttempt
 Var /GLOBAL KunInstallerStopResult
+Var /GLOBAL KunInstallerStopDiagnosticPath
 !endif
 
 !macro kunRunMigrationHelper ACTION
@@ -40,6 +41,8 @@ Var /GLOBAL KunInstallerStopResult
   Pop $KunInstallerHelperExitCode
   Pop $KunInstallerHelperOutput
 !macroend
+
+!include "${PROJECT_DIR}\build\installer-process-check.nsh"
 
 !macro kunSetEnvironmentFromRegister NAME REGISTER
   # System::Call reparses quoted variable expansions. Copy arbitrary registry
@@ -108,64 +111,6 @@ Var /GLOBAL KunInstallerStopResult
   ${endif}
 !macroend
 
-!macro customCheckAppRunning
-  !ifdef BUILD_UNINSTALLER
-    ${if} $INSTDIR == ""
-      Return
-    ${endif}
-
-    InitPluginsDir
-    StrCpy $KunInstallerPowerShellPath "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
-    File /oname=$PLUGINSDIR\kun-windows-installer-migration.ps1 "${PROJECT_DIR}\build\windows-installer-migration.ps1"
-    File /oname=$PLUGINSDIR\windows-installer-migration-paths.ps1 "${PROJECT_DIR}\build\windows-installer-migration-paths.ps1"
-    File /oname=$PLUGINSDIR\windows-installer-migration-journal.ps1 "${PROJECT_DIR}\build\windows-installer-migration-journal.ps1"
-    File /oname=$PLUGINSDIR\windows-installer-migration-filesystem.ps1 "${PROJECT_DIR}\build\windows-installer-migration-filesystem.ps1"
-    File /oname=$PLUGINSDIR\windows-installer-migration-actions.ps1 "${PROJECT_DIR}\build\windows-installer-migration-actions.ps1"
-    StrCpy $KunInstallerHelperPath "$PLUGINSDIR\kun-windows-installer-migration.ps1"
-    System::Call 'kernel32::GetCurrentProcessId() i .r0'
-    StrCpy $KunInstallerCurrentPid $0
-    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_APP_ROOT", "$INSTDIR").r0'
-    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SELF_PID", "$KunInstallerCurrentPid").r0'
-    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_CANONICAL_LEAF", "${APP_FILENAME}").r0'
-    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_APP_EXECUTABLE", "${APP_EXECUTABLE_FILENAME}").r0'
-    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_PRODUCT_NAME", "${PRODUCT_NAME}").r0'
-    StrCpy $KunInstallerStopAttempt 0
-
-    KunStopProcessesFromInstallDir:
-      IntOp $KunInstallerStopAttempt $KunInstallerStopAttempt + 1
-      DetailPrint "Checking for running ${PRODUCT_NAME} processes under $INSTDIR."
-      !insertmacro kunRunMigrationHelper StopProcesses
-      StrCpy $KunInstallerStopResult $KunInstallerHelperExitCode
-
-      ${if} $KunInstallerStopResult == 0
-        Goto KunInstallDirProcessesStopped
-      ${endif}
-
-      Sleep 1200
-      ${if} $KunInstallerStopAttempt <= 5
-        Goto KunStopProcessesFromInstallDir
-      ${endif}
-
-      ${ifNot} ${isUpdated}
-        MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY KunStopProcessesFromInstallDir
-        Quit
-      ${endif}
-
-      DetailPrint "${PRODUCT_NAME} processes may still be running; stopping uninstall to preserve the installation."
-      SetErrorLevel 2
-      Quit
-
-    KunInstallDirProcessesStopped:
-  !else
-    Call KunPrepareInstallMigration
-    StrCpy $appExe "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
-    ${ifNot} ${Silent}
-      SetSilent silent
-      StrCpy $KunInstallerRestoreInteractive 1
-    ${endif}
-  !endif
-!macroend
-
 !macro customUnInstallCheck
   ${if} $KunInstallerInPlaceUpdate == 1
     # Same-directory automatic updates overwrite in place. Running the old
@@ -229,6 +174,12 @@ Var /GLOBAL KunInstallerStopResult
     MessageBox MB_OK|MB_ICONSTOP "Kun installation is incomplete. No PATH changes were made; run the installer again to repair it.$\r$\n$KunInstallerHelperOutput" /SD IDOK
     SetErrorLevel 2
     Quit
+  ${endif}
+
+  ${if} ${isUpdated}
+    # electron-builder keeps existing shortcuts during --updated installs, but
+    # a scope/directory migration may already have removed the old link.
+    !insertmacro addDesktopLink "false"
   ${endif}
 
   ${if} $KunInstallerInPlaceUpdate == 1

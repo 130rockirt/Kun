@@ -67,7 +67,16 @@ try {
       Write-InstallerResult (Resolve-TrustedAppUninstaller)
     }
     'StopProcesses' {
-      Stop-InstallRootProcesses
+      $stopResult = Stop-InstallRootProcesses
+      if ($stopResult.Outcome -eq 'running') {
+        $processIds = @($stopResult.ProcessIds | ForEach-Object { [string]$_ }) -join ','
+        Write-InstallerDiagnostic "STOP_PROCESSES outcome=running pids=$processIds"
+        [Console]::Error.WriteLine("KUN_INSTALLER_STOP_RESULT=running pids=$processIds")
+        exit 2
+      }
+      if ($stopResult.Outcome -ne 'stopped') {
+        throw 'The installer received an unexpected process inspection result.'
+      }
     }
     'Recover' {
       Invoke-RestoreJournal
@@ -97,6 +106,13 @@ try {
   }
   Write-InstallerDiagnostic "SUCCESS action=$Action"
 } catch {
+  if ($Action -eq 'StopProcesses') {
+    # The NSIS caller distinguishes this safe failure from a verified remaining
+    # app process. Do not expose arbitrary PowerShell errors or install paths.
+    Write-InstallerDiagnostic 'STOP_PROCESSES outcome=inspection-failed'
+    [Console]::Error.WriteLine('KUN_INSTALLER_STOP_RESULT=inspection-failed')
+    exit 1
+  }
   Write-InstallerDiagnostic "FAIL action=$Action error=$($_.Exception.Message)"
   [Console]::Error.WriteLine($_.Exception.Message)
   exit 1

@@ -1,7 +1,8 @@
-import { chmod, mkdir, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { MemoryCapabilityConfig } from '../contracts/capabilities.js'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
+import { applyPosixMode } from '../security/posix-permissions.js'
 import {
   MemoryDiagnostics,
   MemoryRecord,
@@ -220,7 +221,7 @@ export class FileMemoryStore implements MemoryStore {
 
   private async ensureRoot(): Promise<void> {
     await mkdir(this.options.rootDir, { recursive: true, mode: 0o700 })
-    await chmod(this.options.rootDir, 0o700)
+    await applyPosixMode(this.options.rootDir, 0o700)
   }
 
   private now(): string {

@@ -142,10 +142,10 @@ export async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSett
 }
 
 /**
- * Startup restart policy: every GUI launch replaces all current-user Kun
- * serve processes with a fresh process built from the current bundle before
- * any client attaches. This intentionally replaces active turns because the
- * GUI is the authoritative owner once the app is opened.
+ * Startup attach policy: a GUI is one client of the data-directory scoped
+ * Runtime, so a normal launch must reuse a healthy shared owner. The retained
+ * function name keeps the existing startup wiring stable; replacement remains
+ * reserved for explicit restart and bundled-build update paths.
  *
  * Automatic-startup disabled: attach-only, exactly like a plain ensure.
  */
@@ -154,9 +154,7 @@ export async function ensureKunServeFreshOnStartup(
 ): Promise<AppSettingsV1> {
   const requested = runtimeSupervisor.latestOr(settings)
   if (!managedKunHostCanAutoStart(requested)) return requested
-  runtimeSupervisor.setManagedRuntimeExpected(true)
-  await restartAllKunServeProcesses(requested)
-  return requested
+  return ensureRuntime(requested)
 }
 
 export async function restartRuntime(settings: AppSettingsV1): Promise<void> {
@@ -194,10 +192,10 @@ export async function replaceKunServe(settings: AppSettingsV1): Promise<void> {
 }
 
 /**
- * Broad restart used by GUI startup and explicit user actions. Stop the
- * current discovered owner through the authenticated replacement path, then
- * clear any remaining current-user historical `kun serve` processes before
- * electing one fresh runtime.
+ * Broad restart used only by an explicit user action. Stop the current
+ * discovered owner through the authenticated replacement path, then clear
+ * any remaining current-user historical `kun serve` processes before electing
+ * one fresh runtime.
  *
  * Ordinary health recovery remains separate so transient failures do not
  * interrupt another client or data-directory owner.

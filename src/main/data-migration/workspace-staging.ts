@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { chmod, lstat, mkdir, readlink, rename, rm, symlink } from 'node:fs/promises'
+import { lstat, mkdir, readlink, rename, rm, symlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import {
   buildMigrationDestinationPath,
@@ -14,6 +14,7 @@ import {
 import { validateKunpackLinkMetadata } from './archive-security'
 import { stableImportedSiblingPath } from './import-planner'
 import { extractZip64ArchiveEntries } from './kunpack-zip'
+import { applyPosixMode } from '../../../kun/src/security/posix-permissions.js'
 
 export type StagedWorkspaceFile = {
   entry: DataMigrationPackageEntry
@@ -423,7 +424,7 @@ function assertBelow(root: string, path: string): void {
 async function hardenTreePermissions(root: string): Promise<void> {
   const details = await lstat(root)
   if (details.isSymbolicLink()) return
-  await chmod(root, details.isDirectory() ? 0o700 : 0o600 | (details.mode & 0o111))
+  await applyPosixMode(root, details.isDirectory() ? 0o700 : 0o600 | (details.mode & 0o111))
   if (!details.isDirectory()) return
   const { readdir } = await import('node:fs/promises')
   for (const name of await readdir(root)) await hardenTreePermissions(join(root, name))

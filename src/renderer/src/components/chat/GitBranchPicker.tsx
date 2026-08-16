@@ -33,6 +33,7 @@ import {
 } from '../../lib/thread-worktree-registry'
 import { useChatStore } from '../../store/chat-store'
 import { rememberCodeWorkspaceRoots } from '../../store/chat-store-helpers'
+import { useGitBranchPickerPopover } from './use-git-branch-picker-popover'
 
 const BRANCH_ROW_LABEL_MAX_LENGTH = 42
 const BRANCH_TRIGGER_LABEL_MAX_LENGTH = 32
@@ -79,6 +80,12 @@ export function GitBranchPicker({
   const [branchPrefix, setBranchPrefix] = useState(DEFAULT_GIT_BRANCH_PREFIX)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const closePanel = useCallback((): void => setOpen(false), [])
+  const { panelRef, panelStyle, updatePanelPosition } = useGitBranchPickerPopover({
+    open,
+    anchorRef: wrapRef,
+    onClose: closePanel
+  })
 
   const load = useCallback(async (): Promise<void> => {
     if (!root || typeof window.kunGui?.getGitBranches !== 'function') return
@@ -129,17 +136,6 @@ export function GitBranchPicker({
     void load()
     window.setTimeout(() => inputRef.current?.focus(), 0)
   }, [load, open])
-
-  useEffect(() => {
-    if (!open) return
-    const onPointerDown = (event: PointerEvent): void => {
-      const target = event.target
-      if (target instanceof Node && wrapRef.current?.contains(target)) return
-      setOpen(false)
-    }
-    window.addEventListener('pointerdown', onPointerDown)
-    return () => window.removeEventListener('pointerdown', onPointerDown)
-  }, [open])
 
   useEffect(() => {
     if (!open) setTooltip(null)
@@ -395,7 +391,12 @@ export function GitBranchPicker({
         data-composer-launch-settings-trigger
         data-composer-launch-mode={useWorktreePool ? 'worktree' : 'current-directory'}
         className="flex h-8 max-w-[360px] min-w-0 items-center gap-2 rounded-lg px-2 text-[14px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          updatePanelPosition()
+          setOpen((v) => !v)
+        }}
+        aria-expanded={open}
+        aria-haspopup="dialog"
         aria-label={t('composerLaunchTriggerLabel', { branch: label, mode: launchModeLabel })}
       >
         <GitBranch className="h-4 w-4 shrink-0" strokeWidth={1.8} />
@@ -407,10 +408,14 @@ export function GitBranchPicker({
         )}
       </button>
 
-      {open ? (
+      {open && typeof document !== 'undefined' ? createPortal(
         <div
+          ref={panelRef}
           data-composer-launch-settings-panel
-          className="absolute bottom-[calc(100%+8px)] left-0 z-50 w-[min(560px,calc(100vw-48px))] overflow-hidden rounded-2xl border border-ds-border bg-ds-elevated shadow-[0_24px_70px_rgba(44,55,78,0.18)] backdrop-blur-xl dark:shadow-[0_30px_80px_rgba(0,0,0,0.42)]"
+          role="dialog"
+          aria-label={t('composerLaunchSettingsTitle')}
+          style={panelStyle}
+          className="fixed z-[1000] overflow-y-auto overscroll-contain rounded-2xl border border-ds-border bg-ds-elevated shadow-[0_24px_70px_rgba(44,55,78,0.18)] backdrop-blur-xl dark:shadow-[0_30px_80px_rgba(0,0,0,0.42)]"
         >
           <div className="flex items-center justify-between gap-4 border-b border-ds-border-muted px-4 py-3.5">
             <div className="min-w-0">
@@ -671,7 +676,8 @@ export function GitBranchPicker({
               {t('composerLaunchDone')}
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
       ) : null}
       {tooltip ? createPortal(
         <div

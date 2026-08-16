@@ -1,5 +1,4 @@
 import {
-  chmodSync,
   closeSync,
   constants,
   copyFileSync,
@@ -48,6 +47,7 @@ import {
   runtimeStoreInventory,
   uniqueSiblingBackup
 } from './runtime-data-dir-migration-inventory'
+import { applyPosixModeSync } from '../../kun/src/security/posix-permissions.js'
 
 
 
@@ -96,7 +96,7 @@ export function copyRegularFilePreservingMetadata(sourcePath: string, targetPath
   const targetState = pathState(targetPath)
   if (targetState !== 'missing') {
     if (targetState === 'other' && sameRegularFileContent(sourcePath, targetPath)) {
-      chmodSync(targetPath, sourceMetadata.mode & 0o7777)
+      applyPosixModeSync(targetPath, sourceMetadata.mode & 0o7777)
       utimesSync(targetPath, sourceMetadata.atime, sourceMetadata.mtime)
       return
     }
@@ -119,7 +119,7 @@ export function copyRegularFilePreservingMetadata(sourcePath: string, targetPath
       partialPath,
       constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE
     )
-    chmodSync(partialPath, sourceMetadata.mode & 0o7777)
+    applyPosixModeSync(partialPath, sourceMetadata.mode & 0o7777)
     utimesSync(partialPath, sourceMetadata.atime, sourceMetadata.mtime)
     // Source files may intentionally be read-only. A read descriptor is
     // sufficient for fsync and avoids requiring write permission after the
@@ -155,7 +155,7 @@ export function copyRuntimeTreePreservingSource(sourcePath: string, targetPath: 
   } else if (targetState !== 'dir') {
     throw new Error(`Runtime copy target is not a directory: ${targetPath}`)
   } else {
-    chmodSync(targetPath, (sourceMetadata.mode & 0o7777) | 0o700)
+    applyPosixModeSync(targetPath, (sourceMetadata.mode & 0o7777) | 0o700)
   }
 
   for (const targetName of readdirSync(targetPath)) {
@@ -190,7 +190,7 @@ export function copyRuntimeTreePreservingSource(sourcePath: string, targetPath: 
     }
     throw new Error(`Runtime source contains an unsupported entry: ${sourceEntry}`)
   }
-  chmodSync(targetPath, sourceMetadata.mode & 0o7777)
+  applyPosixModeSync(targetPath, sourceMetadata.mode & 0o7777)
   utimesSync(targetPath, sourceMetadata.atime, sourceMetadata.mtime)
   fsyncDirectoryBestEffort(targetPath)
 }
@@ -348,11 +348,7 @@ export function backUpRegularFile(
   }
   const backupPath = uniqueSiblingBackup(path, label, now)
   copyFileSync(path, backupPath, constants.COPYFILE_EXCL)
-  try {
-    chmodSync(backupPath, 0o600)
-  } catch {
-    // Windows ACLs are not represented by POSIX mode bits.
-  }
+  applyPosixModeSync(backupPath, 0o600)
   const backupHandle = openSync(backupPath, 'r+')
   try {
     fsyncFileBestEffort(backupHandle)

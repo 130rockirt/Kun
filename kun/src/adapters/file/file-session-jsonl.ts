@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { rename, rm, type FileHandle } from 'node:fs/promises'
+import { rm, type FileHandle } from 'node:fs/promises'
 import type { RuntimeEvent } from '../../contracts/events.js'
 import { isPublicTurnItem, type TurnItem } from '../../contracts/items.js'
 import type { ItemHistoryPage, ItemHistoryPageOptions } from '../../ports/session-store.js'
 import { buildPublicItemHistoryPage, timelineSafeItem } from '../../services/item-history-page.js'
 import { yieldToEventLoop } from '../hybrid/hybrid-thread-support.js'
+import { renameFileWithRetry } from './atomic-write.js'
 
 const MS_PER_DAY = 86_400_000
 const DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES = 16 * 1024 * 1024
@@ -34,7 +35,12 @@ export function compactUsageEvents(
  */
 export async function compactUsageEventsJsonlFile(
   path: string,
-  options: { nowIso: string; retentionDays: number; maxRecordBytes: number }
+  options: {
+    nowIso: string
+    retentionDays: number
+    maxRecordBytes: number
+    commitReplacement?: (replace: () => Promise<void>) => Promise<boolean>
+  }
 ): Promise<boolean> {
   const cutoffMs = Date.parse(options.nowIso) - options.retentionDays * MS_PER_DAY
   if (!Number.isFinite(cutoffMs)) return false
@@ -57,11 +63,17 @@ export async function compactUsageEventsJsonlFile(
       maxRecordBytes: options.maxRecordBytes,
       keepLine: (event, index) => event.kind !== 'usage' || keepUsageIndexes.has(index)
     })
-    await rename(tmp, path)
+    const replace = async (): Promise<void> => renameFileWithRetry(tmp, path)
+    if (options.commitReplacement) {
+      const committed = await options.commitReplacement(replace)
+      return committed
+    }
+    await replace()
     return true
-  } catch (error) {
+  } finally {
+    // A stale snapshot deliberately declines replacement. Always remove its
+    // prepared rewrite; after a successful rename this is a harmless no-op.
     await rm(tmp, { force: true }).catch(() => undefined)
-    throw error
   }
 }
 
@@ -225,7 +237,12 @@ export async function readLatestItemsFromJsonl(
     maxRecordBytes?: number
     rejectMalformed?: boolean
   } = {}
-): Promise<{ items: TurnItem[]; rawCount: number; malformedCount: number }> {
+): Promise<{
+  items: TurnItem[]
+  rawCount: number
+  malformedCount: number
+  incompleteTrailingRecord: boolean
+}> {
   const maxRecordBytes = Math.max(
     1,
     Math.floor(options.maxRecordBytes ?? DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES)
@@ -235,9 +252,10 @@ export async function readLatestItemsFromJsonl(
   let remainder = ''
   let rawCount = 0
   let malformedCount = 0
+  let incompleteTrailingRecord = false
   let linesSinceYield = 0
 
-  const acceptLine = async (line: string): Promise<void> => {
+  const acceptLine = async (line: string, trailing = false): Promise<void> => {
     if (!line.trim()) return
     if (Buffer.byteLength(line, 'utf-8') > maxRecordBytes) {
       throw new Error(`item history record exceeds ${maxRecordBytes} bytes`)
@@ -252,7 +270,8 @@ export async function readLatestItemsFromJsonl(
       if (!latestById.has(item.id)) firstSeenIds.push(item.id)
       latestById.set(item.id, item)
     } catch {
-      malformedCount += 1
+      if (trailing) incompleteTrailingRecord = true
+      else malformedCount += 1
     }
     linesSinceYield += 1
     if (linesSinceYield >= YIELD_EVERY_LINES) {
@@ -278,18 +297,20 @@ export async function readLatestItemsFromJsonl(
         throw new Error(`item history record exceeds ${maxRecordBytes} bytes`)
       }
     }
-    await acceptLine(remainder)
+    await acceptLine(remainder, true)
   } catch (error) {
     if ((error as { code?: string }).code !== 'ENOENT') throw error
   }
 
-  if (options.rejectMalformed && malformedCount > 0) {
-    throw new Error(`item history contains ${malformedCount} malformed record(s)`)
+  const rejectedRecords = malformedCount + (incompleteTrailingRecord ? 1 : 0)
+  if (options.rejectMalformed && rejectedRecords > 0) {
+    throw new Error(`item history contains ${rejectedRecords} malformed record(s)`)
   }
   return {
     items: firstSeenIds.map((id) => latestById.get(id)!),
     rawCount,
-    malformedCount
+    malformedCount,
+    incompleteTrailingRecord
   }
 }
 

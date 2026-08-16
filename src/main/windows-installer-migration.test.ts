@@ -39,7 +39,7 @@ function makeTempRoot(): string {
 }
 
 function runHelper(input: {
-  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'ResolveUninstaller' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore' | 'ValidatePayload' | 'CleanupInPlaceLeftovers' | 'CleanupJournal'
+  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'ResolveUninstaller' | 'StopProcesses' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore' | 'ValidatePayload' | 'CleanupInPlaceLeftovers' | 'CleanupJournal'
   source?: string
   secondary?: string
   currentUserSource?: string
@@ -63,6 +63,8 @@ function runHelper(input: {
   canonicalLeaf?: string
   appExecutable?: string
   productName?: string
+  appRoot?: string
+  diagnosticPath?: string
 }) {
   const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
   const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
@@ -105,7 +107,9 @@ function runHelper(input: {
         KUN_INSTALLER_CANONICAL_LEAF: input.canonicalLeaf ?? 'Kun',
         KUN_INSTALLER_APP_EXECUTABLE: input.appExecutable ?? 'Kun.exe',
         KUN_INSTALLER_PRODUCT_NAME: input.productName ?? 'Kun',
-        KUN_INSTALLER_SELF_PID: String(process.pid)
+        KUN_INSTALLER_SELF_PID: String(process.pid),
+        KUN_INSTALLER_APP_ROOT: input.appRoot ?? '',
+        KUN_INSTALLER_DIAGNOSTIC_PATH: input.diagnosticPath ?? ''
       }
     }
   )
@@ -250,6 +254,25 @@ describe('Windows installer migration ACL contract', () => {
 })
 
 windowsOnly('Windows installer migration helper', () => {
+  it('keeps a process inspection failure distinct from no matching app process', () => {
+    const root = makeTempRoot()
+    const appRoot = join(root, 'Kun')
+    const diagnosticPath = join(root, 'process-check.log')
+    mkdirSync(appRoot, { recursive: true })
+
+    const stopped = runHelper({ action: 'StopProcesses', appRoot, diagnosticPath })
+    expect(stopped.status, processError(stopped)).toBe(0)
+
+    const unsafeRoot = parse(appRoot).root
+    const failed = runHelper({ action: 'StopProcesses', appRoot: unsafeRoot, diagnosticPath })
+    expect(failed.status).toBe(1)
+    expect(processError(failed)).toContain('KUN_INSTALLER_STOP_RESULT=inspection-failed')
+    expect(processError(failed)).not.toContain(unsafeRoot)
+    expect(readFileSync(diagnosticPath, 'utf8')).toContain(
+      'STOP_PROCESSES outcome=inspection-failed'
+    )
+  })
+
   it('validates the installed application payload before PATH is updated', () => {
     const target = join(makeTempRoot(), 'Kun')
     mkdirSync(target, { recursive: true })

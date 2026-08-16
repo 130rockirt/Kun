@@ -11,6 +11,7 @@ const harness = vi.hoisted(() => {
   const stopSharedForReplacementAndWait = vi.fn(async () => undefined)
   const ensureRunning = vi.fn(async () => undefined)
   const ensureReplacementRunning = vi.fn(async () => undefined)
+  const resolveConnection = vi.fn(async () => false)
   const requiresBundledBuildReplacement = vi.fn(async () => false)
   const waitForHealthy = vi.fn(async () => true)
   const probeRuntimeApi = vi.fn(async () => ({ ok: true as const }))
@@ -35,13 +36,14 @@ const harness = vi.hoisted(() => {
     setManagedRuntimeExpected: vi.fn(),
     restart: vi.fn(async (operation: () => Promise<void>) => operation()),
     replace: vi.fn(async (operation: () => Promise<void>) => operation()),
-    ensure: vi.fn()
+    ensure: vi.fn(async (_fingerprint: string, operation: () => Promise<unknown>) => operation())
   }
 
   return {
     clearHistoricalKunServeProcesses,
     ensureReplacementRunning,
     ensureRunning,
+    resolveConnection,
     mainState,
     noteRuntimeHealthy,
     probeRuntimeApi,
@@ -61,7 +63,7 @@ vi.mock('./runtime/kun-adapter', () => ({
     ensureReplacementRunning: harness.ensureReplacementRunning,
     isChildRunning: () => false,
     requiresBundledBuildReplacement: harness.requiresBundledBuildReplacement,
-    resolveConnection: vi.fn(async () => false),
+    resolveConnection: harness.resolveConnection,
     stopSharedAndWait: harness.stopSharedAndWait,
     stopSharedForReplacementAndWait: harness.stopSharedForReplacementAndWait
   }
@@ -116,6 +118,8 @@ beforeEach(() => {
   harness.stopSharedForReplacementAndWait.mockClear()
   harness.ensureRunning.mockClear()
   harness.ensureReplacementRunning.mockClear()
+  harness.resolveConnection.mockReset()
+  harness.resolveConnection.mockResolvedValue(false)
   harness.requiresBundledBuildReplacement.mockReset()
   harness.requiresBundledBuildReplacement.mockResolvedValue(false)
   harness.waitForHealthy.mockClear()
@@ -132,6 +136,8 @@ beforeEach(() => {
   harness.mainState.assertCanonicalRuntimeMigrationReady.mockClear()
   harness.runtimeSupervisor.restart.mockClear()
   harness.runtimeSupervisor.replace.mockClear()
+  harness.runtimeSupervisor.ensure.mockClear()
+  harness.runtimeSupervisor.ensure.mockImplementation(async (_fingerprint: string, operation: () => Promise<unknown>) => operation())
   harness.runtimeSupervisor.setManagedRuntimeExpected.mockClear()
 })
 
@@ -205,27 +211,32 @@ describe('explicit Kun serve replacement', () => {
 })
 
 describe('startup Kun serve restart', () => {
-  it('replaces the shared serve on every GUI launch when automatic startup is enabled', async () => {
+  it('reuses a healthy shared serve on GUI launch instead of replacing it', async () => {
     const current = settings()
+    harness.resolveConnection.mockResolvedValueOnce(true)
 
     const result = await ensureKunServeFreshOnStartup(current)
 
     expect(result).toBe(current)
     expect(harness.runtimeSupervisor.setManagedRuntimeExpected).toHaveBeenCalledWith(true)
-    expect(harness.runtimeSupervisor.replace).toHaveBeenCalledOnce()
-    expect(harness.clearHistoricalKunServeProcesses).toHaveBeenCalledOnce()
-    expect(harness.stopSharedForReplacementAndWait).toHaveBeenCalledWith(current)
-    expect(harness.ensureReplacementRunning).toHaveBeenCalledWith(current)
+    expect(harness.runtimeSupervisor.ensure).toHaveBeenCalledOnce()
+    expect(harness.clearHistoricalKunServeProcesses).not.toHaveBeenCalled()
+    expect(harness.stopSharedForReplacementAndWait).not.toHaveBeenCalled()
+    expect(harness.ensureReplacementRunning).not.toHaveBeenCalled()
     expect(harness.ensureRunning).not.toHaveBeenCalled()
+    expect(harness.waitForHealthy).toHaveBeenCalledWith(current, 2_000)
+    expect(harness.probeRuntimeApi).toHaveBeenCalledWith(current)
   })
 
-  it('clears historical Kun serve processes before the replacement launch', async () => {
+  it('starts a missing shared serve without a broad historical-process cleanup', async () => {
     const current = settings()
 
     await ensureKunServeFreshOnStartup(current)
 
-    expect(harness.clearHistoricalKunServeProcesses).toHaveBeenCalledOnce()
-    expect(harness.runtimeSupervisor.replace).toHaveBeenCalledOnce()
+    expect(harness.clearHistoricalKunServeProcesses).not.toHaveBeenCalled()
+    expect(harness.stopSharedForReplacementAndWait).not.toHaveBeenCalled()
+    expect(harness.ensureReplacementRunning).not.toHaveBeenCalled()
+    expect(harness.ensureRunning).toHaveBeenCalledWith(current)
   })
 
   it('attaches without replacing when automatic startup is disabled', async () => {
@@ -238,7 +249,7 @@ describe('startup Kun serve restart', () => {
 
     expect(result).toBe(current)
     expect(harness.runtimeSupervisor.setManagedRuntimeExpected).not.toHaveBeenCalled()
-    expect(harness.runtimeSupervisor.replace).not.toHaveBeenCalled()
+    expect(harness.runtimeSupervisor.ensure).not.toHaveBeenCalled()
     expect(harness.clearHistoricalKunServeProcesses).not.toHaveBeenCalled()
     expect(harness.stopSharedForReplacementAndWait).not.toHaveBeenCalled()
   })

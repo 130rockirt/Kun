@@ -221,7 +221,7 @@ describe('GUI settings bridge', () => {
       schemaVersion: 1,
       pid: process.pid,
       token: 'legacy-runtime-owner',
-      startedAt: '2026-08-05T00:00:00.000Z'
+      startedAt: new Date().toISOString()
     }))
 
     await expect(syncGuiProviderCatalogToConfig(fixture.dataDir, settings!))

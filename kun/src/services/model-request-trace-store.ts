@@ -1,7 +1,8 @@
 import { createReadStream } from 'node:fs'
-import { appendFile, chmod, mkdir, rm } from 'node:fs/promises'
+import { appendFile, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
+import { applyPosixMode } from '../security/posix-permissions.js'
 import {
   MODEL_REQUEST_TRACE_SCHEMA_VERSION,
   ModelRequestTraceRecordSchema,
@@ -41,7 +42,7 @@ export class ModelRequestTraceStore {
           await this.ensureReady()
           const path = this.pathForThread(threadId)
           await appendFile(path, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 })
-          await chmod(path, 0o600)
+          await applyPosixMode(path, 0o600)
           this.rememberRecent(threadId, record)
         } catch (error) {
           this.rememberWarning(classifyTracePersistenceError(error))
@@ -139,7 +140,7 @@ export class ModelRequestTraceStore {
 
   private async ensureReady(): Promise<void> {
     this.ready ??= mkdir(this.root, { recursive: true, mode: 0o700 })
-      .then(async () => { await chmod(this.root, 0o700) })
+      .then(async () => { await applyPosixMode(this.root, 0o700) })
     await this.ready
   }
 
