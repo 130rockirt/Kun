@@ -109,6 +109,7 @@ function EmptyRoutePoolState({ onAdd, t }: { onAdd: () => void; t: TFunction }):
 export function ModelRoutesSettings({
   settings,
   onChange,
+  translation,
   saveStatus = 'idle',
   saveError,
   onRetrySave,
@@ -117,6 +118,7 @@ export function ModelRoutesSettings({
 }: {
   settings: ModelProviderSettingsV1
   onChange: (next: ModelProviderSettingsV1) => void
+  translation?: TFunction
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error'
   saveError?: string | null
   onRetrySave?: () => void
@@ -124,7 +126,8 @@ export function ModelRoutesSettings({
   /** The configured local Kun endpoint; this is also the public gateway origin. */
   publicBaseUrl?: string
 }): ReactElement {
-  const { t, i18n } = useTranslation('settings')
+  const { t: localTranslation, i18n } = useTranslation('settings')
+  const t = translation ?? localTranslation
   const [selectedId, setSelectedId] = useState(settings.routePools[0]?.id ?? '')
   const [status, setStatus] = useState<RouteStatus | null>(null)
   const [statusError, setStatusError] = useState('')

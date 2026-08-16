@@ -8,6 +8,7 @@ import {
   modelProviderPresetAccountProfile,
   type ModelProviderSettingsV1
 } from '@shared/app-settings'
+import { APP_LOCALES, type AppLocale } from '@shared/app-locales'
 import i18n from '../i18n'
 import { ModelRoutesSettings } from './settings-section-model-routes'
 
@@ -31,6 +32,16 @@ function settings(): ModelProviderSettingsV1 {
       }
     ]
   }
+}
+
+const localRelayProviderLabels: Record<AppLocale, string> = {
+  en: 'Local relay provider',
+  zh: '本地中转供应商',
+  ru: 'Местный поставщик ретрансляции',
+  hi: 'स्थानीय रिले प्रदाता',
+  th: 'ผู้ให้บริการรีเลย์ท้องถิ่น',
+  ja: 'ローカルリレープロバイダー',
+  ko: '지역 중계 제공업체'
 }
 
 describe('ModelRoutesSettings', () => {
@@ -145,6 +156,40 @@ describe('ModelRoutesSettings', () => {
     expect(localized).toContain('稳定性优先自适应')
     expect(localized).not.toContain('Local relay provider')
     await act(async () => { renderer.unmount() })
+  })
+
+  it('reacts to every selectable locale without remounting or fallback copy', async () => {
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = createRenderer(createElement(ModelRoutesSettings, {
+        settings: settings(),
+        onChange: () => undefined,
+        active: false
+      }))
+    })
+
+    for (const locale of APP_LOCALES) {
+      await act(async () => {
+        await i18n.changeLanguage(locale)
+      })
+      expect(textContent(renderer.root)).toContain(localRelayProviderLabels[locale])
+    }
+
+    await act(async () => { renderer.unmount() })
+  })
+
+  it('uses the parent provider translation consistently when nested i18n state lags', async () => {
+    await i18n.changeLanguage('zh')
+    const translation = i18n.getFixedT('en', 'settings')
+    const html = renderToStaticMarkup(createElement(ModelRoutesSettings, {
+      settings: settings(),
+      onChange: () => undefined,
+      translation
+    }))
+
+    expect(html).toContain('Local relay provider')
+    expect(html).toContain('Gateway &amp; API')
+    expect(html).not.toMatch(/[\p{Script=Han}]/u)
   })
 
   it('opens a detailed local API dialog with endpoint examples', async () => {
