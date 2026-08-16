@@ -84,6 +84,59 @@ describe('usageJsonResponse', () => {
     expect(responses.map((response) => response.status)).toEqual([200, 200])
   })
 
+  it('includes active, archived, and side threads in model usage while excluding deleted threads', async () => {
+    const list = vi.fn(async () => [
+      { id: 'thread-active', model: 'deepseek-v4', status: 'completed', relation: 'primary' },
+      { id: 'thread-archived', model: 'glm-5.2', status: 'archived', relation: 'primary' },
+      { id: 'thread-side', model: 'qwen3-coder', status: 'completed', relation: 'side' },
+      { id: 'thread-gemini', model: 'gemini-3-pro', status: 'completed', relation: 'primary' },
+      { id: 'thread-claude', model: 'claude-opus-4', status: 'completed', relation: 'primary' },
+      { id: 'thread-custom', model: 'custom/model', status: 'completed', relation: 'primary' },
+      { id: 'thread-deleted', model: 'deleted-model', status: 'deleted', relation: 'primary' }
+    ])
+    const records = [
+      ['thread-active', 'deepseek-v4', 700],
+      ['thread-archived', 'glm-5.2', 600],
+      ['thread-side', 'qwen3-coder', 500],
+      ['thread-gemini', 'gemini-3-pro', 400],
+      ['thread-claude', 'claude-opus-4', 300],
+      ['thread-custom', 'custom/model', 200],
+      ['thread-deleted', 'deleted-model', 1_000]
+    ].map(([threadId, model, totalTokens]) => ({
+      threadId: String(threadId),
+      model: String(model),
+      completedAt: '2026-08-09T00:00:00.000Z',
+      usage: {
+        ...emptyUsageSnapshot(),
+        promptTokens: Number(totalTokens),
+        totalTokens: Number(totalTokens),
+        turns: 1
+      }
+    }))
+    const runtime = runtimeFixture({
+      list,
+      loadUsageRecords: vi.fn(async () => records)
+    })
+
+    const response = await usageJsonResponse(
+      request('model', '2026-08-01', '2026-08-09'),
+      runtime
+    )
+    const body = JSON.parse(response.body) as { buckets: Array<{ model: string }> }
+
+    expect(response.status).toBe(200)
+    expect(list).toHaveBeenCalledWith({ includeArchived: true, includeSide: true })
+    expect(body.buckets.map((bucket) => bucket.model)).toEqual([
+      'deepseek-v4',
+      'glm-5.2',
+      'qwen3-coder',
+      'gemini-3-pro',
+      'claude-opus-4',
+      'custom/model'
+    ])
+    expect(body.buckets.map((bucket) => bucket.model)).not.toContain('deleted-model')
+  })
+
   it('reuses thread summaries when the optional usage index is unavailable', async () => {
     const get = vi.fn(async () => null)
     const list = vi.fn(async () => [{
@@ -154,7 +207,7 @@ function request(groupBy: 'thread' | 'day' | 'model', from?: string, to?: string
 
 function runtimeFixture(overrides: {
   get?: (threadId: string) => Promise<unknown>
-  list: () => Promise<unknown[]>
+  list: (options?: unknown) => Promise<unknown[]>
   loadEventsSince?: (threadId: string, sinceSeq: number) => Promise<unknown[]>
   loadUsageRecords: () => Promise<unknown[]>
 }): ServerRuntime {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildThreadUsageResponse, type ThreadUsageRecord, UsageService } from './usage-service.js'
+import {
+  buildModelUsageResponse,
+  buildThreadUsageResponse,
+  type ThreadUsageRecord,
+  UsageService
+} from './usage-service.js'
 
 const signature = {
   model: 'model-a',
@@ -129,6 +134,57 @@ describe('usage cache diagnostics', () => {
       avg_ttft_ms: 850,
       avg_tokens_per_second: 42.5
     })
+  })
+})
+
+describe('model usage aggregation', () => {
+  it('keeps every model family, sorts buckets stably, and preserves unknown records', () => {
+    const tokensByModel: Array<[string | undefined, number]> = [
+      ['deepseek-v4', 700],
+      ['gpt-5.6-sol', 600],
+      ['glm-5.2', 500],
+      ['qwen3-coder', 400],
+      ['gemini-3-pro', 300],
+      ['claude-opus-4', 200],
+      ['custom/model', 100],
+      [undefined, 50],
+      ['tie-z', 25],
+      ['tie-a', 25]
+    ]
+    const records: ThreadUsageRecord[] = tokensByModel.map(([model, totalTokens], index) => ({
+      threadId: `thread-${index}`,
+      ...(model ? { model } : {}),
+      completedAt: '2026-08-09T00:00:00.000Z',
+      usage: {
+        promptTokens: totalTokens,
+        completionTokens: 0,
+        totalTokens,
+        cacheHitRate: null,
+        turns: 1
+      }
+    }))
+
+    const response = buildModelUsageResponse(records, {
+      groupBy: 'model',
+      from: '2026-08-01',
+      to: '2026-08-09',
+      timezone: 'UTC'
+    })
+
+    expect(response.buckets.map((bucket) => bucket.model)).toEqual([
+      'deepseek-v4',
+      'gpt-5.6-sol',
+      'glm-5.2',
+      'qwen3-coder',
+      'gemini-3-pro',
+      'claude-opus-4',
+      'custom/model',
+      'unknown',
+      'tie-a',
+      'tie-z'
+    ])
+    expect(response.buckets).toHaveLength(tokensByModel.length)
+    expect(response.totals.total_tokens).toBe(2_900)
   })
 })
 

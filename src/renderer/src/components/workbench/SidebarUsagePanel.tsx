@@ -268,7 +268,7 @@ export function SidebarUsagePanel({
             </p>
           ) : modelBuckets.length > 0 ? (
             <div className="mt-2.5 space-y-2.5">
-              {modelBuckets.slice(0, 4).map((bucket) => {
+              {modelBuckets.map((bucket) => {
                 const percent = Math.max(0, Math.min(100, bucket.totalTokens / modelTotal * 100))
                 return (
                   <div key={bucket.model} className="min-w-0">

@@ -42,14 +42,16 @@ function usageResponse(path: string): { ok: boolean; status: number; body: strin
         from: '2026-07-01',
         to: '2026-07-29',
         timezone: 'UTC',
-        buckets: [{
-          model: 'deepseek-v4',
-          input_tokens: 900,
-          output_tokens: 100,
-          total_tokens: 1000
-        }],
+        buckets: [
+          { model: 'deepseek-v4', input_tokens: 900, output_tokens: 100, total_tokens: 1000 },
+          { model: 'gpt-5.6-sol', input_tokens: 700, output_tokens: 100, total_tokens: 800 },
+          { model: 'claude-opus-4', input_tokens: 500, output_tokens: 100, total_tokens: 600 },
+          { model: 'gemini-3-pro', input_tokens: 300, output_tokens: 100, total_tokens: 400 },
+          { model: 'glm-5.2', input_tokens: 180, output_tokens: 20, total_tokens: 200 },
+          { model: 'custom/qwen3-coder', input_tokens: 90, output_tokens: 10, total_tokens: 100 }
+        ],
         days: [],
-        totals: { total_tokens: 1000 }
+        totals: { total_tokens: 3100 }
       })
     }
   }
@@ -114,8 +116,12 @@ describe('UsageQuotaPanel', () => {
     expect(renderer.root.findByProps({ id: 'usage-quota-tab-quota' }).props['data-active']).toBe('false')
     expect(renderer.root.findByProps({ 'data-sidebar-usage-panel': true })).toBeTruthy()
     expect(listProviderQuotas).not.toHaveBeenCalled()
-    expect(JSON.stringify(renderer.toJSON())).toContain('1.0k')
-    expect(JSON.stringify(renderer.toJSON())).toContain('deepseek-v4')
+    const output = JSON.stringify(renderer.toJSON())
+    expect(output).toContain('1.0k')
+    expect(output).toContain('deepseek-v4')
+    expect(output).toContain('glm-5.2')
+    expect(output).toContain('custom/qwen3-coder')
+    expect(output).toContain('32.25806451612903%')
 
     await act(async () => {
       renderer.root.findByProps({ id: 'usage-quota-tab-quota' }).props.onClick()

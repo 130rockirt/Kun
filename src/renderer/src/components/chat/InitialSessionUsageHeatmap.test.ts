@@ -175,10 +175,12 @@ describe('InitialSessionUsageHeatmap', () => {
           to: '2026-06-04',
           timezone: 'UTC',
           buckets: [
-            {
-              model: 'deepseek-v4-pro',
-              ...detailedDay
-            }
+            { ...detailedDay, model: 'deepseek-v4-pro' },
+            { ...detailedDay, model: 'gpt-5.6-sol', totalTokens: 1_800_000 },
+            { ...detailedDay, model: 'claude-opus-4', totalTokens: 1_200_000 },
+            { ...detailedDay, model: 'gemini-3-pro', totalTokens: 800_000 },
+            { ...detailedDay, model: 'glm-5.2', totalTokens: 400_000 },
+            { ...detailedDay, model: 'custom/qwen3-coder', totalTokens: 200_000 }
           ],
           days: [detailedDay],
           totals: {
@@ -200,6 +202,8 @@ describe('InitialSessionUsageHeatmap', () => {
     expect(html).toContain('459,039 tokens')
     expect(html).toContain('Output')
     expect(html).toContain('44,702 tokens')
+    expect(html).toContain('glm-5.2')
+    expect(html).toContain('custom/qwen3-coder')
   })
 
   it('changes only metric totals when a shorter range is selected', () => {

@@ -80,7 +80,6 @@ export function ModelUsagePanel({
     [chartDays]
   )
   const maxTokens = Math.max(1, ...chartBreakdowns.map((bucket) => bucket.total))
-  const topModels = modelBuckets.slice(0, 4)
   const totalTokens = Math.max(usage?.totals.totalTokens ?? 0, 1)
   const resolvedActiveDayIndex =
     activeDayIndex != null && activeDayIndex >= 0 && activeDayIndex < chartDays.length
@@ -263,7 +262,7 @@ export function ModelUsagePanel({
         </div>
       </div>
       <div className="mt-3 grid gap-1.5">
-        {topModels.map((bucket, index) => {
+        {modelBuckets.map((bucket, index) => {
           const percent = (bucket.totalTokens / totalTokens) * 100
           const summary = modelUsageBreakdownSummary(bucket.model, bucket, t, locale)
           return (
