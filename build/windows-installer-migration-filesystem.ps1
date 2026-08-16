@@ -252,11 +252,9 @@ function Stop-AppProcesses([string[]]$Roots) {
   [void][int]::TryParse($currentPidValue, [ref]$currentPid)
 
   for ($attempt = 0; $attempt -lt 6; $attempt += 1) {
-    $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-      $_.ProcessId -ne $currentPid -and (Test-AppOwnedProcessPath $_.ExecutablePath $Roots)
-    })
+    $processes = @(Get-VerifiedAppProcesses $Roots $currentPid)
     if ($processes.Count -eq 0) {
-      return
+      return @{ Outcome = 'stopped'; ProcessIds = @() }
     }
 
     foreach ($process in $processes) {
@@ -265,18 +263,43 @@ function Stop-AppProcesses([string[]]$Roots) {
     Start-Sleep -Milliseconds 500
   }
 
-  $remaining = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.ProcessId -ne $currentPid -and (Test-AppOwnedProcessPath $_.ExecutablePath $Roots)
-  })
+  $remaining = @(Get-VerifiedAppProcesses $Roots $currentPid)
   if ($remaining.Count -gt 0) {
-    throw ('Unable to stop application processes: ' + (($remaining | ForEach-Object { $_.ProcessId }) -join ', '))
+    return @{
+      Outcome = 'running'
+      ProcessIds = @($remaining | ForEach-Object { [int]($_.ProcessId) })
+    }
   }
+  return @{ Outcome = 'stopped'; ProcessIds = @() }
+}
+
+function Get-VerifiedAppProcesses([string[]]$Roots, [int]$CurrentPid) {
+  try {
+    $candidates = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+  } catch {
+    throw 'The installer could not inspect Windows processes.'
+  }
+
+  $owned = @()
+  foreach ($candidate in $candidates) {
+    if ($candidate.ProcessId -eq $CurrentPid) {
+      continue
+    }
+    try {
+      if (Test-AppOwnedProcessPath $candidate.ExecutablePath $Roots) {
+        $owned += $candidate
+      }
+    } catch {
+      throw 'The installer could not validate application process ownership.'
+    }
+  }
+  return @($owned)
 }
 
 function Stop-InstallRootProcesses {
   $root = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_APP_ROOT')
   if ([string]::IsNullOrWhiteSpace($root)) {
-    return
+    return @{ Outcome = 'stopped'; ProcessIds = @() }
   }
   Assert-SafeInstallRoot $root 'Application root'
   Stop-AppProcesses @($root)
