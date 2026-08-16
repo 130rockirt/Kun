@@ -7,6 +7,13 @@ import { useChatStore } from '../../store/chat-store'
 import i18n from '../../i18n'
 import { FloatingComposer } from './FloatingComposer'
 import { GitBranchPicker } from './GitBranchPicker'
+import { calculateComposerPopoverPlacement } from './floating-composer-popover-placement'
+
+const { createPortalMock } = vi.hoisted(() => ({
+  createPortalMock: vi.fn((children: unknown) => children)
+}))
+
+vi.mock('react-dom', () => ({ createPortal: createPortalMock }))
 
 const BRANCH_RESULT: GitBranchesResult = {
   ok: true,
@@ -67,6 +74,7 @@ describe('composer worktree launch settings', () => {
   let previousLanguage: string
 
   beforeEach(async () => {
+    createPortalMock.mockClear()
     previousLanguage = i18n.language
     await i18n.changeLanguage('en')
     rendererRuntimeClient.invalidateSettings()
@@ -87,6 +95,19 @@ describe('composer worktree launch settings', () => {
     vi.unstubAllGlobals()
     Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT')
     await i18n.changeLanguage(previousLanguage)
+  })
+
+  it('bounds a tall branch panel inside a short viewport', () => {
+    const placement = calculateComposerPopoverPlacement({
+      anchorRect: { left: 240, right: 434, top: 440, bottom: 472 },
+      popoverHeight: 580,
+      viewportHeight: 562,
+      viewportWidth: 675,
+      preferredWidth: 560,
+      maximumHeight: 640
+    })
+
+    expect(placement).toEqual({ left: 57, top: 12, width: 560, maxHeight: 420 })
   })
 
   it('summarizes the selected branch and toggles isolated-worktree mode', async () => {
@@ -122,6 +143,13 @@ describe('composer worktree launch settings', () => {
       const toggle = renderer!.root.findByProps({
         'data-composer-worktree-mode-toggle': true
       })
+      const panel = renderer!.root.findByProps({
+        'data-composer-launch-settings-panel': true
+      })
+      expect(createPortalMock).toHaveBeenCalledWith(expect.anything(), document.body)
+      expect(panel.props.className).toContain('fixed')
+      expect(panel.props.className).toContain('z-[1000]')
+      expect(panel.props.role).toBe('dialog')
       expect(toggle.findByProps({ role: 'switch' }).props['aria-checked']).toBe(true)
 
       await act(async () => {
