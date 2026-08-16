@@ -102,6 +102,7 @@ export type ImageGenToolProviderOptions = {
 export type ProviderCredentialResolver = (providerId: string) => Promise<{
   apiKey: string
   headers?: Record<string, string>
+  proxyUrl?: string
 }>
 
 export type ImageGenToolProviderBuildResult = {
@@ -318,7 +319,8 @@ export function buildImageGenToolProviders(
             ...config,
             ...(credential ? {
               apiKey: credential.apiKey,
-              headers: { ...(config.headers ?? {}), ...(credential.headers ?? {}) }
+              headers: { ...(config.headers ?? {}), ...(credential.headers ?? {}) },
+              ...(credential.proxyUrl ? { proxyUrl: credential.proxyUrl } : {})
             } : {})
           })
         }

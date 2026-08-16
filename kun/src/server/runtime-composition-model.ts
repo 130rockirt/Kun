@@ -352,8 +352,10 @@ export async function createRuntimeModelComposition(
   const resolveCapabilityProviderCredential = async (providerId: string): Promise<{
     apiKey: string
     headers?: Record<string, string>
+    proxyUrl?: string
   }> => {
-    const provider = (await modelConnections.materialize()).providers.get(providerId)
+    const materialized = await modelConnections.materialize()
+    const provider = materialized.providers.get(providerId)
     if (!provider || provider.kind !== 'http') {
       throw new Error(`Model connection ${providerId} is unavailable for media generation`)
     }
@@ -367,7 +369,14 @@ export async function createRuntimeModelComposition(
     if (!apiKey) {
       throw new Error(`Model connection ${providerId} has no usable credential`)
     }
-    return { apiKey, ...(headers ? { headers } : {}) }
+    // Media tools share the provider-level global proxy with chat model
+    // requests so a proxy-restricted provider stays reachable end to end.
+    const proxyUrl = materialized.proxy.enabled ? materialized.proxy.url.trim() : ''
+    return {
+      apiKey,
+      ...(headers ? { headers } : {}),
+      ...(proxyUrl ? { proxyUrl } : {})
+    }
   }
   const providerQuotaService = new ProviderQuotaService({
     loadSource: async () => {
