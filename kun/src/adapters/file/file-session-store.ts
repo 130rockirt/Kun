@@ -16,7 +16,6 @@ import type { TurnItem } from '../../contracts/items.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
 import type { AgentSession } from '../../domain/session.js'
 import {
-  compactUsageEventsJsonlFile,
   parseReplayEventRecord,
   readItemPageFromJsonl,
   readLatestItemsFromJsonl,
@@ -30,6 +29,10 @@ import {
 } from '../../services/item-history-page.js'
 import { SessionCompactionScheduler } from './session-compaction-scheduler.js'
 import { searchItemTextFile } from './file-session-text-search.js'
+import {
+  compactUsageEventsIfLarge,
+  sessionDirectoryExists
+} from './file-session-usage-compaction.js'
 
 export { readLatestItemsFromJsonl } from './file-session-jsonl.js'
 
@@ -144,7 +147,7 @@ export class FileSessionStore implements SessionStore {
   async appendEvent(threadId: string, event: RuntimeEvent): Promise<void> {
     assertSafeThreadId(threadId)
     await this.withThreadWrite(threadId, async () => {
-      await this.ensureDir(this.threadDir(threadId))
+      await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
       const path = this.eventsPath(threadId)
       await appendFile(path, `${JSON.stringify(event)}\n`, { encoding: 'utf-8', mode: 0o600 })
       this.bumpEventHistoryRevision(threadId)
@@ -159,7 +162,7 @@ export class FileSessionStore implements SessionStore {
   async appendItem(threadId: string, item: TurnItem): Promise<void> {
     assertSafeThreadId(threadId)
     await this.withThreadWrite(threadId, async () => {
-      await this.ensureDir(this.threadDir(threadId))
+      await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
       const path = this.messagesPath(threadId)
       await appendFile(path, `${JSON.stringify(item)}\n`, { encoding: 'utf-8', mode: 0o600 })
       this.bumpItemsVersion(threadId)
@@ -171,9 +174,9 @@ export class FileSessionStore implements SessionStore {
   async rewriteItems(threadId: string, items: TurnItem[]): Promise<void> {
     assertSafeThreadId(threadId)
     await this.withThreadWrite(threadId, async () => {
-      await this.ensureDir(this.threadDir(threadId))
+      await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
       const contents = items.map((item) => JSON.stringify(item)).join('\n')
-      await this.atomicWrite(this.messagesPath(threadId), contents ? `${contents}\n` : '')
+      await atomicWriteFile(this.messagesPath(threadId), contents ? `${contents}\n` : '')
       this.bumpItemsVersion(threadId)
       this.cacheItems(threadId, [...items])
       this.bumpItemHistoryRevision(threadId)
@@ -199,9 +202,9 @@ export class FileSessionStore implements SessionStore {
       if (revision !== expectedRevision) {
         return { applied: false, reason: 'conflict', revision }
       }
-      await this.ensureDir(this.threadDir(threadId))
+      await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
       const contents = items.map((item) => JSON.stringify(item)).join('\n')
-      await this.atomicWrite(this.messagesPath(threadId), contents ? `${contents}\n` : '')
+      await atomicWriteFile(this.messagesPath(threadId), contents ? `${contents}\n` : '')
       this.bumpItemsVersion(threadId)
       this.cacheItems(threadId, [...items])
       return { applied: true, revision: this.bumpItemHistoryRevision(threadId) }
@@ -215,7 +218,7 @@ export class FileSessionStore implements SessionStore {
       const current = items.find((item) => item.id === itemId)
       if (!current) return null
       const updated = { ...current, ...patch } as TurnItem
-      await this.ensureDir(this.threadDir(threadId))
+      await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
       await appendFile(this.messagesPath(threadId), `${JSON.stringify(updated)}\n`, { encoding: 'utf-8', mode: 0o600 })
       this.bumpItemsVersion(threadId)
       this.applyItemToCache(threadId, updated)
@@ -455,7 +458,7 @@ export class FileSessionStore implements SessionStore {
 
   async loadSession(threadId: string): Promise<AgentSession | null> {
     try {
-      const raw = await readFile(this.sessionPath(threadId), 'utf-8')
+      const raw = await readFile(join(this.threadDir(threadId), 'session.json'), 'utf-8')
       return JSON.parse(raw) as AgentSession
     } catch {
       return null
@@ -465,8 +468,8 @@ export class FileSessionStore implements SessionStore {
   async upsertSession(session: AgentSession): Promise<void> {
     assertSafeThreadId(session.threadId)
     await this.withThreadWrite(session.threadId, async () => {
-      await this.ensureDir(this.threadDir(session.threadId))
-      await this.atomicWrite(this.sessionPath(session.threadId), JSON.stringify(session))
+      await mkdir(this.threadDir(session.threadId), { recursive: true, mode: 0o700 })
+      await atomicWriteFile(join(this.threadDir(session.threadId), 'session.json'), JSON.stringify(session))
     })
   }
 
@@ -672,58 +675,23 @@ export class FileSessionStore implements SessionStore {
     return join(this.threadDir(threadId), 'messages.jsonl')
   }
 
-  private sessionPath(threadId: string): string {
-    return join(this.threadDir(threadId), 'session.json')
-  }
-
-  private async ensureDir(path: string): Promise<void> {
-    await mkdir(path, { recursive: true, mode: 0o700 })
-  }
-
-  private async atomicWrite(path: string, contents: string): Promise<void> {
-    await atomicWriteFile(path, contents)
-  }
-
   private async compactUsageEventsIfLarge(threadId: string): Promise<void> {
-    const path = this.eventsPath(threadId)
-    const info = await stat(path).catch(() => null)
-    if (!info || info.size <= this.usageEventCompaction.maxBytes) return
-    const revisionBefore = this.eventHistoryRevision(threadId)
-    let conflicted = false
-    const compacted = await compactUsageEventsJsonlFile(path, {
+    await compactUsageEventsIfLarge({
+      path: this.eventsPath(threadId),
+      maxBytes: this.usageEventCompaction.maxBytes,
       nowIso: this.usageEventCompaction.nowIso(),
       retentionDays: this.usageEventCompaction.retentionDays,
       maxRecordBytes: DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES,
-      commitReplacement: (replace) => this.withThreadWrite(threadId, async () => {
-        const currentInfo = await stat(path).catch(() => null)
-        if (
-          this.eventHistoryRevision(threadId) !== revisionBefore ||
-          !currentInfo ||
-          currentInfo.size !== info.size ||
-          currentInfo.mtimeMs !== info.mtimeMs
-        ) {
-          conflicted = true
-          return false
-        }
-        await replace()
-        this.bumpEventHistoryRevision(threadId)
-        return true
-      })
+      readRevision: () => this.eventHistoryRevision(threadId),
+      bumpRevision: () => this.bumpEventHistoryRevision(threadId),
+      withWrite: (operation) => this.withThreadWrite(threadId, operation),
+      scheduleRetry: () => this.scheduleUsageEventCompaction(threadId),
+      invalidateCache: () => this.highestSeqCache.delete(threadId)
     })
-    if (conflicted) this.scheduleUsageEventCompaction(threadId)
-    if (!compacted) return
-    // Size/mtime changed; drop the stale high-water cache entry so the next
-    // highestSeq() rescans against the rewritten file.
-    this.highestSeqCache.delete(threadId)
   }
 
   /** Used by the loop during shutdown to verify the file actually exists. */
   async exists(threadId: string): Promise<boolean> {
-    try {
-      await stat(this.threadDir(threadId))
-      return true
-    } catch {
-      return false
-    }
+    return sessionDirectoryExists(this.threadDir(threadId))
   }
 }
