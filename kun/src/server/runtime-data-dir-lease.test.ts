@@ -58,7 +58,7 @@ describe('Runtime data directory lease', () => {
       schemaVersion: 1,
       pid: process.pid,
       token: 'legacy-migration-lock',
-      startedAt: '2026-08-05T00:00:00.000Z',
+      startedAt: new Date().toISOString(),
       dataDir
     }))
 
