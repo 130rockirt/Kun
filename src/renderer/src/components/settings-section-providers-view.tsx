@@ -310,6 +310,7 @@ export function ProvidersSettingsView({ view }: { view: Record<string, any> }): 
           <ModelRoutesSettings
             settings={provider}
             onChange={(next) => update({ provider: { routePools: next.routePools, localGateway: next.localGateway } })}
+            translation={t}
             saveStatus={saveStatus}
             saveError={saveError}
             onRetrySave={retrySave}

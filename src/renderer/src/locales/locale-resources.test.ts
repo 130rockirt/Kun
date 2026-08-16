@@ -22,6 +22,16 @@ import zhSettings from './zh/settings'
 
 type LocaleTree = Record<string, unknown>
 
+const authoredSettings: Record<AppLocale, LocaleTree> = {
+  en: enSettings,
+  zh: zhSettings,
+  ru: ruSettings,
+  hi: hiSettings,
+  th: thSettings,
+  ja: jaSettings,
+  ko: koSettings
+}
+
 const resources: Record<AppLocale, { common: LocaleTree; settings: LocaleTree }> = {
   en: { common: enCommon, settings: enSettings },
   zh: { common: zhCommon, settings: zhSettings },
@@ -98,6 +108,45 @@ describe('active locale resources', () => {
       }
     }
   )
+
+  it.each(APP_LOCALES)(
+    'authors a complete model-routes resource for %s without fallback copy',
+    (locale) => {
+      const source = flattenStrings(enSettings.modelRoutes)
+      const translated = flattenStrings(authoredSettings[locale].modelRoutes as LocaleTree)
+
+      expect([...translated.keys()]).toEqual([...source.keys()])
+      for (const [key, sourceValue] of source) {
+        const translatedValue = translated.get(key)
+        expect(translatedValue, `settings:modelRoutes.${key}`).toBeTruthy()
+        expect(interpolationTokens(translatedValue ?? ''), `settings:modelRoutes.${key}`)
+          .toEqual(interpolationTokens(sourceValue))
+        expect(translatedValue).not.toContain('ZZSAFE')
+      }
+      if (locale !== 'en') {
+        expect(translated.get('localRelayProvider')).not.toBe(source.get('localRelayProvider'))
+      }
+    }
+  )
+
+  it.each(APP_LOCALES)('preserves model-route protocol literals in %s guidance', (locale) => {
+    const modelRoutes = authoredSettings[locale].modelRoutes as Record<string, string>
+    const expectedLiterals: Record<string, readonly string[]> = {
+      guideModelsResponse: ['object: "list"', 'data'],
+      guideFieldModel: ['model', '{{modelId}}'],
+      guideResponsesNonStreaming: ['object: "response"', 'output'],
+      guideChatMessages: ['messages', 'system', 'developer', 'user', 'assistant', 'tool'],
+      guideChatTools: ['tools', 'function', 'Base64', 'data URL'],
+      guideChatNonStreaming: ['choices[0].message.content'],
+      guideChatStreaming: ['data: [DONE]']
+    }
+
+    for (const [key, literals] of Object.entries(expectedLiterals)) {
+      for (const literal of literals) {
+        expect(modelRoutes[key], `settings:modelRoutes.${key}`).toContain(literal)
+      }
+    }
+  })
 
   it.each(APP_LOCALES)('can switch i18next to %s without falling back to another locale', async (locale) => {
     await i18n.changeLanguage(locale)
