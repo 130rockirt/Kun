@@ -42,7 +42,6 @@ import { createDaemonRuntime } from './daemon-runtime'
 import { createDaemonPushText } from './daemon-push-service'
 import { createPowerSaveController } from './power-save-controller'
 import { inspectPackagedInstallHealth } from './packaged-install-health'
-import { clearHistoricalKunServeProcesses } from './runtime/kun-serve-process-cleanup'
 import { registerKunExtensionProtocol } from './extensions/extension-resource-protocol'
 import { ExtensionMediaProtocolRegistry } from './extensions/extension-media-protocol'
 import { ExtensionDescriptorResolver } from './extensions/extension-descriptor-resolver'
@@ -133,11 +132,11 @@ export interface MainServices {
 }
 
 export async function initializeMainServices(): Promise<MainServices | null> {
-    // GUI startup is an explicit runtime replacement boundary. Stop every
-    // current-user Kun serve before the Manager opens shared data; otherwise
-    // an active turn can block the Manager handoff before the later startup
-    // replacement path gets a chance to run.
-    await clearHistoricalKunServeProcesses()
+    // A detached Runtime and its Service Manager are shared by GUI, TUI, and
+    // other local clients. Desktop startup must attach through the Manager,
+    // not terminate processes by name before their registrations can be
+    // reconciled. Broad historical-process cleanup remains an explicit
+    // replacement/update action only.
     const installHealth = inspectPackagedInstallHealth({
       isPackaged: app.isPackaged,
       executablePath: process.execPath,

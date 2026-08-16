@@ -259,10 +259,9 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
   })
 
   it('migrates Windows install roots without changing identity or touching user data', () => {
-    const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8').replace(
-      /\r\n/g,
-      '\n'
-    )
+    const installerScript = ['installer.nsh', 'installer-process-check.nsh'].map((fileName) =>
+      readFileSync(join(process.cwd(), 'build', fileName), 'utf8').replace(/\r\n/g, '\n')
+    ).join('\n')
     const migrationScript = [
       'windows-installer-migration.ps1',
       'windows-installer-migration-paths.ps1',
@@ -281,6 +280,7 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
     expect(builderConfig.nsis.include).toBe('build/installer.nsh')
     expect(builderConfig.nsis.allowToChangeInstallationDirectory).toBe(false)
     expect(builderConfig.nsis.deleteAppDataOnUninstall).toBe(false)
+    expect(installerScript).toContain('!include "${PROJECT_DIR}\\build\\installer-process-check.nsh"')
     expect(installerScript).toContain('!macro customInit')
     expect(installerScript).toContain('${if} ${isUpdated}')
     expect(installerScript).toContain('SetSilent silent')
@@ -388,6 +388,12 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
     expect(installerScript).toContain('Restore')
     expect(installerScript).toContain('UpdatePath')
     expect(installerScript).toContain('!insertmacro kunRunMigrationHelper StopProcesses')
+    expect(installerScript).toContain('Var /GLOBAL KunInstallerStopDiagnosticPath')
+    expect(installerScript).toContain(
+      'StrCpy $KunInstallerStopDiagnosticPath "$TEMP\\Kun-installer-process-check-$KunInstallerCurrentPid.log"'
+    )
+    expect(installerScript).toContain('KUN_INSTALLER_DIAGNOSTIC_PATH')
+    expect(installerScript).toContain('${elseIf} $KunInstallerStopResult == 2')
     expect(installerScript).toContain('windows-installer-migration-paths.ps1')
     expect(installerScript).toContain('windows-installer-migration-journal.ps1')
     expect(installerScript).toContain('windows-installer-migration-filesystem.ps1')
@@ -395,6 +401,10 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
     expect(installerScript).toContain('!ifdef BUILD_UNINSTALLER')
     expect(installerScript).toContain('${ifNot} ${isUpdated}')
     expect(installerScript).toContain('MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)"')
+    expect(installerScript).toContain(
+      'could not safely check whether an older installation is still using files.'
+    )
+    expect(installerScript).not.toContain('MessageBox MB_RETRYCANCEL|MB_ICONSTOP "$KunInstallerHelperOutput')
     expect(installerScript).not.toContain('RMDir /r "$INSTDIR"')
     expect(installerScript).toContain('DeleteRegKey SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}"')
     expect(installerScript).toContain('DeleteRegKey SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}"')
@@ -413,10 +423,18 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
     expect(migrationScript).not.toContain("'old-uninstaller.exe'")
     expect(migrationScript).toContain("Join-Path $PSScriptRoot 'kun-windows-installer-result.txt'")
     expect(migrationScript).toContain('function Test-AppOwnedProcessPath')
-    expect(migrationScript).toContain('Test-AppOwnedProcessPath $_.ExecutablePath $Roots')
+    expect(migrationScript).toContain('Test-AppOwnedProcessPath $candidate.ExecutablePath $Roots')
+    expect(migrationScript).toContain('function Get-VerifiedAppProcesses')
+    expect(migrationScript).toContain('Get-CimInstance Win32_Process -ErrorAction Stop')
+    expect(migrationScript).not.toContain('Get-CimInstance Win32_Process -ErrorAction SilentlyContinue')
     expect(migrationScript).toContain('& "$env:SystemRoot\\System32\\taskkill.exe" /PID $process.ProcessId /T /F')
     expect(migrationScript).toContain('function Stop-InstallRootProcesses')
     expect(migrationScript).toContain("Assert-SafeInstallRoot $root 'Application root'")
+    expect(migrationScript).toContain("if ($stopResult.Outcome -eq 'running')")
+    expect(migrationScript).toContain('KUN_INSTALLER_STOP_RESULT=running pids=$processIds')
+    expect(migrationScript).toContain('KUN_INSTALLER_STOP_RESULT=inspection-failed')
+    expect(migrationScript).toContain('STOP_PROCESSES outcome=inspection-failed')
+    expect(migrationScript).toContain('Unable to stop verified application processes before migration.')
     expect(migrationScript).toContain('Test-LegacyLeaf')
     expect(migrationScript).toContain('function Resolve-LegacySourceTarget')
     expect(migrationScript).toContain('Test-ReparsePoint')
