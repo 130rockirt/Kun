@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { makeAssistantTextItem, makeToolCallItem, makeToolResultItem, makeUserItem } from '../../domain/item.js'
-import { FileSessionStore } from './file-session-store.js'
+import { FileSessionStore, readLatestItemsFromJsonl } from './file-session-store.js'
 
 const roots: string[] = []
 
@@ -141,6 +141,32 @@ describe('FileSessionStore item ordering', () => {
     await expect(store.compactItems(threadId, { force: true }))
       .rejects.toThrow('malformed record')
     expect(await readFile(path, 'utf-8')).toBe(before)
+  })
+
+  it('distinguishes an unterminated trailing write from a malformed completed row', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-session-incomplete-tail-'))
+    roots.push(root)
+    const path = join(root, 'messages.jsonl')
+    const item = makeUserItem({
+      id: 'user_1',
+      threadId: 'thread_incomplete_tail',
+      turnId: 'turn_1',
+      text: 'valid'
+    })
+    await appendFile(path, `${JSON.stringify(item)}\n{"id":`)
+
+    await expect(readLatestItemsFromJsonl(path)).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: 'user_1' })],
+      rawCount: 1,
+      malformedCount: 0,
+      incompleteTrailingRecord: true
+    })
+
+    await appendFile(path, '}\n{broken-json\n')
+    await expect(readLatestItemsFromJsonl(path)).resolves.toMatchObject({
+      malformedCount: 2,
+      incompleteTrailingRecord: false
+    })
   })
 
   it('does not retain a Session item array that exceeds its byte admission limit', async () => {
