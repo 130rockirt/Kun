@@ -42,6 +42,7 @@ import {
   readManagerDiscovery
 } from '../../kun/src/manager/manager-discovery.js'
 import { stopSharedRuntime } from '../../kun/src/cli/shared-runtime.js'
+import { listServiceManagerRuntimeActiveWork } from './runtime/service-manager-runtime-active-work'
 import { StorageRelocationController } from './storage-relocation/controller'
 import { StorageRelocationEngine } from './storage-relocation/engine'
 import type {
@@ -81,58 +82,7 @@ export async function listStorageRelocationActiveWork(
     label: `Terminal session ${id}`,
     interruptible: true
   })) ?? []
-  for (const flavor of ['production', 'development'] as const) {
-    const registration = await readManagerRuntime(manager, flavor).catch(() => null)
-    if (!registration) continue
-    const response = await fetch(`${registration.baseUrl}/v1/threads?limit=500&include=side`, {
-      headers: { authorization: `Bearer ${registration.runtimeToken}` },
-      signal: AbortSignal.timeout(5_000)
-    }).catch(() => null)
-    if (!response?.ok) {
-      work.push({
-        kind: 'external-writer',
-        id: `runtime:${flavor}:${registration.instanceId}`,
-        label: `${flavor} Runtime could not be inspected`,
-        interruptible: false
-      })
-      continue
-    }
-    const payload = await response.json().catch(() => null) as { threads?: unknown } | null
-    for (const thread of Array.isArray(payload?.threads) ? payload.threads : []) {
-      if (!thread || typeof thread !== 'object') continue
-      const value = thread as { id?: unknown; title?: unknown; status?: unknown; turns?: unknown }
-      const threadId = typeof value.id === 'string' ? value.id : ''
-      const threadActive = value.status === 'queued' || value.status === 'in_progress' ||
-        value.status === 'started' || value.status === 'running'
-      let turns = Array.isArray(value.turns) ? value.turns : []
-      if (threadActive && turns.length === 0 && threadId) {
-        const detailResponse = await fetch(`${registration.baseUrl}/v1/threads/${encodeURIComponent(threadId)}`, {
-          headers: { authorization: `Bearer ${registration.runtimeToken}` },
-          signal: AbortSignal.timeout(5_000)
-        }).catch(() => null)
-        const detail = detailResponse?.ok
-          ? await detailResponse.json().catch(() => null) as { turns?: unknown } | null
-          : null
-        turns = Array.isArray(detail?.turns) ? detail.turns : []
-      }
-      const activeTurn = turns.find((turn) => {
-        const status = turn && typeof turn === 'object' ? (turn as { status?: unknown }).status : undefined
-        return status === 'queued' || status === 'in_progress' || status === 'started' || status === 'running'
-      }) as { id?: unknown; turnId?: unknown } | undefined
-      if (!threadActive && !activeTurn) continue
-      const turnId = typeof activeTurn?.id === 'string'
-        ? activeTurn.id
-        : typeof activeTurn?.turnId === 'string' ? activeTurn.turnId : ''
-      work.push({
-        kind: 'turn',
-        id: `${flavor}:${threadId}:${turnId}`,
-        label: typeof value.title === 'string' && value.title.trim()
-          ? value.title.trim()
-          : `${flavor} thread ${threadId || 'unknown'}`,
-        interruptible: Boolean(threadId && turnId)
-      })
-    }
-  }
+  work.push(...await listServiceManagerRuntimeActiveWork(manager))
   return work
 }
 

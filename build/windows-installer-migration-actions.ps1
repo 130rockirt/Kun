@@ -215,7 +215,10 @@ function Invoke-Prepare {
     }
   }
 
-  Stop-AppProcesses @($sources + $target)
+  $stopResult = Stop-AppProcesses @($sources + $target)
+  if ($stopResult.Outcome -ne 'stopped') {
+    throw 'Unable to stop verified application processes before migration.'
+  }
 
   $journal = @{
     SchemaVersion = 3
