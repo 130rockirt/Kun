@@ -491,6 +491,7 @@ export class HybridThreadStore implements ThreadStore {
   private queryThreadRows(options: ThreadStoreListOptions): ThreadRow[] {
     return this.index?.query(options) ?? []
   }
+  private indexCount(options: ThreadStoreListOptions): number | undefined { return this.index?.count(options) }
 
   private findRow(threadId: string): ThreadRow | null {
     return this.index?.find(threadId) ?? null
