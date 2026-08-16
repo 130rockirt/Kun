@@ -24,6 +24,7 @@ import {
   Puzzle,
   RefreshCw,
   ScanSearch,
+  Search,
   Shapes,
   Terminal
 } from 'lucide-react'
@@ -68,6 +69,7 @@ type WorkbenchTopActionsProps = {
   onToggleTerminal?: () => void
   rightWorkspaceExpanded?: boolean
   onToggleRightWorkspace?: () => void
+  onOpenCommandPalette?: () => void
 }
 
 const TOPBAR_ICON_CLASS = 'h-4 w-4'
@@ -91,7 +93,8 @@ export function WorkbenchTopActions({
   terminalOpen = false,
   onToggleTerminal,
   rightWorkspaceExpanded = false,
-  onToggleRightWorkspace
+  onToggleRightWorkspace,
+  onOpenCommandPalette
 }: WorkbenchTopActionsProps): ReactElement {
   const { t } = useTranslation(['common', 'settings'])
   const [editors, setEditors] = useState<EditorInfo[]>([])
@@ -315,6 +318,18 @@ export function WorkbenchTopActions({
 
   return (
     <div className="ds-workbench-top-actions ds-no-drag relative flex shrink-0 items-center gap-1.5">
+      {onOpenCommandPalette ? (
+        <button
+          type="button"
+          onClick={onOpenCommandPalette}
+          className={topbarActionButtonClass(false)}
+          data-tooltip={t('paletteOpenTooltip')}
+          aria-label={t('paletteOpenTooltip')}
+        >
+          <Search className={TOPBAR_ICON_CLASS} strokeWidth={1.75} />
+        </button>
+      ) : null}
+
       {guiUpdateAction ? (
         <button
           type="button"

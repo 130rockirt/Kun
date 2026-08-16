@@ -18,12 +18,19 @@ import {
   runtimeDataDirMigrationLockPath,
   runtimeDataDirOwnerPath
 } from '../../kun/src/server/runtime-data-dir-migration-lock.js'
+import {
+  isValidRuntimeProcessIdentity,
+  runtimeProcessIdentity,
+  runtimeProcessIsAlive,
+  type RuntimeProcessIsAlive
+} from '../../kun/src/server/runtime-process-identity.js'
 
 type MigrationLockOwner = {
   schemaVersion: 1
   pid: number
   token: string
   startedAt: string
+  processIdentity?: string
   dataDir: string
 }
 
@@ -32,6 +39,7 @@ type RuntimeDataDirOwner = {
   pid: number
   token: string
   startedAt: string
+  processIdentity?: string
 }
 
 type RuntimeDataDirWriterClaim = {
@@ -40,6 +48,7 @@ type RuntimeDataDirWriterClaim = {
   pid: number
   token: string
   startedAt: string
+  processIdentity?: string
   dataDir: string
 }
 
@@ -61,15 +70,6 @@ function errnoCode(error: unknown): string | undefined {
     : undefined
 }
 
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return errnoCode(error) !== 'ESRCH'
-  }
-}
-
 function parseOwner(raw: string): MigrationLockOwner | null {
   try {
     const value = JSON.parse(raw) as Partial<MigrationLockOwner>
@@ -79,6 +79,7 @@ function parseOwner(raw: string): MigrationLockOwner | null {
       typeof value.token === 'string' &&
       value.token.length > 0 &&
       typeof value.startedAt === 'string' &&
+      isValidRuntimeProcessIdentity(value.processIdentity) &&
       typeof value.dataDir === 'string' &&
       value.dataDir.length > 0
       ? value as MigrationLockOwner
@@ -96,7 +97,8 @@ function parseRuntimeOwner(raw: string): RuntimeDataDirOwner | null {
       (value.pid ?? 0) > 0 &&
       typeof value.token === 'string' &&
       value.token.length > 0 &&
-      typeof value.startedAt === 'string'
+      typeof value.startedAt === 'string' &&
+      isValidRuntimeProcessIdentity(value.processIdentity)
       ? value as RuntimeDataDirOwner
       : null
   } catch {
@@ -119,6 +121,7 @@ function parseWriterClaim(raw: string): RuntimeDataDirWriterClaim | null {
       typeof value.token === 'string' &&
       value.token.length > 0 &&
       typeof value.startedAt === 'string' &&
+      isValidRuntimeProcessIdentity(value.processIdentity) &&
       typeof value.dataDir === 'string' &&
       value.dataDir.length > 0
       ? value as RuntimeDataDirWriterClaim
@@ -144,7 +147,7 @@ function acquireWriterClaimSync(
   input: {
     pid: number
     now: () => Date
-    processIsAlive: (pid: number) => boolean
+    processIsAlive: RuntimeProcessIsAlive
   }
 ): { path: string; owner: RuntimeDataDirWriterClaim } {
   const canonicalDataDir = resolve(dataDir)
@@ -152,12 +155,14 @@ function acquireWriterClaimSync(
   mkdirSync(claimsPath, { recursive: true, mode: 0o700 })
   const token = randomUUID()
   const path = join(claimsPath, writerClaimFilename(input.pid, token))
+  const processIdentity = runtimeProcessIdentity(input.pid)
   const owner: RuntimeDataDirWriterClaim = {
     schemaVersion: 1,
     kind: 'migration',
     pid: input.pid,
     token,
     startedAt: input.now().toISOString(),
+    ...(processIdentity ? { processIdentity } : {}),
     dataDir: canonicalDataDir
   }
   let handle: number | undefined
@@ -199,7 +204,7 @@ function acquireWriterClaimSync(
         }
         throw new Error(`Kun Runtime writer claim is invalid: ${contenderPath}`)
       }
-      if (input.processIsAlive(contender.pid)) {
+      if (input.processIsAlive(contender.pid, contender)) {
         throw new Error(
           contender.kind === 'migration'
             ? `Kun Runtime data migration is already active in process ${contender.pid}`
@@ -283,7 +288,7 @@ function assertRuntimeDataDirLeaseInactiveSync(
   dataDir: string,
   input: {
     pid: number
-    processIsAlive: (pid: number) => boolean
+    processIsAlive: RuntimeProcessIsAlive
     beforeReclaim?: (path: string, expectedRaw: string) => void
   }
 ): void {
@@ -298,7 +303,7 @@ function assertRuntimeDataDirLeaseInactiveSync(
     }
     const owner = parseRuntimeOwner(raw)
     if (!owner) throw new Error(`Kun Runtime data directory owner record is invalid: ${path}`)
-    if (input.processIsAlive(owner.pid)) {
+    if (input.processIsAlive(owner.pid, owner)) {
       throw new Error(
         `Kun Runtime data directory is already owned by active process ${owner.pid}: ${dataDir}`
       )
@@ -316,14 +321,14 @@ export function acquireCanonicalRuntimeMigrationLock(
   options: {
     pid?: number
     now?: () => Date
-    processIsAlive?: (pid: number) => boolean
+    processIsAlive?: RuntimeProcessIsAlive
     beforeStaleReclaim?: (path: string, expectedRaw: string) => void
     unlinkLock?: (path: string) => void
   } = {}
 ): CanonicalRuntimeMigrationLock {
   const pid = options.pid ?? process.pid
   const now = options.now ?? (() => new Date())
-  const isAlive = options.processIsAlive ?? processIsAlive
+  const isAlive = options.processIsAlive ?? runtimeProcessIsAlive
   const unlinkLock = options.unlinkLock ?? unlinkSync
   const canonicalDirs = [...new Set(dataDirs.map((path) => resolve(path)))].sort()
   const owned: Array<{ path: string; owner: MigrationLockOwner }> = []
@@ -342,11 +347,13 @@ export function acquireCanonicalRuntimeMigrationLock(
         processIsAlive: isAlive,
         beforeReclaim: options.beforeStaleReclaim
       })
+      const processIdentity = runtimeProcessIdentity(pid)
       const owner: MigrationLockOwner = {
         schemaVersion: 1,
         pid,
         token: randomUUID(),
         startedAt: now().toISOString(),
+        ...(processIdentity ? { processIdentity } : {}),
         dataDir
       }
       for (;;) {
@@ -382,7 +389,7 @@ export function acquireCanonicalRuntimeMigrationLock(
         }
         const current = parseOwner(currentRaw)
         if (!current) throw new Error(`Kun Runtime migration lock is invalid: ${path}`)
-        if (isAlive(current.pid)) {
+        if (isAlive(current.pid, current)) {
           throw new Error(
             `Kun Runtime data migration is already active in process ${current.pid}`
           )

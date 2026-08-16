@@ -7,6 +7,7 @@ import type {
   ItemHistoryPage,
   ItemHistoryPageOptions,
   ItemHistorySnapshot,
+  ItemTextSearchOptions,
   SessionLatestUsageSnapshot,
   SessionStore,
   SessionUsageRecord
@@ -104,6 +105,14 @@ export class HybridSessionStore implements SessionStore {
     options: ItemHistoryPageOptions
   ): Promise<ItemHistoryPage> {
     return this.delegate.loadItemPage(threadId, options)
+  }
+
+  async searchItemText(
+    threadId: string,
+    query: string,
+    options?: ItemTextSearchOptions
+  ): Promise<string | null> {
+    return this.delegate.searchItemText?.(threadId, query, options) ?? null
   }
 
   async loadSession(threadId: string): Promise<AgentSession | null> {

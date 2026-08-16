@@ -41,6 +41,7 @@ import {
 } from '../lib/settings-home-paths'
 import { defaultConversationWorkspaceRoot } from '../lib/workspace-path'
 import { useChatStore } from '../store/chat-store'
+import { useSettingsCommandPaletteShortcut } from '../palette/useSettingsCommandPaletteShortcut'
 import {
   DEFAULT_WORKSPACE_ROOT,
   hasValidPort,
@@ -75,6 +76,7 @@ export function SettingsView(): ReactElement {
   const { t, i18n } = useTranslation('settings')
   const { t: tCommon } = useTranslation('common')
   const closeSettings = useChatStore((s) => s.closeSettings)
+  useSettingsCommandPaletteShortcut(closeSettings)
   const settingsSection = useChatStore((s) => s.settingsSection)
   const openCode = useChatStore((s) => s.openCode)
   const openInitialSetup = useChatStore((s) => s.openInitialSetup)

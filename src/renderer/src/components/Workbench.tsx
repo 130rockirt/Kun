@@ -11,7 +11,10 @@ import { useWorkbenchComposerSubmitController } from './workbench/useWorkbenchCo
 import { useWorkbenchNavigationController } from './workbench/useWorkbenchNavigationController'
 import { useWorkbenchDesignRuntime } from './workbench/useWorkbenchDesignRuntime'
 import { useWorkbenchExecutionSettings } from './workbench/useWorkbenchExecutionSettings'
-import { useWorkbenchKeyboardShortcuts } from './workbench/useWorkbenchKeyboardShortcuts'
+import {
+  openWorkbenchCommandPalette,
+  WorkbenchCommandPaletteRuntime
+} from './workbench/WorkbenchCommandPaletteRuntime'
 import { useWorkbenchChatStoreState } from './workbench/useWorkbenchChatStoreState'
 import { useWorkbenchDerivedState } from './workbench/useWorkbenchDerivedState'
 import { useWorkbenchWriteAssistantRuntime } from './workbench/useWorkbenchWriteAssistantRuntime'
@@ -109,6 +112,7 @@ export function Workbench(): ReactElement {
     liveReasoning, liveAssistant, error, runtimeErrorDetail, runtimeStatus, busy,
     currentTurnOrchestration,
     route, pluginHostRoute, workspaceRoot, conversationWorkspaceRoot, runtimeConnection,
+    codeWorkspaceRoots, selectWorkspaceRoot,
     setRoute, openCode, openWrite, openDesign, ensureWriteThreadForWorkspace,
     ensureDesignThreadForWorkspace, createWriteThread, clearDesignHistory, openSettings,
     openPlugins, openClaw, openSchedule, openWorkflow, chooseWorkspace, clawChannels,
@@ -391,19 +395,6 @@ export function Workbench(): ReactElement {
     if (!linkedSddDraft) return
     void openSddRequirementDraftFromHistory(linkedSddDraft)
   }, [linkedSddDraft, openSddRequirementDraftFromHistory])
-  useWorkbenchKeyboardShortcuts({
-    composerMode,
-    setComposerMode,
-    handleGuiPlanCommand,
-    createThread,
-    chooseWorkspace,
-    toggleTerminal,
-    openSettings,
-    useWorktreePool,
-    setUseWorktreePool,
-    worktreeBranch,
-    navigationLocked: designDrawingCreationSubmitting
-  })
   const showDevPreviewCard =
     route === 'chat' &&
     latestDevPreviewUrl !== null
@@ -646,7 +637,8 @@ export function Workbench(): ReactElement {
     implementDesignInCode, selectCanvasShape, handleDesignHtmlElementAsContext,
     handleDesignRuntimeQualityFindings, handleDesignQualityRepairRequest
   })
-  return <WorkbenchContent context={{
+  return <>
+    <WorkbenchContent context={{
     shellRef, extensionHostContextMenus, activeExtensionCenterView, route, setWorkspaceContextMenu,
     leftSidebarCollapsed, leftSidebarWidth, codeThreads, activeThreadId, sidebarView,
     connectPhoneSidebarOpen, activeExtensionLeftSidebar, extensionWorkspaceRoot,
@@ -677,6 +669,28 @@ export function Workbench(): ReactElement {
     messageContributionsForSurface,
     openCodeRightTool, currentSideRunningCount, extensionRightRailItems, selectRightRailExtension,
     imageAnnotationHost, planOverlay, openManagedExtensionView, activeExtensionAuxiliaryPanel,
-    workspaceContextMenu, activeGuiPlan
+    workspaceContextMenu, activeGuiPlan,
+    onOpenCommandPalette: openWorkbenchCommandPalette
   }} />
+    <WorkbenchCommandPaletteRuntime
+      sources={{ route, workspaceRoot: activeSkillWorkspace, threads: codeThreads, codeWorkspaceRoots,
+        runtimeReady: runtimeConnection === 'ready', busy, activeThreadId,
+        activeThreadArchived: threads.find((item) => item.id === activeThreadId)?.archived === true,
+        canOpenGoalPanel: runtimeConnection === 'ready' && route !== 'claw',
+        canCreateNewThread: runtimeConnection === 'ready' && route !== 'claw' && Boolean(activeSkillWorkspace),
+        hasPlanCommand: route !== 'claw', hasBtwCommand: route !== 'claw', hideBtwCommand: false,
+        hasReviewCommand: route !== 'claw', skillCommands: runtimeSkills, disabledSkillIds,
+        extensionRightRailItems, composerModel, composerModelGroups,
+        activeThreadPinned: threads.find((item) => item.id === activeThreadId)?.pinned === true }}
+      shortcutContext={{ composerMode, setComposerMode, handleGuiPlanCommand, createThread,
+        chooseWorkspace, toggleTerminal, openSettings, useWorktreePool, setUseWorktreePool,
+        worktreeBranch, navigationLocked: designDrawingCreationSubmitting }}
+      actions={{ routes: { chat: openCodeMode, write: openWriteMode, design: openDesignMode,
+        settings: openSettings, plugins: openPluginsView, extensions: openExtensionsView,
+        claw: openClaw, schedule: openScheduleView, workflow: openWorkflowView },
+        openSettings, openThread, selectWorkspaceRoot, selectExtension: selectRightRailExtension,
+        openCode, setInput, setError, setComposerModel, archiveThread, pinThread }}
+      input={input}
+    />
+  </>
 }

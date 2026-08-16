@@ -80,6 +80,7 @@ import {
   writeWorkspaceForThreadId
 } from '../write/write-thread-registry'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
+import { withNativeDialog } from '../lib/native-dialog-activity'
 import { pendingDesignDocumentClones } from '../design/design-document-clone-registry'
 import { reconcilePendingDesignDocumentClones } from '../design/design-document-fork'
 import {
@@ -137,6 +138,7 @@ import {
   markUnreadCompletion,
   retainUnreadCompletions
 } from './unread-completions'
+import { threadRefreshSelection } from './chat-store-thread-refresh-selection'
 
 type SseAbortRef = { current: AbortController | null }
 
@@ -146,11 +148,7 @@ type StoreActionContext = {
   sseAbortRef: SseAbortRef
 }
 
-let bootPromise: Promise<void> | null = null
 let refreshThreadsGeneration = 0
-let clawChannelActivityUnsubscribe: (() => void) | null = null
-let runtimeStatusUnsubscribe: (() => void) | null = null
-let trayActionUnsubscribe: (() => void) | null = null
 
 export function createNavigationWorkspaceActions(
   { set, get, sseAbortRef }: StoreActionContext
@@ -163,7 +161,9 @@ export function createNavigationWorkspaceActions(
       if (typeof window.kunGui === 'undefined' || typeof window.kunGui.pickWorkspaceDirectory !== 'function') {
         throw new Error(i18n.t('common:workspacePickerUnavailable'))
       }
-      const picked = await window.kunGui.pickWorkspaceDirectory(get().workspaceRoot || undefined)
+      const pickWorkspaceDirectory = window.kunGui.pickWorkspaceDirectory
+      const picked = await withNativeDialog(() =>
+        pickWorkspaceDirectory(get().workspaceRoot || undefined))
       if (picked.canceled || !picked.path) {
         if (createThreadAfter) {
           set({ error: i18n.t('common:workspaceRequiredToCreateThread') })
@@ -589,8 +589,7 @@ export function createNavigationWorkspaceActions(
           isWriteAssistantThread(activeThread, writeRegistry) ||
           isClawThread(activeThread, get().clawChannels) ||
           isInternalDeepSeekGuiWorkspace(activeThread.workspace))
-      const shouldClearSelection =
-        activeThreadId != null && !displayThreads.some((thread) => thread.id === activeThreadId)
+      const { shouldClearSelection } = threadRefreshSelection(get(), displayThreads)
       if (shouldClearSelection) {
         sseAbortRef.current?.abort()
         sseAbortRef.current = null
@@ -604,10 +603,7 @@ export function createNavigationWorkspaceActions(
         rememberedCodeThreadId &&
         !threads.some((thread) => thread.id === rememberedCodeThreadId && thread.archived !== true)
       )
-      const validIds = new Set([
-        ...displayThreads.map((thread) => thread.id),
-        ...Object.keys(get().sideConversations ?? {})
-      ])
+      const { validIds } = threadRefreshSelection(get(), displayThreads)
       const reconciledCompletedWatchIds = new Set(
         [...reconciledStateById.entries()]
           .filter(([id, state]) => {

@@ -21,6 +21,41 @@ async function dataStore(): Promise<ManagerSharedDataStore> {
 }
 
 describe('manager shared data store', () => {
+  it('proxies the lock-free item text search so palette deep search works in shared mode', async () => {
+    const store = await dataStore()
+    const thread = createThreadRecord({
+      id: 'thread-search', title: 'Search', workspace: '/tmp/workspace', model: 'test-model'
+    })
+    const turn = createTurnRecord({
+      id: 'turn-search', threadId: thread.id, prompt: 'search', model: 'test-model'
+    })
+    const createdAt = '2026-08-15T00:00:00.000Z'
+    await store.executeThread('upsert', { thread })
+    await store.executeSession('appendItem', {
+      threadId: thread.id,
+      item: {
+        id: 'msg-1', kind: 'user_message', turnId: turn.id, threadId: thread.id,
+        role: 'user', status: 'completed', createdAt,
+        text: 'Please rework the checkout flow end to end.'
+      }
+    })
+
+    // The GUI's shared runtime reaches the store through this proxy. Before
+    // `searchItemText` was allowlisted here it silently resolved to nothing,
+    // so deep search returned no matches in the real app.
+    await expect(store.executeSession('searchItemText', {
+      threadId: thread.id, query: 'checkout'
+    })).resolves.toBe('Please rework the checkout flow end to end.')
+    await expect(store.executeSession('searchItemText', {
+      threadId: thread.id, query: 'absent'
+    })).resolves.toBeNull()
+    await expect(store.executeSession('searchItemText', {
+      threadId: thread.id, query: 'checkout', deadlineAtMs: Date.now() - 1
+    })).resolves.toBeNull()
+    await store.close()
+  })
+
+
   it('serializes canonical thread mutations without changing the existing format', async () => {
     const store = await dataStore()
     const thread = createThreadRecord({

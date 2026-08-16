@@ -3,6 +3,7 @@ import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 export type AtomicWriteFileOptions = {
+  allowDirectWriteFallback?: boolean
   renameRetry?: {
     attempts?: number
     baseDelayMs?: number
@@ -23,9 +24,9 @@ export async function atomicWriteFile(
   try {
     await writeFile(tmp, contents, { encoding: 'utf-8', mode: 0o600 })
     try {
-      await renameWithRetry(tmp, path, options.renameRetry)
+      await renameFileWithRetry(tmp, path, options.renameRetry)
     } catch (error) {
-      if (!shouldFallbackToDirectWrite(error)) {
+      if (options.allowDirectWriteFallback === false || !shouldFallbackToDirectWrite(error)) {
         throw error
       }
       await writeFile(path, contents, { encoding: 'utf-8', mode: 0o600 })
@@ -61,10 +62,10 @@ function describeAtomicWriteError(path: string, error: unknown): unknown {
   return prefixed
 }
 
-async function renameWithRetry(
+export async function renameFileWithRetry(
   from: string,
   to: string,
-  options: NonNullable<AtomicWriteFileOptions['renameRetry']> | undefined
+  options?: NonNullable<AtomicWriteFileOptions['renameRetry']>
 ): Promise<void> {
   const attempts = Math.max(1, Math.floor(options?.attempts ?? DEFAULT_RENAME_RETRY_ATTEMPTS))
   const baseDelayMs = Math.max(0, Math.floor(options?.baseDelayMs ?? DEFAULT_RENAME_RETRY_BASE_DELAY_MS))

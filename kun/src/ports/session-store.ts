@@ -67,6 +67,12 @@ export type ItemHistoryPage = {
   itemBytes: number
 }
 
+export type ItemTextSearchOptions = {
+  maxBytes?: number
+  /** Epoch deadline after which the scan must stop and report no match. */
+  deadlineAtMs?: number
+}
+
 /**
  * Port for persisted per-thread activity.
  *
@@ -141,6 +147,23 @@ export interface SessionStore {
   loadItems(threadId: string): Promise<TurnItem[]>
   /** Optional bounded history read used by renderer timeline hydration. */
   loadItemPage?(threadId: string, options: ItemHistoryPageOptions): Promise<ItemHistoryPage>
+  /**
+   * Optional bounded, lock-free text scan over item history.
+   *
+   * Search is a read-only side path: unlike `loadItems` it must never take a
+   * thread's write queue and must never trigger history compaction, so a
+   * search keystroke cannot contend with an in-flight turn or rewrite a
+   * multi-megabyte log. Implementations return the first matching item text,
+   * or null when the thread has no match within `maxBytes`. Stores that
+   * cannot honor those guarantees should leave this undefined; callers treat
+   * an absent implementation as "no content-search capability" rather than
+   * falling back to `loadItems`.
+   */
+  searchItemText?(
+    threadId: string,
+    query: string,
+    options?: ItemTextSearchOptions
+  ): Promise<string | null>
   loadSession(threadId: string): Promise<AgentSession | null>
   upsertSession(session: AgentSession): Promise<void>
   /** Highest known per-thread `seq`. Returns 0 when no events have been recorded. */

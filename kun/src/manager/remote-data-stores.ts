@@ -53,6 +53,7 @@ import type {
   ItemHistoryPage,
   ItemHistoryPageOptions,
   ItemHistorySnapshot,
+  ItemTextSearchOptions,
   SessionLatestUsageSnapshot,
   SessionStore,
   SessionUsageRecord
@@ -302,6 +303,19 @@ export class ManagerRemoteSessionStore implements SessionStore {
     options: ItemHistoryPageOptions
   ): Promise<ItemHistoryPage> {
     return ItemPageSchema.parse(await this.call('loadItemPage', { threadId, options }))
+  }
+
+  async searchItemText(
+    threadId: string,
+    query: string,
+    options?: ItemTextSearchOptions
+  ): Promise<string | null> {
+    return z.string().nullable().parse(await this.call('searchItemText', {
+      threadId,
+      query,
+      ...(options?.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
+      ...(options?.deadlineAtMs === undefined ? {} : { deadlineAtMs: options.deadlineAtMs })
+    }))
   }
 
   async loadSession(threadId: string): Promise<AgentSession | null> {

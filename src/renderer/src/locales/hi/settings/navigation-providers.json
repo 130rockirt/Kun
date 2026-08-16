@@ -320,6 +320,8 @@
   "shortcutToggleTerminalDesc": "टर्मिनल पैनल खोलें या बंद करें.",
   "shortcutSettings": "सेटिंग्स",
   "shortcutSettingsDesc": "सेटिंग्स खोलें.",
+  "shortcutCommandPalette": "कमांड पैलेट",
+  "shortcutCommandPaletteDesc": "कमांड, वार्तालाप और सेटिंग खोजने के लिए कमांड पैलेट खोलें।",
   "shortcutQuit": "छोड़ो",
   "shortcutQuitDesc": "ऐप छोड़ें.",
   "shortcutUndo": "पूर्ववत करें",

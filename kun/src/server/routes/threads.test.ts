@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { forkThread, getThread, getThreadState, getThreadTimeline, updateThread } from './threads.js'
+import {
+  forkThread,
+  getThread,
+  getThreadState,
+  getThreadTimeline,
+  updateThread
+} from './threads.js'
 import { buildRouter } from './index.js'
 import type { ServerRuntime } from './server-runtime.js'
 import { createThreadRecord } from '../../domain/thread.js'
