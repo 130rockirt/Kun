@@ -280,6 +280,7 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
     expect(builderConfig.nsis.include).toBe('build/installer.nsh')
     expect(builderConfig.nsis.allowToChangeInstallationDirectory).toBe(false)
     expect(builderConfig.nsis.deleteAppDataOnUninstall).toBe(false)
+    expect(builderConfig.nsis.createDesktopShortcut).toBe('always')
     expect(installerScript).toContain('!include "${PROJECT_DIR}\\build\\installer-process-check.nsh"')
     expect(installerScript).toContain('!macro customInit')
     expect(installerScript).toContain('${if} ${isUpdated}')
@@ -377,6 +378,10 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
       'suppressed the selected-scope uninstaller until the new payload is installed'
     )
     expect(installerScript).toContain('!insertmacro kunRunMigrationHelper CleanupInPlaceLeftovers')
+    expect(installerScript).toContain('!insertmacro addDesktopLink "false"')
+    expect(installerScript.indexOf('!insertmacro kunRunMigrationHelper ValidatePayload')).toBeLessThan(
+      installerScript.indexOf('!insertmacro addDesktopLink "false"')
+    )
     expect(installerScript).toContain('KUN_INSTALLER_IN_PLACE_UPDATE')
     expect(installerScript).toContain('Function KunSecureSelectedUninstallRegistration')
     expect(installerScript).toContain('Function KunSecureCurrentUserUninstallRegistration')

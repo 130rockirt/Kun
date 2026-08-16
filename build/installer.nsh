@@ -176,6 +176,12 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
     Quit
   ${endif}
 
+  ${if} ${isUpdated}
+    # electron-builder keeps existing shortcuts during --updated installs, but
+    # a scope/directory migration may already have removed the old link.
+    !insertmacro addDesktopLink "false"
+  ${endif}
+
   ${if} $KunInstallerInPlaceUpdate == 1
     !insertmacro kunRunMigrationHelper CleanupInPlaceLeftovers
     ${if} $KunInstallerHelperExitCode != 0
