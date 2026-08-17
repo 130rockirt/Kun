@@ -229,6 +229,9 @@ export function createRuntimeRegistry(
           sessionStore,
           threadStore,
           events,
+          // Share the runtime ledger so child usage stays live-queryable under
+          // the child thread id without folding onto the parent.
+          usage: usageService,
 	          ...(core.activeOptions.runtime ? { runtime: core.activeOptions.runtime } : {}),
 	          ...(services.memoryStore ? { memoryStore: services.memoryStore } : {}),
           attachmentStore: () => services.attachmentStore,

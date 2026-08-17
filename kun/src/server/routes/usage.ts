@@ -131,7 +131,7 @@ async function loadUsageRecords(
   if (options.threadId && !explicitThread) return []
   const threadSummaries = options.threadId
     ? []
-    : (await runtime.threadService.list({ includeArchived: true }))
+    : (await runtime.threadService.list({ includeArchived: true, includeSide: true }))
         .filter((thread) => thread.status !== 'deleted')
 
   if (typeof runtime.sessionStore.loadUsageRecords === 'function') {

@@ -400,7 +400,9 @@ export abstract class DelegationRuntimeBase {
   ): void {
     const usage = toUsageSnapshot(childUsage)
     if (usage.totalTokens <= 0 && usage.costUsd === undefined && usage.costCny === undefined) return
-    this.options.recordExternalUsage?.(record.parentThreadId, usage)
+    // Independent ledger: child usage settles on the child's own side thread,
+    // never the parent, so parent cache telemetry and budgets stay clean.
+    this.options.recordExternalUsage?.(record.id, usage)
   }
 
   protected async notifyDetachedChild(record: ChildRunRecord): Promise<void> {
@@ -615,7 +617,7 @@ export abstract class DelegationRuntimeBase {
         previewChars: CHILD_RESULT_PREVIEW_CHARS
       }))
       // Settle usage for failed/aborted children too: tokens burned before the
-      // failure are real cost and must reach the parent aggregate exactly once
+      // failure are real cost and must reach the child ledger exactly once
       // (issue #1155). Same delta mechanism as the success path, so resume and
       // retry never double-count, and zero-usage failures stay zero.
       if (usageBeforeRun !== undefined && failedError?.usage !== undefined) {

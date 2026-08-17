@@ -124,6 +124,12 @@ export type ChildAgentExecutorOptions = {
   sessionStore?: SessionStore
   threadStore?: ThreadStore
   events?: RuntimeEventRecorder
+  /**
+   * Shared runtime usage ledger. When supplied, child usage counts live in the
+   * runtime aggregate under the child thread id; tests that omit it keep an
+   * isolated throwaway counter.
+   */
+  usage?: UsageService
 }
 
 export function createChildAgentExecutor(options: ChildAgentExecutorOptions): ChildRunExecutor {
@@ -163,7 +169,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
           nowIso
         })
       })()
-    const usage = new UsageService()
+    const usage = options.usage ?? new UsageService()
     const ids = new RandomIdGenerator()
     const inflight = new InflightTracker()
     const steering = new SteeringQueue()
