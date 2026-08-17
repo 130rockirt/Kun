@@ -437,6 +437,7 @@
   "sidebarThreadArchiveConfirmButton": "เก็บถาวร",
   "sidebarThreadRestore": "คืนค่าเธรด",
   "sidebarThreadRename": "เปลี่ยนชื่อเธรด",
+  "sidebarThreadCopyId": "คัดลอก ID เซสชัน",
   "sidebarThreadRenamePrompt": "ป้อนชื่อเธรดใหม่",
   "sidebarThreadMove": "ย้ายไปที่โครงการ...",
   "sidebarThreadMoveDialogTitle": "ย้าย “{{title}}” หรือไม่",

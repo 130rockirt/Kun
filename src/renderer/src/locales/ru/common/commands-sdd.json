@@ -437,6 +437,7 @@
   "sidebarThreadArchiveConfirmButton": "Архив",
   "sidebarThreadRestore": "Восстановить ветку",
   "sidebarThreadRename": "Переименовать тему",
+  "sidebarThreadCopyId": "Скопировать ID сессии",
   "sidebarThreadRenamePrompt": "Введите новое название темы",
   "sidebarThreadMove": "Перейти в проект...",
   "sidebarThreadMoveDialogTitle": "Переместить «{{title}}»?",

@@ -444,6 +444,7 @@
   "sidebarThreadArchiveConfirmButton": "Archive",
   "sidebarThreadRestore": "Restore thread",
   "sidebarThreadRename": "Rename thread",
+  "sidebarThreadCopyId": "Copy session ID",
   "sidebarThreadRenamePrompt": "Enter a new thread name",
   "sidebarThreadMove": "Move to Project...",
   "sidebarThreadMoveDialogTitle": "Move “{{title}}”?",

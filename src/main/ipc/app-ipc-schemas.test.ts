@@ -189,6 +189,20 @@ describe('app-ipc-schemas runtime', () => {
     })).toThrow(/runtime request path is not allowed/)
   })
 
+  it('lets the sidebar summarize a thread (#1200)', () => {
+    // The action shipped without an allowlist entry, so every summarize POST
+    // was rejected in Main and never reached the runtime.
+    expect(runtimeRequestPayloadSchema.parse({
+      path: '/v1/threads/thr_9e795326bb0b/summarize',
+      method: 'POST',
+      body: '{}'
+    }).path).toBe('/v1/threads/thr_9e795326bb0b/summarize')
+    expect(() => runtimeRequestPayloadSchema.parse({
+      path: '/v1/threads/thr_9e795326bb0b/summarize',
+      method: 'GET'
+    })).toThrow(/runtime request path is not allowed/)
+  })
+
   it('accepts only the modeled Kun route diagnostics operations', () => {
     expect(runtimeRequestPayloadSchema.parse({
       path: '/v1/model-routes',
