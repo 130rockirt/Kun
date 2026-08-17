@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
 import { UsageQuotaPanel } from './UsageQuotaPanel'
 
-function usageResponse(path: string): { ok: boolean; status: number; body: string } {
+function usageResponse(
+  path: string,
+  modelBucketsOverride?: Array<Record<string, string | number>>
+): { ok: boolean; status: number; body: string } {
   if (path.includes('group_by=day')) {
     return {
       ok: true,
@@ -42,13 +45,14 @@ function usageResponse(path: string): { ok: boolean; status: number; body: strin
         from: '2026-07-01',
         to: '2026-07-29',
         timezone: 'UTC',
-        buckets: [
+        buckets: modelBucketsOverride ?? [
           { model: 'deepseek-v4', input_tokens: 900, output_tokens: 100, total_tokens: 1000 },
           { model: 'gpt-5.6-sol', input_tokens: 700, output_tokens: 100, total_tokens: 800 },
           { model: 'claude-opus-4', input_tokens: 500, output_tokens: 100, total_tokens: 600 },
           { model: 'gemini-3-pro', input_tokens: 300, output_tokens: 100, total_tokens: 400 },
           { model: 'glm-5.2', input_tokens: 180, output_tokens: 20, total_tokens: 200 },
-          { model: 'custom/qwen3-coder', input_tokens: 90, output_tokens: 10, total_tokens: 100 }
+          { model: 'custom/qwen3-coder', input_tokens: 90, output_tokens: 10, total_tokens: 100 },
+          { model: 'glm-4-zero-usage', input_tokens: 0, output_tokens: 0, total_tokens: 0 }
         ],
         days: [],
         totals: { total_tokens: 3100 }
@@ -122,6 +126,9 @@ describe('UsageQuotaPanel', () => {
     expect(output).toContain('glm-5.2')
     expect(output).toContain('custom/qwen3-coder')
     expect(output).toContain('32.25806451612903%')
+    expect(output).not.toContain('glm-4-zero-usage')
+    expect(output).not.toContain('0.0%')
+    expect(output).not.toContain('"width":"0%"')
 
     await act(async () => {
       renderer.root.findByProps({ id: 'usage-quota-tab-quota' }).props.onClick()
@@ -135,6 +142,39 @@ describe('UsageQuotaPanel', () => {
     expect(renderer.root.findByProps({ 'data-provider-quota-scroller': true })).toBeTruthy()
     expect(listProviderQuotas).toHaveBeenCalledTimes(1)
 
+    act(() => renderer.unmount())
+  })
+
+  it('shows the existing models empty state when every returned model bucket has zero usage', async () => {
+    const runtimeRequest = vi.fn(async (path: string) =>
+      usageResponse(path, [
+        { model: 'glm-4-zero-usage', input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+        { model: 'deepseek-v4-idle', input_tokens: 0, output_tokens: 0, total_tokens: 0 }
+      ]))
+    const listProviderQuotas = vi.fn(async () => ({
+      refreshedAt: '2026-07-29T08:00:00.000Z',
+      entries: []
+    }))
+    vi.stubGlobal('window', {
+      kunGui: {
+        runtimeRequest,
+        listProviderQuotas
+      }
+    })
+
+    let renderer!: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement(UsageQuotaPanel, {
+        activeThreadId: 'thread-a'
+      }))
+    })
+
+    const output = JSON.stringify(renderer.toJSON())
+    expect(output).toContain('No model usage for - yet.')
+    expect(output).not.toContain('glm-4-zero-usage')
+    expect(output).not.toContain('deepseek-v4-idle')
+    expect(output).not.toContain('0.0%')
+    expect(listProviderQuotas).not.toHaveBeenCalled()
     act(() => renderer.unmount())
   })
 

@@ -100,10 +100,13 @@ export function SidebarUsagePanel({
     totals.costUsd > 0 ||
     (totals.costCny ?? 0) > 0
   const modelBuckets = modelState.usage?.buckets ?? []
+  // The usage API keeps zero-token model buckets in the response. Only models
+  // with real usage in the selected range are worth listing, so derive both the
+  // visible rows and the percentage denominator from the positive buckets.
+  const visibleModelBuckets = modelBuckets.filter((bucket) => bucket.totalTokens > 0)
   const modelTotal = Math.max(
     1,
-    modelState.usage?.totals.totalTokens ??
-      modelBuckets.reduce((sum, bucket) => sum + bucket.totalTokens, 0)
+    visibleModelBuckets.reduce((sum, bucket) => sum + bucket.totalTokens, 0)
   )
   const currentUsage = threadState.usage
   const currentCacheHitRate = currentUsage ? primaryCacheHitRate(currentUsage) : null
@@ -266,9 +269,9 @@ export function SidebarUsagePanel({
             <p role="alert" className="mt-2 text-[10.5px] leading-4 text-amber-700 dark:text-amber-300">
               {t('usageHeatmapErrorTitle')}
             </p>
-          ) : modelBuckets.length > 0 ? (
+          ) : visibleModelBuckets.length > 0 ? (
             <div className="mt-2.5 space-y-2.5">
-              {modelBuckets.map((bucket) => {
+              {visibleModelBuckets.map((bucket) => {
                 const percent = Math.max(0, Math.min(100, bucket.totalTokens / modelTotal * 100))
                 return (
                   <div key={bucket.model} className="min-w-0">
