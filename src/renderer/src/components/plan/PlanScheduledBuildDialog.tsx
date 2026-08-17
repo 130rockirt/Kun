@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactElement } from 'react'
 import { CalendarClock, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { AppSettingsV1, ScheduleReasoningEffort, ScheduledTaskV1 } from '@shared/app-settings'
-import { formatInTimeZone, modelTimePricingState, relativeScheduleLabel, supportedTimeZones, systemTimeZone, zonedDateTimeToIso, type ZonedDateTimeResult } from '@shared/app-settings'
+import { formatInTimeZone, modelTimePricingState, relativeScheduleLabel, supportedTimeZones, systemTimeZone, timePricingScheduleLabel, zonedDateTimeToIso, type ZonedDateTimeResult } from '@shared/app-settings'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { useChatStore } from '../../store/chat-store'
 import { resolveScheduleModelSelection, resolveScheduleReasoningSelection, scheduleModelProfileForSelection, scheduleModelProviderOptions, scheduleReasoningLabel, scheduleReasoningOptionsForModel } from '../schedule/schedule-task-support'
@@ -124,7 +124,16 @@ export function PlanScheduledBuildDialog({ settings, orchestration, initialTask,
           <label className="col-span-2 text-[12px] text-ds-muted">{t('scheduleReasoning')}<select className={fieldClass} value={reasoningEffort} onChange={(event) => setReasoningEffort(event.target.value as ScheduleReasoningEffort)}>{reasoningOptions.map((effort) => <option key={effort} value={effort}>{scheduleReasoningLabel(effort, t)}</option>)}</select></label>
         </div>
         {instant.ok ? <p className="mt-3 text-[11.5px] text-ds-muted">{formatInTimeZone(instant.iso, timeZone, locale)} · {relativeScheduleLabel(instant.iso, Date.now(), locale)}</p> : <p className="mt-3 text-[12px] text-red-600">{scheduleInstantError(instant, t)}</p>}
-        {pricing.rule ? <div className="mt-4 rounded-xl bg-accent-soft px-4 py-3 text-[12px] text-ds-ink"><strong>{t(SCHEDULE_PRICING_BENEFIT_KEYS[pricing.rule.benefitKind])}</strong><div className="mt-1 text-ds-muted">{pricing.state === 'off-peak' ? t('planScheduleBuildPricingOffPeakState') : t('planScheduleBuildPricingStandardState')}</div></div> : null}
+        {pricing.rule ? (
+          <div data-plan-schedule-pricing className="mt-4 rounded-xl bg-accent-soft px-4 py-3 text-[12px] text-ds-ink">
+            <strong>{t(SCHEDULE_PRICING_BENEFIT_KEYS[pricing.rule.benefitKind])}</strong>
+            <div className="mt-1 text-ds-muted">
+              {t(pricing.state === 'off-peak' ? 'planScheduleBuildPricingOffPeakState' : 'planScheduleBuildPricingStandardState', {
+                schedule: timePricingScheduleLabel(pricing.rule, locale)
+              })}
+            </div>
+          </div>
+        ) : null}
         {error ? <p className="mt-4 text-[12px] text-red-600" role="alert">{error}</p> : null}
         <p className="mt-4 text-[11.5px] leading-5 text-ds-muted">{t('planScheduleBuildRunningNotice')}</p>
         <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onClose} className="h-10 rounded-full px-4 text-[13px] text-ds-muted hover:bg-ds-hover">{t('cancel')}</button><button type="button" disabled={submitting || !instant.ok || !selectedProvider} onClick={submit} className="inline-flex h-10 items-center gap-2 rounded-full bg-accent px-5 text-[13px] font-medium text-white disabled:opacity-45"><CalendarClock className="h-4 w-4" />{submitting ? t('planScheduleBuildConfirmPending') : t(initialTask ? 'planScheduleBuildModify' : 'planScheduleBuildConfirm')}</button></div>

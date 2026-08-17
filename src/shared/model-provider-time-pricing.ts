@@ -21,7 +21,8 @@ export type ModelTimePricingRule = {
   matchesProvider: (provider: ModelProviderProfileV1) => boolean
 }
 
-const codingPlanModels = ['glm-5.3', 'glm-5-turbo', 'glm-4.7', 'glm-5.2', 'glm-5.1']
+const zhipuCodingPlanModels = ['glm-5.3', 'glm-5.2', 'glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4.5-air']
+const zaiCodingPlanModels = [...zhipuCodingPlanModels, 'glm-5']
 const codingPlanPeak: TimeWindow[] = [{ startMinute: 14 * 60, endMinute: 18 * 60, weekDays: [1, 2, 3, 4, 5] }]
 
 function officialDeepSeek(provider: ModelProviderProfileV1): boolean {
@@ -42,10 +43,10 @@ export const MODEL_TIME_PRICING_RULES: readonly ModelTimePricingRule[] = [
   {
     id: 'deepseek-off-peak-api',
     benefitKind: 'unit-price-discount',
-    timeZone: 'UTC',
+    timeZone: 'Asia/Shanghai',
     peakWindows: [
-      { startMinute: 60, endMinute: 4 * 60 },
-      { startMinute: 6 * 60, endMinute: 10 * 60 }
+      { startMinute: 9 * 60, endMinute: 12 * 60 },
+      { startMinute: 14 * 60, endMinute: 18 * 60 }
     ],
     models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
     sourceUrl: 'https://api-docs.deepseek.com/quick_start/pricing/',
@@ -58,7 +59,7 @@ export const MODEL_TIME_PRICING_RULES: readonly ModelTimePricingRule[] = [
     benefitKind: 'quota-multiplier',
     timeZone: 'Asia/Shanghai',
     peakWindows: codingPlanPeak,
-    models: codingPlanModels,
+    models: zhipuCodingPlanModels,
     sourceUrl: 'https://docs.bigmodel.cn/cn/coding-plan/overview',
     verifiedAt: '2026-08-18',
     description: 'This Coding Plan uses fewer credits outside peak hours.',
@@ -69,7 +70,7 @@ export const MODEL_TIME_PRICING_RULES: readonly ModelTimePricingRule[] = [
     benefitKind: 'quota-multiplier',
     timeZone: 'Asia/Singapore',
     peakWindows: codingPlanPeak,
-    models: codingPlanModels,
+    models: zaiCodingPlanModels,
     sourceUrl: 'https://docs.z.ai/devpack/overview.md',
     verifiedAt: '2026-08-18',
     description: 'This Coding Plan uses fewer credits outside peak hours.',
@@ -118,6 +119,28 @@ export function modelTimePricingState(
       ? local.minute >= window.startMinute && local.minute < window.endMinute
       : local.minute >= window.startMinute || local.minute < window.endMinute))
   return { state: inPeak ? 'standard' : 'off-peak', rule }
+}
+
+export function timePricingScheduleLabel(rule: ModelTimePricingRule, locale: string): string {
+  const chinese = locale.toLowerCase().startsWith('zh')
+  const pad = (minute: number): string =>
+    `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
+  const windows = rule.peakWindows.map((window) => `${pad(window.startMinute)}–${pad(window.endMinute)}`).join(chinese ? '、' : ', ')
+  const hasWeekDays = rule.peakWindows.some((window) => Boolean(window.weekDays?.length))
+  const recurring = hasWeekDays ? (chinese ? '周一至周五' : 'Monday–Friday') : (chinese ? '每天' : 'daily')
+  const zone = rule.timeZone === 'Asia/Shanghai'
+    ? (chinese ? '北京时间' : 'Beijing time')
+    : rule.timeZone === 'Asia/Singapore'
+      ? (chinese ? '新加坡时间' : 'Singapore time')
+      : rule.timeZone
+  if (chinese) {
+    const remainder = rule.benefitKind === 'unit-price-discount' ? '其余为空闲时段。' : '其余为非高峰时段。'
+    return `高峰期：${recurring} ${windows}（${zone}）；${remainder}`
+  }
+  const remainder = rule.benefitKind === 'unit-price-discount'
+    ? 'All other times are off-peak.'
+    : 'All other times are non-peak.'
+  return `Peak hours: ${recurring} ${windows} (${zone}). ${remainder}`
 }
 
 export function timePricingBenefitLabel(kind: TimePricingBenefitKind): string {
