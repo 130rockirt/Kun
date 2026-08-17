@@ -31,7 +31,7 @@ export function FloatingComposerStackView({
     <>
         <FloatingComposerAboveInputStack
           todo={showTodoProgress && activeThreadTodos ? (
-            <FloatingComposerTodoProgress todos={activeThreadTodos} />
+            <FloatingComposerTodoProgress todos={activeThreadTodos} enabled={showGraphProgress} />
           ) : null}
           graph={(
             <FloatingComposerGraphProgress

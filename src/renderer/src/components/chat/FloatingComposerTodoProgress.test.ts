@@ -95,11 +95,12 @@ describe('plan checklist against live Graph execution (#1202)', () => {
     })
   })
 
-  async function renderChecklist(): Promise<ReactTestRenderer> {
+  async function renderChecklist(enabled?: boolean): Promise<ReactTestRenderer> {
     let renderer: ReactTestRenderer
     await act(async () => {
       renderer = create(createElement(FloatingComposerTodoProgress, {
-        todos: planChecklist('thread-1', 19)
+        todos: planChecklist('thread-1', 19),
+        ...(enabled === undefined ? {} : { enabled })
       }))
     })
     return renderer!
@@ -134,6 +135,22 @@ describe('plan checklist against live Graph execution (#1202)', () => {
       })
     })
     const renderer = await renderChecklist()
+    const trigger = renderer.root.findByType('button')
+
+    expect(trigger.props['data-todo-plan-outline']).toBeUndefined()
+    expect(JSON.stringify(renderer.toJSON())).toContain('Step 1 / 19')
+    expect(trigger.props['aria-label']).toContain('step 1 of 19')
+    renderer.unmount()
+  })
+
+  it('keeps step progress while the Graph progress surface is disabled', async () => {
+    act(() => {
+      useGraphStore.setState({
+        runs: [graphRunFor('thread-1', 'running')],
+        selectedRunId: 'run_1'
+      })
+    })
+    const renderer = await renderChecklist(false)
     const trigger = renderer.root.findByType('button')
 
     expect(trigger.props['data-todo-plan-outline']).toBeUndefined()

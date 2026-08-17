@@ -82,9 +82,12 @@ export function calculateTodoProgressPopoverPlacement({
 }
 
 export function FloatingComposerTodoProgress({
-  todos
+  todos,
+  enabled = true
 }: {
   todos: ThreadTodoList
+  /** Mirrors FloatingComposerGraphProgress: only demote while the Graph card reports progress. */
+  enabled?: boolean
 }): ReactElement | null {
   const { t } = useTranslation('common')
   const [open, setOpen] = useState(false)
@@ -96,8 +99,11 @@ export function FloatingComposerTodoProgress({
   // A Graph run compiles the plan into its own node set, and no reliable
   // checklist-to-node mapping exists. While Graph executes, this list is a
   // static plan outline, so it must stop claiming to be live step progress.
+  // Gated on the same `enabled` flag as the Graph card so the demotion (and
+  // its popover hint pointing at the Graph card) only applies while that
+  // card can actually report execution progress.
   const graphOwnsProgress = useGraphStore((state) => (
-    graphRunOwnsThreadProgress(state.runs, todos.threadId, state.selectedRunId)
+    enabled && graphRunOwnsThreadProgress(state.runs, todos.threadId, state.selectedRunId)
   ))
   const progress = getTodoProgress(todos.items)
   const estimatedPopoverHeight = Math.min(
