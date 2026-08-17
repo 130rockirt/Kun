@@ -254,6 +254,7 @@ export class ScheduleRuntime {
     title: string
     prompt: string
     workspaceRoot?: string
+    sourceThreadId?: string
     providerId?: string
     model?: string
     reasoningEffort?: ScheduleReasoningEffort
@@ -279,6 +280,7 @@ export class ScheduleRuntime {
       workspaceRoot:
         input.workspaceRoot?.trim() ||
         (clawChannel ? this.queue.resolveClawChannelWorkspaceRoot(settings, clawChannel) : this.queue.resolveDefaultWorkspaceRoot(settings)),
+      sourceThreadId: input.sourceThreadId?.trim() || '',
       clawChannelId: clawChannel?.id ?? '',
       providerId: modelConfig.providerId,
       model: modelConfig.model,

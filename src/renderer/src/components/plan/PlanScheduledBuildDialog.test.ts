@@ -2,9 +2,9 @@ import { createElement } from 'react'
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
-import { normalizeAppSettings, type AppSettingsV1 } from '@shared/app-settings'
+import { normalizeAppSettings, systemTimeZone, zonedDateTimeToIso, type AppSettingsV1 } from '@shared/app-settings'
 import { useChatStore } from '../../store/chat-store'
-import { PlanScheduledBuildDialog } from './PlanScheduledBuildDialog'
+import { defaultScheduleDraft, PlanScheduledBuildDialog } from './PlanScheduledBuildDialog'
 
 const FIXED_NOW = new Date('2030-06-15T08:00:00Z').getTime()
 
@@ -88,6 +88,30 @@ function clickConfirm(renderer: ReactTestRenderer): void {
     confirm.props.onClick()
   })
 }
+
+describe('defaultScheduleDraft', () => {
+  it('uses the next complete minute instead of adding an hour', () => {
+    const now = new Date(2026, 7, 18, 12, 54, 17, 250)
+    expect(defaultScheduleDraft(now.getTime())).toEqual({ date: '2026-08-18', time: '12:55' })
+  })
+
+  it('advances when the current time is exactly on a minute boundary', () => {
+    const now = new Date(2026, 7, 18, 12, 54, 0, 0)
+    expect(defaultScheduleDraft(now.getTime())).toEqual({ date: '2026-08-18', time: '12:55' })
+  })
+
+  it('rolls over to the next day and stays valid in the system time zone', () => {
+    const now = new Date(2026, 7, 18, 23, 59, 30, 0)
+    const draft = defaultScheduleDraft(now.getTime())
+    expect(draft).toEqual({ date: '2026-08-19', time: '00:00' })
+    expect(zonedDateTimeToIso(
+      draft.date,
+      draft.time,
+      systemTimeZone(),
+      now.getTime()
+    )).toMatchObject({ ok: true })
+  })
+})
 
 describe('PlanScheduledBuildDialog i18n', () => {
   beforeEach(() => {

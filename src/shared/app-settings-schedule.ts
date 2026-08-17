@@ -43,6 +43,7 @@ export function normalizeScheduledTask(
     enabled: normalizeBoolean(task.enabled, true),
     prompt: typeof task.prompt === 'string' ? task.prompt : '',
     workspaceRoot: typeof task.workspaceRoot === 'string' ? task.workspaceRoot.trim() : '',
+    sourceThreadId: typeof task.sourceThreadId === 'string' ? task.sourceThreadId.trim() : '',
     clawChannelId: typeof task.clawChannelId === 'string' ? task.clawChannelId.trim() : '',
     providerId: typeof task.providerId === 'string' ? task.providerId.trim() : '',
     model,

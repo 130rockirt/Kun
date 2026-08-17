@@ -402,6 +402,8 @@ export type ScheduleTaskCreateInput = {
   title: string
   prompt: string
   workspaceRoot: string
+  /** Existing GUI thread that should receive this scheduled turn. */
+  sourceThreadId?: string
   providerId: string
   model: string
   reasoningEffort: ScheduleReasoningEffort
@@ -424,6 +426,8 @@ export type ScheduledTaskV1 = {
   enabled: boolean
   prompt: string
   workspaceRoot: string
+  /** Existing GUI thread reused by plan-scheduled builds. */
+  sourceThreadId?: string
   /** Optional Claw IM channel whose persona/defaults should drive this scheduled task. */
   clawChannelId: string
   /** Selected model provider for this scheduled task. Empty means the current/default runtime provider. */

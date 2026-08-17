@@ -34,8 +34,8 @@ function scheduleInstantError(instant: Extract<ZonedDateTimeResult, { ok: false 
   return key ? t(key) : instant.message
 }
 
-function futureDraft(): { date: string; time: string } {
-  const next = new Date(Date.now() + 60 * 60_000)
+export function defaultScheduleDraft(nowMs = Date.now()): { date: string; time: string } {
+  const next = new Date(Math.floor(nowMs / 60_000) * 60_000 + 60_000)
   const pad = (value: number): string => String(value).padStart(2, '0')
   return { date: `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}`, time: `${pad(next.getHours())}:${pad(next.getMinutes())}` }
 }
@@ -43,7 +43,7 @@ function futureDraft(): { date: string; time: string } {
 export function PlanScheduledBuildDialog({ settings, orchestration, submitting, error, onClose, onSubmit }: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
   const locale = i18n.resolvedLanguage ?? i18n.language
-  const initial = useMemo(futureDraft, [])
+  const initial = useMemo(defaultScheduleDraft, [])
   const providers = useMemo(() => scheduleModelProviderOptions(settings), [settings])
   const chat = useChatStore.getState()
   const initialSelection = useMemo(

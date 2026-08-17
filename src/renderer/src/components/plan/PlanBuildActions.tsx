@@ -80,6 +80,7 @@ export function PlanBuildActions({
       })
       const result = await window.kunGui.createScheduleTask({
         ...draft,
+        ...(activeThreadId ? { sourceThreadId: activeThreadId } : {}),
         title: prepared.title,
         prompt: prepared.prompt,
         workspaceRoot: prepared.workspaceRoot,

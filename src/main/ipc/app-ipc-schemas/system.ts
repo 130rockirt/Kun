@@ -111,6 +111,7 @@ export const scheduleTaskCreatePayloadSchema = z
     title: z.string().trim().min(1).max(200),
     prompt: z.string().min(1).max(500_000),
     workspaceRoot: defaultPathSchema,
+    sourceThreadId: z.string().trim().min(1).max(MAX_ID_LENGTH).optional(),
     providerId: z.string().trim().min(1).max(128),
     model: modelIdSchema,
     reasoningEffort: scheduleReasoningEffortSchema,
