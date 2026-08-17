@@ -28,6 +28,7 @@ import { ensureRuntimeProviderForSend, subscribeThreadEventsWithRecovery } from 
 import { settleAcceptedTurnAfterNavigation } from './chat-store-thread-send-navigation'
 import { startWorkspaceCheckpointSnapshot } from './chat-store-thread-send-checkpoint'
 import { readDesignThreadRegistry } from '../design/design-thread-registry'
+import { mergeThreadDesignProfile } from '../design/design-locked-profile'
 import {
   failQueuedSubmission,
   localConversationErrorBlock,
@@ -657,6 +658,18 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
           : {})
       }))
       runtime.persistActiveQueuedMessages()
+      if (runtimeErrorCode === 'design_profile_locked' && activeThreadId) {
+        try {
+          const detail = await p.getThreadDetail(activeThreadId)
+          if (detail.designProfile) {
+            set((state) => ({
+              threads: mergeThreadDesignProfile(state.threads, activeThreadId, detail.designProfile!)
+            }))
+          }
+        } catch {
+          // The next Design send still refreshes the lock from Runtime.
+        }
+      }
       await get().refreshThreads()
       return false
     }

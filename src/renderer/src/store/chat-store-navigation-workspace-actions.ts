@@ -56,6 +56,7 @@ import {
   reconcileCodeWorkspaceRoots,
   saveCodeWorkspaceRoots
 } from './chat-store-helpers'
+import { preserveListedDesignProfiles } from '../design/design-locked-profile'
 import {
   clearedThreadSelection,
   collectAssistantTextForTurn,
@@ -401,6 +402,7 @@ export function createNavigationWorkspaceActions(
       }))
       const watchSnapshot = get().watchTurnCompletion
       const localThreadById = new Map(get().threads.map((thread) => [thread.id, thread]))
+      threads = preserveListedDesignProfiles(threads, localThreadById)
       // A raw summary may already carry terminal latest-turn evidence (for
       // example a list written by the runtime after the turn settled). Normalize
       // it to idle here so a stale raw `running` never lingers, and so these

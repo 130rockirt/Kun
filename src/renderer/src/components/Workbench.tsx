@@ -508,6 +508,7 @@ export function Workbench(): ReactElement {
     rollbackProvisionalThread,
     designTaskProfileSelection: taskSurface === 'design' ? designTaskProfile : undefined,
     lockedDesignProfile,
+    expectedThreadId: activeThreadId,
     imageGenerationAvailable: runtimeInfo?.capabilities.imageGen?.available === true,
     imageGenerationReason: runtimeInfo?.capabilities.imageGen?.reason,
     getAttachmentScope,

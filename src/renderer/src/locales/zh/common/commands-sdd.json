@@ -400,7 +400,7 @@
   "runtimeFeatureUnsupported": "当前连接的运行时还不支持这个操作。",
   "runtimeActiveTurn": "这个会话已有回合正在运行。",
   "runtimeThreadBusyQueued": "当前任务仍在运行，你的消息已排队。可以等待任务完成，或停止当前任务。",
-  "runtimeTaskSurfaceLocked": "该会话锁定在旧的 Work/Design 任务面，无法在此运行 Code 回合。如需切换模式请新建会话。", "runtimeDesignProfileLocked": "此 Design 文档、输出媒介、目标或风格已由首个 Design 回合锁定。如需修改 Design 档案请新建会话。",
+  "runtimeTaskSurfaceLocked": "该会话锁定在旧的 Work/Design 任务面，无法在此运行 Code 回合。如需切换模式请新建会话。", "runtimeDesignProfileLocked": "本会话已锁定原白板。后续 Design 回合必须复用该白板；如需更换文档、输出媒介、目标或风格，请新建会话。",
   "sidebarOfflineHint": "连接运行时后即可创建并继续会话。",
   "sidebarEmptyTitle": "还没有会话",
   "sidebarEmptySub": "从上方新建会话开始第一轮任务。",

@@ -94,6 +94,11 @@ export type SubmitDesignTurnOptions = SubmitDesignTurnDeps & {
   clearAutoRepairScope?: (scopeKey: string) => void
   designTaskProfileForTarget?: (target: DesignDocumentTarget) => DesignTaskProfileInput
   /**
+   * When a locked task cannot rebuild an identity profile, omit both
+   * designProfile and designDocumentTarget so admission reuses the lock.
+   */
+  omitDesignProfileWhenUnavailable?: boolean
+  /**
    * Board pinned by a locked task target. When present the board is resolved by
    * id and a missing board is reported instead of re-selecting the most
    * recently updated canvas artifact.
@@ -171,6 +176,7 @@ export async function submitDesignTurn(
     boardArtifactId: boardArtifact.id
   }
   const designProfile = options.designTaskProfileForTarget?.(designDocumentTarget)
+  const omitLockedProfile = Boolean(options.omitDesignProfileWhenUnavailable && !designProfile)
   const turnDesignContext = designProfile
     ? designContextFromTaskProfile(designProfile)
     : latestDesignState.designContext
@@ -302,7 +308,7 @@ export async function submitDesignTurn(
         ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
         ...(options.expectedThreadId ? { expectedThreadId: options.expectedThreadId } : {}),
         target: resolvedTarget.target,
-        ...(designProfile ? { designProfile, designDocumentTarget } : {}),
+        ...(!omitLockedProfile && designProfile ? { designProfile, designDocumentTarget } : {}),
         ...(designImagePlacementTarget ? { designImagePlacementTarget } : {}),
         ...(options.waitForRuntimeAdmission ? { waitForRuntimeAdmission: true } : {}),
         attachmentIds: options.attachmentIds ?? [],
