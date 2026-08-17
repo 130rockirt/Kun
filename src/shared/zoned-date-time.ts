@@ -79,9 +79,10 @@ export function formatInTimeZone(iso: string, timeZone: string, locale?: string)
   }).format(new Date(iso))
 }
 
-export function relativeScheduleLabel(iso: string, nowMs = Date.now()): string {
+export function relativeScheduleLabel(iso: string, nowMs = Date.now(), locale?: string): string {
   const minutes = Math.max(0, Math.round((Date.parse(iso) - nowMs) / 60_000))
-  if (minutes < 60) return `in ${minutes} minute${minutes === 1 ? '' : 's'}`
+  const formatter = new Intl.RelativeTimeFormat(locale ?? 'en', { numeric: 'always' })
+  if (minutes < 60) return formatter.format(minutes, 'minute')
   const hours = Math.round(minutes / 60)
-  return `in ${hours} hour${hours === 1 ? '' : 's'}`
+  return formatter.format(hours, 'hour')
 }
