@@ -17,7 +17,9 @@ import {
   type ScheduleRunResult,
   type ScheduleRuntimeStatus,
   type ScheduleTaskCreateInput,
+  type ScheduleTaskDeleteResult,
   type ScheduleTaskMutationResult,
+  type ScheduleTaskUpdateInput,
   type ScheduleTaskFromTextResult,
   resolveModelProviderProxyUrl,
   type WorkflowCodeCheckResult,
@@ -34,6 +36,7 @@ import {
   providerProbePayloadSchema,
   promptOptimizationPayloadSchema,
   scheduleTaskCreatePayloadSchema,
+  scheduleTaskUpdatePayloadSchema,
   scheduleTaskFromTextPayloadSchema,
   streamIdSchema,
   daemonLogsPayloadSchema,
@@ -148,6 +151,36 @@ export function registerAppRuntimeIpcHandlers(options: RegisterAppIpcHandlersOpt
       if (!scheduleRuntime) return { ok: false, message: 'Schedule runtime is not initialized.' }
       const task = await scheduleRuntime.createTaskFromInput(input)
       return { ok: true, task }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('schedule:task:update', async (_, payload: unknown): Promise<ScheduleTaskMutationResult> => {
+    try {
+      const input = parseIpcPayload('schedule:task:update', scheduleTaskUpdatePayloadSchema, payload) as ScheduleTaskUpdateInput
+      const scheduleRuntime = getScheduleRuntime()
+      if (!scheduleRuntime) return { ok: false, message: 'Schedule runtime is not initialized.' }
+      const task = await scheduleRuntime.updateTaskById(input.taskId, {
+        providerId: input.providerId,
+        model: input.model,
+        reasoningEffort: input.reasoningEffort,
+        schedule: input.schedule
+      })
+      return task ? { ok: true, task } : { ok: false, message: 'Scheduled task was not found.' }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('schedule:task:delete', async (_, taskId: unknown): Promise<ScheduleTaskDeleteResult> => {
+    try {
+      const normalizedTaskId = parseIpcPayload('schedule:task:delete', streamIdSchema, taskId)
+      const scheduleRuntime = getScheduleRuntime()
+      if (!scheduleRuntime) return { ok: false, message: 'Schedule runtime is not initialized.' }
+      return await scheduleRuntime.deleteTaskById(normalizedTaskId)
+        ? { ok: true }
+        : { ok: false, message: 'Scheduled task was not found.' }
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) }
     }

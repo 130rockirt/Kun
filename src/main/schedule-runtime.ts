@@ -254,6 +254,7 @@ export class ScheduleRuntime {
     title: string
     prompt: string
     workspaceRoot?: string
+    sourcePlanId?: string
     sourceThreadId?: string
     providerId?: string
     model?: string
@@ -280,6 +281,7 @@ export class ScheduleRuntime {
       workspaceRoot:
         input.workspaceRoot?.trim() ||
         (clawChannel ? this.queue.resolveClawChannelWorkspaceRoot(settings, clawChannel) : this.queue.resolveDefaultWorkspaceRoot(settings)),
+      sourcePlanId: input.sourcePlanId?.trim() || '',
       sourceThreadId: input.sourceThreadId?.trim() || '',
       clawChannelId: clawChannel?.id ?? '',
       providerId: modelConfig.providerId,
@@ -310,7 +312,10 @@ export class ScheduleRuntime {
     return saved
   }
 
-  async updateTaskById(taskId: string, patch: Partial<ScheduledTaskV1>): Promise<ScheduledTaskV1 | null> {
+  async updateTaskById(
+    taskId: string,
+    patch: Omit<Partial<ScheduledTaskV1>, 'schedule'> & { schedule?: Partial<ScheduledTaskV1['schedule']> }
+  ): Promise<ScheduledTaskV1 | null> {
     const settings = await this.loadSettings()
     const task = settings.schedule.tasks.find((item) => item.id === taskId)
     if (!task) return null
@@ -330,7 +335,9 @@ export class ScheduleRuntime {
       }
     })
     this.sync(saved)
-    return saved.schedule.tasks.find((item) => item.id === taskId) ?? nextTask
+    if (shouldRecomputeNextRun) await this.queue.ensureNextRuns(await this.loadSettings())
+    const latest = await this.loadSettings()
+    return latest.schedule.tasks.find((item) => item.id === taskId) ?? nextTask
   }
 
   async deleteTaskById(taskId: string): Promise<boolean> {

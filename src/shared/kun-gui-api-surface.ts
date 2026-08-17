@@ -14,7 +14,9 @@ import type {
   ScheduleRunResult,
   ScheduleRuntimeStatus,
   ScheduleTaskCreateInput,
+  ScheduleTaskDeleteResult,
   ScheduleTaskMutationResult,
+  ScheduleTaskUpdateInput,
   ScheduleTaskFromTextResult,
   WorkflowApprovalDecision,
   WorkflowCodeCheckResult,
@@ -379,6 +381,8 @@ export type KunGuiApi = ExtensionIpcApi & {
   runClawTask: (taskId: string) => Promise<ClawRunResult>
   getScheduleStatus: () => Promise<ScheduleRuntimeStatus>
   createScheduleTask: (payload: ScheduleTaskCreateInput) => Promise<ScheduleTaskMutationResult>
+  updateScheduleTask: (payload: ScheduleTaskUpdateInput) => Promise<ScheduleTaskMutationResult>
+  deleteScheduleTask: (taskId: string) => Promise<ScheduleTaskDeleteResult>
   runScheduleTask: (taskId: string) => Promise<ScheduleRunResult>
   getDaemonStatus: () => Promise<DaemonRuntimeStatus>
   restartDaemon: (daemonId: string) => Promise<DaemonActionResult>

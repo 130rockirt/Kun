@@ -176,6 +176,8 @@ const api = {
   runClawTask: (taskId) => ipcRenderer.invoke('claw:task:run', taskId),
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
   createScheduleTask: (payload) => ipcRenderer.invoke('schedule:task:create', payload),
+  updateScheduleTask: (payload) => ipcRenderer.invoke('schedule:task:update', payload),
+  deleteScheduleTask: (taskId) => ipcRenderer.invoke('schedule:task:delete', taskId),
   runScheduleTask: (taskId) =>
     ipcRenderer.invoke('schedule:task:run', taskId),
   getDaemonStatus: () => ipcRenderer.invoke('daemon:status'),

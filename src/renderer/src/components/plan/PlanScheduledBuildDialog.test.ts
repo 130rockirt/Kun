@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
 import { normalizeAppSettings, systemTimeZone, zonedDateTimeToIso, type AppSettingsV1 } from '@shared/app-settings'
 import { useChatStore } from '../../store/chat-store'
-import { defaultScheduleDraft, PlanScheduledBuildDialog } from './PlanScheduledBuildDialog'
+import { defaultScheduleDraft, PlanScheduledBuildDialog, scheduleDraftFromTask } from './PlanScheduledBuildDialog'
 
 const FIXED_NOW = new Date('2030-06-15T08:00:00Z').getTime()
 
@@ -88,6 +88,18 @@ function clickConfirm(renderer: ReactTestRenderer): void {
     confirm.props.onClick()
   })
 }
+
+describe('scheduleDraftFromTask', () => {
+  it('prefills the wall clock time in the task time zone', () => {
+    const draft = scheduleDraftFromTask({
+      id: 'task-1', title: 'Build', enabled: true, prompt: '', workspaceRoot: '/tmp', sourcePlanId: 'plan-1',
+      clawChannelId: '', providerId: 'deepseek', model: 'deepseek-v4-flash', reasoningEffort: 'medium', mode: 'agent',
+      schedule: { kind: 'at', everyMinutes: 60, timeOfDay: '09:00', atTime: '2030-06-16T02:00:00.000Z', timeZone: 'Asia/Shanghai' },
+      createdAt: '', updatedAt: '', lastRunAt: '', nextRunAt: '', lastStatus: 'idle', lastMessage: '', lastThreadId: ''
+    })
+    expect(draft).toEqual({ date: '2030-06-16', time: '10:00', timeZone: 'Asia/Shanghai' })
+  })
+})
 
 describe('defaultScheduleDraft', () => {
   it('uses the next complete minute instead of adding an hour', () => {

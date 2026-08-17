@@ -111,12 +111,27 @@ export const scheduleTaskCreatePayloadSchema = z
     title: z.string().trim().min(1).max(200),
     prompt: z.string().min(1).max(500_000),
     workspaceRoot: defaultPathSchema,
+    sourcePlanId: z.string().trim().min(1).max(MAX_ID_LENGTH),
     sourceThreadId: z.string().trim().min(1).max(MAX_ID_LENGTH).optional(),
     providerId: z.string().trim().min(1).max(128),
     model: modelIdSchema,
     reasoningEffort: scheduleReasoningEffortSchema,
     mode: z.enum(['agent', 'plan']),
     orchestration: z.enum(['direct', 'graph']),
+    schedule: z.object({
+      kind: z.literal('at'),
+      atTime: z.string().datetime().refine((value) => Date.parse(value) > Date.now(), 'Execution time must be in the future.'),
+      timeZone: z.string().trim().min(1).max(128).refine(isValidTimeZone, 'Invalid IANA time zone.')
+    }).strict()
+  })
+  .strict()
+
+export const scheduleTaskUpdatePayloadSchema = z
+  .object({
+    taskId: z.string().trim().min(1).max(MAX_ID_LENGTH),
+    providerId: z.string().trim().min(1).max(128),
+    model: modelIdSchema,
+    reasoningEffort: scheduleReasoningEffortSchema,
     schedule: z.object({
       kind: z.literal('at'),
       atTime: z.string().datetime().refine((value) => Date.parse(value) > Date.now(), 'Execution time must be in the future.'),

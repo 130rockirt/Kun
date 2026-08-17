@@ -402,6 +402,8 @@ export type ScheduleTaskCreateInput = {
   title: string
   prompt: string
   workspaceRoot: string
+  /** Plan artifact that owns this scheduled build. */
+  sourcePlanId: string
   /** Existing GUI thread that should receive this scheduled turn. */
   sourceThreadId?: string
   providerId: string
@@ -416,6 +418,22 @@ export type ScheduleTaskCreateInput = {
   }
 }
 
+export type ScheduleTaskUpdateInput = {
+  taskId: string
+  providerId: string
+  model: string
+  reasoningEffort: ScheduleReasoningEffort
+  schedule: {
+    kind: 'at'
+    atTime: string
+    timeZone: string
+  }
+}
+
+export type ScheduleTaskDeleteResult =
+  | { ok: true }
+  | { ok: false; message: string }
+
 export type ScheduleTaskMutationResult =
   | { ok: true; task: ScheduledTaskV1 }
   | { ok: false; message: string }
@@ -426,6 +444,8 @@ export type ScheduledTaskV1 = {
   enabled: boolean
   prompt: string
   workspaceRoot: string
+  /** Plan artifact that owns this scheduled build. */
+  sourcePlanId?: string
   /** Existing GUI thread reused by plan-scheduled builds. */
   sourceThreadId?: string
   /** Optional Claw IM channel whose persona/defaults should drive this scheduled task. */

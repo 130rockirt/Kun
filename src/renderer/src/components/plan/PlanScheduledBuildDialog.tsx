@@ -1,19 +1,28 @@
 import { useMemo, useState, type ReactElement } from 'react'
 import { CalendarClock, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import type { AppSettingsV1, ScheduleReasoningEffort, ScheduleTaskCreateInput } from '@shared/app-settings'
+import type { AppSettingsV1, ScheduleReasoningEffort, ScheduledTaskV1 } from '@shared/app-settings'
 import { formatInTimeZone, modelTimePricingState, relativeScheduleLabel, supportedTimeZones, systemTimeZone, zonedDateTimeToIso, type ZonedDateTimeResult } from '@shared/app-settings'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { useChatStore } from '../../store/chat-store'
 import { resolveScheduleModelSelection, resolveScheduleReasoningSelection, scheduleModelProfileForSelection, scheduleModelProviderOptions, scheduleReasoningLabel, scheduleReasoningOptionsForModel } from '../schedule/schedule-task-support'
 
+type ScheduleDialogDraft = {
+  providerId: string
+  model: string
+  reasoningEffort: ScheduleReasoningEffort
+  mode: 'agent'
+  schedule: { kind: 'at'; atTime: string; timeZone: string }
+}
+
 type Props = {
   settings: AppSettingsV1
   orchestration: PlanBuildOrchestration
+  initialTask?: ScheduledTaskV1 | null
   submitting: boolean
   error: string
   onClose: () => void
-  onSubmit: (draft: Omit<ScheduleTaskCreateInput, 'title' | 'prompt' | 'workspaceRoot' | 'orchestration'>) => Promise<void>
+  onSubmit: (draft: ScheduleDialogDraft) => Promise<void>
 }
 
 const SCHEDULE_INSTANT_ERROR_KEYS = {
@@ -40,25 +49,39 @@ export function defaultScheduleDraft(nowMs = Date.now()): { date: string; time: 
   return { date: `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}`, time: `${pad(next.getHours())}:${pad(next.getMinutes())}` }
 }
 
-export function PlanScheduledBuildDialog({ settings, orchestration, submitting, error, onClose, onSubmit }: Props): ReactElement {
+export function scheduleDraftFromTask(task: ScheduledTaskV1 | null | undefined): { date: string; time: string; timeZone: string } {
+  if (!task) return { ...defaultScheduleDraft(), timeZone: systemTimeZone() }
+  const timeZone = task.schedule.timeZone || systemTimeZone()
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  }).formatToParts(new Date(task.schedule.atTime))
+  const value = (type: Intl.DateTimeFormatPartTypes): string => parts.find((part) => part.type === type)?.value ?? ''
+  return { date: `${value('year')}-${value('month')}-${value('day')}`, time: `${value('hour')}:${value('minute')}`, timeZone }
+}
+
+export function PlanScheduledBuildDialog({ settings, orchestration, initialTask, submitting, error, onClose, onSubmit }: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
   const locale = i18n.resolvedLanguage ?? i18n.language
-  const initial = useMemo(defaultScheduleDraft, [])
+  const initial = useMemo(() => scheduleDraftFromTask(initialTask), [initialTask])
   const providers = useMemo(() => scheduleModelProviderOptions(settings), [settings])
   const chat = useChatStore.getState()
   const initialSelection = useMemo(
-    () => resolveScheduleModelSelection(providers, chat.composerProviderId, chat.composerModel),
-    [chat.composerModel, chat.composerProviderId, providers]
+    () => resolveScheduleModelSelection(
+      providers,
+      initialTask?.providerId || chat.composerProviderId,
+      initialTask?.model || chat.composerModel
+    ),
+    [chat.composerModel, chat.composerProviderId, initialTask, providers]
   )
   const [date, setDate] = useState(initial.date)
   const [time, setTime] = useState(initial.time)
-  const [timeZone, setTimeZone] = useState(systemTimeZone())
+  const [timeZone, setTimeZone] = useState(initial.timeZone)
   const [providerId, setProviderId] = useState(initialSelection.providerId)
   const [model, setModel] = useState(initialSelection.model)
   const selectedProvider = providers.find((provider) => provider.providerId === providerId)
   const selectedProfile = scheduleModelProfileForSelection(selectedProvider, model)
   const [reasoningEffort, setReasoningEffort] = useState<ScheduleReasoningEffort>(() =>
-    resolveScheduleReasoningSelection(chat.composerReasoningEffort, selectedProfile))
+    resolveScheduleReasoningSelection(initialTask?.reasoningEffort || chat.composerReasoningEffort, selectedProfile))
   const reasoningOptions = scheduleReasoningOptionsForModel(selectedProfile)
   const instant = zonedDateTimeToIso(date, time, timeZone)
   const pricing = instant.ok ? modelTimePricingState(selectedProvider?.provider, model, instant.iso) : { state: 'unsupported' as const }
@@ -104,7 +127,7 @@ export function PlanScheduledBuildDialog({ settings, orchestration, submitting, 
         {pricing.rule ? <div className="mt-4 rounded-xl bg-accent-soft px-4 py-3 text-[12px] text-ds-ink"><strong>{t(SCHEDULE_PRICING_BENEFIT_KEYS[pricing.rule.benefitKind])}</strong><div className="mt-1 text-ds-muted">{pricing.state === 'off-peak' ? t('planScheduleBuildPricingOffPeakState') : t('planScheduleBuildPricingStandardState')}</div></div> : null}
         {error ? <p className="mt-4 text-[12px] text-red-600" role="alert">{error}</p> : null}
         <p className="mt-4 text-[11.5px] leading-5 text-ds-muted">{t('planScheduleBuildRunningNotice')}</p>
-        <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onClose} className="h-10 rounded-full px-4 text-[13px] text-ds-muted hover:bg-ds-hover">{t('cancel')}</button><button type="button" disabled={submitting || !instant.ok || !selectedProvider} onClick={submit} className="inline-flex h-10 items-center gap-2 rounded-full bg-accent px-5 text-[13px] font-medium text-white disabled:opacity-45"><CalendarClock className="h-4 w-4" />{submitting ? t('planScheduleBuildConfirmPending') : t('planScheduleBuildConfirm')}</button></div>
+        <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onClose} className="h-10 rounded-full px-4 text-[13px] text-ds-muted hover:bg-ds-hover">{t('cancel')}</button><button type="button" disabled={submitting || !instant.ok || !selectedProvider} onClick={submit} className="inline-flex h-10 items-center gap-2 rounded-full bg-accent px-5 text-[13px] font-medium text-white disabled:opacity-45"><CalendarClock className="h-4 w-4" />{submitting ? t('planScheduleBuildConfirmPending') : t(initialTask ? 'planScheduleBuildModify' : 'planScheduleBuildConfirm')}</button></div>
       </div>
     </div>
   )
