@@ -32,7 +32,7 @@ export type SharedModelConnection = {
   accountId: string
   name: string
   presetSource?: string
-  kind: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist'
+  kind: 'http' | 'agent-sdk' | 'antigravity-cli' | 'cursor-sdk' | 'gemini-code-assist' | 'gemini-cli-api'
   authType: 'api-key' | 'oauth' | 'subscription'
   baseUrl?: string
   endpointFormat: ModelEndpointFormat

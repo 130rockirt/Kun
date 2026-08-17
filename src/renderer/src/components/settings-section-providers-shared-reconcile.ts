@@ -29,6 +29,17 @@ import {
   type SharedModelConnectionsSnapshot
 } from './settings-section-providers-shared-api'
 
+/** Kinds that authenticate through their own CLI/SDK login instead of a
+ * user-entered baseUrl. `gemini-cli-api` always targets Google's Code Assist
+ * endpoint from the runtime client, so its AppSettings baseUrl stays empty. */
+export function sharedConnectionBaseUrlOptional(kind: string | undefined): boolean {
+  return kind === 'agent-sdk' ||
+    kind === 'antigravity-cli' ||
+    kind === 'gemini-cli-api' ||
+    kind === 'gemini-code-assist' ||
+    kind === 'cursor-sdk'
+}
+
 export function reconcilePendingSharedProviderDeletions(
   snapshot: SharedModelConnectionsSnapshot,
   pending: ReadonlyMap<string, PendingSharedProviderDeletion>,
@@ -274,10 +285,7 @@ async function connectSharedModelConnectionWithCatalog(
   pending: PendingSharedProviderCatalog,
   credential?: string
 ): Promise<SharedModelConnectionsSnapshot> {
-  const baseUrlOptional =
-    provider.kind === 'agent-sdk' ||
-    provider.kind === 'antigravity-cli' ||
-    provider.kind === 'cursor-sdk'
+  const baseUrlOptional = sharedConnectionBaseUrlOptional(provider.kind)
   const resolvedCredential = (credential ?? provider.apiKey).trim()
   const selectedModel = pending.localModels[0]
   return await requestSharedModelConnections('/v1/model-connections/connect', 'POST', {
@@ -397,10 +405,7 @@ export async function connectOrReplaceSharedModelConnectionCredential(
           { expectedRevision: snapshot.revision, credential }
         )
       }
-      const baseUrlOptional =
-        provider.kind === 'agent-sdk' ||
-        provider.kind === 'antigravity-cli' ||
-        provider.kind === 'cursor-sdk'
+      const baseUrlOptional = sharedConnectionBaseUrlOptional(provider.kind)
       return await requestSharedModelConnections('/v1/model-connections/connect', 'POST', {
         expectedRevision: snapshot.revision,
         id: provider.id,
@@ -550,10 +555,7 @@ export function projectSharedModelConnections(
       // committed without a credential ("configure later"), and providers
       // whose baseUrl is still empty, are never connected to the registry,
       // so a registry projection must not drop them from AppSettings.
-      const baseUrlOptional =
-        provider.kind === 'agent-sdk' ||
-        provider.kind === 'antigravity-cli' ||
-        provider.kind === 'cursor-sdk'
+      const baseUrlOptional = sharedConnectionBaseUrlOptional(provider.kind)
       return (modelProviderRequiresApiKey(provider) && !provider.apiKey.trim()) ||
         (!baseUrlOptional && !provider.baseUrl.trim())
     })

@@ -46,6 +46,7 @@ import { settingsSaveIssueMessage } from './settings-save-error'
 export { sharedModelConnectionHasUsableCredential } from '../lib/provider-credential-readiness'
 export {
   antigravityProviderCatalogPatch,
+  geminiCliApiCatalogPatch,
   kunProviderSelectionPatch,
   modelProvidersSettingsPatch,
   nonEmptyModelId
@@ -69,6 +70,7 @@ export {
   reconcilePendingSharedProviderDeletions,
   reconcilePendingSharedProviderNames,
   replaceSharedModelConnectionCredential,
+  sharedConnectionBaseUrlOptional,
   sharedProvidersEligibleForSync,
   type SharedModelConnectionCatalogConnectSource
 } from './settings-section-providers-shared-reconcile'

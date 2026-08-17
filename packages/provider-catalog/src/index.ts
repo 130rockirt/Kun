@@ -72,6 +72,8 @@ const GEMINI_SUBSCRIPTION_MODELS = [
 ] as const
 
 const GEMINI_CLI_SUBSCRIPTION_MODELS = [
+  'gemini-3.7-pro-preview',
+  'gemini-3.7-flash-preview',
   'gemini-3.1-pro-preview',
   'gemini-3-flash-preview',
   'gemini-3.1-flash-lite',
