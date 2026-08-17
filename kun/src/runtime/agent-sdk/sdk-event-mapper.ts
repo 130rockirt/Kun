@@ -21,6 +21,7 @@
  * (deltas absent) the `item_created` alone carries the whole message.
  */
 import type { RuntimeEventDraft } from '../../services/runtime-event-recorder.js'
+import { redactBrowserUseActionForPersistence } from '../../contracts/browser-use.js'
 import type { UsageSnapshot } from '../../contracts/usage.js'
 import { DEFAULT_MODEL_STREAM_LIMITS } from '../../adapters/model/model-stream-resource-budget.js'
 import {
@@ -401,7 +402,9 @@ export class SdkEventMapper {
       callId: block.id,
       toolName: block.name,
       toolKind,
-      arguments: block.input ?? {},
+      arguments: isSdkBrowserUseTool(block.name)
+        ? redactBrowserUseActionForPersistence(block.input ?? {}) as Record<string, unknown>
+        : block.input ?? {},
       status: 'running'
     })
     return [
@@ -447,6 +450,10 @@ export class SdkEventMapper {
       })
     }
   }
+}
+
+function isSdkBrowserUseTool(name: string): boolean {
+  return name === 'browser_use' || name === 'mcp__kun__browser_use'
 }
 
 /** O(1)-append, lazily joined accumulator bounded by the enclosing byte/event budget. */

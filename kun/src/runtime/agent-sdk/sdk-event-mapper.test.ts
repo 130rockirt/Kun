@@ -112,6 +112,38 @@ describe('SdkEventMapper', () => {
     })
   })
 
+  test('redacts Browser Use arguments from durable SDK events', () => {
+    const events = makeMapper().map({
+      type: 'assistant',
+      parent_tool_use_id: null,
+      message: {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_browser',
+          name: 'mcp__kun__browser_use',
+          input: {
+            action: 'open',
+            url: 'https://example.com/path?token=secret#fragment',
+            unexpected: 'private-value'
+          }
+        }]
+      }
+    } as SdkMessage)
+
+    expect(events.find((event) => event.kind === 'item_created')).toMatchObject({
+      item: {
+        arguments: {
+          action: 'open',
+          url: 'https://example.com/path',
+          unexpectedFields: ['unexpected']
+        }
+      }
+    })
+    expect(JSON.stringify(events)).not.toContain('token=secret')
+    expect(JSON.stringify(events)).not.toContain('private-value')
+  })
+
   test('omits unresolved raw arguments from durable SDK tool-call events', () => {
     const m = makeMapper()
     const raw = '{"plan":{"title":"private-sdk-event-marker"'
