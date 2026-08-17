@@ -382,6 +382,9 @@
   "todoProgressStep": "Step {{current}} / {{total}}",
   "todoProgressAria": "Todo progress: step {{current}} of {{total}}",
   "todoProgressDetails": "कार्य विवरण",
+  "todoPlanOutline": "योजना रूपरेखा · {{total}} चरण",
+  "todoPlanOutlineAria": "मूल योजना रूपरेखा: {{total}} चरण। लाइव निष्पादन प्रगति Graph अलग से दिखाता है।",
+  "todoPlanOutlineHint": "Graph ऑर्केस्ट्रेशन चल रहा है। यह चेकलिस्ट मूल योजना रूपरेखा है, लाइव निष्पादन प्रगति नहीं — स्वीकृत नोड्स के लिए Graph कार्ड देखें।",
   "todoStatus": {
     "pending": "लंबित",
     "in_progress": "सक्रिय",

@@ -382,6 +382,9 @@
   "todoProgressStep": "ขั้นตอนที่ {{current}} / {{total}}",
   "todoProgressAria": "ความคืบหน้าของสิ่งที่ต้องทำ: ขั้นตอนที่ {{current}} จาก {{total}}",
   "todoProgressDetails": "รายละเอียดสิ่งที่ต้องทำ",
+  "todoPlanOutline": "โครงร่างแผน · {{total}} ขั้นตอน",
+  "todoPlanOutlineAria": "โครงร่างแผนต้นฉบับ: {{total}} ขั้นตอน Graph จะแสดงความคืบหน้าการทำงานจริงแยกต่างหาก",
+  "todoPlanOutlineHint": "การจัดการแบบ Graph กำลังทำงาน รายการนี้คือโครงร่างแผนต้นฉบับ ไม่ใช่ความคืบหน้าการทำงานจริง — ดูโหนดที่ยอมรับแล้วได้ที่การ์ด Graph",
   "todoStatus": {
     "pending": "รอดำเนินการ",
     "in_progress": "ใช้งานอยู่",

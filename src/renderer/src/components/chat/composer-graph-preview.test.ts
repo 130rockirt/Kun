@@ -8,6 +8,7 @@ import type {
 import {
   fitComposerGraphLabel,
   getComposerGraphProgress,
+  graphRunOwnsThreadProgress,
   layoutComposerGraph
 } from './composer-graph-preview'
 
@@ -205,6 +206,25 @@ describe('composer Graph progress', () => {
     waitingRun.status = 'completed'
     expect(layoutComposerGraph(waitingRun, { child_1: child('running') }).edges[0]?.flowing)
       .toBe(false)
+  })
+})
+
+describe('graphRunOwnsThreadProgress (#1202)', () => {
+  it('hands progress authority to a live Graph run on the same thread', () => {
+    expect(graphRunOwnsThreadProgress([graphRun(readyNode())], 'thread_1')).toBe(true)
+  })
+
+  it('leaves authority with the plan checklist once every run is terminal', () => {
+    const run = graphRun(readyNode())
+    run.status = 'completed'
+
+    expect(graphRunOwnsThreadProgress([run], 'thread_1')).toBe(false)
+  })
+
+  it('ignores live runs that belong to another thread', () => {
+    expect(graphRunOwnsThreadProgress([graphRun(readyNode())], 'thread_2')).toBe(false)
+    expect(graphRunOwnsThreadProgress([graphRun(readyNode())], null)).toBe(false)
+    expect(graphRunOwnsThreadProgress([], 'thread_1')).toBe(false)
   })
 })
 

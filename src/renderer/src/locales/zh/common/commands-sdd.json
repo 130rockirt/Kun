@@ -388,6 +388,9 @@
   "todoProgressStep": "第 {{current}} / {{total}} 步",
   "todoProgressAria": "Todo 进度：第 {{current}} 步，共 {{total}} 步",
   "todoProgressDetails": "Todo 详情",
+  "todoPlanOutline": "计划大纲 · {{total}} 步",
+  "todoPlanOutlineAria": "原始计划大纲：共 {{total}} 步。Graph 会单独显示实时执行进度。",
+  "todoPlanOutlineHint": "Graph 编排正在运行。此清单是原始计划大纲，不是实时执行进度——已接受的节点请查看 Graph 卡片。",
   "todoStatus": {
     "pending": "待处理",
     "in_progress": "进行中",

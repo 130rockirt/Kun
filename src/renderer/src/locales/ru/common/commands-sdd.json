@@ -382,6 +382,9 @@
   "todoProgressStep": "Step {{current}} / {{total}}",
   "todoProgressAria": "Прогресс в задаче: шаг {{current}} из {{total}}",
   "todoProgressDetails": "Подробности задачи",
+  "todoPlanOutline": "План · {{total}} шагов",
+  "todoPlanOutlineAria": "Исходный план: {{total}} шагов. Реальный прогресс выполнения показывает Graph отдельно.",
+  "todoPlanOutlineHint": "Выполняется оркестрация Graph. Этот список — исходный план, а не текущий прогресс выполнения: принятые узлы смотрите в карточке Graph.",
   "todoStatus": {
     "pending": "В ожидании",
     "in_progress": "Активный",

@@ -5,10 +5,12 @@ import {
   type CSSProperties,
   type ReactElement
 } from 'react'
-import { CheckCircle2, Circle } from 'lucide-react'
+import { CheckCircle2, Circle, ListTodo } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import type { ThreadTodoItem, ThreadTodoList } from '../../agent/types'
+import { useGraphStore } from '../../graph/graph-store'
+import { graphRunOwnsThreadProgress } from './composer-graph-preview'
 import {
   calculateComposerPopoverPlacement,
   currentComposerBodyZoom,
@@ -91,6 +93,12 @@ export function FloatingComposerTodoProgress({
   const buttonRef = useRef<HTMLButtonElement | null>(null)
   const popoverRef = useRef<HTMLDivElement | null>(null)
   const hoverCloseTimerRef = useRef<number | null>(null)
+  // A Graph run compiles the plan into its own node set, and no reliable
+  // checklist-to-node mapping exists. While Graph executes, this list is a
+  // static plan outline, so it must stop claiming to be live step progress.
+  const graphOwnsProgress = useGraphStore((state) => (
+    graphRunOwnsThreadProgress(state.runs, todos.threadId, state.selectedRunId)
+  ))
   const progress = getTodoProgress(todos.items)
   const estimatedPopoverHeight = Math.min(
     TODO_POPOVER_MAX_HEIGHT,
@@ -185,10 +193,18 @@ export function FloatingComposerTodoProgress({
         maxHeight: `${TODO_POPOVER_MAX_HEIGHT}px`,
         visibility: 'hidden'
       }
-  const progressLabel = t('todoProgressStep', {
-    current: progress.current,
-    total: progress.total
-  })
+  const progressLabel = graphOwnsProgress
+    ? t('todoPlanOutline', { total: progress.total })
+    : t('todoProgressStep', {
+        current: progress.current,
+        total: progress.total
+      })
+  const triggerAriaLabel = graphOwnsProgress
+    ? t('todoPlanOutlineAria', { total: progress.total })
+    : t('todoProgressAria', {
+        current: progress.current,
+        total: progress.total
+      })
 
   return (
     <>
@@ -204,6 +220,14 @@ export function FloatingComposerTodoProgress({
               onMouseEnter={cancelClose}
               onMouseLeave={closeDetailsSoon}
             >
+              {graphOwnsProgress ? (
+                <p
+                  data-todo-plan-outline-hint
+                  className="mb-1.5 rounded-xl bg-ds-hover px-2.5 py-2 text-[12px] leading-[1.125rem] text-ds-muted"
+                >
+                  {t('todoPlanOutlineHint')}
+                </p>
+              ) : null}
               <ol className="space-y-0.5">
                 {todos.items.map((item) => (
                   <TodoDetailRow key={item.id} item={item} />
@@ -227,14 +251,14 @@ export function FloatingComposerTodoProgress({
           onMouseEnter={openDetails}
           onMouseLeave={closeDetailsSoon}
           className="ds-no-drag inline-flex h-11 items-center gap-2.5 rounded-full border border-ds-border bg-white/96 px-4 text-[14px] font-medium text-ds-muted shadow-[0_10px_30px_rgba(20,47,95,0.10)] backdrop-blur-xl transition hover:border-ds-border-strong hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 dark:bg-ds-card/96"
-          aria-label={t('todoProgressAria', {
-            current: progress.current,
-            total: progress.total
-          })}
+          aria-label={triggerAriaLabel}
           aria-expanded={open}
           aria-haspopup="dialog"
+          data-todo-plan-outline={graphOwnsProgress ? 'true' : undefined}
         >
-          {progress.allComplete ? (
+          {graphOwnsProgress ? (
+            <ListTodo className="h-5 w-5 shrink-0 text-ds-faint" strokeWidth={1.9} />
+          ) : progress.allComplete ? (
             <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" strokeWidth={1.9} />
           ) : (
             <span

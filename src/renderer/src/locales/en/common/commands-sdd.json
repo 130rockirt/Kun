@@ -388,6 +388,9 @@
   "todoProgressStep": "Step {{current}} / {{total}}",
   "todoProgressAria": "Todo progress: step {{current}} of {{total}}",
   "todoProgressDetails": "Todo details",
+  "todoPlanOutline": "Plan outline · {{total}} steps",
+  "todoPlanOutlineAria": "Original plan outline: {{total}} steps. Graph reports live execution progress separately.",
+  "todoPlanOutlineHint": "Graph orchestration is running. This checklist is the original plan outline, not live execution progress — see the Graph card for accepted nodes.",
   "todoStatus": {
     "pending": "Pending",
     "in_progress": "Active",
