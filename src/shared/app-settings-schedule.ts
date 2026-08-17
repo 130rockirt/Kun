@@ -48,6 +48,7 @@ export function normalizeScheduledTask(
     model,
     reasoningEffort: normalizeScheduleReasoningEffort(task.reasoningEffort),
     mode: normalizeRunMode(task.mode),
+    orchestration: task.orchestration === 'graph' ? 'graph' : 'direct',
     priority: normalizePositiveInteger(task.priority, 0, 0, 100),
     dependsOn: compactStrings(task.dependsOn).filter((id) => id !== task.id),
     useWorktree: normalizeBoolean(task.useWorktree, false),
@@ -55,7 +56,10 @@ export function normalizeScheduledTask(
       kind: normalizeScheduleKind(schedule?.kind),
       everyMinutes: normalizePositiveInteger(schedule?.everyMinutes, 60, 1, 10_080),
       timeOfDay: normalizeTimeOfDay(schedule?.timeOfDay),
-      atTime: normalizeAtTime(schedule?.atTime)
+      atTime: normalizeAtTime(schedule?.atTime),
+      ...(typeof schedule?.timeZone === 'string' && schedule.timeZone.trim()
+        ? { timeZone: schedule.timeZone.trim() }
+        : {})
     },
     createdAt: typeof task.createdAt === 'string' && task.createdAt ? task.createdAt : now,
     updatedAt: typeof task.updatedAt === 'string' && task.updatedAt ? task.updatedAt : now,

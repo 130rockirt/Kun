@@ -1,6 +1,10 @@
 import { useEffect, useState, type ReactElement } from 'react'
-import { GitBranch, Hammer, Share2 } from 'lucide-react'
+import { GitBranch, Hammer, Share2, CalendarClock } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { rendererRuntimeClient } from '../../agent/runtime-client'
+import { useChatStore } from '../../store/chat-store'
+import { preparePlanBuild } from '../../plan/prepare-plan-build'
+import { PlanScheduledBuildDialog } from './PlanScheduledBuildDialog'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { useGuiPlanStore } from '../../plan/plan-store'
 import { usePlanWorktreePreferenceStore } from '../../plan/plan-worktree-preference-store'
@@ -30,6 +34,76 @@ export function PlanBuildActions({
   )
   const [selectedOrchestration, setSelectedOrchestration] =
     useState<PlanBuildOrchestration>('direct')
+  const [scheduleOrchestration, setScheduleOrchestration] = useState<PlanBuildOrchestration | null>(null)
+  const [scheduleSettings, setScheduleSettings] = useState<Awaited<ReturnType<typeof rendererRuntimeClient.getSettings>> | null>(null)
+  const [scheduleError, setScheduleError] = useState('')
+  const [scheduleSubmitting, setScheduleSubmitting] = useState(false)
+
+  const openSchedule = async (orchestration: PlanBuildOrchestration): Promise<void> => {
+    setScheduleError('')
+    try {
+      setScheduleSettings(await rendererRuntimeClient.getSettings())
+      setScheduleOrchestration(orchestration)
+    } catch (error) {
+      useChatStore.getState().setError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  const submitSchedule = async (
+    draft: Omit<Parameters<typeof window.kunGui.createScheduleTask>[0], 'title' | 'prompt' | 'workspaceRoot' | 'orchestration'>
+  ): Promise<void> => {
+    const orchestration = scheduleOrchestration
+    const planState = useGuiPlanStore.getState()
+    const plan = planState.activePlan
+    if (!orchestration || !plan) return
+    setScheduleSubmitting(true)
+    setScheduleError('')
+    try {
+      const activeThreadId = useChatStore.getState().activeThreadId
+      const selectedPreference = usePlanWorktreePreferenceStore.getState().plans[plan.id]
+      const prepared = await preparePlanBuild({
+        plan,
+        content: planState.content,
+        orchestration,
+        graphEnabled,
+        usePromptWorktree: orchestration === 'direct' && selectedPreference?.usePromptWorktree === true,
+        branchPrefix: selectedPreference?.branchPrefix ?? 'codex/',
+        activeThreadId,
+        save: async (target, content) => {
+          const result = await window.kunGui.writeWorkspaceFile({ workspaceRoot: target.workspaceRoot, path: target.relativePath, content })
+          if (result.ok && useGuiPlanStore.getState().activePlan?.id === target.id) useGuiPlanStore.getState().markSaved(content)
+          return result.ok
+        },
+        currentPlanId: () => useGuiPlanStore.getState().activePlan?.id,
+        currentThreadId: () => useChatStore.getState().activeThreadId,
+        getGitBranches: window.kunGui.getGitBranches
+      })
+      const result = await window.kunGui.createScheduleTask({
+        ...draft,
+        title: prepared.title,
+        prompt: prepared.prompt,
+        workspaceRoot: prepared.workspaceRoot,
+        orchestration: prepared.orchestration
+      })
+      if (!result.ok) throw new Error(result.message)
+      setScheduleOrchestration(null)
+    } catch (error) {
+      setScheduleError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setScheduleSubmitting(false)
+    }
+  }
+
+  const scheduleDialog = scheduleOrchestration && scheduleSettings ? (
+    <PlanScheduledBuildDialog
+      settings={scheduleSettings}
+      orchestration={scheduleOrchestration}
+      submitting={scheduleSubmitting}
+      error={scheduleError}
+      onClose={() => setScheduleOrchestration(null)}
+      onSubmit={submitSchedule}
+    />
+  ) : null
 
   useEffect(() => {
     if (!graphEnabled) setSelectedOrchestration('direct')
@@ -89,6 +163,7 @@ export function PlanBuildActions({
 
     return (
       <div className="flex w-full min-w-0 flex-col gap-3">
+        {scheduleDialog}
         <div
           data-plan-build-actions
           data-plan-build-actions-variant={variant}
@@ -134,6 +209,16 @@ export function PlanBuildActions({
           {worktreeControl}
           <button
             type="button"
+            data-plan-build-schedule
+            disabled={buildDisabled}
+            onClick={() => void openSchedule(selectedOrchestration)}
+            className="ml-auto inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-4 text-[13px] font-medium text-ds-ink transition hover:bg-ds-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            <CalendarClock className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+            {t('planScheduleBuild')}
+          </button>
+          <button
+            type="button"
             data-plan-build-start
             disabled={buildDisabled}
             onClick={() => onBuild(selectedOrchestration)}
@@ -149,12 +234,23 @@ export function PlanBuildActions({
 
   return (
     <div className="flex min-w-0 flex-col gap-2">
+      {scheduleDialog}
       {worktreeControl}
       <div
         data-plan-build-actions
         data-plan-build-actions-variant={variant}
         className={`grid w-full ${graphEnabled ? 'grid-cols-2' : 'grid-cols-1'} gap-2`}
       >
+        <button
+          type="button"
+          data-plan-build-schedule
+          disabled={buildDisabled}
+          onClick={() => void openSchedule('direct')}
+          className="inline-flex h-9 w-full min-w-0 items-center justify-center gap-2 rounded-lg border border-ds-border bg-ds-card px-3 text-[13px] font-semibold text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <CalendarClock className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+          <span className="truncate">{t('planScheduleBuild')}</span>
+        </button>
         <button
           type="button"
           data-plan-build-orchestration="direct"

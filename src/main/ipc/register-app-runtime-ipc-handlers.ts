@@ -16,6 +16,8 @@ import {
   type DaemonRuntimeStatus,
   type ScheduleRunResult,
   type ScheduleRuntimeStatus,
+  type ScheduleTaskCreateInput,
+  type ScheduleTaskMutationResult,
   type ScheduleTaskFromTextResult,
   resolveModelProviderProxyUrl,
   type WorkflowCodeCheckResult,
@@ -31,6 +33,7 @@ import {
   modelsDevCatalogPayloadSchema,
   providerProbePayloadSchema,
   promptOptimizationPayloadSchema,
+  scheduleTaskCreatePayloadSchema,
   scheduleTaskFromTextPayloadSchema,
   streamIdSchema,
   daemonLogsPayloadSchema,
@@ -137,6 +140,18 @@ export function registerAppRuntimeIpcHandlers(options: RegisterAppIpcHandlersOpt
       powerSaveBlockerActive: false
     }
   )
+
+  ipcMain.handle('schedule:task:create', async (_, payload: unknown): Promise<ScheduleTaskMutationResult> => {
+    try {
+      const input = parseIpcPayload('schedule:task:create', scheduleTaskCreatePayloadSchema, payload) as ScheduleTaskCreateInput
+      const scheduleRuntime = getScheduleRuntime()
+      if (!scheduleRuntime) return { ok: false, message: 'Schedule runtime is not initialized.' }
+      const task = await scheduleRuntime.createTaskFromInput(input)
+      return { ok: true, task }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  })
 
   ipcMain.handle('schedule:task:run', async (_, taskId: unknown): Promise<ScheduleRunResult> => {
     const normalizedTaskId = parseIpcPayload('schedule:task:run', streamIdSchema, taskId)

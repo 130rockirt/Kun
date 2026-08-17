@@ -175,6 +175,7 @@ const api = {
   getClawStatus: () => ipcRenderer.invoke('claw:status'),
   runClawTask: (taskId) => ipcRenderer.invoke('claw:task:run', taskId),
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
+  createScheduleTask: (payload) => ipcRenderer.invoke('schedule:task:create', payload),
   runScheduleTask: (taskId) =>
     ipcRenderer.invoke('schedule:task:run', taskId),
   getDaemonStatus: () => ipcRenderer.invoke('daemon:status'),

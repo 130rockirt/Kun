@@ -237,13 +237,15 @@ export class ScheduleRuntime {
   }
 
   async createTask(task: ScheduledTaskV1): Promise<ScheduledTaskV1> {
-    const settings = await this.loadSettings()
-    const saved = await this.deps.store.patch({
+    const saved = await this.deps.store.update((current) => ({
+      ...current,
       schedule: {
+        ...current.schedule,
         enabled: true,
-        tasks: [...settings.schedule.tasks, task]
+        keepAwake: true,
+        tasks: [...current.schedule.tasks, task]
       }
-    })
+    }))
     this.sync(saved)
     return saved.schedule.tasks.find((item) => item.id === task.id) ?? task
   }
@@ -256,6 +258,7 @@ export class ScheduleRuntime {
     model?: string
     reasoningEffort?: ScheduleReasoningEffort
     mode?: ScheduleRunMode
+    orchestration?: 'direct' | 'graph'
     clawChannelId?: string
     enabled?: boolean
     schedule: Partial<ScheduledTaskV1['schedule']> & { kind: ScheduledTaskV1['schedule']['kind'] }
@@ -281,6 +284,7 @@ export class ScheduleRuntime {
       model: modelConfig.model,
       reasoningEffort: modelConfig.reasoningEffort,
       mode: input.mode ?? settings.schedule.mode,
+      orchestration: input.orchestration ?? 'direct',
       priority: 0,
       dependsOn: [],
       useWorktree: false,
@@ -288,7 +292,8 @@ export class ScheduleRuntime {
         kind: input.schedule.kind,
         everyMinutes: typeof input.schedule.everyMinutes === 'number' ? input.schedule.everyMinutes : 60,
         timeOfDay: input.schedule.timeOfDay?.trim() || '09:00',
-        atTime: input.schedule.atTime?.trim() || ''
+        atTime: input.schedule.atTime?.trim() || '',
+        ...(input.schedule.timeZone?.trim() ? { timeZone: input.schedule.timeZone.trim() } : {})
       },
       createdAt: now,
       updatedAt: now,

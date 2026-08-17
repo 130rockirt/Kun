@@ -87,6 +87,7 @@ export type RunPromptOptions = {
   providerId?: string
   reasoningEffort: ScheduleReasoningEffort
   mode: ScheduleRunMode
+  orchestration?: 'direct' | 'graph'
   clawChannel?: ClawImChannelV1 | null
   waitForResult: boolean
   responseTimeoutMs: number
@@ -359,6 +360,7 @@ export type RunPromptViaRuntimeOptions = {
   providerId?: string
   reasoningEffort: ScheduleReasoningEffort | ''
   mode: ScheduleRunMode
+  orchestration?: 'direct' | 'graph'
   waitForResult: boolean
   responseTimeoutMs: number
   signal?: AbortSignal
@@ -402,7 +404,8 @@ export async function runPromptViaRuntime(
     clientSurface: 'api',
     // Headless turns — nobody can answer a user_input prompt; a turn that asks
     // one hangs until the response timeout.
-    disableUserInput: true
+    disableUserInput: true,
+    orchestration: options.orchestration ?? 'direct'
   }
   if (model) turnBody.model = model
   if (options.reasoningEffort) turnBody.reasoningEffort = options.reasoningEffort

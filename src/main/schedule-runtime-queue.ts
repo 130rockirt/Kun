@@ -428,6 +428,7 @@ export class ScheduleExecutionQueue {
         ...(modelConfig.providerId ? { providerId: modelConfig.providerId } : {}),
         reasoningEffort: modelConfig.reasoningEffort,
         mode: task.mode,
+        orchestration: task.orchestration ?? 'direct',
         clawChannel,
         waitForResult: false,
         responseTimeoutMs: TASK_RESPONSE_TIMEOUT_MS,
@@ -550,6 +551,7 @@ export class ScheduleExecutionQueue {
       ...(options.providerId ? { providerId: options.providerId } : {}),
       reasoningEffort: options.reasoningEffort,
       mode: options.mode,
+      orchestration: options.orchestration ?? 'direct',
       waitForResult: options.waitForResult,
       responseTimeoutMs: options.responseTimeoutMs,
       ...(options.signal ? { signal: options.signal } : {})
