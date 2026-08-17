@@ -382,6 +382,9 @@
   "todoProgressStep": "Step {{current}} / {{total}}",
   "todoProgressAria": "Todo progress: step {{current}} of {{total}}",
   "todoProgressDetails": "할일 세부정보",
+  "todoPlanOutline": "계획 개요 · {{total}}단계",
+  "todoPlanOutlineAria": "원본 계획 개요: 총 {{total}}단계. 실행 진행률은 Graph에서 따로 표시합니다.",
+  "todoPlanOutlineHint": "Graph 오케스트레이션이 실행 중입니다. 이 체크리스트는 원본 계획 개요이며 실시간 실행 진행률이 아닙니다. 수락된 노드는 Graph 카드를 확인하세요.",
   "todoStatus": {
     "pending": "보류 중",
     "in_progress": "활성",

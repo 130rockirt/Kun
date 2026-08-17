@@ -50,6 +50,7 @@
     "smoke:extension-native-media": "node ./scripts/run-extension-native-media-smoke.cjs",
     "smoke:development-video-editor-layout": "node ./scripts/smoke-development-video-editor-layout.cjs",
     "smoke:development-ui-plugin-layout": "node ./scripts/smoke-development-ui-plugin-layout.cjs",
+    "smoke:development-graph-plan-progress": "node ./scripts/smoke-development-graph-plan-progress.cjs",
     "smoke:development-graph-workbench": "node ./scripts/smoke-development-graph-workbench.cjs",
     "evidence:extension-native": "node ./scripts/write-extension-native-evidence.mjs",
     "verify:extension-native-evidence": "node ./scripts/verify-extension-native-evidence.mjs",

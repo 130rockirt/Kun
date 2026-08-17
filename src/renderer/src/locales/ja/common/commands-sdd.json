@@ -382,6 +382,9 @@
   "todoProgressStep": "ステップ {{current}} / {{total}}",
   "todoProgressAria": "Todo の進行状況: ステップ {{current}} / {{total}}",
   "todoProgressDetails": "Todoの詳細",
+  "todoPlanOutline": "プラン概要 · {{total}} ステップ",
+  "todoPlanOutlineAria": "元のプラン概要: 全 {{total}} ステップ。実行の進捗は Graph が個別に表示します。",
+  "todoPlanOutlineHint": "Graph オーケストレーションが実行中です。このチェックリストは元のプラン概要であり、実行の進捗ではありません。受理済みノードは Graph カードを参照してください。",
   "todoStatus": {
     "pending": "保留中",
     "in_progress": "アクティブ",

@@ -200,6 +200,25 @@ export function selectComposerGraphRun(
   return runs.find((run) => !terminalRunStatuses.has(run.status)) ?? null
 }
 
+/**
+ * True when a Graph run owns execution for this thread, so Graph node state —
+ * not the originating plan checklist — is the authoritative progress metric.
+ *
+ * Deliberately shares `selectComposerGraphRun` with the Graph chip: the two
+ * surfaces can never disagree about which one is reporting live progress.
+ */
+export function graphRunOwnsThreadProgress(
+  runs: readonly GraphRun[],
+  threadId: string | null,
+  selectedRunId: string | null = null
+): boolean {
+  if (!threadId) return false
+  return selectComposerGraphRun(
+    runs.filter((run) => run.threadId === threadId),
+    selectedRunId
+  ) != null
+}
+
 export function getComposerGraphProgress(
   run: GraphRun,
   childRuns: Readonly<Record<string, GraphChildRuntime>> = {}
