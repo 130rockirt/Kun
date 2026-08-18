@@ -80,6 +80,29 @@ describe('HybridThreadStore usage timing persistence', () => {
     }
   })
 
+  it('keeps subscription attribution while producing differential usage records', async () => {
+    const { store } = await createStore()
+    try {
+      await store.noteEvent(usageEvent(1, {
+        promptTokens: 25_300,
+        completionTokens: 700,
+        totalTokens: 26_000,
+        cacheHitRate: 0,
+        actualModelId: 'gpt-5.6-luna',
+        billingKind: 'subscription',
+        turns: 1
+      }))
+
+      const records = await store.loadUsageRecords({ threadId: 'thread-usage-1' })
+      expect(records[0]?.usage).toMatchObject({
+        actualModelId: 'gpt-5.6-luna',
+        billingKind: 'subscription'
+      })
+    } finally {
+      store.close()
+    }
+  })
+
   it('defaults timing aggregates to null when snapshots omit them', async () => {
     const { store } = await createStore()
     try {

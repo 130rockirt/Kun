@@ -7,9 +7,10 @@ export function normalizeCompatUsage(input: {
   usage: Record<string, unknown>
   model: string
   providerBaseUrl: string
+  billingKind?: 'subscription'
 }): UsageSnapshot {
-  const { usage, model, providerBaseUrl } = input
-  const subscription = isCodexEndpoint(providerBaseUrl)
+  const { usage, model, providerBaseUrl, billingKind } = input
+  const subscription = billingKind === 'subscription' || isCodexEndpoint(providerBaseUrl)
   const completionTokens = numberValue(usage.completion_tokens ?? usage.eval_count ?? usage.output_tokens)
   const promptDetails = recordValue(usage.prompt_tokens_details)
   const inputDetails = recordValue(usage.input_tokens_details)

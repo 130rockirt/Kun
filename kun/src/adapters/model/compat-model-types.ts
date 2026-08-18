@@ -41,6 +41,8 @@ export type CompatModelClientConfig = {
   modelCapabilities?: (model: string) => ModelCapabilityMetadata
   /** Optional troubleshooting sink that captures each request body + raw output. */
   debugSink?: LlmDebugSink
+  /** Non-sensitive billing attribution used only for usage aggregation. */
+  billingKind?: 'subscription'
 }
 
 export type ChatMessage = CompatChatMessage

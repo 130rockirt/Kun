@@ -18,6 +18,7 @@ import {
   type GeminiCodeAssistCredential
 } from './runtime-factory-dependencies.js'
 import type { KunServeRuntimeOptions } from './runtime-factory-types.js'
+import { subscriptionBillingKind } from '../shared/subscription-billing.js'
 
 export async function hydrateLegacyCredentialOptions(
   options: KunServeRuntimeOptions,
@@ -94,6 +95,12 @@ export function buildModelClientRouterInput(
     activeProvider,
     modelCapabilities
   )
+  const defaultBillingKind = subscriptionBillingKind({
+    authType: activeProvider?.authType,
+    presetSource: activeProvider?.presetSource,
+    providerId: activeProviderId,
+    baseUrl: activeProvider?.baseUrl ?? options.baseUrl
+  })
   const defaultClient: ModelClient =
     process.env.KUN_RUNTIME_PROVIDER_KIND === 'gemini-code-assist'
       ? new GeminiCodeAssistModelClient({
@@ -125,6 +132,7 @@ export function buildModelClientRouterInput(
           model: options.model,
           modelCapabilities: defaultModelCapabilities,
           headers: options.headers,
+          ...(defaultBillingKind ? { billingKind: defaultBillingKind } : {}),
           ...(options.credentialSourceId && credentialResolver
             ? {
                 resolveCredentials: (rejectedAccessToken?: string) =>
@@ -145,6 +153,12 @@ export function buildModelClientRouterInput(
       provider,
       modelCapabilities
     )
+    const providerBillingKind = subscriptionBillingKind({
+      authType: provider.authType,
+      presetSource: provider.presetSource,
+      providerId: trimmedId,
+      baseUrl: provider.baseUrl
+    })
     const client: ModelClient = kind === 'gemini-code-assist'
       ? new GeminiCodeAssistModelClient({
           baseUrl: provider.baseUrl ?? options.baseUrl,
@@ -175,6 +189,7 @@ export function buildModelClientRouterInput(
           model: options.model,
           modelCapabilities: scopedModelCapabilities,
           headers: provider.headers,
+          ...(providerBillingKind ? { billingKind: providerBillingKind } : {}),
           ...(provider.credentialSourceId && credentialResolver
             ? {
                 resolveCredentials: (rejectedAccessToken?: string) =>

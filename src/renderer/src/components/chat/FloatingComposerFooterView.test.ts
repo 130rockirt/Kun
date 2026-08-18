@@ -13,6 +13,10 @@ function translate(key: string, values: Record<string, unknown> = {}): string {
   const text = {
     sessionUsageFooterLabel: 'Session usage',
     sessionUsageFooterTokens: `${values.tokens} tokens`,
+    sessionUsageFooterActualCost: `Cost ${values.value}`,
+    sessionUsageFooterEstimate: `Estimate ≈${values.value}`,
+    sessionUsageActualCostTitle: 'Recorded API/Gateway cost.',
+    sessionUsageEstimateTitle: 'Reference estimate.',
     sessionUsageFooterCache: `${values.cache} cache`,
     sessionUsageFooterTurns: `${values.turns} turns`,
     sessionUsageFooterTtft: `TTFT ${values.ttft}`,
@@ -33,6 +37,8 @@ function usageSummary(overrides: Record<string, unknown> = {}): Record<string, u
     totalTokens: 11_900_000,
     costUsd: 1.25,
     costCny: null,
+    valueEstimateUsd: null,
+    valueEstimateCny: null,
     cacheHitRate: 0.41,
     lastTurnCacheHitRate: 0.95,
     cachedTokens: 410,
@@ -86,6 +92,27 @@ describe('FloatingComposerFooterView', () => {
     expect(html).toContain('95% cache')
     expect(html).not.toContain('41% cache')
     expect(html).not.toContain('ds-composer-usage-cost')
+  })
+
+  it('shows a gpt-5.6-luna subscription estimate between tokens and cache metrics', () => {
+    const html = renderFooter({
+      i18n: { language: 'zh' },
+      t: (key: string, values: Record<string, unknown> = {}) => key === 'sessionUsageFooterEstimate'
+        ? `参考估值 ≈${values.value}`
+        : translate(key, values),
+      threadUsage: usageSummary({
+        totalTokens: 26_000,
+        costUsd: null,
+        costCny: null,
+        valueEstimateUsd: 0.03,
+        valueEstimateCny: 0.216
+      })
+    })
+
+    expect(html).toContain('参考估值 ≈￥0.2160')
+    expect(html).toContain('ds-composer-usage-money')
+    expect(html.indexOf('ds-composer-usage-tokens')).toBeLessThan(html.indexOf('ds-composer-usage-money'))
+    expect(html.indexOf('ds-composer-usage-money')).toBeLessThan(html.indexOf('ds-composer-usage-cache'))
   })
 
   it('falls back to cumulative cache telemetry when latest-request telemetry is unavailable', () => {

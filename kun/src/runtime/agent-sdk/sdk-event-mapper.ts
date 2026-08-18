@@ -44,6 +44,10 @@ export interface SdkEventMapperContext {
   turnId: string
   /** Monotonic id generator, e.g. `(p) => `${p}_${++n}``. Injected for tests. */
   nextId: (prefix: string) => string
+  /** Non-sensitive subscription attribution inherited from the selected provider. */
+  billingKind?: 'subscription'
+  /** Resolved provider model for subscription usage attribution. */
+  model?: string
   /** Optional test/runtime overrides; production defaults mirror native model-stream limits. */
   streamLimits?: Partial<SdkStreamResourceLimits>
 }
@@ -122,7 +126,12 @@ function blocksOf(message: SdkApiMessage): SdkContentBlock[] {
  * `input_tokens` EXCLUDES cache reads/writes, so the real prompt size is
  * input + cache_read + cache_creation (see provider-cache memory).
  */
-export function mapSdkUsage(usage: SdkUsage | undefined, turns: number, costUsd?: number): UsageSnapshot {
+export function mapSdkUsage(
+  usage: SdkUsage | undefined,
+  turns: number,
+  costUsd?: number,
+  billing?: Pick<SdkEventMapperContext, 'billingKind' | 'model'>
+): UsageSnapshot {
   const input = Math.max(0, Math.trunc(usage?.input_tokens ?? 0))
   const output = Math.max(0, Math.trunc(usage?.output_tokens ?? 0))
   const cacheRead = Math.max(0, Math.trunc(usage?.cache_read_input_tokens ?? 0))
@@ -139,6 +148,8 @@ export function mapSdkUsage(usage: SdkUsage | undefined, turns: number, costUsd?
     cacheMissTokens: input + cacheCreate,
     cacheHitRate,
     turns: Math.max(0, Math.trunc(turns)),
+    ...(billing?.model ? { actualModelId: billing.model } : {}),
+    ...(billing?.billingKind ? { billingKind: billing.billingKind } : {}),
     ...(typeof costUsd === 'number' && costUsd >= 0 ? { costUsd } : {})
   }
 }
@@ -303,7 +314,8 @@ export class SdkEventMapper {
     const usage = mapSdkUsage(
       message.usage as SdkUsage | undefined,
       Number(message.num_turns ?? 1),
-      typeof message.total_cost_usd === 'number' ? (message.total_cost_usd as number) : undefined
+      typeof message.total_cost_usd === 'number' ? (message.total_cost_usd as number) : undefined,
+      { billingKind: this.ctx.billingKind, model: this.ctx.model }
     )
     // A result is terminal for one SDK query. No later tool result may legally
     // refer back across an SVG recovery query boundary.

@@ -44,7 +44,8 @@ export function hasCacheTelemetry(usage: UsageSnapshot): boolean {
 
 export function addUsageCounters(
   target: UsageCountersTarget,
-  usage: UsageSnapshot
+  usage: UsageSnapshot,
+  recordModel?: string
 ): { hasCacheTelemetry: boolean } {
   const cached = typeof usage.cacheHitTokens === 'number' ? usage.cacheHitTokens : 0
   const miss = typeof usage.cacheMissTokens === 'number' ? usage.cacheMissTokens : 0
@@ -58,7 +59,7 @@ export function addUsageCounters(
   target.cost_cny += usage.costCny ?? 0
   if (usage.billingKind === 'subscription') {
     const estimate = estimateCodexSubscriptionValue({
-      model: usage.actualModelId ?? usage.requestedModelId ?? '',
+      model: usage.actualModelId ?? usage.requestedModelId ?? recordModel ?? '',
       promptTokens: usage.promptTokens,
       completionTokens: usage.completionTokens,
       cacheHitTokens: usage.cacheHitTokens,

@@ -55,4 +55,24 @@ describe('normalizeCompatUsage', () => {
       providerBaseUrl: 'https://api.openai.com/v1'
     })).toMatchObject({ cacheHitTokens: 30, cacheMissTokens: 20, cacheHitRate: 0.6 })
   })
+
+  it('uses configured subscription billing for a proxied Codex request', () => {
+    expect(normalizeCompatUsage({
+      usage: { input_tokens: 25_300, output_tokens: 700 },
+      model: 'gpt-5.6-luna',
+      providerBaseUrl: 'https://proxy.example/v1',
+      billingKind: 'subscription'
+    })).toMatchObject({
+      actualModelId: 'gpt-5.6-luna',
+      billingKind: 'subscription'
+    })
+  })
+
+  it('does not infer subscription billing from a GPT model name', () => {
+    expect(normalizeCompatUsage({
+      usage: { input_tokens: 25_300, output_tokens: 700 },
+      model: 'gpt-5.6-luna',
+      providerBaseUrl: 'https://gateway.example/v1'
+    }).billingKind).toBeUndefined()
+  })
 })

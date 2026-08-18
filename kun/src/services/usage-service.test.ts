@@ -101,6 +101,30 @@ describe('usage cache diagnostics', () => {
     expect(switched.cacheSuggestions?.some((s) => /Cache hit rate dropped/.test(s))).toBe(false)
   })
 
+  it('aggregates a gpt-5.6-luna subscription estimate without mixing it into API cost', () => {
+    const response = buildThreadUsageResponse([{
+      threadId: 'thread-luna',
+      model: 'gpt-5.6-luna',
+      completedAt: '2026-08-18T00:00:00.000Z',
+      usage: {
+        promptTokens: 25_300,
+        completionTokens: 700,
+        totalTokens: 26_000,
+        cacheHitRate: 0,
+        billingKind: 'subscription',
+        turns: 1
+      }
+    }])
+
+    expect(response.buckets[0]).toMatchObject({
+      thread_id: 'thread-luna',
+      cost_usd: 0,
+      cost_cny: 0
+    })
+    expect(response.buckets[0]?.value_estimate_usd).toBeGreaterThan(0)
+    expect(response.buckets[0]?.value_estimate_cny).toBeGreaterThan(0)
+  })
+
   it('surfaces the latest-turn cache diagnostic fields in thread usage', () => {
     const records: ThreadUsageRecord[] = [
       {

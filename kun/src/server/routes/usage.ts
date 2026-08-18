@@ -301,6 +301,10 @@ function diffUsage(current: UsageSnapshot, previous: UsageSnapshot): UsageSnapsh
       : {}),
     ...(current.cacheMissReasons ? { cacheMissReasons: [...current.cacheMissReasons] } : {}),
     ...(current.cacheSuggestions ? { cacheSuggestions: [...current.cacheSuggestions] } : {}),
+    ...(current.actualProviderId ? { actualProviderId: current.actualProviderId } : {}),
+    ...(current.actualModelId ? { actualModelId: current.actualModelId } : {}),
+    ...(current.billingKind ? { billingKind: current.billingKind } : {}),
+    ...(current.requestedModelId ? { requestedModelId: current.requestedModelId } : {}),
     turns: diffNumber(current.turns, previous.turns),
     ...(current.costUsd !== undefined || previous.costUsd !== undefined
       ? { costUsd: diffNumber(current.costUsd ?? 0, previous.costUsd ?? 0) }

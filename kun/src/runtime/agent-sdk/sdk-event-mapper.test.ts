@@ -444,6 +444,18 @@ describe('mapSdkUsage', () => {
     expect(usage.costUsd).toBe(0.5)
   })
 
+  test('preserves subscription attribution for downstream value estimation', () => {
+    expect(mapSdkUsage(
+      { input_tokens: 25_300, output_tokens: 700 },
+      1,
+      undefined,
+      { billingKind: 'subscription', model: 'gpt-5.6-luna' }
+    )).toMatchObject({
+      actualModelId: 'gpt-5.6-luna',
+      billingKind: 'subscription'
+    })
+  })
+
   test('null cache hit rate when no prompt tokens', () => {
     const usage = mapSdkUsage(undefined, 0)
     expect(usage.promptTokens).toBe(0)
