@@ -8,6 +8,7 @@ import {
 } from './apply-shape-ops'
 import {
   ensureGeneratedImageOnCanvas,
+  materializeHistoricalGeneratedImages,
   replayDurableDesignCanvasTurns,
   type CanvasDesignDocumentTarget,
   type DurableDesignCanvasTurnCompletion
@@ -109,9 +110,6 @@ export function replayIdleDesignCanvas(options: {
           })
           if (placed) options.affectedIds.add(placed)
         }
-      } else if (options.affectedIds.size === 0 && completion.legacyGeneratedImageUrl) {
-        const placed = ensureGeneratedImageOnCanvas(completion.legacyGeneratedImageUrl)
-        if (placed) options.affectedIds.add(placed)
       }
       const affectedIds = [...options.affectedIds]
       if (affectedIds.length > 0) useCanvasSelectionStore.getState().select(affectedIds)
@@ -119,6 +117,7 @@ export function replayIdleDesignCanvas(options: {
       options.onTurnReplayed?.(completion, affectedIds)
     }
   })
+  materializeHistoricalGeneratedImages({ threadId, blocks: state.blocks, target })
 }
 
 export function replayIdleCodeCanvas(options: {

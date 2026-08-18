@@ -407,6 +407,44 @@ export function replayDurableDesignCanvasTurns(options: {
   }
 }
 
+export function materializeHistoricalGeneratedImages(options: {
+  threadId: string
+  blocks: readonly ChatBlock[]
+  target: CanvasDesignDocumentTarget
+}): string[] {
+  const placedIds: string[] = []
+  for (const turn of durableDesignCanvasTurns(options.blocks, options.target)) {
+    const placementTarget = designImagePlacementTargetFromUserBlock(
+      turn.blocks.find((block) => block.kind === 'user')
+    )
+    const place = (imageUrl: string, source: string): void => {
+      const placed = ensureGeneratedImageOnCanvas(imageUrl, {
+        replayKey: designCanvasReplayKey({
+          threadId: options.threadId,
+          turnId: turn.turnId,
+          target: options.target,
+          source
+        }),
+        ...(placementTarget ? { target: placementTarget } : {}),
+        // Historical hydration must not fill whatever the user happens to have
+        // selected while reopening a board.
+        preferredShapeIds: []
+      })
+      if (placed) placedIds.push(placed)
+    }
+    const generatedImages = generatedImageResultsForTurn(turn.blocks)
+    if (generatedImages.length > 0) {
+      for (const image of generatedImages) {
+        place(image.imageUrl, `image:${image.completionIdentity}`)
+      }
+      continue
+    }
+    const legacyImageUrl = latestGeneratedImageUrlForTurn(turn.blocks)
+    if (legacyImageUrl) place(legacyImageUrl, `legacy-image:${legacyImageUrl}`)
+  }
+  return placedIds
+}
+
 /** Idempotently place a generated main-lane image in the visible whiteboard. */
 export function ensureGeneratedImageOnCanvas(imageUrl: string, options?: {
   replayKey?: string

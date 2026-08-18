@@ -7,6 +7,7 @@ import {
   designCanvasReplayKey,
   durableDesignCanvasTurns,
   ensureGeneratedImageOnCanvas,
+  materializeHistoricalGeneratedImages,
   replayDurableDesignCanvasTurns,
   toolBlockMatchesDesignTarget
 } from './canvas-design-turn-replay'
@@ -108,6 +109,82 @@ describe('generated Design image canvas placement', () => {
     useProjectDesignSystemStore.getState().setMissing()
   })
 
+  it('materializes every historical generated image without overlap or duplication', () => {
+    useCanvasViewportStore.getState().setVbox({ x: 0, y: 0, width: 1600, height: 900 })
+    const blocks: ChatBlock[] = [
+      { ...userBlock('user-first', target), turnId: 'turn-first' },
+      {
+        kind: 'tool', id: 'image-first', turnId: 'turn-first', summary: 'Generated image',
+        status: 'success', meta: {
+          toolName: 'generate_image', generatedFiles: [{
+            absolutePath: '/workspace/.kun/images/first.png', completionIdentity: 'first'
+          }]
+        }
+      },
+      { ...userBlock('user-second', target), turnId: 'turn-second' },
+      {
+        kind: 'tool', id: 'image-second', turnId: 'turn-second', summary: 'Generated image',
+        status: 'success', meta: {
+          toolName: 'generate_image', generatedFiles: [{
+            absolutePath: '/workspace/.kun/images/second.png', completionIdentity: 'second'
+          }]
+        }
+      }
+    ]
+
+    const firstPass = materializeHistoricalGeneratedImages({ threadId: 'thread', blocks, target })
+    const images = Object.values(useCanvasShapeStore.getState().document.objects)
+      .filter((shape) => shape.type === 'image')
+    const [first, second] = images
+
+    expect(firstPass).toHaveLength(2)
+    expect(images).toHaveLength(2)
+    expect(first && second).toBeTruthy()
+    expect(first!.x + first!.width <= second!.x || second!.x + second!.width <= first!.x ||
+      first!.y + first!.height <= second!.y || second!.y + second!.height <= first!.y).toBe(true)
+    expect(materializeHistoricalGeneratedImages({ threadId: 'thread', blocks, target })).toEqual([])
+    expect(Object.values(useCanvasShapeStore.getState().document.objects)
+      .filter((shape) => shape.type === 'image')).toHaveLength(2)
+  })
+
+  it('hydrates images before the ShapeOps replay watermark without resurrecting deleted images', () => {
+    const blocks: ChatBlock[] = [
+      { ...userBlock('user-old', target), turnId: 'turn-old' },
+      {
+        kind: 'tool', id: 'image-old', turnId: 'turn-old', summary: 'Generated image',
+        status: 'success', meta: {
+          toolName: 'generate_image', generatedFiles: [{
+            absolutePath: '/workspace/.kun/images/old.png', completionIdentity: 'old'
+          }]
+        }
+      }
+    ]
+    useCanvasShapeStore.getState().recordRendererReplayWatermark('turn-old')
+
+    const [placedId] = materializeHistoricalGeneratedImages({ threadId: 'thread', blocks, target })
+    expect(placedId).toBeTruthy()
+    useCanvasShapeStore.getState().deleteShape(placedId!)
+
+    expect(materializeHistoricalGeneratedImages({ threadId: 'thread', blocks, target })).toEqual([])
+    expect(Object.values(useCanvasShapeStore.getState().document.objects)
+      .filter((shape) => shape.type === 'image')).toHaveLength(0)
+  })
+
+  it('uses a stable receipt for legacy Markdown image results', () => {
+    const blocks: ChatBlock[] = [
+      { ...userBlock('user-legacy', target), turnId: 'turn-legacy' },
+      {
+        kind: 'assistant', id: 'assistant-legacy', turnId: 'turn-legacy',
+        text: '![Legacy](.kun/images/legacy.png)'
+      }
+    ]
+
+    const [placedId] = materializeHistoricalGeneratedImages({ threadId: 'thread', blocks, target })
+    expect(placedId).toBeTruthy()
+    useCanvasShapeStore.getState().deleteShape(placedId!)
+
+    expect(materializeHistoricalGeneratedImages({ threadId: 'thread', blocks, target })).toEqual([])
+  })
   it('centers a deterministic square in the viewport and is idempotent by image URL', () => {
     useCanvasShapeStore.getState().resetDocument()
     useCanvasViewportStore.getState().setVbox({ x: 100, y: 200, width: 1000, height: 600 })
