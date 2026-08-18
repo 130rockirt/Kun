@@ -185,6 +185,58 @@ describe('FloatingComposer input history and shortcut hint', () => {
     }
   })
 
+  it('hides the send shortcut while the composer has input and restores it when cleared', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    try {
+      const drafting = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
+        input: 'draft prompt'
+      })))
+      expect(drafting).not.toContain('ds-composer-footer-hint')
+      expect(drafting).not.toContain('Enter to send · Shift+Enter for newline')
+      expect(drafting).toContain('ds-composer-footer')
+
+      const whitespaceOnly = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
+        input: '   '
+      })))
+      expect(whitespaceOnly).toContain('Enter to send · Shift+Enter for newline')
+
+      const cleared = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps()))
+      expect(cleared).toContain('Enter to send · Shift+Enter for newline')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
+  it('hides the reversed send shortcut too when input is present', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    try {
+      const html = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
+        input: 'draft prompt',
+        composerSendKey: 'shiftEnter' as const
+      })))
+      expect(html).not.toContain('ds-composer-footer-hint')
+      expect(html).not.toContain('Shift+Enter to send · Enter for newline')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
+  it('keeps high-priority footer hints while input is present', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('en')
+    try {
+      const offline = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
+        input: 'draft prompt',
+        runtimeReady: false
+      })))
+      expect(offline).toContain('ds-composer-footer-hint')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
   it('hard-disables editing and submission for external destructive operations', () => {
     const html = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
       disabled: true,
