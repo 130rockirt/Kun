@@ -64,17 +64,33 @@ export function prioritizeSidebarThreadActivity(
   threads: readonly NormalizedThread[],
   context: SidebarThreadActivityContext
 ): NormalizedThread[] {
-  const unread: NormalizedThread[] = []
   const running: NormalizedThread[] = []
+  const unread: NormalizedThread[] = []
   const read: NormalizedThread[] = []
   for (const thread of threads) {
     switch (sidebarThreadActivity(thread, context)) {
-      case 'unread': unread.push(thread); break
       case 'running': running.push(thread); break
+      case 'unread': unread.push(thread); break
       default: read.push(thread)
     }
   }
-  return [...unread, ...running, ...read]
+  return [...running, ...unread, ...read]
+}
+
+export function sidebarThreadsHaveRunningActivity(
+  threads: readonly NormalizedThread[],
+  context: SidebarThreadActivityContext
+): boolean {
+  return threads.some((thread) => sidebarThreadActivity(thread, context) === 'running')
+}
+
+export function workspaceContextLabel(workspacePath: string, folderName: string): string {
+  const normalized = workspacePath.replace(/[/\\]+$/, '')
+  const parts = normalized.split(/[/\\]/).filter(Boolean)
+  if (parts.length < 2) return ''
+  const parent = parts[parts.length - 2] ?? ''
+  if (!parent || parent.toLowerCase() === folderName.toLowerCase()) return ''
+  return parent
 }
 
 export function resolveThreadPreviewPosition(

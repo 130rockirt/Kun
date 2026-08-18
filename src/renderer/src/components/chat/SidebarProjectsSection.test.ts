@@ -568,7 +568,7 @@ describe('SidebarProjectsSection groups', () => {
     ).toEqual(['thread-normal', 'thread-sdd-active-build'])
   })
 
-  it('prioritizes unread threads, then running threads, while preserving each bucket order', () => {
+  it('prioritizes running threads, then unread threads, while preserving each bucket order', () => {
     const base = [
       thread({ id: 'read-newer', workspace: '/tmp/app' }),
       thread({ id: 'running-status', workspace: '/tmp/app', status: 'running' }),
@@ -585,10 +585,10 @@ describe('SidebarProjectsSection groups', () => {
     }
 
     expect(prioritizeSidebarThreadActivity(base, context).map((item) => item.id)).toEqual([
-      'unread-first',
-      'unread-second',
       'running-status',
       'running-watched',
+      'unread-first',
+      'unread-second',
       'read-newer',
       'read-older'
     ])

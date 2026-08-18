@@ -34,7 +34,7 @@ import {
   SidebarEmpty,
   ThreadRow
 } from './SidebarProjectRows'
-export { SddDraftHistoryRows, ThreadRow } from './SidebarProjectRows'
+export { SddDraftHistoryRows, ThreadRow, ThreadRunningIndicator } from './SidebarProjectRows'
 import {
   FolderContextMenu,
   MoveThreadDialog,

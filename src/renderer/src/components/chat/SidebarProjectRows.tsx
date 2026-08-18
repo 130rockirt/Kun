@@ -315,11 +315,28 @@ export function ThreadRow({
           <ThreadActivityDot
             running={showRunning}
             unread={showUnreadDot}
-            unreadLabel={t('sidebarThreadUnread')}
+            unreadLabel={t(showRunning ? 'sidebarThreadRunning' : 'sidebarThreadUnread')}
           />
         </span>
       </span>
     </SidebarTreeRow>
+  )
+}
+
+export function ThreadRunningIndicator({
+  label,
+  className = ''
+}: {
+  label: string
+  className?: string
+}): ReactElement {
+  return (
+    <Loader2
+      className={`h-3.5 w-3.5 shrink-0 animate-spin text-accent motion-reduce:animate-none ${className}`}
+      strokeWidth={2}
+      role="img"
+      aria-label={label}
+    />
   )
 }
 
@@ -332,7 +349,7 @@ function ThreadActivityDot({
   unread: boolean
   unreadLabel: string
 }): ReactElement | null {
-  if (running) return <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" strokeWidth={2} />
+  if (running) return <ThreadRunningIndicator label={unreadLabel} />
   if (unread) {
     return (
       <span

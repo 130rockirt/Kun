@@ -6,12 +6,13 @@ import type {
   ReactElement,
   SetStateAction
 } from 'react'
-import { ChevronDown, ChevronRight, Folder, FolderPlus, FolderOpen, Plus, Search } from 'lucide-react'
+import { ChevronDown, ChevronRight, Folder, FolderPlus, FolderOpen, Plus } from 'lucide-react'
 import type { NormalizedThread } from '../../agent/types'
 import { workspaceLabelFromPath } from '../../lib/workspace-label'
 import { workspaceRootIdentityKey } from '../../lib/workspace-path'
 import { SidebarIconButton, SidebarSearchField, SidebarTreeRow } from '../sidebar/SidebarPrimitives'
-import { SidebarEmpty, SidebarThreadSkeleton, ThreadRow } from './SidebarProjectRows'
+import { SidebarProjectsHeader } from './SidebarProjectsHeader'
+import { SidebarEmpty, SidebarThreadSkeleton, ThreadRow, ThreadRunningIndicator } from './SidebarProjectRows'
 import {
   FolderContextMenu,
   MoveThreadDialog,
@@ -31,7 +32,9 @@ import {
 import {
   prioritizeSidebarThreadActivity,
   sidebarThreadActivity,
+  sidebarThreadsHaveRunningActivity,
   sortSidebarThreads,
+  workspaceContextLabel,
   worktreeRecordForSidebarThread,
   type SidebarThreadWorktreeRecord,
   type SidebarThreadWorktrees,
@@ -47,6 +50,7 @@ import {
 } from './sidebar-collapse'
 import {
   sidebarChildFolders,
+  sidebarFolderDescendantThreadIds,
   sidebarFolderThreadCount,
   sidebarFoldersForWorkspace,
   type SidebarFolderRegistry,
@@ -59,7 +63,7 @@ import type {
 } from './sidebar-project-drag-actions'
 import {
   nextSidebarProjectExpansionStage,
-  sidebarProjectHasVisibleThreadOverflow,
+  sidebarProjectVisibleItems,
   sidebarProjectVisibleThreadCount,
   type SidebarProjectExpansionStage
 } from './sidebar-project-expansion'
@@ -168,6 +172,11 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
     submitMoveThreadDialog, closeActionDialog, submitActionDialog
   } = props
 
+  const projectsHaveRunning = displayGroups.some(([, threads]) =>
+    sidebarThreadsHaveRunningActivity(threads, sidebarThreadActivityContext)
+  )
+  const runningLabel = t('sidebarThreadRunning')
+
   const renderThreadRow = (
     thread: NormalizedThread,
     workspacePath: string,
@@ -209,41 +218,16 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
   )
   return (
     <div className="ds-no-drag flex min-h-0 flex-1 flex-col">
-      <div className="flex min-h-[38px] items-center justify-between px-2 pb-1.5 pt-3">
-        <button
-          type="button"
-          onClick={toggleAllGroups}
-          className="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-muted"
-          title={t('sidebarProjects')}
-          aria-label={t('sidebarProjects')}
-        >
-          <span className="truncate">{t('sidebarProjects')}</span>
-          {allGroupsCollapsed ? (
-            <ChevronRight className="h-3 w-3 shrink-0" strokeWidth={2} />
-          ) : (
-            <ChevronDown className="h-3 w-3 shrink-0" strokeWidth={2} />
-          )}
-        </button>
-        <div className="flex shrink-0 items-center gap-1">
-          <SidebarIconButton
-            onClick={() => setSearchOpen((open) => !open)}
-            active={searchVisible}
-            className="h-7 w-7"
-            title={t('sidebarSearchThreads')}
-            ariaLabel={t('sidebarSearchThreads')}
-          >
-            <Search className="h-3.5 w-3.5" strokeWidth={1.85} />
-          </SidebarIconButton>
-          <SidebarIconButton
-            onClick={onPickWorkspace}
-            className="h-7 w-7"
-            title={workspaceRoot ? t('changeWorkspace') : t('selectWorkspace')}
-            ariaLabel={workspaceRoot ? t('changeWorkspace') : t('selectWorkspace')}
-          >
-            <FolderPlus className="h-3.5 w-3.5" strokeWidth={1.75} />
-          </SidebarIconButton>
-        </div>
-      </div>
+      <SidebarProjectsHeader
+        allGroupsCollapsed={allGroupsCollapsed}
+        hasRunning={projectsHaveRunning}
+        searchVisible={searchVisible}
+        workspaceRoot={workspaceRoot}
+        onToggle={toggleAllGroups}
+        onToggleSearch={() => setSearchOpen((open) => !open)}
+        onPickWorkspace={onPickWorkspace}
+        t={t}
+      />
 
       {searchVisible ? (
         <div className="mb-2 flex items-center gap-1 px-2">
@@ -305,6 +289,10 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
             ),
             sidebarThreadActivityContext
           )
+          const workspaceHasRunning = sidebarThreadsHaveRunningActivity(
+            sortedThreads,
+            sidebarThreadActivityContext
+          )
           const workspaceFolders = sidebarFoldersForWorkspace(sidebarFolders, workspacePath)
           const assignedThreadIds = new Set(
             workspaceFolders.flatMap((folder) => folder.threadIds)
@@ -322,11 +310,13 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
             rootThreads.length,
             expansionStage
           )
-          const hasVisibleThreadOverflow = sidebarProjectHasVisibleThreadOverflow(
-            rootThreads.length,
-            expansionStage
+          const visibleSelection = sidebarProjectVisibleItems(
+            rootThreads,
+            visibleThreadCount,
+            (thread) => sidebarThreadActivity(thread, sidebarThreadActivityContext) === 'running'
           )
-          const visibleThreads = rootThreads.slice(0, visibleThreadCount)
+          const visibleThreads = visibleSelection.items
+          const hiddenThreadCount = visibleSelection.hiddenCount
           return (
             <div
               key={workspacePath}
@@ -340,6 +330,7 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
             >
               <SidebarTreeRow
                 title={workspacePath}
+                ariaLabel={[workspacePath, workspaceHasRunning ? runningLabel : ''].filter(Boolean).join(' - ')}
                 onClick={() =>
                   persistSidebarCollapse((current) =>
                     setSidebarWorkspaceCollapsed(current, workspacePath, !isCollapsed)
@@ -394,6 +385,7 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                   <FolderOpen className="h-4 w-4 shrink-0 text-ds-muted" strokeWidth={1.75} />
                 )}
                 <span className="min-w-0 flex-1 truncate">{folderName}</span>
+                {workspaceHasRunning ? <ThreadRunningIndicator label={runningLabel} /> : null}
                 {workspaceContext ? (
                   <span className="min-w-0 max-w-[42%] shrink truncate text-[12.5px] text-ds-faint transition group-hover:opacity-0 group-focus-within:opacity-0">
                     {workspaceContext}
@@ -410,6 +402,11 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                         workspacePath,
                         item.id
                       )
+                      const folderThreadIds = sidebarFolderDescendantThreadIds(workspaceFolders, item.id)
+                      const folderHasRunning = folderThreadIds.some((threadId) => {
+                        const thread = threadsById.get(threadId)
+                        return thread && sidebarThreadActivity(thread, sidebarThreadActivityContext) === 'running'
+                      })
                       const folderThreads = prioritizeSidebarThreadActivity(
                         item.threadIds.flatMap((threadId) => {
                           const thread = threadsById.get(threadId)
@@ -425,10 +422,13 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                         <div key={item.id}>
                           <SidebarTreeRow
                             title={item.name}
-                            ariaLabel={t('sidebarFolderAriaLabel', {
-                              name: item.name,
-                              count: sidebarFolderThreadCount(workspaceFolders, item.id)
-                            })}
+                            ariaLabel={[
+                              t('sidebarFolderAriaLabel', {
+                                name: item.name,
+                                count: sidebarFolderThreadCount(workspaceFolders, item.id)
+                              }),
+                              folderHasRunning ? runningLabel : ''
+                            ].filter(Boolean).join(' - ')}
                             onClick={() =>
                               persistSidebarCollapse((current) =>
                                 setSidebarFolderCollapsed(
@@ -483,6 +483,7 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                             <span className="min-w-0 flex-1 truncate text-[13px] text-ds-ink">
                               {item.name}
                             </span>
+                            {folderHasRunning ? <ThreadRunningIndicator label={runningLabel} /> : null}
                             <span className="shrink-0 rounded-md bg-ds-card/70 px-1.5 py-0.5 text-[10.5px] text-ds-faint tabular-nums transition group-hover:opacity-0 group-focus-within:opacity-0">
                               {sidebarFolderThreadCount(workspaceFolders, item.id)}
                             </span>
@@ -560,10 +561,10 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                       }}
                       className="ml-1 mt-1 rounded-md px-2.5 py-1.5 text-[12.5px] text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
                     >
-                      {hasVisibleThreadOverflow
+                      {hiddenThreadCount > 0
                         ? t('sidebarWorkspaceShowMore', {
                             count: Math.max(
-                              rootThreads.length - visibleThreadCount,
+                              hiddenThreadCount,
                               (threadListCursorByWorkspace[workspacePath]?.total ?? rootThreads.length) - rootThreads.length
                             )
                           })
@@ -685,13 +686,4 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
       ) : null}
     </div>
   )
-}
-
-function workspaceContextLabel(workspacePath: string, folderName: string): string {
-  const normalized = workspacePath.replace(/[/\\]+$/, '')
-  const parts = normalized.split(/[/\\]/).filter(Boolean)
-  if (parts.length < 2) return ''
-  const parent = parts[parts.length - 2] ?? ''
-  if (!parent || parent.toLowerCase() === folderName.toLowerCase()) return ''
-  return parent
 }
