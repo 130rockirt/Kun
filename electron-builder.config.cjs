@@ -283,7 +283,10 @@ module.exports = {
   },
   dmg: {
     sign: hasExplicitMacSigningIdentity,
-    title: `${productName} Installer`,
+    // Volume name carries the same artifact version as artifactName so users
+    // can tell installers apart in Finder; without release env overrides,
+    // electron-builder expands the ${version} macro from package.json.
+    title: `${productName} Installer ${artifactVersion}`,
     background: './build/dmg-background.png',
     iconSize: 88,
     iconTextSize: 13,
