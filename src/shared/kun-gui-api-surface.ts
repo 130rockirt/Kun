@@ -149,6 +149,7 @@ import type {
   MemoryMarkdownExportSavePayload,
   MemoryMarkdownExportSaveResult
 } from './memory-import-export'
+import type { RemoteSshApi } from './remote-ssh'
 import type {
   TerminalCreatePayload,
   TerminalCreateResult,
@@ -246,7 +247,7 @@ import {
   WorkspacePickResult
 } from './kun-gui-api-contracts'
 
-export type KunGuiApi = ExtensionIpcApi & {
+export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & {
   platform: string
   /** Immutable mode selected before the BrowserWindow and renderer are created. */
   desktopTitleBarMode: DesktopTitleBarMode
