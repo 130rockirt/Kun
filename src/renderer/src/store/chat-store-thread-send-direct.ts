@@ -3,8 +3,8 @@ import i18n from '../i18n'
 import { describeRuntimeError, formatRuntimeError, getRuntimeErrorCode } from '../lib/format-runtime-error'
 import { shouldAutoTitleThread } from '../lib/thread-title'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
-import { buildClawRuntimePrompt, buildCodeRuntimePrompt } from '@shared/app-settings'
 import { saveQueuedMessagesForThread } from './queued-message-persistence'
+import { runtimePromptForSurface } from './chat-store-send-prompt'
 import { currentTurnStartGeneration } from './turn-start-fence'
 import {
   activeClawChannel,
@@ -43,20 +43,6 @@ import {
   withoutConsumedComposerContexts
 } from './chat-store-thread-actions-support'
 import type { PreparedThreadSend } from './chat-store-thread-send-direct-types'
-
-export function runtimePromptForSurface(input: {
-  channel: ReturnType<typeof activeClawChannel>
-  requestedAgentSurface: PreparedThreadSend['requestedAgentSurface']
-  writeContext: PreparedThreadSend['writeContext']
-  settings: Parameters<typeof buildClawRuntimePrompt>[0] & Parameters<typeof buildCodeRuntimePrompt>[0]
-  prompt: string
-}): string {
-  if (input.channel) {
-    return buildClawRuntimePrompt(input.settings, input.prompt, { channel: input.channel })
-  }
-  if (input.requestedAgentSurface === 'write' || input.writeContext) return input.prompt
-  return buildCodeRuntimePrompt(input.settings, input.prompt)
-}
 
 export async function performPreparedThreadSend(input: PreparedThreadSend): Promise<boolean> {
   let {

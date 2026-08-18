@@ -25,6 +25,7 @@ import type { ClawImChannelV1 } from '@shared/app-settings'
 import type { TurnCompleteNotificationSource } from '@shared/kun-gui-api'
 import { isBackgroundShellNoticeUserMessage } from '@shared/background-shell-notice'
 import type { ChatState } from './chat-store-types'
+import { drainBackgroundQueuedMessage } from './chat-store-background-queue'
 import { isPendingQueuedMessage } from './queued-message-persistence'
 import { hydrateBlockModelLabels, isClawThread } from './chat-store-helpers'
 import {
@@ -90,6 +91,7 @@ import {
   notifyTurnComplete,
   runtimeErrorDetail,
   takePendingClawFeishuMirror,
+  watchTurnCompletionNotification,
   watchCompletionNotificationKeys,
   watchCompletionNotificationSources
 } from './chat-store-runtime-notifications'
@@ -221,15 +223,33 @@ export function syncTurnCompletionPoll(
       })
       if (claimed.length === 0) return
       const notificationState = getState()
-      for (const { id, completionWatchKey } of claimed) {
+      for (const { id, completionWatchKey, latestTurnId } of claimed) {
+        const notificationSource = watchCompletionNotificationSources.get(id)
         notifyTurnComplete(
           id,
           notificationState,
           completionWatchKey ?? completionNotificationDedupeKeyForWatchedThread(id),
-          watchCompletionNotificationSources.get(id)
+          notificationSource
         )
         clearWatchedCompletionNotification(id)
         invalidateThreadSnapshot(id)
+        await drainBackgroundQueuedMessage({
+          threadId: id,
+          completedTurnId: latestTurnId,
+          provider: getProvider(),
+          set: setState,
+          get: getState,
+          onTurnStarted: () => {
+            setState((snapshot) => ({
+              watchTurnCompletion: { ...snapshot.watchTurnCompletion, [id]: true }
+            }))
+            watchTurnCompletionNotification(id, Date.now(), notificationSource)
+            syncTurnCompletionPoll(setState, getState)
+            if (getState().activeThreadId === id) {
+              void getState().recoverActiveTurn()
+            }
+          }
+        })
       }
       void getState().refreshThreads()
     },

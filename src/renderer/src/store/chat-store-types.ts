@@ -56,6 +56,10 @@ export type QueuedUserMessage = {
   errorCode?: string
   /** Localized summary of a terminal rejection for inline retry UI. */
   errorMessage?: string
+  /** Frozen runtime prompt reused for idempotent background admission retries. */
+  backgroundRuntimeText?: string
+  /** Frozen checkpoint request id reused with the same clientRequestId. */
+  backgroundCheckpointRequestId?: string
   displayText?: string
   mode?: string
   orchestration?: 'direct' | 'graph'
