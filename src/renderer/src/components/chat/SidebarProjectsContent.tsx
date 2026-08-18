@@ -289,10 +289,6 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
             ),
             sidebarThreadActivityContext
           )
-          const workspaceHasRunning = sidebarThreadsHaveRunningActivity(
-            sortedThreads,
-            sidebarThreadActivityContext
-          )
           const workspaceFolders = sidebarFoldersForWorkspace(sidebarFolders, workspacePath)
           const assignedThreadIds = new Set(
             workspaceFolders.flatMap((folder) => folder.threadIds)
@@ -330,7 +326,7 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
             >
               <SidebarTreeRow
                 title={workspacePath}
-                ariaLabel={[workspacePath, workspaceHasRunning ? runningLabel : ''].filter(Boolean).join(' - ')}
+                ariaLabel={workspacePath}
                 onClick={() =>
                   persistSidebarCollapse((current) =>
                     setSidebarWorkspaceCollapsed(current, workspacePath, !isCollapsed)
@@ -385,7 +381,6 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                   <FolderOpen className="h-4 w-4 shrink-0 text-ds-muted" strokeWidth={1.75} />
                 )}
                 <span className="min-w-0 flex-1 truncate">{folderName}</span>
-                {workspaceHasRunning ? <ThreadRunningIndicator label={runningLabel} /> : null}
                 {workspaceContext ? (
                   <span className="min-w-0 max-w-[42%] shrink truncate text-[12.5px] text-ds-faint transition group-hover:opacity-0 group-focus-within:opacity-0">
                     {workspaceContext}
