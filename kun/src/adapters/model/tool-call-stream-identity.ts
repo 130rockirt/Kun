@@ -16,7 +16,7 @@ export class ModelStreamProtocolError extends Error {
 
 /** Resolve provider fragments without using untrusted ids as object keys or diagnostics. */
 export function resolvePendingToolCall(input: {
-  explicitId?: string
+  explicitId?: unknown
   index?: number
   pending: Map<string, PendingToolCall>
   pendingByIndex: Map<number, string>
@@ -75,12 +75,12 @@ function migratePendingCallId(
   }
 }
 
-function safeExplicitId(value: string | undefined, pendingCount: number): string | undefined {
+function safeExplicitId(value: unknown, pendingCount: number): string | undefined {
   // OpenAI-compatible gateways occasionally serialize an omitted delta id as
-  // an empty string. Treat only that form as absent so the stable index (or
-  // sole pending call) can retain the established identity.
-  if (value === undefined || value === '') return undefined
-  if (value.length > 512 || [...value].some((character) => {
+  // null or an empty string. Treat only those forms as absent so the stable
+  // index (or sole pending call) can retain the established identity.
+  if (value === undefined || value === null || value === '') return undefined
+  if (typeof value !== 'string' || value.length > 512 || [...value].some((character) => {
     const code = character.charCodeAt(0)
     return code <= 0x1f || code === 0x7f
   })) {

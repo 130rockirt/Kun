@@ -44,7 +44,7 @@ export function decodeChatCompletionsStreamPayload(input: {
       }
       const toolCalls = delta.tool_calls as Array<{
         index?: number
-        id?: string
+        id?: unknown
         function?: { name?: string; arguments?: string }
       }> | undefined
       for (const call of toolCalls ?? []) {

@@ -107,7 +107,7 @@ function expectResourceLimit(chunk: ModelStreamChunk | undefined, messagePrefix:
   expect(chunk.message).toContain('pendingArgumentFragments=')
 }
 
-function chatToolDelta(d: { index: number; id?: string; name?: string; args?: string }): string {
+function chatToolDelta(d: { index: number; id?: unknown; name?: string; args?: string }): string {
   const fn: Record<string, unknown> = {}
   if (d.name !== undefined) fn.name = d.name
   if (d.args !== undefined) fn.arguments = d.args
@@ -349,6 +349,56 @@ it('keeps bash arguments together when the provider supplies the call id late', 
       arguments: { pattern: 'planWorktree' }
     }])
     expect(completed(chunks).stopReason).toBe('tool_calls')
+  })
+
+  it('treats a null chat fragment id as omitted and keeps the indexed tool call', async () => {
+    const frames = [
+      chatToolDelta({ index: 0, id: 'call_grep', name: 'grep', args: '{"pattern":"plan' }),
+      chatToolDelta({ index: 0, id: null, args: 'Worktree"}' }),
+      chatFinish('tool_calls')
+    ]
+    const chunks = await drain(makeClient(streamingFetch(frames)).stream(request()))
+    expect(toolCallCompletes(chunks)).toEqual([{
+      kind: 'tool_call_complete',
+      callId: 'call_grep',
+      toolName: 'grep',
+      arguments: { pattern: 'planWorktree' }
+    }])
+    expect(completed(chunks).stopReason).toBe('tool_calls')
+  })
+
+  it('migrates a null-id indexed call when a later chat fragment supplies the id', async () => {
+    const frames = [
+      chatToolDelta({ index: 0, id: null, name: 'read', args: '{"path":"src/' }),
+      chatToolDelta({ index: 0, id: 'call_read', args: 'main.ts"}' }),
+      chatFinish('tool_calls')
+    ]
+    const chunks = await drain(makeClient(streamingFetch(frames)).stream(request()))
+    expect(toolCallCompletes(chunks)).toEqual([{
+      kind: 'tool_call_complete',
+      callId: 'call_read',
+      toolName: 'read',
+      arguments: { path: 'src/main.ts' }
+    }])
+  })
+
+  it.each([
+    { label: 'number', id: 42 },
+    { label: 'object', id: { value: 'do-not-log-provider-id' } },
+    { label: 'oversized string', id: 'x'.repeat(513) },
+    { label: 'control-character string', id: 'call_secret\nvalue' }
+  ])('rejects an invalid $label chat fragment id with a redacted protocol error', async ({ id }) => {
+    const chunks = await drain(makeClient(streamingFetch([
+      chatToolDelta({ index: 0, id, name: 'grep', args: '{"pattern":"secret"}' })
+    ])).stream(request()))
+    expect(chunks.at(-1)).toEqual({
+      kind: 'error',
+      code: 'stream_tool_call_protocol',
+      message: 'model stream tool-call protocol error: provider call id is invalid (pendingToolCalls=0)'
+    })
+    expect(JSON.stringify(chunks.at(-1))).not.toContain('do-not-log-provider-id')
+    expect(JSON.stringify(chunks.at(-1))).not.toContain('call_secret')
+    expect(JSON.stringify(chunks.at(-1))).not.toContain('Cannot read properties')
   })
 
   it('merges an anonymous chat fragment into the only pending tool call', async () => {
