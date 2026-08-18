@@ -28,6 +28,10 @@ import {
   type ModelStreamLimits,
   type PendingToolCall
 } from './model-stream-resource-budget.js'
+import {
+  assertPendingToolCallsComplete,
+  ModelStreamProtocolError
+} from './tool-call-stream-identity.js'
 import { normalizeCompatUsage } from './compat-usage-normalizer.js'
 import {
   exponentialRetryDelayMs,
@@ -426,13 +430,19 @@ export class CompatModelStreamingClient extends CompatModelClientBase {
         if (sawDone) break
       }
     } catch (error) {
-      if (error instanceof ModelStreamResourceLimitError) {
+      if (error instanceof ModelStreamResourceLimitError || error instanceof ModelStreamProtocolError) {
         frameBuffer.clear()
         budget.clearPendingCalls(pendingArguments)
         pendingByIndex.clear()
         completedToolCalls.clear()
-        cancelReader('model stream resource limit exceeded')
-        yield { kind: 'error', message: error.message, code: 'stream_resource_limit' }
+        cancelReader(error instanceof ModelStreamProtocolError
+          ? 'model stream tool-call protocol error'
+          : 'model stream resource limit exceeded')
+        yield {
+          kind: 'error',
+          message: error.message,
+          code: error instanceof ModelStreamProtocolError ? error.code : 'stream_resource_limit'
+        }
         return
       }
       throw error
@@ -466,6 +476,7 @@ export class CompatModelStreamingClient extends CompatModelClientBase {
     // `{ __raw }` (a tool error the model can react to) instead of vanishing.
     let flushedPendingToolCall = false
     try {
+      assertPendingToolCallsComplete(pendingArguments)
       for (const [callId, pending] of pendingArguments) {
         if (!pending.name) continue
         if (completedToolCalls.has(callId)) continue
@@ -481,8 +492,12 @@ export class CompatModelStreamingClient extends CompatModelClientBase {
         }
       }
     } catch (error) {
-      if (error instanceof ModelStreamResourceLimitError) {
-        yield { kind: 'error', message: error.message, code: 'stream_resource_limit' }
+      if (error instanceof ModelStreamResourceLimitError || error instanceof ModelStreamProtocolError) {
+        yield {
+          kind: 'error',
+          message: error.message,
+          code: error instanceof ModelStreamProtocolError ? error.code : 'stream_resource_limit'
+        }
         return
       }
       throw error

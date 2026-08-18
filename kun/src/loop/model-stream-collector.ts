@@ -160,6 +160,16 @@ export class ModelStreamCollector {
   private reduceCompletedToolCall(
     chunk: Extract<ModelStreamChunk, { kind: 'tool_call_complete' }>
   ): ModelStreamReduction {
+    if (!chunk.toolName.trim()) {
+      this.stopReason = 'error'
+      return {
+        intents: [{
+          kind: 'model_error',
+          message: 'model stream produced an incomplete tool call',
+          code: 'stream_tool_call_protocol'
+        }]
+      }
+    }
     if (this.toolCalls.length >= this.config.maxToolCallsPerStep) {
       if (this.config.toolCallOverflowBehavior === 'truncate') {
         this.truncatedToolCalls += 1

@@ -113,6 +113,26 @@ describe('ModelStreamCollector', () => {
       .toEqual(['call_runtime_1', 'call_runtime_2'])
   })
 
+  it('rejects an incomplete completed call with content-free diagnostics', () => {
+    const stream = collector()
+    const reduction = stream.reduce({
+      kind: 'tool_call_complete',
+      callId: 'provider-secret-id',
+      toolName: '',
+      arguments: { command: 'provider-secret-command' }
+    })
+
+    expect(reduction).toEqual({
+      intents: [{
+        kind: 'model_error',
+        message: 'model stream produced an incomplete tool call',
+        code: 'stream_tool_call_protocol'
+      }]
+    })
+    expect(JSON.stringify(reduction)).not.toContain('provider-secret')
+    expect(stream.snapshot()).toMatchObject({ toolCalls: [], stopReason: 'error' })
+  })
+
   it('does not accept a tool call past the configured cap', () => {
     const stream = collector({ maxToolCallsPerStep: 1 })
     stream.reduce({ kind: 'tool_call_complete', callId: 'call_1', toolName: 'edit', arguments: {} })

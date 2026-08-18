@@ -80,7 +80,9 @@ export function ConversationTurn({
   const forkThreadFromTurn = useChatStore((s) => s.forkThreadFromTurn)
   const rollbackWorkspaceToCheckpoint = useChatStore((s) => s.rollbackWorkspaceToCheckpoint)
   const sendMessage = useChatStore((s) => s.sendMessage)
+  const archiveActiveThreadToTurn = useChatStore((s) => s.archiveActiveThreadToTurn)
   const [forking, setForking] = useState(false)
+  const [archiving, setArchiving] = useState(false)
   const [rollingBackCheckpointId, setRollingBackCheckpointId] = useState<string | null>(null)
   // Inline Review Plan card: surfaced under a turn that produced a
   // successful `create_plan` result so the user can open/build the plan
@@ -216,6 +218,16 @@ export function ConversationTurn({
       setForking(false)
     }
   }
+  const archiveToTurn = async (): Promise<void> => {
+    if (!allowMainThreadActions || !forkTurnId || archiving || isProcessing) return
+    if (!window.confirm(t('archiveHistoryConfirm'))) return
+    setArchiving(true)
+    try {
+      await archiveActiveThreadToTurn(forkTurnId)
+    } finally {
+      setArchiving(false)
+    }
+  }
   const rollbackWorkspace = async (checkpointId: string): Promise<void> => {
     const targetCheckpointId = checkpointId.trim()
     if (!allowMainThreadActions || !targetCheckpointId || rollingBackCheckpointId) return
@@ -308,6 +320,19 @@ export function ConversationTurn({
           }
         />
       ))}
+
+      {allowMainThreadActions && !isProcessing && forkTurnId ? (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            disabled={archiving}
+            onClick={() => void archiveToTurn()}
+            className="rounded-md px-2 py-1 text-[11px] text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-50"
+          >
+            {archiving ? t('archiveHistoryWorking') : t('archiveHistoryToHere')}
+          </button>
+        </div>
+      ) : null}
 
       {!isProcessing ? (
         <GeneratedFilesPanel blocks={generatedFileBlocks} placement="turn" />

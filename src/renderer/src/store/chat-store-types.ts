@@ -557,6 +557,7 @@ export type ChatState = {
   pinThread: (threadId: string, pinned: boolean) => Promise<void>
   archiveThread: (threadId: string, archived: boolean) => Promise<void>
   compactActiveThread: (reason?: string) => Promise<void>
+  archiveActiveThreadToTurn: (turnId: string) => Promise<void>
   forkActiveThread: () => Promise<void>
   forkThreadFromTurn: (turnId: string) => Promise<void>
   setActiveThreadGoal: (objective: string) => Promise<boolean>

@@ -19,11 +19,11 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
   const {
     shellRef, extensionHostContextMenus, activeExtensionCenterView, route, setWorkspaceContextMenu,
     leftSidebarCollapsed, leftSidebarWidth, codeThreads, activeThreadId, sidebarView,
-    connectPhoneSidebarOpen, activeExtensionLeftSidebar, extensionWorkspaceRoot,
+    connectPhoneSidebarOpen, connectPhoneInitialTarget, activeExtensionLeftSidebar, extensionWorkspaceRoot,
     selectExtensionSurface, runtimeConnection, threadSearch, showArchivedThreads, focusModeEnabled,
     updateFocusMode, setThreadSearch, openThread, renameThread, pinThread, archiveThread,
     deleteThread, startNewChat, startNewChatInWorkspace,
-    openSettings, openPluginsView, openExtensionsView, toggleTheme, toggleConnectPhone,
+    openSettings, openPluginsView, openExtensionsView, toggleTheme, toggleConnectPhone, openConnectWeixin,
     openCodeMode, openWriteMode, openScheduleView, openWorkflowView,
     startNewConversation, beginLeftResize, toggleLeftSidebar, busy,
     input, rightPanel, writeRuntimeBanner, setInput, sendWritePrompt,
@@ -83,6 +83,7 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
         activeThreadId={activeThreadId}
         sidebarView={sidebarView}
         connectPhoneSidebarOpen={connectPhoneSidebarOpen}
+        connectPhoneInitialTarget={connectPhoneInitialTarget}
         extensionsActive={normalizedRoute === 'extensions'}
         extensionView={activeExtensionLeftSidebar}
         workspaceRoot={extensionWorkspaceRoot}
@@ -131,6 +132,7 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
         leftSidebarCollapsed={leftSidebarCollapsed}
         onToggleLeftSidebar={toggleLeftSidebar}
         onOpenThread={openThread}
+        onConnectWeixin={openConnectWeixin}
         write={{
           runtimeBanner: writeRuntimeBanner,
           leftSidebarCollapsed,

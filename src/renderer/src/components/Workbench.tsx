@@ -170,6 +170,7 @@ export function Workbench(): ReactElement {
   const [useWorktreePool, setUseWorktreePool] = useState(false)
   const [worktreeBranch, setWorktreeBranch] = useState('')
   const [connectPhoneSidebarOpen, setConnectPhoneSidebarOpen] = useState(false)
+  const [connectPhoneInitialTarget, setConnectPhoneInitialTarget] = useState<'feishu' | 'lark' | 'weixin' | 'telegram'>('feishu')
   const taskActiveSkillWorkspace = threads.find(
     (thread) => thread.id === activeThreadId
   )?.workspace || workspaceRoot || ''
@@ -642,11 +643,12 @@ export function Workbench(): ReactElement {
     <WorkbenchContent context={{
     shellRef, extensionHostContextMenus, activeExtensionCenterView, route, setWorkspaceContextMenu,
     leftSidebarCollapsed, leftSidebarWidth, codeThreads, activeThreadId, sidebarView,
-    connectPhoneSidebarOpen, activeExtensionLeftSidebar, extensionWorkspaceRoot,
+    connectPhoneSidebarOpen, connectPhoneInitialTarget, activeExtensionLeftSidebar, extensionWorkspaceRoot,
     selectExtensionSurface, runtimeConnection, threadSearch, showArchivedThreads, focusModeEnabled,
     updateFocusMode, setThreadSearch, openThread, renameThread, pinThread, archiveThread,
     deleteThread, deleteDrawing, startNewChat, startNewChatInWorkspace,
     openSettings, openPluginsView, openExtensionsView, toggleTheme, toggleConnectPhone,
+    openConnectWeixin: () => { setConnectPhoneInitialTarget('weixin'); openClaw(); setConnectPhoneSidebarOpen(true) },
     openCodeMode, openWriteMode, openDesignMode, openScheduleView, openWorkflowView,
     startNewConversation, beginLeftResize, toggleLeftSidebar, busy, implementDesignInCode,
     handleDesignHtmlElementAsContext, selectCanvasShape, sendDesignPrompt,

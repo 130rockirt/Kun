@@ -20,7 +20,7 @@ import type {
 import {
   ClawSidebarContent
 } from './SidebarClaw'
-import type { ClawImDialogMode } from './SidebarClawDialogHelpers'
+import type { ClawImDialogMode, ClawInstallTarget } from './SidebarClawDialogHelpers'
 import { ClawAddImDialog } from './SidebarClawDialog'
 import { ConnectPhoneSidebarPanel } from './ConnectPhoneView'
 import { SidebarProjectsSection } from './SidebarProjectsSection'
@@ -38,6 +38,7 @@ type Props = {
   activeThreadId: string | null
   activeView: 'chat' | 'write' | 'claw' | 'schedule' | 'workflow' | 'subagents'
   connectPhoneSidebarOpen: boolean
+  connectPhoneInitialTarget: ClawInstallTarget
   pluginsActive: boolean
   extensionsActive: boolean
   runtimeReady: boolean
@@ -74,6 +75,7 @@ export function Sidebar({
   activeThreadId,
   activeView,
   connectPhoneSidebarOpen,
+  connectPhoneInitialTarget,
   pluginsActive,
   extensionsActive,
   runtimeReady,
@@ -230,6 +232,7 @@ export function Sidebar({
       {connectPhoneSidebarOpen ? (
         <ConnectPhoneSidebarPanel
           channels={clawChannels}
+          initialTarget={connectPhoneInitialTarget}
           onAddProvider={async (provider, agentProfile, platformCredential, options) => {
             await addClawChannel(provider, agentProfile, platformCredential, options)
             onToggleConnectPhone()
