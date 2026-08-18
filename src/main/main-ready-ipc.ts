@@ -335,6 +335,7 @@ export function registerMainIpc(services: MainServices): void {
       startWeixinInstallQrcode,
       pollWeixinInstall,
       resolveKunConfigPath: resolveKunMcpJsonPath,
+      resolveSettingsConfigPath: () => serviceManager.discovery.settingsPath,
       onKunMcpConfigWritten: async () => {
         const settings = await mainState.store.load()
         queueRuntimeMcpConfigApply(settings)

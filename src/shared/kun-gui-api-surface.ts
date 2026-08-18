@@ -297,6 +297,8 @@ export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & {
     respondRendererRequest: (response: DataMigrationRendererResponse) => Promise<void>
   }
   getSettings: () => Promise<AppSettingsV1>
+  /** Opens the fixed Manager-owned settings document in the system editor. */
+  openSettingsConfigFile: () => Promise<PathOpenResult>
   /** Reveal one protected provider credential after an explicit trusted-workbench action. */
   revealModelProviderCredential: (providerId: string) => Promise<ModelProviderCredentialRevealResult>
   resetUnreadableCredentials: () => Promise<CredentialRecoveryResetResult>

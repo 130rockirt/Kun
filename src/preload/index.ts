@@ -113,6 +113,7 @@ const api = {
     respondRendererRequest: (response) => ipcRenderer.invoke('data-migration:renderer-response', response)
   },
   getSettings: () => ipcRenderer.invoke('settings:get'),
+  openSettingsConfigFile: () => ipcRenderer.invoke('settings:open-config-file'),
   revealModelProviderCredential: (providerId) =>
     ipcRenderer.invoke('model-provider:credential:reveal', { providerId }),
   resetUnreadableCredentials: () => ipcRenderer.invoke('credentials:reset-unreadable'),

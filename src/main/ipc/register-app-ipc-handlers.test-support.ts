@@ -294,6 +294,7 @@ export function registerOptions(overrides: Partial<Parameters<typeof import('./r
     startWeixinInstallQrcode: vi.fn() as never,
     pollWeixinInstall: vi.fn() as never,
     resolveKunConfigPath: () => '/tmp/kun.json',
+    resolveSettingsConfigPath: () => '/tmp/kun-settings.json',
     showTurnCompleteNotification: vi.fn() as never,
     getAppVersion: () => '0.1.0',
     readGuiUpdateState: vi.fn() as never,

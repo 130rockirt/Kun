@@ -188,6 +188,7 @@ describe('provider mutation lifecycle across settings remounts', () => {
     vi.stubGlobal('window', {
       kunGui: {
         runtimeRequest: vi.fn(),
+        openSettingsConfigFile: vi.fn(async () => ({ ok: true })),
         confirmDialog: vi.fn(async () => true)
       },
       addEventListener: vi.fn(),
@@ -206,6 +207,20 @@ describe('provider mutation lifecycle across settings remounts', () => {
     resetSharedProviderMutationCoordinatorForTests()
     vi.unstubAllGlobals()
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false
+  })
+
+  it('opens the fixed settings file and surfaces a shell failure', async () => {
+    const { settings, provider } = providerFixture()
+    const openSettingsConfigFile = vi.fn(async () => ({ ok: false, message: 'editor unavailable' }))
+    Object.assign(window.kunGui, { openSettingsConfigFile })
+
+    const renderer = await mount(contextFor(settings, provider))
+    await flush()
+    expect(rendererText(renderer)).toContain('modelProviderConfigFileHint')
+    await act(async () => findButton(renderer, 'modelProviderOpenConfigFile').props.onClick())
+
+    expect(openSettingsConfigFile).toHaveBeenCalledOnce()
+    expect(rendererText(renderer)).toContain('editor unavailable')
   })
 
   it('hides the delete action for the default API provider', async () => {

@@ -9,6 +9,7 @@ import {
   AlertCircle,
   Check,
   CheckCircle2,
+  FilePenLine,
   ChevronDown,
   Loader2,
   PlugZap,
@@ -55,7 +56,7 @@ import { ProviderConnectionAdvancedPanels } from './settings-section-providers-c
 import { ProviderModelsCapabilitiesPanels } from './settings-section-providers-model-panels'
 
 export function ProvidersSettingsView({ view }: { view: Record<string, any> }): ReactElement {
-  const { t, kun, update, showApiKey, selectControlClass, saveStatus, saveError, retrySave, zh, provider, sharedConnections, sharedConnectionsError, credentialRevealError, setSelectedProviderId, addMenuOpen, addProviderQuery, setAddProviderQuery, subscriptionRegion, setSubscriptionRegion, providerListQuery, setProviderListQuery, activeTab, setActiveTab, workspaceMode, setWorkspaceMode, globalNetworkOpen, setGlobalNetworkOpen, expandedCapabilities, addProviderButtonRef, addProviderDialogRef, pendingImport, setPendingImport, displayProviders, activeRetry, isDraftActive, canEditActiveProviderId, activeKunProviderId, providerProxy, selectSharedModel, updateProviderProxy, setCapabilityExpanded, openAddProviderDialog, closeAddProviderDialog, handleAddProviderDialogKeyDown, handleSubscriptionRegionTabKeyDown, patchProviderProfile, updateModelProvider, updateActiveProviderCredential, toggleActiveProviderCredentialVisibility, updateModelProviderImage, removeModelProviderImage, updateModelProviderSpeech, removeModelProviderSpeech, updateModelProviderTextToSpeech, removeModelProviderTextToSpeech, updateModelProviderMusic, removeModelProviderMusic, updateModelProviderVideo, removeModelProviderVideo, updateModelProviderId, commitProviderDraft, cancelProviderDraft, addModelProvider, removeModelProvider, runProbe, importPickedModels, activeProbe, probeBusy, probeNotice, activeBaseUrlInvalid, activeImageBaseUrlInvalid, activeSpeechBaseUrlInvalid, activeSpeechToggleDisabled, activeTextToSpeechBaseUrlInvalid, activeMusicBaseUrlInvalid, activeVideoBaseUrlInvalid, activeMissingCredential, providerSetupNeedsApiKey, activeProbeBlocked, activeCursorAccount, activeCursorAccountFresh, activeCursorApiKeyUrl, activeSharedConnection, activeCredentialNeedsReplacement, activeApiKeyPlaceholder, activeApiKeyValue, activeCredentialRevealBusy, activeTokenPlanRegions, filteredProviders, grouped, renderProviderButton, planAddEntries, apiAddEntries, showPlanAddGroup, renderAddEntry, pendingImportProvider } = view
+  const { t, kun, update, showApiKey, selectControlClass, saveStatus, saveError, retrySave, zh, provider, sharedConnections, sharedConnectionsError, settingsConfigOpenError, openSettingsConfigFile, credentialRevealError, setSelectedProviderId, addMenuOpen, addProviderQuery, setAddProviderQuery, subscriptionRegion, setSubscriptionRegion, providerListQuery, setProviderListQuery, activeTab, setActiveTab, workspaceMode, setWorkspaceMode, globalNetworkOpen, setGlobalNetworkOpen, expandedCapabilities, addProviderButtonRef, addProviderDialogRef, pendingImport, setPendingImport, displayProviders, activeRetry, isDraftActive, canEditActiveProviderId, activeKunProviderId, providerProxy, selectSharedModel, updateProviderProxy, setCapabilityExpanded, openAddProviderDialog, closeAddProviderDialog, handleAddProviderDialogKeyDown, handleSubscriptionRegionTabKeyDown, patchProviderProfile, updateModelProvider, updateActiveProviderCredential, toggleActiveProviderCredentialVisibility, updateModelProviderImage, removeModelProviderImage, updateModelProviderSpeech, removeModelProviderSpeech, updateModelProviderTextToSpeech, removeModelProviderTextToSpeech, updateModelProviderMusic, removeModelProviderMusic, updateModelProviderVideo, removeModelProviderVideo, updateModelProviderId, commitProviderDraft, cancelProviderDraft, addModelProvider, removeModelProvider, runProbe, importPickedModels, activeProbe, probeBusy, probeNotice, activeBaseUrlInvalid, activeImageBaseUrlInvalid, activeSpeechBaseUrlInvalid, activeSpeechToggleDisabled, activeTextToSpeechBaseUrlInvalid, activeMusicBaseUrlInvalid, activeVideoBaseUrlInvalid, activeMissingCredential, providerSetupNeedsApiKey, activeProbeBlocked, activeCursorAccount, activeCursorAccountFresh, activeCursorApiKeyUrl, activeSharedConnection, activeCredentialNeedsReplacement, activeApiKeyPlaceholder, activeApiKeyValue, activeCredentialRevealBusy, activeTokenPlanRegions, filteredProviders, grouped, renderProviderButton, planAddEntries, apiAddEntries, showPlanAddGroup, renderAddEntry, pendingImportProvider } = view
   const activeProvider = view.activeProvider as ModelProviderProfileV1 | undefined
   const planProviders = view.planProviders as ModelProviderProfileV1[]
   const apiProviders = view.apiProviders as ModelProviderProfileV1[]
@@ -81,8 +82,18 @@ export function ProvidersSettingsView({ view }: { view: Record<string, any> }): 
                   ? `${displayProviders.length} 个已配置`
                   : `${displayProviders.length} configured`}
               </p>
+              <p className="mt-2 text-[11.5px] leading-5 text-ds-faint">{t('modelProviderConfigFileHint')}</p>
             </div>
-            {workspaceMode === 'providers' ? <button
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void openSettingsConfigFile()}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-2.5 text-[12px] font-medium text-ds-ink transition hover:border-accent/35 hover:bg-ds-hover"
+              >
+                <FilePenLine className="h-3.5 w-3.5" strokeWidth={2} />
+                {t('modelProviderOpenConfigFile')}
+              </button>
+              {workspaceMode === 'providers' ? <button
               ref={addProviderButtonRef}
               type="button"
               aria-haspopup="dialog"
@@ -93,6 +104,7 @@ export function ProvidersSettingsView({ view }: { view: Record<string, any> }): 
               <Plus className="h-3.5 w-3.5" strokeWidth={2} />
               {t('modelProviderAdd')}
             </button> : null}
+            </div>
           </div>
           <div className="flex min-w-0 items-center px-4 py-3 sm:px-6">
             <SettingsTabs<ProviderWorkspaceMode>
@@ -244,6 +256,7 @@ export function ProvidersSettingsView({ view }: { view: Record<string, any> }): 
                   value={activeTab}
                   onChange={setActiveTab}
                 />
+                {settingsConfigOpenError ? <InlineNoticeView notice={{ tone: 'error', message: settingsConfigOpenError }} /> : null}
                 {sharedConnectionsError ? (
                   <InlineNoticeView notice={{ tone: 'error', message: sharedConnectionsError }} />
                 ) : null}

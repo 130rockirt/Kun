@@ -2,6 +2,7 @@ import {
   app,
   dialog,
   ipcMain,
+  shell,
   type BrowserWindow,
   type IpcMainInvokeEvent
 } from 'electron'
@@ -101,11 +102,21 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
     getRuntimeSettingsSyncStatus,
     restartRuntime,
     restartKunServe,
+    resolveSettingsConfigPath,
     logError,
     logInfo: logInfoHandler = () => undefined
   } = options
   const withRegistryCredentials = options.withRegistryCredentials ?? (async (settings) => settings)
   const nativeDialogs = options.nativeDialogs ?? new NativeDialogCoordinator()
+  ipcMain.handle('settings:open-config-file', async () => {
+    try {
+      await store.save(await store.load())
+      const message = await shell.openPath(resolveSettingsConfigPath())
+      return message ? { ok: false as const, message } : { ok: true as const }
+    } catch (error) {
+      return { ok: false as const, message: error instanceof Error ? error.message : String(error) }
+    }
+  })
   const showMainWindowMessageBox = (
     parent: BrowserWindow,
     messageBoxOptions: Electron.MessageBoxOptions
