@@ -7,6 +7,7 @@ import {
   loadThreadUsage,
   primaryCacheHitRate,
   retainPendingThreadUsage,
+  summarizeThreadMoney,
   useThreadUsageState,
   type ThreadUsageState,
   type ThreadUsageSummary
@@ -31,6 +32,8 @@ function usageSummary(overrides: Partial<ThreadUsageSummary> = {}): ThreadUsageS
     totalTokens: 120,
     costUsd: null,
     costCny: null,
+    valueEstimateUsd: null,
+    valueEstimateCny: null,
     tokenEconomySavingsTokens: 0,
     turns: 1,
     avgTtftMs: null,
@@ -109,8 +112,19 @@ describe('thread usage formatting', () => {
     expect(formatCost(0.125, 'zh-CN', 0.88)).toBe('￥0.8800')
     expect(formatCost(0.125, 'en')).toBe('$0.1250')
     expect(formatCost(null, 'zh-CN', null)).toBe('-')
-    expect(formatCost(null, 'en', 0.88)).toBe('￥0.8800')
+    expect(formatCost(null, 'en', 0.88)).toBe('$0.1222')
+    expect(formatCost(null, 'ja', 0.88)).toBe('$0.1222')
+    expect(formatCost(0.125, 'zh-CN')).toBe('￥0.9000')
     expect(formatCost(0.00000001, 'en')).toBe('$<0.0001')
+  })
+
+  it('keeps actual API cost and subscription value estimates separate', () => {
+    expect(summarizeThreadMoney({
+      costUsd: 0.125, costCny: null, valueEstimateUsd: 0.5, valueEstimateCny: null, locale: 'en'
+    })).toEqual([{ kind: 'actual', value: '$0.1250' }, { kind: 'estimate', value: '$0.5000' }])
+    expect(summarizeThreadMoney({
+      costUsd: 0.125, costCny: null, valueEstimateUsd: 0.5, valueEstimateCny: null, locale: 'zh'
+    })).toEqual([{ kind: 'actual', value: '￥0.9000' }, { kind: 'estimate', value: '￥3.60' }])
   })
 
   it('prefers the latest LLM cache result, including zero, then falls back to cumulative usage', () => {

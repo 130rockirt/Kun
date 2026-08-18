@@ -1,4 +1,5 @@
 import { emptyUsageSnapshot, type UsageSnapshot } from '../../contracts/usage.js'
+import { isCodexEndpoint } from './compat-model-support.js'
 import { estimateDeepseekCost } from './deepseek-pricing.js'
 import { estimateMiniMaxCost } from './minimax-pricing.js'
 
@@ -8,6 +9,7 @@ export function normalizeCompatUsage(input: {
   providerBaseUrl: string
 }): UsageSnapshot {
   const { usage, model, providerBaseUrl } = input
+  const subscription = isCodexEndpoint(providerBaseUrl)
   const completionTokens = numberValue(usage.completion_tokens ?? usage.eval_count ?? usage.output_tokens)
   const promptDetails = recordValue(usage.prompt_tokens_details)
   const inputDetails = recordValue(usage.input_tokens_details)
@@ -64,6 +66,8 @@ export function normalizeCompatUsage(input: {
     cacheMissTokens: cacheMiss,
     cacheHitRate: cacheTotal === 0 ? null : cacheHit / cacheTotal,
     turns: 1,
+    actualModelId: model,
+    ...(subscription ? { billingKind: 'subscription' as const } : {}),
     costUsd: Number.isFinite(reportedCostUsd) ? reportedCostUsd : estimatedCost?.costUsd,
     costCny: Number.isFinite(reportedCostCny) ? reportedCostCny : estimatedCost?.costCny
   }

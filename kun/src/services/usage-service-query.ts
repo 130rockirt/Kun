@@ -76,6 +76,8 @@ export type UsageCountersTarget = Pick<
   | 'total_tokens'
   | 'cost_usd'
   | 'cost_cny'
+  | 'value_estimate_usd'
+  | 'value_estimate_cny'
   | 'cache_savings_usd'
   | 'cache_savings_cny'
   | 'token_economy_savings_tokens'

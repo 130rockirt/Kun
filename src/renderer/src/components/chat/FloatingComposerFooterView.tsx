@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement } from 'react'
+import { summarizeThreadMoney } from '../../hooks/use-thread-usage'
 import type { FloatingComposerRenderContext } from './floating-composer-view-context'
 
 type AnimatedCacheValueState = {
@@ -58,6 +59,14 @@ export function FloatingComposerFooterView({
   } = context
   if (compact) return null
   const latestCacheHitRate = threadUsage ? primaryCacheHitRate(threadUsage) : null
+  const usageLocale = i18n.resolvedLanguage ?? i18n.language
+  const moneyItems = threadUsage ? summarizeThreadMoney({
+    costUsd: threadUsage.costUsd,
+    costCny: threadUsage.costCny,
+    valueEstimateUsd: threadUsage.valueEstimateUsd,
+    valueEstimateCny: threadUsage.valueEstimateCny,
+    locale: usageLocale
+  }) : []
 
   return (
     <div className="ds-composer-footer ds-no-drag">
@@ -72,7 +81,7 @@ export function FloatingComposerFooterView({
                       : 'sessionUsageDetailsTitle',
                     {
                       tokens: formatCompactNumber(threadUsage.totalTokens),
-                      cost: formatCost(threadUsage.costUsd, i18n.language, threadUsage.costCny),
+                      cost: formatCost(threadUsage.costUsd, usageLocale, threadUsage.costCny),
                       cache: formatPercent(threadUsage.cacheHitRate),
                       latestCache: formatPercent(threadUsage.lastTurnCacheHitRate),
                       cached: formatCompactNumber(threadUsage.cachedTokens),
@@ -96,6 +105,19 @@ export function FloatingComposerFooterView({
                     tokens: formatCompactNumber(threadUsage.totalTokens)
                   })}
                 </span>
+                {moneyItems.map((item) => (
+                  <span
+                    key={item.kind}
+                    className="ds-composer-usage-metric ds-composer-usage-money shrink-0 tabular-nums"
+                    title={item.kind === 'estimate'
+                      ? t('sessionUsageEstimateTitle', { defaultValue: 'Reference API-price estimate, not an actual subscription charge.' })
+                      : t('sessionUsageActualCostTitle', { defaultValue: 'Recorded API cost.' })}
+                  >
+                    {item.kind === 'estimate'
+                      ? t('sessionUsageFooterEstimate', { value: item.value, defaultValue: 'Estimate ≈{{value}}' })
+                      : t('sessionUsageFooterActualCost', { value: item.value, defaultValue: 'Cost {{value}}' })}
+                  </span>
+                ))}
                 {latestCacheHitRate != null ? (
                   <span className="ds-composer-usage-metric ds-composer-usage-cache shrink-0 tabular-nums">
                     <span className="ds-composer-usage-cache-indicator" aria-hidden="true" />

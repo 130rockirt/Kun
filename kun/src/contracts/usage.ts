@@ -18,6 +18,8 @@ export const UsageSnapshotSchema = z.object({
   /** Concrete upstream attribution for routed requests. */
   actualProviderId: z.string().min(1).optional(),
   actualModelId: z.string().min(1).optional(),
+  /** Whether this usage came from a real API bill or a subscription benefit. */
+  billingKind: z.enum(['api', 'subscription']).optional(),
   routePoolId: z.string().min(1).optional(),
   routeTargetId: z.string().min(1).optional(),
   totalTokens: z.number().int().nonnegative(),
@@ -84,6 +86,8 @@ export const DailyUsageCountersSchema = z.object({
   total_tokens: z.number().int().nonnegative(),
   cost_usd: z.number().nonnegative(),
   cost_cny: z.number().nonnegative(),
+  value_estimate_usd: z.number().nonnegative(),
+  value_estimate_cny: z.number().nonnegative(),
   cache_savings_usd: z.number().nonnegative(),
   cache_savings_cny: z.number().nonnegative(),
   token_economy_savings_tokens: z.number().int().nonnegative(),
