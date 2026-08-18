@@ -124,11 +124,38 @@ describe('UsageQuotaPanel', () => {
     expect(output).toContain('1.0k')
     expect(output).toContain('deepseek-v4')
     expect(output).toContain('glm-5.2')
-    expect(output).toContain('custom/qwen3-coder')
+    expect(output).not.toContain('custom/qwen3-coder')
+    expect(output).toContain('Showing 1–5 / 6')
+    expect(output).toContain('1 / 2')
     expect(output).toContain('32.25806451612903%')
     expect(output).not.toContain('glm-4-zero-usage')
     expect(output).not.toContain('0.0%')
     expect(output).not.toContain('"width":"0%"')
+
+    const previousPage = renderer.root.findByProps({ 'aria-label': 'Previous page' })
+    const nextPage = renderer.root.findByProps({ 'aria-label': 'Next page' })
+    expect(previousPage.props.disabled).toBe(true)
+    expect(nextPage.props.disabled).toBe(false)
+
+    await act(async () => {
+      nextPage.props.onClick()
+    })
+
+    const secondPage = JSON.stringify(renderer.toJSON())
+    expect(secondPage).toContain('custom/qwen3-coder')
+    expect(secondPage).not.toContain('deepseek-v4')
+    expect(secondPage).toContain('Showing 6–6 / 6')
+    expect(secondPage).toContain('2 / 2')
+    expect(secondPage).toContain('3.225806451612903%')
+    expect(renderer.root.findByProps({ 'aria-label': 'Next page' }).props.disabled).toBe(true)
+
+    await act(async () => {
+      renderer.root.findByProps({ 'data-usage-range': '7d' }).props.onClick()
+    })
+
+    const resetPage = JSON.stringify(renderer.toJSON())
+    expect(resetPage).toContain('Showing 1–5 / 6')
+    expect(resetPage).not.toContain('custom/qwen3-coder')
 
     await act(async () => {
       renderer.root.findByProps({ id: 'usage-quota-tab-quota' }).props.onClick()

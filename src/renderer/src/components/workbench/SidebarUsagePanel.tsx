@@ -1,4 +1,4 @@
-import { AlertCircle, BarChart3, Loader2 } from 'lucide-react'
+import { AlertCircle, BarChart3, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
@@ -31,6 +31,7 @@ const RANGE_DAYS: Record<UsageRangeKey, number> = {
 
 const RANGE_KEYS: UsageRangeKey[] = ['7d', '30d', '90d', 'all']
 const EMPTY_DAILY_USAGE_BUCKETS: DailyUsageBucket[] = []
+const MODEL_USAGE_PAGE_SIZE = 5
 
 export type SidebarUsagePanelStatus = {
   loading: boolean
@@ -50,6 +51,7 @@ export function SidebarUsagePanel({
 }: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
   const [rangeKey, setRangeKey] = useState<UsageRangeKey>('90d')
+  const [modelPage, setModelPage] = useState(0)
   const [refreshedAt, setRefreshedAt] = useState<string>()
   const threadState = useThreadUsageState(
     activeThreadId,
@@ -104,10 +106,22 @@ export function SidebarUsagePanel({
   // with real usage in the selected range are worth listing, so derive both the
   // visible rows and the percentage denominator from the positive buckets.
   const visibleModelBuckets = modelBuckets.filter((bucket) => bucket.totalTokens > 0)
+  const modelPageCount = Math.max(1, Math.ceil(visibleModelBuckets.length / MODEL_USAGE_PAGE_SIZE))
+  const safeModelPage = Math.min(modelPage, modelPageCount - 1)
+  const modelPageStart = safeModelPage * MODEL_USAGE_PAGE_SIZE
+  const pagedModelBuckets = visibleModelBuckets.slice(
+    modelPageStart,
+    modelPageStart + MODEL_USAGE_PAGE_SIZE
+  )
+  const modelPageEnd = modelPageStart + pagedModelBuckets.length
   const modelTotal = Math.max(
     1,
     visibleModelBuckets.reduce((sum, bucket) => sum + bucket.totalTokens, 0)
   )
+  useEffect(() => {
+    if (modelPage !== safeModelPage) setModelPage(safeModelPage)
+  }, [modelPage, safeModelPage])
+
   const currentUsage = threadState.usage
   const currentCacheHitRate = currentUsage ? primaryCacheHitRate(currentUsage) : null
 
@@ -189,7 +203,10 @@ export function SidebarUsagePanel({
                   type="button"
                   data-usage-range={key}
                   aria-pressed={rangeKey === key}
-                  onClick={() => setRangeKey(key)}
+                  onClick={() => {
+                    setRangeKey(key)
+                    setModelPage(0)
+                  }}
                   className={`min-h-6 rounded-[7px] px-2 transition ${
                     rangeKey === key
                       ? 'bg-accent/10 text-accent shadow-sm dark:bg-accent/20'
@@ -270,8 +287,11 @@ export function SidebarUsagePanel({
               {t('usageHeatmapErrorTitle')}
             </p>
           ) : visibleModelBuckets.length > 0 ? (
-            <div className="mt-2.5 space-y-2.5">
-              {visibleModelBuckets.map((bucket) => {
+            <>
+              <div className={`mt-2.5 space-y-2.5 ${
+                visibleModelBuckets.length > MODEL_USAGE_PAGE_SIZE ? 'min-h-[188px]' : ''
+              }`}>
+                {pagedModelBuckets.map((bucket) => {
                 const percent = Math.max(0, Math.min(100, bucket.totalTokens / modelTotal * 100))
                 return (
                   <div key={bucket.model} className="min-w-0">
@@ -295,7 +315,48 @@ export function SidebarUsagePanel({
                   </div>
                 )
               })}
-            </div>
+              </div>
+              {visibleModelBuckets.length > MODEL_USAGE_PAGE_SIZE ? (
+                <nav
+                  className="mt-3 flex items-center justify-between gap-2 border-t border-ds-border-muted pt-2.5"
+                  aria-label={t('usageQuotaModelPagination')}
+                >
+                  <span className="min-w-0 text-[10px] tabular-nums text-ds-faint">
+                    {t('usageQuotaModelPageRange', {
+                      first: modelPageStart + 1,
+                      last: modelPageEnd,
+                      total: visibleModelBuckets.length
+                    })}
+                  </span>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      disabled={safeModelPage === 0}
+                      aria-label={t('usageQuotaModelPagePrevious')}
+                      onClick={() => setModelPage(safeModelPage - 1)}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-ds-border-muted bg-ds-card text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" strokeWidth={1.9} />
+                    </button>
+                    <span className="min-w-[2.75rem] text-center text-[10.5px] tabular-nums text-ds-muted" aria-live="polite">
+                      {t('usageQuotaModelPageIndicator', {
+                        page: safeModelPage + 1,
+                        total: modelPageCount
+                      })}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={safeModelPage >= modelPageCount - 1}
+                      aria-label={t('usageQuotaModelPageNext')}
+                      onClick={() => setModelPage(safeModelPage + 1)}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-ds-border-muted bg-ds-card text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.9} />
+                    </button>
+                  </div>
+                </nav>
+              ) : null}
+            </>
           ) : (
             <p className="mt-2 rounded-xl bg-ds-surface-subtle px-3 py-5 text-center text-[11px] text-ds-faint">
               {t('usageHeatmapModelsEmpty', { model: '-' })}
