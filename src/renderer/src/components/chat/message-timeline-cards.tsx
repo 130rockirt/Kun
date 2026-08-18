@@ -39,6 +39,7 @@ export function ReviewPlanCard({
   onBuild?: (orchestration: PlanBuildOrchestration) => void
 }): ReactElement {
   const { t } = useTranslation('common')
+  const [hasActiveSchedule, setHasActiveSchedule] = useState(false)
   return (
     <div
       data-review-plan-card
@@ -50,8 +51,13 @@ export function ReviewPlanCard({
           <ListTodo className="h-5 w-5" strokeWidth={1.8} />
         </div>
         <div className="min-w-[220px] flex-1">
-          <div className="text-[12.5px] font-medium text-accent">
-            {t('reviewPlanCardStatus')}
+          <div className="flex flex-wrap items-center gap-2 text-[12.5px] font-medium text-accent">
+            <span>{t('reviewPlanCardStatus')}</span>
+            {hasActiveSchedule ? (
+              <span data-review-plan-scheduled className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-300">
+                {t('planScheduleBuildScheduled')}
+              </span>
+            ) : null}
           </div>
           <div className="mt-0.5 break-words text-[15px] font-medium text-ds-ink">{title}</div>
           <div className="mt-0.5 text-[12px] text-ds-muted">{t('reviewPlanCardHint')}</div>
@@ -74,6 +80,7 @@ export function ReviewPlanCard({
           variant="card"
           planId={planId}
           onBuild={onBuild}
+          onScheduleStateChange={setHasActiveSchedule}
         />
       ) : null}
     </div>

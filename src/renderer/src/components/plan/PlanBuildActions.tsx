@@ -1,31 +1,15 @@
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { CalendarClock, GitBranch, Hammer, Share2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { formatInTimeZone, systemTimeZone, type AppSettingsV1, type ScheduleReasoningEffort, type ScheduledTaskV1 } from '@shared/app-settings'
 import { rendererRuntimeClient } from '../../agent/runtime-client'
-import { confirmDialog } from '../../lib/confirm-dialog'
 import { useChatStore } from '../../store/chat-store'
 import { preparePlanBuild } from '../../plan/prepare-plan-build'
-import { activePlanScheduledTask, planScheduleCountdown, scheduledTaskTime } from '../../plan/plan-scheduled-task'
+import { activePlanScheduledTask, scheduledTaskTime } from '../../plan/plan-scheduled-task'
 import { PlanScheduledBuildDialog } from './PlanScheduledBuildDialog'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { useGuiPlanStore } from '../../plan/plan-store'
 import { usePlanWorktreePreferenceStore } from '../../plan/plan-worktree-preference-store'
-
-const COUNTDOWN_UNITS = {
-  zh: { day: '天', hour: '小时', minute: '分' },
-  en: { day: 'd', hour: 'h', minute: 'm' }
-} as const
-
-function countdownLabel(countdown: ReturnType<typeof planScheduleCountdown>, locale: string): string {
-  if (countdown.kind === 'due') return ''
-  const units = locale.toLowerCase().startsWith('zh') ? COUNTDOWN_UNITS.zh : COUNTDOWN_UNITS.en
-  return [
-    countdown.days ? `${countdown.days} ${units.day}` : '',
-    countdown.hours ? `${countdown.hours} ${units.hour}` : '',
-    countdown.minutes ? `${countdown.minutes} ${units.minute}` : ''
-  ].filter(Boolean).join(' ')
-}
 
 type PlanBuildMode = 'direct' | 'scheduled' | 'graph'
 type ScheduleDraft = {
@@ -42,9 +26,17 @@ type Props = {
   variant: 'panel' | 'card'
   planId?: string
   onBuild: (orchestration: PlanBuildOrchestration) => void
+  onScheduleStateChange?: (hasActiveSchedule: boolean) => void
 }
 
-export function PlanBuildActions({ disabled, graphEnabled, variant, planId, onBuild }: Props): ReactElement {
+export function PlanBuildActions({
+  disabled,
+  graphEnabled,
+  variant,
+  planId,
+  onBuild,
+  onScheduleStateChange
+}: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
   const activePlanId = useGuiPlanStore((state) => state.activePlan?.id)
   const resolvedPlanId = planId || activePlanId || ''
@@ -58,11 +50,17 @@ export function PlanBuildActions({ disabled, graphEnabled, variant, planId, onBu
   const [scheduleError, setScheduleError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [nowMs, setNowMs] = useState(Date.now())
+  const resolvedPlanIdRef = useRef(resolvedPlanId)
+  resolvedPlanIdRef.current = resolvedPlanId
 
   const refreshSchedule = useCallback(async (): Promise<void> => {
-    if (!resolvedPlanId) return
+    if (!resolvedPlanId) {
+      setScheduledTask(null)
+      return
+    }
     try {
       const next = await rendererRuntimeClient.getSettings()
+      if (resolvedPlanIdRef.current !== resolvedPlanId) return
       const task = activePlanScheduledTask(next.schedule.tasks, resolvedPlanId)
       setSettings(next)
       setScheduledTask(task)
@@ -95,15 +93,20 @@ export function PlanBuildActions({ disabled, graphEnabled, variant, planId, onBu
     return () => window.clearInterval(timer)
   }, [scheduledTask])
 
+  const taskTime = scheduledTask ? scheduledTaskTime(scheduledTask) : ''
+  const hasActiveSchedule = Boolean(taskTime && Date.parse(taskTime) > nowMs)
+
+  useEffect(() => {
+    onScheduleStateChange?.(hasActiveSchedule)
+  }, [hasActiveSchedule, onScheduleStateChange])
+
+  useEffect(() => {
+    if (scheduledTask && !hasActiveSchedule) void refreshSchedule()
+  }, [hasActiveSchedule, refreshSchedule, scheduledTask])
+
   useEffect(() => {
     if (!graphEnabled && selectedMode === 'graph') setSelectedMode('direct')
   }, [graphEnabled, selectedMode])
-
-  const taskTime = scheduledTask ? scheduledTaskTime(scheduledTask) : ''
-  const countdown = taskTime ? planScheduleCountdown(taskTime, nowMs) : null
-  useEffect(() => {
-    if (scheduledTask && countdown?.kind === 'due') void refreshSchedule()
-  }, [countdown?.kind, refreshSchedule, scheduledTask])
 
   const openSchedule = async (task: ScheduledTaskV1 | null): Promise<void> => {
     setScheduleError('')
@@ -174,21 +177,6 @@ export function PlanBuildActions({ disabled, graphEnabled, variant, planId, onBu
     }
   }
 
-  const cancelSchedule = async (): Promise<void> => {
-    if (!scheduledTask || !(await confirmDialog(t('planScheduleBuildCancel')))) return
-    setSubmitting(true)
-    try {
-      const result = await window.kunGui.deleteScheduleTask(scheduledTask.id)
-      if (!result.ok) throw new Error(result.message)
-      setScheduledTask(null)
-      await refreshSchedule()
-    } catch (error) {
-      useChatStore.getState().setError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
   const settingsPending = Boolean(resolvedPlanId && !preference?.initialized)
   const buildDisabled = disabled || settingsPending || submitting
   const graphSelected = selectedMode === 'graph'
@@ -248,9 +236,10 @@ export function PlanBuildActions({ disabled, graphEnabled, variant, planId, onBu
     if (mode === 'scheduled' && !scheduledTask) void openSchedule(null)
   }
   const locale = i18n.resolvedLanguage ?? i18n.language
-  const countdownText = countdown?.kind === 'remaining'
-    ? countdownLabel(countdown, locale)
-    : t('planScheduleBuildDueSoon')
+  const taskTimeZone = scheduledTask?.schedule.timeZone || systemTimeZone()
+  const formattedTaskTime = taskTime
+    ? formatInTimeZone(taskTime, taskTimeZone, locale)
+    : ''
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-3">
@@ -267,26 +256,12 @@ export function PlanBuildActions({ disabled, graphEnabled, variant, planId, onBu
           </select>
         </label>
         {worktreeControl}
-        {selectedMode === 'scheduled' ? scheduledTask && taskTime ? (
-          <div data-plan-schedule-status className="ml-auto flex min-w-[300px] items-center gap-3">
-            <div className="min-w-0 flex-1 text-[11.5px] leading-5">
-              <div className="font-medium text-ds-ink"><span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-accent" />{t('planScheduleBuildEnabled')}</div>
-              <div className="text-ds-ink">{t('planScheduleBuildNextRun', { time: formatInTimeZone(taskTime, scheduledTask.schedule.timeZone || systemTimeZone(), locale) })}</div>
-              <div className="text-ds-muted">{t('planScheduleBuildRemaining', { time: countdownText })}</div>
-            </div>
-            <button type="button" disabled={buildDisabled} onClick={() => void openSchedule(scheduledTask)}
-              className="h-9 shrink-0 rounded-xl border border-accent/40 px-3 text-[12px] font-medium text-accent hover:bg-accent-soft disabled:opacity-45">
-              {t('planScheduleBuildModify')}
-            </button>
-            <button type="button" disabled={buildDisabled} onClick={() => void cancelSchedule()}
-              className="shrink-0 text-[12px] text-ds-muted hover:text-red-600 disabled:opacity-45">
-              {t('planScheduleBuildCancel')}
-            </button>
-          </div>
-        ) : (
-          <button type="button" data-plan-build-schedule disabled={buildDisabled} onClick={() => void openSchedule(null)}
-            className="ml-auto inline-flex h-10 items-center gap-1.5 rounded-full bg-accent px-4 text-[13px] font-medium text-white disabled:opacity-45">
-            <CalendarClock className="h-3.5 w-3.5" />{t('planScheduleBuildSet')}
+        {selectedMode === 'scheduled' ? (
+          <button type="button" data-plan-build-schedule disabled={buildDisabled}
+            onClick={() => void openSchedule(scheduledTask)}
+            className="ml-auto inline-flex h-10 items-center gap-1.5 rounded-full bg-accent px-4 text-[13px] font-medium text-white transition hover:brightness-110 disabled:opacity-45">
+            <CalendarClock className="h-3.5 w-3.5" />
+            {t(scheduledTask && taskTime ? 'planScheduleBuildModify' : 'planScheduleBuildSet')}
           </button>
         ) : (
           <button type="button" data-plan-build-start disabled={buildDisabled}
@@ -297,6 +272,25 @@ export function PlanBuildActions({ disabled, graphEnabled, variant, planId, onBu
           </button>
         )}
       </div>
+      {selectedMode === 'scheduled' && scheduledTask && taskTime ? (
+        <div data-plan-schedule-status className="flex min-w-0 items-start gap-4 border-t border-ds-border-muted/80 pt-4">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
+            <CalendarClock className="h-5 w-5" strokeWidth={1.8} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-[12px] font-medium text-ds-muted">{t('planScheduleBuildTimeLabel')}</div>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <span className="break-words text-[15px] font-semibold text-ds-ink">{formattedTaskTime}</span>
+              <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-semibold text-accent">
+                {t('planScheduleBuildOnce')}
+              </span>
+            </div>
+            <div className="mt-1 break-words text-[11.5px] text-ds-muted">
+              {taskTimeZone} · {t('planScheduleBuildAutomaticHint')}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

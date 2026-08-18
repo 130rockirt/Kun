@@ -201,6 +201,41 @@ describe('PlanScheduledBuildDialog i18n', () => {
     })
   })
 
+  it('opens native date and time pickers from the full input click target', async () => {
+    const { renderer } = await renderDialog()
+    const datePicker = vi.fn()
+    const timePicker = vi.fn()
+
+    act(() => {
+      renderer.root.findByProps({ 'data-plan-schedule-date': true }).props.onClick({
+        currentTarget: { showPicker: datePicker }
+      })
+      renderer.root.findByProps({ 'data-plan-schedule-time': true }).props.onClick({
+        currentTarget: { showPicker: timePicker }
+      })
+    })
+
+    expect(datePicker).toHaveBeenCalledTimes(1)
+    expect(timePicker).toHaveBeenCalledTimes(1)
+    await act(async () => renderer.unmount())
+  })
+
+  it('keeps native editing usable when showPicker is unavailable or rejected', async () => {
+    const { renderer, onSubmit } = await renderDialog()
+    const dateInput = renderer.root.findByProps({ 'data-plan-schedule-date': true })
+    const timeInput = renderer.root.findByProps({ 'data-plan-schedule-time': true })
+
+    expect(() => dateInput.props.onClick({ currentTarget: {} })).not.toThrow()
+    expect(() => timeInput.props.onClick({
+      currentTarget: { showPicker: () => { throw new DOMException('Not allowed') } }
+    })).not.toThrow()
+
+    setDateTime(renderer, '2030-06-16', '10:00')
+    clickConfirm(renderer)
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    await act(async () => renderer.unmount())
+  })
+
   it('submits untranslated technical values regardless of language', async () => {
     await i18n.changeLanguage('zh')
     const { renderer, onSubmit } = await renderDialog()

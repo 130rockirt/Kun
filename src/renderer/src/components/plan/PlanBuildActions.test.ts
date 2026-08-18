@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { normalizeAppSettings } from '@shared/app-settings'
+import { normalizeAppSettings, type ScheduledTaskV1 } from '@shared/app-settings'
 import i18n from '../../i18n'
 import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { resetPlanWorktreePreferenceStoreForTests, usePlanWorktreePreferenceStore } from '../../plan/plan-worktree-preference-store'
@@ -22,6 +22,37 @@ function rendererText(renderer: ReactTestRenderer): string {
   return parts.join('|')
 }
 
+function scheduledTask(patch: Partial<ScheduledTaskV1> = {}): ScheduledTaskV1 {
+  return {
+    id: 'schedule-1',
+    title: 'Build plan',
+    enabled: true,
+    prompt: 'Build',
+    workspaceRoot: '/tmp/project',
+    sourcePlanId: 'plan-1',
+    clawChannelId: '',
+    providerId: 'deepseek',
+    model: 'deepseek-v4-flash',
+    reasoningEffort: 'medium',
+    mode: 'agent',
+    schedule: {
+      kind: 'at',
+      everyMinutes: 60,
+      timeOfDay: '09:00',
+      atTime: '2099-08-19T01:00:00.000Z',
+      timeZone: 'Asia/Shanghai'
+    },
+    createdAt: '2099-08-18T00:00:00.000Z',
+    updatedAt: '2099-08-18T00:00:00.000Z',
+    lastRunAt: '',
+    nextRunAt: '2099-08-19T01:00:00.000Z',
+    lastStatus: 'idle',
+    lastMessage: '',
+    lastThreadId: '',
+    ...patch
+  }
+}
+
 async function selectMode(renderer: ReactTestRenderer, mode: string): Promise<void> {
   const select = renderer.root.findByProps({ 'data-plan-build-mode': true })
   await act(async () => {
@@ -35,6 +66,8 @@ describe('PlanBuildActions card i18n', () => {
     vi.stubGlobal('window', {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
+      setInterval,
+      clearInterval,
       kunGui: {}
     })
     vi.stubGlobal('document', {
@@ -89,4 +122,57 @@ describe('PlanBuildActions card i18n', () => {
       })
     }
   )
+
+  it('shows persisted schedule details and changes the action only after confirmation', async () => {
+    await i18n.changeLanguage('zh')
+    const onScheduleStateChange = vi.fn()
+    vi.mocked(rendererRuntimeClient.getSettings).mockResolvedValue(normalizeAppSettings({
+      schedule: { tasks: [scheduledTask()] }
+    } as never))
+
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(PlanBuildActions, {
+        disabled: false,
+        graphEnabled: true,
+        variant: 'card',
+        planId: 'plan-1',
+        onBuild: vi.fn(),
+        onScheduleStateChange
+      }))
+    })
+
+    const text = rendererText(renderer)
+    expect(renderer.root.findAllByProps({ 'data-plan-schedule-status': true })).toHaveLength(1)
+    expect(text).toContain('修改定时')
+    expect(text).toContain('定时时间')
+    expect(text).toContain('仅一次')
+    expect(text).toContain('Asia/Shanghai')
+    expect(text).toContain('将于设定时间自动执行')
+    expect(text).not.toContain('设置定时')
+    expect(onScheduleStateChange).toHaveBeenLastCalledWith(true)
+
+    await act(async () => renderer.unmount())
+  })
+
+  it('does not show schedule details before a task is persisted', async () => {
+    await i18n.changeLanguage('zh')
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(PlanBuildActions, {
+        disabled: false,
+        graphEnabled: true,
+        variant: 'card',
+        planId: 'plan-1',
+        onBuild: vi.fn()
+      }))
+    })
+
+    await selectMode(renderer, 'scheduled')
+    expect(renderer.root.findAllByProps({ 'data-plan-schedule-status': true })).toHaveLength(0)
+    expect(rendererText(renderer)).toContain('设置定时')
+    expect(rendererText(renderer)).not.toContain('定时时间')
+
+    await act(async () => renderer.unmount())
+  })
 })

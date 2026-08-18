@@ -43,6 +43,15 @@ function scheduleInstantError(instant: Extract<ZonedDateTimeResult, { ok: false 
   return key ? t(key) : instant.message
 }
 
+function openNativePicker(input: HTMLInputElement): void {
+  if (typeof input.showPicker !== 'function') return
+  try {
+    input.showPicker()
+  } catch {
+    // Keep the native click and keyboard behavior when Chromium rejects the picker request.
+  }
+}
+
 export function defaultScheduleDraft(nowMs = Date.now()): { date: string; time: string } {
   const next = new Date(Math.floor(nowMs / 60_000) * 60_000 + 60_000)
   const pad = (value: number): string => String(value).padStart(2, '0')
@@ -116,8 +125,8 @@ export function PlanScheduledBuildDialog({ settings, orchestration, initialTask,
           <button type="button" onClick={onClose} aria-label={t('close')} className="rounded-full p-2 text-ds-muted hover:bg-ds-hover"><X className="h-4 w-4" /></button>
         </div>
         <div className="mt-5 grid grid-cols-2 gap-4">
-          <label className="text-[12px] text-ds-muted">{t('planScheduleBuildDate')}<input className={fieldClass} type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
-          <label className="text-[12px] text-ds-muted">{t('planScheduleBuildTime')}<input className={fieldClass} type="time" value={time} onChange={(event) => setTime(event.target.value)} /></label>
+          <label className="text-[12px] text-ds-muted">{t('planScheduleBuildDate')}<input data-plan-schedule-date className={fieldClass} type="date" value={date} onClick={(event) => openNativePicker(event.currentTarget)} onChange={(event) => setDate(event.target.value)} /></label>
+          <label className="text-[12px] text-ds-muted">{t('planScheduleBuildTime')}<input data-plan-schedule-time className={fieldClass} type="time" value={time} onClick={(event) => openNativePicker(event.currentTarget)} onChange={(event) => setTime(event.target.value)} /></label>
           <label className="col-span-2 text-[12px] text-ds-muted">{t('planScheduleBuildTimeZone')}<select className={fieldClass} value={timeZone} onChange={(event) => setTimeZone(event.target.value)}>{supportedTimeZones().map((zone) => <option key={zone}>{zone}</option>)}</select></label>
           <label className="text-[12px] text-ds-muted">{t('scheduleProvider')}<select className={fieldClass} value={providerId} onChange={(event) => changeProvider(event.target.value)}>{providers.map((provider) => <option value={provider.providerId} key={provider.providerId}>{provider.label}</option>)}</select></label>
           <label className="text-[12px] text-ds-muted">{t('scheduleModel')}<select className={fieldClass} value={model} onChange={(event) => changeModel(event.target.value)}>{selectedProvider?.modelIds.map((id) => <option key={id}>{id}</option>)}</select></label>
