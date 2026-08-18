@@ -108,6 +108,11 @@ import {
 import { saveThreadListCache } from './thread-list-cache'
 import { loadMoreThreads as loadMoreThreadsAction, buildWorkspaceCursorByWorkspace } from './chat-store-thread-pagination'
 import {
+  collectRunningWatchTargets,
+  normalizeListedThreadActivity
+} from './chat-store-thread-activity-reconcile'
+import {
+  MAX_WATCHED_COMPLETION_NOTIFICATIONS,
   armBusyWatchdog,
   buildFollowupMessageFromUserInput,
   buildThreadEventSink,
@@ -403,40 +408,7 @@ export function createNavigationWorkspaceActions(
       const watchSnapshot = get().watchTurnCompletion
       const localThreadById = new Map(get().threads.map((thread) => [thread.id, thread]))
       threads = preserveListedDesignProfiles(threads, localThreadById)
-      // A raw summary may already carry terminal latest-turn evidence (for
-      // example a list written by the runtime after the turn settled). Normalize
-      // it to idle here so a stale raw `running` never lingers, and so these
-      // threads do not need a state request at all. When the raw summary carries
-      // no turn evidence at all but the local projection already confirmed a
-      // terminal latest turn (poll/recovery result), keep that confirmed
-      // terminal state instead of rolling it back to a stale raw `running`.
-      threads = threads.map((thread) => {
-        if (
-          !threadLooksRunning(thread) &&
-          thread.status?.trim().toLowerCase() === 'running' &&
-          thread.archived !== true
-        ) {
-          return { ...thread, status: 'idle' }
-        }
-        const localThread = localThreadById.get(thread.id)
-        if (
-          localThread &&
-          !thread.latestTurnStatus &&
-          !thread.latestTurnId &&
-          localThread.latestTurnStatus
-        ) {
-          const localRunning = threadLooksRunning(localThread)
-          return {
-            ...thread,
-            status: thread.archived
-              ? thread.status
-              : localRunning ? 'running' : 'idle',
-            ...(localThread.latestTurnId ? { latestTurnId: localThread.latestTurnId } : {}),
-            ...(localThread.latestTurnStatus ? { latestTurnStatus: localThread.latestTurnStatus } : {})
-          }
-        }
-        return thread
-      })
+      threads = normalizeListedThreadActivity(threads, localThreadById)
       const watchTokenByThread = new Map<string, string>()
       for (const id of Object.keys(watchSnapshot)) {
         const watchKey = currentCompletionWatchToken(id)
@@ -639,6 +611,15 @@ export function createNavigationWorkspaceActions(
           } else {
             clearWatchedCompletionNotification(k)
           }
+        }
+        const addedWatchIds = collectRunningWatchTargets(displayThreads, {
+          activeThreadId: s.activeThreadId,
+          watchTurnCompletion: w,
+          watchLimit: MAX_WATCHED_COMPLETION_NOTIFICATIONS
+        })
+        for (const id of addedWatchIds) {
+          w[id] = true
+          watchTurnCompletionNotification(id, Date.now(), turnCompleteNotificationSource(id, s))
         }
         let u = retainUnreadCompletions(s.unreadThreadIds, validIds)
         for (const id of reconciledCompletedWatchIds) {
