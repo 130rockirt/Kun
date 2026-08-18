@@ -196,27 +196,6 @@ export function SidebarUsagePanel({
                 })}
               </p>
             </div>
-            <div className="inline-flex rounded-[9px] border border-ds-border-muted bg-ds-surface-subtle/70 p-0.5 text-[10px] font-medium text-ds-muted">
-              {RANGE_KEYS.map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  data-usage-range={key}
-                  aria-pressed={rangeKey === key}
-                  onClick={() => {
-                    setRangeKey(key)
-                    setModelPage(0)
-                  }}
-                  className={`min-h-6 rounded-[7px] px-2 transition ${
-                    rangeKey === key
-                      ? 'bg-accent/10 text-accent shadow-sm dark:bg-accent/20'
-                      : 'hover:text-ds-ink'
-                  }`}
-                >
-                  {t(`usageHeatmapRange.${key}`)}
-                </button>
-              ))}
-            </div>
           </div>
 
           {dailyState.error ? (
@@ -274,9 +253,35 @@ export function SidebarUsagePanel({
           aria-label={t('usageQuotaModels')}
           className="rounded-[16px] border border-ds-border-muted bg-ds-card p-3 shadow-sm"
         >
-          <h3 className="text-[12.5px] font-semibold text-ds-ink">
-            {t('usageQuotaModels')}
-          </h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-[12.5px] font-semibold text-ds-ink">
+              {t('usageQuotaModels')}
+            </h3>
+            <div
+              className="inline-flex rounded-[9px] border border-ds-border-muted bg-ds-surface-subtle/70 p-0.5 text-[10px] font-medium text-ds-muted"
+              aria-label={t('usageQuotaModels')}
+            >
+              {RANGE_KEYS.map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  data-usage-range={key}
+                  aria-pressed={rangeKey === key}
+                  onClick={() => {
+                    setRangeKey(key)
+                    setModelPage(0)
+                  }}
+                  className={`min-h-6 rounded-[7px] px-2 transition ${
+                    rangeKey === key
+                      ? 'bg-accent/10 text-accent shadow-sm dark:bg-accent/20'
+                      : 'hover:text-ds-ink'
+                  }`}
+                >
+                  {t(`usageHeatmapRange.${key}`)}
+                </button>
+              ))}
+            </div>
+          </div>
           {modelState.loading && !modelState.usage ? (
             <div className="flex min-h-20 items-center justify-center gap-2 text-[11px] text-ds-faint">
               <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.8} />
