@@ -159,6 +159,31 @@ describe('PlanBuildActions card i18n', () => {
     await act(async () => renderer.unmount())
   })
 
+  it('bypasses cached settings when loading the card schedule', async () => {
+    await i18n.changeLanguage('zh')
+    vi.mocked(rendererRuntimeClient.getSettings).mockImplementation(async (options) =>
+      normalizeAppSettings(options?.forceRefresh
+        ? { schedule: { tasks: [scheduledTask()] } } as never
+        : {} as never))
+
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(PlanBuildActions, {
+        disabled: false,
+        graphEnabled: true,
+        variant: 'card',
+        planId: 'plan-1',
+        onBuild: vi.fn()
+      }))
+    })
+
+    expect(rendererRuntimeClient.getSettings).toHaveBeenCalledWith({ forceRefresh: true })
+    expect(renderer.root.findAllByProps({ 'data-plan-schedule-status': true })).toHaveLength(1)
+    expect(rendererText(renderer)).toContain('已设置定时')
+
+    await act(async () => renderer.unmount())
+  })
+
   it('does not show schedule details before a task is persisted', async () => {
     await i18n.changeLanguage('zh')
     let renderer!: ReactTestRenderer

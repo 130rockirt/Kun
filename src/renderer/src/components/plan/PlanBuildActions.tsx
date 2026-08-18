@@ -64,7 +64,7 @@ export function PlanBuildActions({
       return
     }
     try {
-      const next = await rendererRuntimeClient.getSettings()
+      const next = await rendererRuntimeClient.getSettings({ forceRefresh: true })
       if (resolvedPlanIdRef.current !== resolvedPlanId) return
       const task = activePlanScheduledTask(next.schedule.tasks, resolvedPlanId)
       setSettings(next)
@@ -116,7 +116,7 @@ export function PlanBuildActions({
   const openSchedule = async (task: ScheduledTaskV1 | null): Promise<void> => {
     setScheduleError('')
     try {
-      setSettings(await rendererRuntimeClient.getSettings())
+      setSettings(await rendererRuntimeClient.getSettings({ forceRefresh: true }))
       setScheduledTask(task)
       setDialogOpen(true)
     } catch (error) {
