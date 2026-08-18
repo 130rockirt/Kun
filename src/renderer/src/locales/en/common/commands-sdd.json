@@ -208,6 +208,8 @@
   "sessionUsageFooterEstimate": "Estimate ≈{{value}}",
   "sessionUsageActualCostTitle": "Recorded API/Gateway cost.",
   "sessionUsageEstimateTitle": "Estimated from reference API prices and exchange rate; not an actual subscription charge.",
+  "sessionUsagePriceUnavailable": "Price unavailable",
+  "sessionUsagePriceUnavailableTitle": "The provider did not report a cost and this model has no trusted local price.",
   "sessionUsageFooterCache": "{{cache}} cache",
   "sessionUsageFooterTurns": "{{turns}} turns",
   "sessionUsageFooterTtft": "TTFT {{ttft}}",

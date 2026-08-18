@@ -206,6 +206,8 @@
   "sessionUsageFooterEstimate": "มูลค่าประมาณ ≈{{value}}",
   "sessionUsageActualCostTitle": "ค่าใช้จ่าย API/Gateway ที่บันทึกไว้",
   "sessionUsageEstimateTitle": "ประเมินจากราคาอ้างอิง API ไม่ใช่ยอดเรียกเก็บค่าสมาชิกจริง",
+  "sessionUsagePriceUnavailable": "Price unavailable",
+  "sessionUsagePriceUnavailableTitle": "The provider did not report a cost and this model has no trusted local price.",
   "sessionUsageFooterCache": "แคช {{cache}}",
   "sessionUsageFooterTurns": "{{turns}} รอบ",
   "sessionUsageFooterTtft": "TTFT {{ttft}}",

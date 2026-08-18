@@ -48,7 +48,9 @@ export function estimateCodexSubscriptionValue(input: {
 }
 
 function normalizeModelId(model: string): string {
-  return model.trim().toLowerCase().replace(/\s*\([^)]*\)\s*$/u, '')
+  const withoutLabel = model.trim().toLowerCase().replace(/\s*\([^)]*\)\s*$/u, '')
+  const qualified = /^(codex|openai)\/([^/]+)$/u.exec(withoutLabel)
+  return qualified?.[2] ?? (withoutLabel.includes('/') || withoutLabel.includes(':') ? '' : withoutLabel)
 }
 
 function nonNegative(value: number | undefined): number {

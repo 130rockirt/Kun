@@ -10,8 +10,26 @@ describe('estimateCodexSubscriptionValue', () => {
       cacheWriteTokens: 100_000,
       completionTokens: 100_000
     })
-    expect(value?.valueEstimateUsd).toBeCloseTo(6.1)
-    expect(value?.valueEstimateCny).toBeCloseTo(6.1 * USD_TO_CNY_REFERENCE_RATE)
+    expect(value?.valueEstimateUsd).toBeCloseTo(6.6)
+    expect(value?.valueEstimateCny).toBeCloseTo(6.6 * USD_TO_CNY_REFERENCE_RATE)
+  })
+
+  it('normalizes provider-qualified model ids without fuzzy matching', () => {
+    const value = estimateCodexSubscriptionValue({
+      model: 'openai/gpt-5.6-luna (current)',
+      promptTokens: 1_000_000,
+      completionTokens: 0
+    })
+    expect(value?.valueEstimateUsd).toBeCloseTo(1)
+    expect(estimateCodexSubscriptionValue({
+      model: 'openai/gpt-5.6-luna-preview', promptTokens: 1, completionTokens: 1
+    })).toBeNull()
+    expect(estimateCodexSubscriptionValue({
+      model: 'custom/gpt-5.6-luna', promptTokens: 1, completionTokens: 1
+    })).toBeNull()
+    expect(estimateCodexSubscriptionValue({
+      model: 'custom:gpt-5.6-luna', promptTokens: 1, completionTokens: 1
+    })).toBeNull()
   })
 
   it('does not invent a price for an unknown model', () => {

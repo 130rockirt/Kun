@@ -208,6 +208,8 @@
   "sessionUsageFooterEstimate": "参考估值 ≈{{value}}",
   "sessionUsageActualCostTitle": "已记录的 API/Gateway 实际成本。",
   "sessionUsageEstimateTitle": "按参考 API 价格和参考汇率估算，并非订阅账户的实际扣费。",
+  "sessionUsagePriceUnavailable": "价格不可用",
+  "sessionUsagePriceUnavailableTitle": "Provider 未报告费用，且当前模型没有可信的本地参考价格。",
   "sessionUsageFooterCache": "{{cache}} 缓存",
   "sessionUsageFooterTurns": "{{turns}} 回合",
   "sessionUsageFooterTtft": "TTFT {{ttft}}",

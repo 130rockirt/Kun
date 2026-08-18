@@ -206,6 +206,8 @@
   "sessionUsageFooterEstimate": "अनुमान ≈{{value}}",
   "sessionUsageActualCostTitle": "रिकॉर्ड की गई API/Gateway लागत।",
   "sessionUsageEstimateTitle": "संदर्भ API कीमतों से अनुमानित; यह वास्तविक सदस्यता शुल्क नहीं है।",
+  "sessionUsagePriceUnavailable": "Price unavailable",
+  "sessionUsagePriceUnavailableTitle": "The provider did not report a cost and this model has no trusted local price.",
   "sessionUsageFooterCache": "कैश {{cache}}",
   "sessionUsageFooterTurns": "{{turns}} turns",
   "sessionUsageFooterTtft": "TTFT {{ttft}}",

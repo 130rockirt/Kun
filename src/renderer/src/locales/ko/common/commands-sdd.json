@@ -206,6 +206,8 @@
   "sessionUsageFooterEstimate": "참조 추정 ≈{{value}}",
   "sessionUsageActualCostTitle": "기록된 API/Gateway 비용입니다.",
   "sessionUsageEstimateTitle": "참조 API 가격과 환율로 계산한 추정치이며 실제 구독 청구가 아닙니다.",
+  "sessionUsagePriceUnavailable": "Price unavailable",
+  "sessionUsagePriceUnavailableTitle": "The provider did not report a cost and this model has no trusted local price.",
   "sessionUsageFooterCache": "캐시 {{cache}}",
   "sessionUsageFooterTurns": "{{turns}} 턴",
   "sessionUsageFooterTtft": "TTFT {{ttft}}",

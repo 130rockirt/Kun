@@ -206,6 +206,8 @@
   "sessionUsageFooterEstimate": "Оценка ≈{{value}}",
   "sessionUsageActualCostTitle": "Учтённая стоимость API/Gateway.",
   "sessionUsageEstimateTitle": "Оценка по справочным ценам API; это не фактическое списание подписки.",
+  "sessionUsagePriceUnavailable": "Price unavailable",
+  "sessionUsagePriceUnavailableTitle": "The provider did not report a cost and this model has no trusted local price.",
   "sessionUsageFooterCache": "кеш {{cache}}",
   "sessionUsageFooterTurns": "{{turns}} поворотов",
   "sessionUsageFooterTtft": "TTFT {{ttft}}",

@@ -17,6 +17,8 @@ function translate(key: string, values: Record<string, unknown> = {}): string {
     sessionUsageFooterEstimate: `Estimate ≈${values.value}`,
     sessionUsageActualCostTitle: 'Recorded API/Gateway cost.',
     sessionUsageEstimateTitle: 'Reference estimate.',
+    sessionUsagePriceUnavailable: 'Price unavailable',
+    sessionUsagePriceUnavailableTitle: 'No trusted price.',
     sessionUsageFooterCache: `${values.cache} cache`,
     sessionUsageFooterTurns: `${values.turns} turns`,
     sessionUsageFooterTtft: `TTFT ${values.ttft}`,
@@ -94,7 +96,7 @@ describe('FloatingComposerFooterView', () => {
     expect(html).not.toContain('ds-composer-usage-cost')
   })
 
-  it('shows a gpt-5.6-luna subscription estimate between tokens and cache metrics', () => {
+  it('shows a gpt-5.6-luna subscription estimate after throughput', () => {
     const html = renderFooter({
       i18n: { language: 'zh' },
       t: (key: string, values: Record<string, unknown> = {}) => key === 'sessionUsageFooterEstimate'
@@ -111,8 +113,22 @@ describe('FloatingComposerFooterView', () => {
 
     expect(html).toContain('参考估值 ≈￥0.2160')
     expect(html).toContain('ds-composer-usage-money')
-    expect(html.indexOf('ds-composer-usage-tokens')).toBeLessThan(html.indexOf('ds-composer-usage-money'))
-    expect(html.indexOf('ds-composer-usage-money')).toBeLessThan(html.indexOf('ds-composer-usage-cache'))
+    expect(html.indexOf('ds-composer-usage-tps')).toBeLessThan(html.indexOf('ds-composer-usage-money'))
+  })
+
+  it('shows an explained unavailable state after throughput when no trusted price exists', () => {
+    const html = renderFooter({
+      threadUsage: usageSummary({
+        costUsd: null,
+        costCny: null,
+        valueEstimateUsd: null,
+        valueEstimateCny: null
+      })
+    })
+
+    expect(html).toContain('Price unavailable')
+    expect(html).toContain('title="No trusted price."')
+    expect(html.indexOf('ds-composer-usage-tps')).toBeLessThan(html.indexOf('ds-composer-usage-money'))
   })
 
   it('falls back to cumulative cache telemetry when latest-request telemetry is unavailable', () => {

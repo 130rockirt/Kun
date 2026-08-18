@@ -17,6 +17,8 @@ const counters = {
   total_tokens: 126_482,
   cost_usd: 0.2,
   cost_cny: 1.42,
+  value_estimate_usd: 0,
+  value_estimate_cny: 0,
   cache_savings_usd: 0,
   cache_savings_cny: 0,
   token_economy_savings_tokens: 18_000,

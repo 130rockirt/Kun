@@ -125,6 +125,51 @@ describe('usage cache diagnostics', () => {
     expect(response.buckets[0]?.value_estimate_cny).toBeGreaterThan(0)
   })
 
+  it('restores a reference estimate for legacy known-model records without billing metadata', () => {
+    const response = buildThreadUsageResponse([{
+      threadId: 'thread-legacy-luna',
+      model: 'codex/gpt-5.6-luna',
+      completedAt: '2026-08-18T00:00:00.000Z',
+      usage: {
+        promptTokens: 25_000,
+        completionTokens: 1_000,
+        totalTokens: 26_000,
+        cacheHitRate: null,
+        turns: 1
+      }
+    }])
+
+    expect(response.buckets[0]).toMatchObject({
+      thread_id: 'thread-legacy-luna',
+      cost_usd: 0,
+      cost_cny: 0
+    })
+    expect(response.buckets[0]?.value_estimate_usd).toBeGreaterThan(0)
+    expect(response.buckets[0]?.value_estimate_cny).toBeGreaterThan(0)
+  })
+
+  it('does not infer subscription value from an unqualified API model record', () => {
+    const response = buildThreadUsageResponse([{
+      threadId: 'thread-api-luna',
+      model: 'gpt-5.6-luna',
+      completedAt: '2026-08-18T00:00:00.000Z',
+      usage: {
+        promptTokens: 25_000,
+        completionTokens: 1_000,
+        totalTokens: 26_000,
+        cacheHitRate: null,
+        costUsd: 0.02,
+        turns: 1
+      }
+    }])
+
+    expect(response.buckets[0]).toMatchObject({
+      cost_usd: 0.02,
+      value_estimate_usd: 0,
+      value_estimate_cny: 0
+    })
+  })
+
   it('surfaces the latest-turn cache diagnostic fields in thread usage', () => {
     const records: ThreadUsageRecord[] = [
       {

@@ -53,7 +53,7 @@ export function FloatingComposerFooterView({
 }): ReactElement | null {
   const {
     BarChart3, FloatingComposerUsageHistory, activeThreadId, compact,
-    primaryCacheHitRate, footerHint, formatCompactNumber, formatCost, formatPercent, formatTps,
+    primaryCacheHitRate, footerHint, formatCompactNumber, formatPercent, formatTps,
     formatTtftSeconds, i18n, showUsageHistoryFooter, t, threadUsage, threadUsageState,
     timingThreadUsage
   } = context
@@ -81,7 +81,7 @@ export function FloatingComposerFooterView({
                       : 'sessionUsageDetailsTitle',
                     {
                       tokens: formatCompactNumber(threadUsage.totalTokens),
-                      cost: formatCost(threadUsage.costUsd, usageLocale, threadUsage.costCny),
+                      cost: moneyItems[0]?.value ?? '-',
                       cache: formatPercent(threadUsage.cacheHitRate),
                       latestCache: formatPercent(threadUsage.lastTurnCacheHitRate),
                       cached: formatCompactNumber(threadUsage.cachedTokens),
@@ -102,19 +102,6 @@ export function FloatingComposerFooterView({
                     tokens: formatCompactNumber(threadUsage.totalTokens)
                   })}
                 </span>
-                {moneyItems.map((item) => (
-                  <span
-                    key={item.kind}
-                    className="ds-composer-usage-metric ds-composer-usage-money shrink-0 tabular-nums"
-                    title={item.kind === 'estimate'
-                      ? t('sessionUsageEstimateTitle', { defaultValue: 'Reference API-price estimate, not an actual subscription charge.' })
-                      : t('sessionUsageActualCostTitle', { defaultValue: 'Recorded API cost.' })}
-                  >
-                    {item.kind === 'estimate'
-                      ? t('sessionUsageFooterEstimate', { value: item.value, defaultValue: 'Estimate ≈{{value}}' })
-                      : t('sessionUsageFooterActualCost', { value: item.value, defaultValue: 'Cost {{value}}' })}
-                  </span>
-                ))}
                 {latestCacheHitRate != null ? (
                   <span className="ds-composer-usage-metric ds-composer-usage-cache shrink-0 tabular-nums">
                     <span className="ds-composer-usage-cache-indicator" aria-hidden="true" />
@@ -146,6 +133,28 @@ export function FloatingComposerFooterView({
                     {t('sessionUsageFooterTps', {
                       tps: formatTps(timingThreadUsage.avgTokensPerSecond) ?? '-'
                     })}
+                  </span>
+                ) : null}
+                {moneyItems.length > 0 ? moneyItems.map((item) => (
+                  <span
+                    key={item.kind}
+                    className="ds-composer-usage-metric ds-composer-usage-money shrink-0 tabular-nums"
+                    title={item.kind === 'estimate'
+                      ? t('sessionUsageEstimateTitle', { defaultValue: 'Reference API-price estimate, not an actual subscription charge.' })
+                      : t('sessionUsageActualCostTitle', { defaultValue: 'Recorded API cost.' })}
+                  >
+                    {item.kind === 'estimate'
+                      ? t('sessionUsageFooterEstimate', { value: item.value, defaultValue: 'Estimate ≈{{value}}' })
+                      : t('sessionUsageFooterActualCost', { value: item.value, defaultValue: 'Cost {{value}}' })}
+                  </span>
+                )) : threadUsage.totalTokens > 0 ? (
+                  <span
+                    className="ds-composer-usage-metric ds-composer-usage-money shrink-0"
+                    title={t('sessionUsagePriceUnavailableTitle', {
+                      defaultValue: 'The provider did not report a cost and this model has no trusted local price.'
+                    })}
+                  >
+                    {t('sessionUsagePriceUnavailable', { defaultValue: 'Price unavailable' })}
                   </span>
                 ) : null}
               </>

@@ -57,17 +57,19 @@ export function addUsageCounters(
   target.total_tokens += usage.totalTokens
   target.cost_usd += usage.costUsd ?? 0
   target.cost_cny += usage.costCny ?? 0
-  if (usage.billingKind === 'subscription') {
-    const estimate = estimateCodexSubscriptionValue({
-      model: usage.actualModelId ?? usage.requestedModelId ?? recordModel ?? '',
-      promptTokens: usage.promptTokens,
-      completionTokens: usage.completionTokens,
-      cacheHitTokens: usage.cacheHitTokens,
-      cacheWriteTokens: usage.cacheWriteTokens
-    })
-    target.value_estimate_usd += estimate?.valueEstimateUsd ?? 0
-    target.value_estimate_cny += estimate?.valueEstimateCny ?? 0
-  }
+  const model = usage.actualModelId ?? usage.requestedModelId ?? recordModel ?? ''
+  const legacyCodexRecord = usage.billingKind == null && /^codex\//iu.test(model.trim())
+  const estimate = usage.billingKind === 'subscription' || legacyCodexRecord
+    ? estimateCodexSubscriptionValue({
+        model,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        cacheHitTokens: usage.cacheHitTokens,
+        cacheWriteTokens: usage.cacheWriteTokens
+      })
+    : null
+  target.value_estimate_usd += estimate?.valueEstimateUsd ?? 0
+  target.value_estimate_cny += estimate?.valueEstimateCny ?? 0
   target.cache_savings_usd += usage.cacheSavingsUsd ?? 0
   target.cache_savings_cny += usage.cacheSavingsCny ?? 0
   target.token_economy_savings_tokens += usage.tokenEconomySavingsTokens ?? 0
