@@ -63,6 +63,7 @@ export type BrowserUseNetworkPolicyOptions = {
 export type BrowserUsePolicyProxyOptions = BrowserUseNetworkPolicyOptions & {
   maxConcurrentConnections?: number
   connectTimeoutMs?: number
+  startTimeoutMs?: number
   onPolicyEvent?: (event: {
     outcome: 'allowed' | 'blocked'
     sanitizedUrl: string
@@ -283,12 +284,12 @@ export function classifyBrowserUseAddress(address: string): {
     normalized
   }
 }
+const PROXY_START_TIMEOUT_MS = 10_000
 
 export class BrowserUsePolicyProxy {
   private server?: HttpServer
   private readonly sockets = new Set<Socket>()
   private activeConnections = 0
-
   constructor(private readonly options: BrowserUsePolicyProxyOptions) {}
 
   async start(): Promise<string> {
@@ -313,11 +314,33 @@ export class BrowserUsePolicyProxy {
       socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
     })
     await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => {
-        server.off('error', reject)
-        resolve()
-      })
+      let settled = false
+      const finish = (error?: Error): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        server.off('error', onError)
+        if (error) reject(error)
+        else resolve()
+      }
+      const onError = (error: Error): void => {
+        server.close()
+        for (const socket of this.sockets) socket.destroy()
+        this.sockets.clear()
+        finish(new BrowserUseNetworkPolicyError(
+          'proxy_start_failed', 'Browser Use policy proxy failed to start.'
+        ))
+      }
+      const timer = setTimeout(() => {
+        server.close()
+        for (const socket of this.sockets) socket.destroy()
+        this.sockets.clear()
+        finish(new BrowserUseNetworkPolicyError(
+          'proxy_start_timeout', 'Browser Use policy proxy startup timed out.'
+        ))
+      }, this.options.startTimeoutMs ?? PROXY_START_TIMEOUT_MS)
+      server.once('error', onError)
+      server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => finish())
     })
     this.server = server
     const address = server.address()
