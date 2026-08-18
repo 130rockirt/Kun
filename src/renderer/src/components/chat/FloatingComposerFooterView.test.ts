@@ -73,7 +73,8 @@ describe('FloatingComposerFooterView', () => {
   it('renders separately collapsible session metrics without a visible cost metric', () => {
     const html = renderFooter()
 
-    expect(html).toContain('Session usage')
+    expect(html).not.toContain('Session usage')
+    expect(html).toContain('title="11.9M tokens · $1.25 · 278 turns"')
     expect(html).toContain('ds-composer-usage-tokens')
     expect(html).toContain('ds-composer-usage-cache')
     expect(html).toContain('ds-composer-usage-turns')

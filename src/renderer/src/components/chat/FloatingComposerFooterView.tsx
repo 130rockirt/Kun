@@ -95,9 +95,6 @@ export function FloatingComposerFooterView({
             }
           >
             <BarChart3 className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.9} />
-            <span className="ds-composer-usage-label shrink-0">
-              {t('sessionUsageFooterLabel')}
-            </span>
             {threadUsage ? (
               <>
                 <span className="ds-composer-usage-metric ds-composer-usage-tokens shrink-0 tabular-nums">
