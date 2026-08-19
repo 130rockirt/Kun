@@ -74,7 +74,10 @@ export function ProvidersSettingsView({ view }: { view: Record<string, any> }): 
       ) : null}
       <section className="ds-provider-workspace overflow-hidden rounded-xl border border-ds-border bg-ds-card">
         <header className="grid min-h-[76px] border-b border-ds-border-muted lg:grid-cols-[268px_minmax(0,1fr)]">
-          <div className="flex items-center justify-between gap-3 border-b border-ds-border-muted px-4 py-3 lg:border-b-0 lg:border-r">
+          <div
+            className="grid min-w-0 content-start gap-3 border-b border-ds-border-muted px-4 py-3 lg:border-b-0 lg:border-r"
+            data-testid="provider-workspace-meta"
+          >
             <div className="min-w-0">
               <h2 className="truncate text-[16px] font-semibold text-ds-ink">{t('providers')}</h2>
               <p className="mt-0.5 truncate text-[11.5px] text-ds-faint">
@@ -84,29 +87,34 @@ export function ProvidersSettingsView({ view }: { view: Record<string, any> }): 
               </p>
               <p className="mt-2 text-[11.5px] leading-5 text-ds-faint">{t('modelProviderConfigFileHint')}</p>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
+            <div
+              className="flex min-w-0 flex-wrap items-center gap-2"
+              data-testid="provider-workspace-actions"
+            >
               <button
                 type="button"
                 onClick={() => void openSettingsConfigFile()}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-2.5 text-[12px] font-medium text-ds-ink transition hover:border-accent/35 hover:bg-ds-hover"
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-ds-border bg-ds-card px-2.5 text-[12px] font-medium text-ds-ink transition hover:border-accent/35 hover:bg-ds-hover"
               >
                 <FilePenLine className="h-3.5 w-3.5" strokeWidth={2} />
                 {t('modelProviderOpenConfigFile')}
               </button>
-              {workspaceMode === 'providers' ? <button
-              ref={addProviderButtonRef}
-              type="button"
-              aria-haspopup="dialog"
-              aria-expanded={addMenuOpen}
-              onClick={openAddProviderDialog}
-              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-2.5 text-[12px] font-medium text-ds-ink transition hover:border-accent/35 hover:bg-ds-hover"
-            >
-              <Plus className="h-3.5 w-3.5" strokeWidth={2} />
-              {t('modelProviderAdd')}
-            </button> : null}
+              {workspaceMode === 'providers' ? (
+                <button
+                  ref={addProviderButtonRef}
+                  type="button"
+                  aria-haspopup="dialog"
+                  aria-expanded={addMenuOpen}
+                  onClick={openAddProviderDialog}
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-ds-border bg-ds-card px-2.5 text-[12px] font-medium text-ds-ink transition hover:border-accent/35 hover:bg-ds-hover"
+                >
+                  <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+                  {t('modelProviderAdd')}
+                </button>
+              ) : null}
             </div>
           </div>
-          <div className="flex min-w-0 items-center px-4 py-3 sm:px-6">
+          <div className="flex min-w-0 items-start px-4 py-3 sm:px-6">
             <SettingsTabs<ProviderWorkspaceMode>
               baseId="provider-workspace"
               ariaLabel={t('providers')}
@@ -506,8 +514,8 @@ export function ProvidersSettingsView({ view }: { view: Record<string, any> }): 
         authoritative={pendingImport.authoritative}
         t={t}
         onCancel={() => setPendingImport(null)}
-        onConfirm={(picked) => {
-          importPickedModels(
+        onConfirm={async (picked) => {
+          await importPickedModels(
             pendingImportProvider,
             picked,
             pendingImport.authoritative,

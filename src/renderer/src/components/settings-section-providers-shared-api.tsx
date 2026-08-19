@@ -56,6 +56,8 @@ export type SharedModelConnectionsSnapshot = {
   localModelGateway?: { enabled: boolean }
 }
 
+export const MAX_SHARED_MODEL_CONNECTION_MODELS = 500
+
 export function shouldUseSharedModelConnectionProbe(
   provider: Pick<ModelProviderProfileV1, 'apiKey'>,
   connection: Pick<SharedModelConnection, 'configured' | 'credentialStatus'> | undefined

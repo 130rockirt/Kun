@@ -96,7 +96,7 @@ function render(input: {
     providerError: input.providerError,
     t,
     onCancel: () => undefined,
-    onConfirm: () => undefined
+    onConfirm: async () => undefined
   }))
 }
 

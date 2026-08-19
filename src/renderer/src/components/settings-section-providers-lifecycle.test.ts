@@ -223,6 +223,24 @@ describe('provider mutation lifecycle across settings remounts', () => {
     expect(rendererText(renderer)).toContain('editor unavailable')
   })
 
+  it('keeps provider metadata and wrapping actions in separate header regions', async () => {
+    const { settings, provider } = providerFixture()
+    const renderer = await mount(contextFor(settings, provider))
+    await flush()
+
+    const metadata = renderer.root.findByProps({ 'data-testid': 'provider-workspace-meta' })
+    const actions = renderer.root.findByProps({ 'data-testid': 'provider-workspace-actions' })
+    expect(metadata.props.className).toContain('grid')
+    expect(actions.props.className).toContain('flex-wrap')
+    expect(actions.findAllByType('button')).toHaveLength(2)
+    for (const button of actions.findAllByType('button')) {
+      expect(button.props.className).toContain('whitespace-nowrap')
+    }
+    const tabs = renderer.root.findAllByProps({ role: 'tablist' })
+      .find((tablist) => tablist.props['aria-label'] === 'providers')
+    expect(tabs).toBeTruthy()
+  })
+
   it('hides the delete action for the default API provider', async () => {
     const { settings, provider } = providerFixture('deepseek')
     const runtimeRequest = vi.fn(async (path: string) => {

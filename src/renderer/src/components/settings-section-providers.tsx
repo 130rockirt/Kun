@@ -267,7 +267,8 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
 
   const { selectSharedModel, updateProviderProxy, setCapabilityExpanded, openAddProviderDialog,
     closeAddProviderDialog, handleAddProviderDialogKeyDown, handleSubscriptionRegionTabKeyDown,
-    confirmAction, updateModelProviders, stageSharedProviderCatalog, stageSharedProviderCredential
+    confirmAction, updateModelProviders, stageSharedProviderCatalog, flushSharedProviderCatalog,
+    stageSharedProviderCredential
   } = useProviderSharedActions({ kun, update, provider, setSharedConnections,
     setSharedConnectionsError, pendingSharedProviderDeletions, pendingSharedProviderCatalogs,
     pendingSharedProviderCredentials, catalogMutationTimers, credentialMutationTimers,
@@ -300,7 +301,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
 
   const { runProbe, importPickedModels } = useProviderProbeOperations({ t, setProbeStates,
     setCursorAccounts, sharedConnectionFor, patchProviderProfile, fetchModelsDevCatalogFor,
-    openModelImport })
+    openModelImport, flushSharedProviderCatalog })
 
   const { activeProbe, probeBusy, probeNotice, activeBaseUrlInvalid, activeImageBaseUrlInvalid, activeSpeechBaseUrlInvalid, activeSpeechToggleDisabled, activeTextToSpeechBaseUrlInvalid, activeMusicBaseUrlInvalid, activeVideoBaseUrlInvalid, activeMissingCredential, providerSetupNeedsApiKey, activeProbeBlocked, activeCursorAccount, activeCursorAccountFresh, activeCursorApiKeyUrl, activeSharedConnection, activeCredentialNeedsReplacement, activeApiKeyPlaceholder, activeApiKeyValue, activeCredentialRevealBusy, activeTokenPlanRegions, filteredProviders, planProviders, apiProviders, grouped, renderProviderButton, planAddEntries, apiAddEntries, showPlanAddGroup, renderAddEntry, pendingImportProvider } = buildProvidersViewModel({ t, showApiKey, modelProviders,
     sharedConnections, revealedCredential, credentialRevealPendingProviderId, setSelectedProviderId,
