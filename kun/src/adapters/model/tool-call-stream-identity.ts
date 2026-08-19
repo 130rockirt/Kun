@@ -76,8 +76,11 @@ function migratePendingCallId(
 }
 
 function safeExplicitId(value: string | undefined, pendingCount: number): string | undefined {
-  if (value === undefined) return undefined
-  if (!value || value.length > 512 || [...value].some((character) => {
+  // OpenAI-compatible gateways occasionally serialize an omitted delta id as
+  // an empty string. Treat only that form as absent so the stable index (or
+  // sole pending call) can retain the established identity.
+  if (value === undefined || value === '') return undefined
+  if (value.length > 512 || [...value].some((character) => {
     const code = character.charCodeAt(0)
     return code <= 0x1f || code === 0x7f
   })) {

@@ -335,6 +335,22 @@ it('keeps bash arguments together when the provider supplies the call id late', 
     }])
   })
 
+  it('treats an empty chat fragment id as omitted and keeps the indexed tool call', async () => {
+    const frames = [
+      chatToolDelta({ index: 0, id: 'call_grep', name: 'grep', args: '{"pattern":"plan' }),
+      chatToolDelta({ index: 0, id: '', args: 'Worktree"}' }),
+      chatFinish('tool_calls')
+    ]
+    const chunks = await drain(makeClient(streamingFetch(frames)).stream(request()))
+    expect(toolCallCompletes(chunks)).toEqual([{
+      kind: 'tool_call_complete',
+      callId: 'call_grep',
+      toolName: 'grep',
+      arguments: { pattern: 'planWorktree' }
+    }])
+    expect(completed(chunks).stopReason).toBe('tool_calls')
+  })
+
   it('merges an anonymous chat fragment into the only pending tool call', async () => {
     const frames = [
       chatToolDelta({ index: 0, id: 'call_bash', name: 'bash', args: '{"command":"echo ' }),
