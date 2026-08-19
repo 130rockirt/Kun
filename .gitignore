@@ -8,6 +8,13 @@ resources/bundled-extensions/
 *.log
 .DS_Store
 
+### Agent benchmark runs
+artifacts/benchmarks/
+benchmarks/agent-evals/.venv/
+benchmarks/agent-evals/swebench/.venv/
+__pycache__/
+*.pyc
+
 ### Local environment
 .env
 .env.*

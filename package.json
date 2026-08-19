@@ -63,6 +63,7 @@
     "test": "npm run test:extensions && npm run test:kun && vitest run",
     "test:kun": "npm --prefix kun test",
     "test:graph:platform": "node ./scripts/run-graph-platform-tests.mjs",
+    "benchmark:agents": "uv run --project benchmarks/agent-evals kun-bench",
     "test:watch": "vitest",
     "dist": "npm run check:windows-installer-syntax && npm run build && npx --yes electron-builder@26.8.1 --config electron-builder.config.cjs --publish never",
     "dist:dv": "node ./scripts/run-with-kun-flavor.cjs development npm run dist:dv:inner",
