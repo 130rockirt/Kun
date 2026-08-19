@@ -4,6 +4,7 @@ import {
   GeminiCodeAssistModelClient,
   modelCapabilitiesForModel,
   modelCapabilitiesForProviderModel,
+  safeProviderReasoningCapability,
   modelContextProfilesFromConfig,
   type ServeProviderConfig,
   type ModelClient,
@@ -239,7 +240,7 @@ export function providerScopedModelCapabilities(
       model
     })
     if (explicit) {
-      const reasoning = shouldUpgradeProviderReasoning(
+      const requestedReasoning = shouldUpgradeProviderReasoning(
         providerId,
         provider?.endpointFormat,
         model,
@@ -248,10 +249,17 @@ export function providerScopedModelCapabilities(
       )
         ? providerFallback.reasoning
         : explicit.reasoning ?? providerFallback.reasoning
+      const reasoning = safeProviderReasoningCapability({
+        providerId,
+        presetSource: provider?.presetSource ?? providerId,
+        baseUrl: provider?.baseUrl,
+        kind: provider?.kind,
+        model
+      }, requestedReasoning)
       return {
         ...explicit,
         id: model,
-        ...(reasoning ? { reasoning } : {}),
+        ...((reasoning ?? explicit.reasoning) ? { reasoning: reasoning ?? explicit.reasoning } : {}),
         ...(explicit.serviceTiers ?? providerFallback.serviceTiers
           ? { serviceTiers: [...(explicit.serviceTiers ?? providerFallback.serviceTiers ?? [])] }
           : {})
@@ -355,7 +363,10 @@ export function modelConnectionSeedsForOptions(
       id: activeConnectionId,
       name: activeConnectionId === 'default' ? 'Default provider' : activeConnectionId,
       ...(activeProvider?.presetSource
-        ? { presetSource: activeProvider.presetSource }
+        ? {
+            presetSource: activeProvider.presetSource,
+            ...(activeProvider.presetMode ? { presetMode: activeProvider.presetMode } : {})
+          }
         : activeConnectionId === 'default' ? {} : { presetSource: activeConnectionId }),
       kind: activeKind,
       authType: activeProvider?.authType ?? modelConnectionAuthType(activeKind, options.apiKey),
@@ -387,7 +398,12 @@ export function modelConnectionSeedsForOptions(
         expectedRevision: 0,
         id: providerId,
         name: providerId,
-        ...(provider.presetSource ? { presetSource: provider.presetSource } : {}),
+        ...(provider.presetSource
+          ? {
+              presetSource: provider.presetSource,
+              ...(provider.presetMode ? { presetMode: provider.presetMode } : {})
+            }
+          : {}),
         kind: provider.kind ?? 'http',
         authType: provider.authType ?? modelConnectionAuthType(provider.kind ?? 'http', provider.apiKey),
         ...((provider.kind ?? 'http') === 'http'

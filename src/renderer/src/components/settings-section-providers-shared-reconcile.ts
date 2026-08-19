@@ -7,7 +7,8 @@ import {
   DEFAULT_MODEL_PROVIDER_ID,
   MAX_MODEL_CONTEXT_WINDOW_TOKENS,
   MAX_MODEL_OUTPUT_TOKENS,
-  defaultModelRequestRetrySettings
+  defaultModelRequestRetrySettings,
+  resolveModelProviderPresetSource
 } from '@shared/app-settings'
 import {
   modelProviderRequiresApiKey
@@ -292,6 +293,7 @@ async function connectSharedModelConnectionWithCatalog(
     expectedRevision: snapshot.revision,
     id: provider.id,
     name: provider.name.trim() || provider.id,
+    ...registryPresetFields(provider),
     kind: provider.kind ?? 'http',
     authType: isSubscriptionProvider(provider) ? 'subscription' : 'api-key',
     ...(baseUrlOptional ? {} : { baseUrl: provider.baseUrl }),
@@ -410,6 +412,7 @@ export async function connectOrReplaceSharedModelConnectionCredential(
         expectedRevision: snapshot.revision,
         id: provider.id,
         name: provider.name.trim() || provider.id,
+        ...registryPresetFields(provider),
         kind: provider.kind ?? 'http',
         authType: isSubscriptionProvider(provider) ? 'subscription' : 'api-key',
         ...(baseUrlOptional ? {} : { baseUrl: provider.baseUrl }),
@@ -427,6 +430,13 @@ export async function connectOrReplaceSharedModelConnectionCredential(
     }
   }
   return snapshot
+}
+
+export function registryPresetFields(
+  provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>
+): { presetSource?: string; presetMode?: 'api' | 'token-plan' } {
+  const source = resolveModelProviderPresetSource(provider)
+  return source ? { presetSource: source.preset.id, presetMode: source.mode } : {}
 }
 
 export function createSharedModelMutationQueue(): <T>(operation: () => Promise<T>) => Promise<T> {
@@ -516,6 +526,9 @@ export function projectSharedModelConnections(
   const projectedProviders = visibleConnections.map((connection): ModelProviderProfileV1 => {
     const existing = existingById.get(connection.id)
     const pendingCatalog = pendingCatalogs.get(connection.id)
+    const presetSource = connection.presetSource
+      ? { presetId: connection.presetSource, mode: connection.presetMode ?? 'api' as const }
+      : existing?.presetSource
     return {
       ...(existing ?? {
         id: connection.id,
@@ -529,6 +542,7 @@ export function projectSharedModelConnections(
       }),
       id: connection.id,
       name: pendingNames.get(connection.id)?.localName ?? connection.name,
+      ...(presetSource ? { presetSource } : {}),
       // Canonical connections expose only configured state. Secret material
       // stays in the protected Registry and the in-memory edit generation.
       apiKey: '',

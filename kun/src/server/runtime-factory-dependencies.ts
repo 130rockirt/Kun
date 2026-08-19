@@ -120,6 +120,7 @@ export {
   DEFAULT_CONTEXT_THRESHOLDS,
   modelCapabilitiesForModel,
   modelCapabilitiesForProviderModel,
+  safeProviderReasoningCapability,
   modelContextProfilesFromConfig,
   contextThresholdsForModel,
   type ContextCompactionConfig,

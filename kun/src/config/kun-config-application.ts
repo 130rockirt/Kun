@@ -168,6 +168,8 @@ export const ServeProviderConfigSchema = z
     credentialSourceId: z.string().min(1).max(256).optional(),
     /** Stable built-in preset identity; independent from a multi-account id. */
     presetSource: z.string().min(1).max(128).optional(),
+    /** Preserves the base or token-plan channel of the preset source. */
+    presetMode: z.enum(['api', 'token-plan']).optional(),
     /** Secret-free authentication family used for capability gating. */
     authType: z.enum(['api-key', 'oauth', 'subscription']).optional(),
     baseUrl: z.string().min(1).optional(),

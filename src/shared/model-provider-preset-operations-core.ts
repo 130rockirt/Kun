@@ -171,9 +171,16 @@ export function resolveModelProviderPresetSource(
   }
   const direct = getModelProviderPreset(profile.id)
   if (direct) return { preset: direct, mode: 'api' }
-  if (!profile.id.endsWith(TOKEN_PLAN_PROVIDER_ID_SUFFIX)) return null
-  const preset = getModelProviderPreset(profile.id.slice(0, -TOKEN_PLAN_PROVIDER_ID_SUFFIX.length))
-  return preset?.tokenPlan ? { preset, mode: 'token-plan' } : null
+  const numbered = /^(.*)-(?:[2-9]|[1-9][0-9]+)$/u.exec(profile.id)?.[1]
+  const candidateId = numbered ?? profile.id
+  const tokenPlan = candidateId.endsWith(TOKEN_PLAN_PROVIDER_ID_SUFFIX)
+  const presetId = tokenPlan
+    ? candidateId.slice(0, -TOKEN_PLAN_PROVIDER_ID_SUFFIX.length)
+    : candidateId
+  const preset = getModelProviderPreset(presetId)
+  return preset && (!tokenPlan || preset.tokenPlan)
+    ? { preset, mode: tokenPlan ? 'token-plan' : 'api' }
+    : null
 }
 
 export function isMultiAccountProviderPreset(
