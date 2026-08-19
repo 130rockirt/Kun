@@ -8,7 +8,7 @@ import { GeneratedFilesPanel, MessageBubble } from './message-timeline-bubbles'
 import { PresentationFilesPanel } from './PresentationFilesPanel'
 import { presentationFileArtifactsForTurn } from './presentation-file-artifacts'
 import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
-import { ProcessSectionRow, groupProcessSections, summarizeProcessWork, summarizeToolBlock } from './message-timeline-process'
+import { ProcessSectionRow, groupProcessSections, summarizeToolBlock } from './message-timeline-process'
 import { ComponentPrototypeCard } from './ComponentPrototypeCard'
 import { ConversationVisualizationCard } from './ConversationVisualizationCard'
 import type { OpenChildThreadHandler } from './SubagentCallCard'
@@ -134,10 +134,6 @@ export function ConversationTurn({
     [turn.blocks, filePreviewWorkspaceRoot, isProcessing]
   )
   const workProcessBlocks = processBlocks
-  const workSummary = useMemo(
-    () => summarizeProcessWork(workProcessBlocks, t),
-    [t, workProcessBlocks]
-  )
   const workExpanded = workExpandedOverride ?? false
   const reviewBlocks = useMemo(
     () => turn.blocks.filter((block) => block.kind === 'review'),
@@ -251,10 +247,7 @@ export function ConversationTurn({
         <div className="flex flex-col gap-1 pb-2">
           <WorkMetaRow
             processing={isProcessing}
-            stepCount={workProcessBlocks.length}
             durationMs={durationMs}
-            reasoningDurationMs={reasoningDurationMs}
-            summary={workSummary}
             expanded={isProcessing || workExpanded}
             collapsible={!isProcessing && workProcessBlocks.length > 0}
             onToggle={() => setWorkExpandedOverride((value) => !(value ?? false))}
