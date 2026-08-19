@@ -362,6 +362,9 @@ export function ProviderModelImportDialog({
                           {entry.catalog?.inputModalities.includes('image') ? (
                             <ModelBadge tone="accent">{t('providerModelImportVisionBadge')}</ModelBadge>
                           ) : null}
+                          {entry.catalog?.inputModalities.includes('audio') ? (
+                            <ModelBadge tone="accent">{t('providerModelImportAudioInputBadge')}</ModelBadge>
+                          ) : null}
                           {entry.catalog?.toolCalling === true ? (
                             <ModelBadge tone="accent">{t('providerModelImportToolsBadge')}</ModelBadge>
                           ) : entry.catalog?.toolCalling === false ? (

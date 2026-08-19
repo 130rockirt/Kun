@@ -118,6 +118,7 @@
   "providerModelImportContextBadge": "上下文 {{value}}",
   "providerModelImportOutputBadge": "输出 {{value}}",
   "providerModelImportVisionBadge": "图片识别",
+  "providerModelImportAudioInputBadge": "音频输入",
   "providerModelImportToolsBadge": "工具调用",
   "providerModelImportNoToolsBadge": "不支持工具",
   "providerModelImportReasoningBadge": "推理",

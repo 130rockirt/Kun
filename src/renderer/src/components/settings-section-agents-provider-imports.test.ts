@@ -64,8 +64,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         {
           id: 'model-a',
           name: 'Model A',
-          description: 'Vision-capable catalog metadata',
-          inputModalities: ['text', 'image'],
+          description: 'Multimodal catalog metadata',
+          inputModalities: ['text', 'image', 'audio'],
           outputModalities: ['text'],
           contextWindowTokens: 128_000,
           maxOutputTokens: 16_000,
@@ -434,6 +434,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       const updatedTarget = updatedProviders.find((item) => item.id === target.id)
       expect(updatedTarget?.models).toEqual(['model-a', 'model-b'])
       expect(updatedTarget?.models).not.toContain('catalog-only')
+      expect(updatedTarget?.speech).toBeUndefined()
       expect(updatedTarget?.modelProfiles['model-a']).toEqual(expect.objectContaining({
         contextWindowTokens: 128_000,
         maxOutputTokens: 16_000,

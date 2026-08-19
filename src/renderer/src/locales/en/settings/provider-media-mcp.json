@@ -118,6 +118,7 @@
   "providerModelImportContextBadge": "Context {{value}}",
   "providerModelImportOutputBadge": "Output {{value}}",
   "providerModelImportVisionBadge": "Vision",
+  "providerModelImportAudioInputBadge": "Audio input",
   "providerModelImportToolsBadge": "Tools",
   "providerModelImportNoToolsBadge": "No tools",
   "providerModelImportReasoningBadge": "Reasoning",
