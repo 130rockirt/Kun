@@ -1,4 +1,8 @@
 import type { ChatBlock, ThreadDeltaEvent, ToolBlock, ToolEventPayload } from '../agent/types'
+import {
+  dedupeTimelineTextBlocks,
+  isSyntheticTimelineTextBlock
+} from '../agent/timeline-text-blocks'
 import type { ChatState } from './chat-store-types'
 
 export function monotonicToolStatus(
@@ -344,13 +348,34 @@ export function isUserInputInterruptError(message: string | undefined): boolean 
 }
 
 export function upsertTimelineBlock(blocks: ChatBlock[], incoming: ChatBlock): ChatBlock[] {
-  const index = blocks.findIndex(
-    (block) => block.kind === incoming.kind && block.id === incoming.id
+  const canonicalBlocks = dedupeTimelineTextBlocks(blocks)
+  const incomingKind = incoming.kind
+  const incomingTurnId = incoming.turnId
+  const incomingText = incoming.kind === 'assistant' || incoming.kind === 'reasoning'
+    ? incoming.text
+    : ''
+  const incomingIsTextBlock = incoming.kind === 'assistant' || incoming.kind === 'reasoning'
+  const incomingIsSynthetic = isSyntheticTimelineTextBlock(incoming)
+  const index = canonicalBlocks.findIndex(
+    (block) => block.kind === incomingKind && block.id === incoming.id
   )
-  if (index < 0) return [...blocks, incoming]
-  const current = blocks[index]
-  if (sameStableTimelineBlock(current, incoming)) return blocks
-  const next = [...blocks]
+  if (index < 0) {
+    const syntheticIndex = !incomingIsTextBlock || incomingIsSynthetic
+      ? -1
+      : canonicalBlocks.findIndex((block) => (
+          isSyntheticTimelineTextBlock(block) &&
+          block.kind === incomingKind &&
+          block.turnId === incomingTurnId &&
+          block.text === incomingText
+        ))
+    if (syntheticIndex < 0) return [...canonicalBlocks, incoming]
+    const next = [...canonicalBlocks]
+    next[syntheticIndex] = incoming
+    return next
+  }
+  const current = canonicalBlocks[index]
+  if (sameStableTimelineBlock(current, incoming)) return canonicalBlocks
+  const next = [...canonicalBlocks]
   next[index] = incoming
   return next
 }
@@ -371,10 +396,11 @@ function sameStableTimelineBlock(left: ChatBlock, right: ChatBlock): boolean {
 }
 
 export function reconcileSnapshotBlocks(current: ChatBlock[], persisted: ChatBlock[]): ChatBlock[] {
+  const canonicalPersisted = dedupeTimelineTextBlocks(persisted)
   const currentByIdentity = new Map(
     current.map((block) => [`${block.kind}:${block.id}`, block] as const)
   )
-  return persisted.map((block) => {
+  return canonicalPersisted.map((block) => {
     const existing = currentByIdentity.get(`${block.kind}:${block.id}`)
     return existing && sameStableTimelineBlock(existing, block) ? existing : block
   })
@@ -386,7 +412,7 @@ export function reconcileSnapshotTurn(
   turnId: string,
   userBlockId?: string | null
 ): ChatBlock[] {
-  const persistedTurn = persisted.filter(
+  const persistedTurn = dedupeTimelineTextBlocks(persisted).filter(
     (block) => block.turnId === turnId || Boolean(userBlockId && block.id === userBlockId)
   )
   if (persistedTurn.length === 0) return current

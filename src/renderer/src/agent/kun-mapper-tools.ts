@@ -29,6 +29,7 @@ import type {
 } from './types'
 import { normalizeKunRuntimeEvent, type KunEventNormalizerDeps } from './kun-event-normalizer'
 import type { RuntimeProjectionAction } from './runtime-projection-actions'
+import { dedupeTimelineTextBlocks } from './timeline-text-blocks'
 import { redactSecrets, redactSecretText } from '@shared/secret-redaction'
 import { applyClientUserMessageSourceMeta } from '@shared/background-shell-notice'
 import {
@@ -382,5 +383,5 @@ export function mergeChatBlocks(blocks: ChatBlock[]): ChatBlock[] {
       meta: { ...(existing.meta ?? {}), ...(block.meta ?? {}) }
     }
   }
-  return merged
+  return dedupeTimelineTextBlocks(merged)
 }

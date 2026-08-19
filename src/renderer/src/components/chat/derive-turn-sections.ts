@@ -1,4 +1,5 @@
 import type { ChatBlock, ToolBlock } from '../../agent/types'
+import { dedupeTimelineTextBlocks } from '../../agent/timeline-text-blocks'
 import {
   extractDiffFilePath,
   extractUnifiedDiffText,
@@ -154,6 +155,7 @@ export function deriveTurnSections({
   liveContent,
   workspaceRoot
 }: DeriveTurnSectionsInput): TurnSections {
+  const timelineBlocks = dedupeTimelineTextBlocks(turn.blocks)
   const processBlocks: ChatBlock[] = []
   const processTimelineBlocks: ChatBlock[] = []
   const assistantContentBlocks: TurnAssistantBlock[] = []
@@ -162,9 +164,9 @@ export function deriveTurnSections({
   const runtimeErrorsAfterFinalContent: TurnRuntimeErrorBlock[] = []
   const finalAssistantContentIndex = isProcessing
     ? -1
-    : findLastAssistantContentIndex(turn.blocks)
+    : findLastAssistantContentIndex(timelineBlocks)
 
-  for (const [index, block] of turn.blocks.entries()) {
+  for (const [index, block] of timelineBlocks.entries()) {
     if (block.kind === 'system' && block.runtimeError === true) {
       const runtimeErrorBlock = block as TurnRuntimeErrorBlock
       runtimeErrorBlocks.push(runtimeErrorBlock)
