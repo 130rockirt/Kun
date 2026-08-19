@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -20,7 +19,9 @@ from .artifacts import (
 from .builder import build_archive, build_command
 from .config import ModelSettings, RunOptions, load_preset
 from .constants import DEFAULT_ARTIFACT_ROOT, REPOSITORY_ROOT
+from .environment import load_benchmark_environment
 from .framework_results import ingest_framework_results
+from .host import detect_host, normalize_host_path
 from .preflight import docker_available, run_preflight
 from .suites import (
     build_suite_run,
@@ -43,6 +44,7 @@ def parser() -> argparse.ArgumentParser:
     resume = subcommands.add_parser("resume")
     resume.add_argument("--run-id", required=True)
     resume.add_argument("--artifact-root", type=Path, default=DEFAULT_ARTIFACT_ROOT)
+    resume.add_argument("--env-file", type=Path)
     for name in ("validate", "summarize"):
         command = subcommands.add_parser(name)
         command.add_argument("--run-id", required=True)
@@ -59,6 +61,7 @@ def add_run_options(command: argparse.ArgumentParser) -> None:
     command.add_argument("--preset", choices=("smoke", "pilot", "full"), default="smoke")
     command.add_argument("--run-id")
     command.add_argument("--kun-archive", type=Path)
+    command.add_argument("--env-file", type=Path)
     command.add_argument("--artifact-root", type=Path, default=DEFAULT_ARTIFACT_ROOT)
     command.add_argument("--dry-run", action="store_true")
 
@@ -86,19 +89,22 @@ def main(argv: list[str] | None = None) -> int:
 
 def run_options(args: argparse.Namespace) -> RunOptions:
     run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    host = detect_host(REPOSITORY_ROOT)
     return RunOptions(
         suite=args.suite,
         preset=args.preset,
         run_id=run_id,
         dry_run=args.dry_run,
-        kun_archive=args.kun_archive,
-        artifact_root=args.artifact_root.expanduser().resolve(),
+        kun_archive=normalize_host_path(args.kun_archive, host),
+        env_file=normalize_host_path(args.env_file, host),
+        artifact_root=normalize_host_path(args.artifact_root, host),
     )
 
 
 def preflight_command(args: argparse.Namespace) -> int:
     options = run_options(args)
-    report = run_preflight(options, env=dict(os.environ), repository_root=REPOSITORY_ROOT)
+    environment = load_benchmark_environment(options.env_file, host=detect_host(REPOSITORY_ROOT))
+    report = run_preflight(options, env=environment, repository_root=REPOSITORY_ROOT)
     print(report.model_dump_json(indent=2))
     return 0 if report.ok else 1
 
@@ -121,11 +127,12 @@ def build_command_cli(args: argparse.Namespace) -> int:
 def run_command(args: argparse.Namespace) -> int:
     options = run_options(args)
     preset = load_preset(options.preset)
-    report = run_preflight(options, env=dict(os.environ), repository_root=REPOSITORY_ROOT)
+    environment = load_benchmark_environment(options.env_file, host=detect_host(REPOSITORY_ROOT))
+    report = run_preflight(options, env=environment, repository_root=REPOSITORY_ROOT)
     if not report.ok:
         print(report.model_dump_json(indent=2), file=sys.stderr)
         return 1
-    model = placeholder_model() if options.dry_run else ModelSettings.from_environment()
+    model = placeholder_model() if options.dry_run else ModelSettings.from_environment(environment)
     layout = RunLayout(options.artifact_root / options.run_id)
     if layout.manifest.exists():
         raise RuntimeError(f"Run already exists: {layout.root}; use resume")
@@ -202,7 +209,12 @@ def run_command(args: argparse.Namespace) -> int:
 
 
 def resume_command(args: argparse.Namespace) -> int:
-    layout = RunLayout(args.artifact_root.expanduser().resolve() / args.run_id)
+    host = detect_host(REPOSITORY_ROOT)
+    artifact_root = normalize_host_path(args.artifact_root, host)
+    env_file = normalize_host_path(args.env_file, host)
+    if artifact_root is None:
+        raise ValueError("Artifact root is required")
+    layout = RunLayout(artifact_root / args.run_id)
     manifest = load_manifest(layout)
     preset_name = str(manifest.get("preset", {}).get("name", ""))
     preset = load_preset(preset_name)
@@ -215,7 +227,8 @@ def resume_command(args: argparse.Namespace) -> int:
         raise RuntimeError("Cannot resume: manifest has no selected suites")
     if manifest.get("dry_run") is True:
         return summarize_layout(layout)
-    model = ModelSettings.from_environment()
+    environment = load_benchmark_environment(env_file, host=host)
+    model = ModelSettings.from_environment(environment)
     if manifest.get("model") != model.public_dict():
         raise RuntimeError("Cannot resume: public model configuration drifted")
     archive_record = manifest.get("kun_archive")

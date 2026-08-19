@@ -91,6 +91,7 @@ class RunOptions(BaseModel):
     run_id: str
     dry_run: bool = False
     kun_archive: Path | None = None
+    env_file: Path | None = None
     artifact_root: Path
     agent_timeout_seconds: int = Field(default=DEFAULT_AGENT_TIMEOUT_SECONDS, gt=0)
 
