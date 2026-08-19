@@ -423,6 +423,9 @@ export function defaultKunLabSettings(): KunLabSettingsV1 {
       providerId: '',
       fast: false,
       imageFirst: true
+    },
+    conversationVisualization: {
+      enabled: false
     }
   }
 }
@@ -441,7 +444,9 @@ export function mergeKunLabSettings(
   const legacyCurrent = current as Partial<KunLabSettingsV1> | undefined
   const base: KunLabSettingsV1 = {
     fastContext: legacyCurrent?.fastContext ?? defaults.fastContext,
-    pptAgent: legacyCurrent?.pptAgent ?? defaults.pptAgent
+    pptAgent: legacyCurrent?.pptAgent ?? defaults.pptAgent,
+    conversationVisualization:
+      legacyCurrent?.conversationVisualization ?? defaults.conversationVisualization
   }
   if (!patch) return base
   // Legacy migration: older settings wrote `exploreAgent`; treat it as the
@@ -455,6 +460,10 @@ export function mergeKunLabSettings(
     pptAgent: {
       ...mergeLabAgentSettings(base.pptAgent, patch.pptAgent),
       imageFirst: patch.pptAgent?.imageFirst ?? base.pptAgent.imageFirst
+    },
+    conversationVisualization: {
+      enabled: patch.conversationVisualization?.enabled
+        ?? base.conversationVisualization.enabled
     }
   }
 }

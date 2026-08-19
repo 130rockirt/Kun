@@ -9,6 +9,7 @@ import {
   buildTodoLocalTools,
   buildDelegationToolProviders,
   buildComponentDesignToolProviders,
+  buildConversationVisualizationToolProvider,
   protocolSupportsImageEdit,
   buildRuntimeCapabilityManifest,
   DEFAULT_APPROVAL_REVIEWER,
@@ -355,7 +356,10 @@ export function createRuntimeRegistry(
       }),
       turnService
     ),
-    ...buildComponentDesignToolProviders(delegationRuntime)
+    ...buildComponentDesignToolProviders(delegationRuntime),
+    ...buildConversationVisualizationToolProvider(
+      () => core.activeOptions.lab?.conversationVisualization
+    )
   ])
   return {
     services,

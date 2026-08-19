@@ -330,6 +330,13 @@ export const LabPptAgentConfigSchema = z
   })
 export type LabPptAgentConfig = z.infer<typeof LabPptAgentConfigSchema>
 
+export const LabConversationVisualizationConfigSchema = z.object({
+  enabled: z.boolean().default(false)
+}).strict()
+export type LabConversationVisualizationConfig = z.infer<
+  typeof LabConversationVisualizationConfigSchema
+>
+
 export const LabConfigSchema = z
   .object({
     fastContext: LabFastContextConfigSchema.default({
@@ -340,6 +347,9 @@ export const LabConfigSchema = z
       enabled: true,
       fast: false,
       imageFirst: true
+    }),
+    conversationVisualization: LabConversationVisualizationConfigSchema.default({
+      enabled: false
     })
   })
   .strict()

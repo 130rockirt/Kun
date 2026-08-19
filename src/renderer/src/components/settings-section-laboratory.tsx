@@ -20,6 +20,7 @@ import {
   Presentation,
   Search,
   UserRound,
+  Waypoints,
   Workflow
 } from 'lucide-react'
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
@@ -37,10 +38,12 @@ import {
 import { GraphModeSettingsPanel } from './settings-section-graph-panel'
 import { FastContextSettingsPanel } from './settings-section-lab-fast-context'
 import { ComposerPersonaSettingsPanel } from './settings-section-lab-persona'
+import { ConversationVisualizationSettingsPanel } from './settings-section-lab-conversation-visualization'
 import { PptAgentSettingsPanel } from './settings-section-lab-ppt'
 
 type LaboratorySettingsPanel =
   | 'persona'
+  | 'visualization'
   | 'computer'
   | 'browser'
   | 'graph'
@@ -88,6 +91,7 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
         contentSized
         items={[
           { id: 'persona', label: t('labComposerPersonaTitle'), icon: UserRound },
+          { id: 'visualization', label: t('labConversationVisualizationTitle'), icon: Waypoints },
           { id: 'computer', label: t('computerUseTitle'), icon: Monitor },
           { id: 'browser', label: t('browserUseSettingsTitle'), icon: Globe2 },
           { id: 'graph', label: t('graphSettingsTitle'), icon: Workflow },
@@ -110,6 +114,19 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
           presets={form.codeAgentPresets ?? []}
           onEnabledChange={(enabled) => update({ codeAgentPersonaEnabled: enabled })}
           onPresetsChange={(next) => update({ codeAgentPresets: next })}
+        />
+      </SettingsTabPanel>
+
+      <SettingsTabPanel<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        tabId="visualization"
+        active={activePanel === 'visualization'}
+        className="[&>div]:mt-0"
+      >
+        <ConversationVisualizationSettingsPanel
+          t={t}
+          value={lab}
+          onChange={(patch) => updateKun({ lab: patch })}
         />
       </SettingsTabPanel>
 

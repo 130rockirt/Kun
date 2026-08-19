@@ -247,7 +247,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     const followMain = renderPanel({
       fastContext: { enabled: true, model: '', providerId: '', fast: false },
-      pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true }
+      pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true },
+      conversationVisualization: { enabled: false }
     })
     expect(followMain).toContain('Enable fast_context')
     expect(followMain).toContain('Follow main model')
@@ -255,7 +256,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     const fixed = renderPanel({
       fastContext: { enabled: true, model: 'deepseek-v4-pro', providerId: 'deepseek', fast: false },
-      pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true }
+      pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true },
+      conversationVisualization: { enabled: false }
     })
     expect(fixed).toContain('Use fixed model')
     expect(fixed).toContain('Explore reasoning effort')
@@ -263,7 +265,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     const disabled = renderPanel({
       fastContext: { enabled: false, model: '', providerId: '', fast: false },
-      pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true }
+      pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true },
+      conversationVisualization: { enabled: false }
     })
     expect(disabled).not.toContain('Follow main model')
   })
@@ -284,7 +287,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     const followMain = renderPanel({
       fastContext: { enabled: true, model: '', providerId: '', fast: false },
-      pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true }
+      pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true },
+      conversationVisualization: { enabled: false }
     })
     expect(followMain).toContain('Enable ppt_agent')
     expect(followMain).toContain('Follow main model')
@@ -292,7 +296,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     const fixed = renderPanel({
       fastContext: { enabled: true, model: '', providerId: '', fast: false },
-      pptAgent: { enabled: true, model: 'deepseek-v4-pro', providerId: 'deepseek', fast: false, imageFirst: true }
+      pptAgent: { enabled: true, model: 'deepseek-v4-pro', providerId: 'deepseek', fast: false, imageFirst: true },
+      conversationVisualization: { enabled: false }
     })
     expect(fixed).toContain('Use fixed model')
     expect(fixed).toContain('PPT reasoning effort')
@@ -300,7 +305,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     const disabled = renderPanel({
       fastContext: { enabled: true, model: '', providerId: '', fast: false },
-      pptAgent: { enabled: false, model: '', providerId: '', fast: false, imageFirst: true }
+      pptAgent: { enabled: false, model: '', providerId: '', fast: false, imageFirst: true },
+      conversationVisualization: { enabled: false }
     })
     expect(disabled).not.toContain('Follow main model')
   })
@@ -337,7 +343,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
           t,
           value: {
             fastContext: { enabled: true, model: 'gpt-5.4', providerId: 'codex-2', fast: true },
-            pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true }
+            pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true },
+      conversationVisualization: { enabled: false }
           },
           modelProviders,
           leadProviderId: 'codex-2',

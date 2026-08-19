@@ -579,5 +579,13 @@
   "graphStatus_promoted": "promoted",
   "graphStatus_rolled_back": "rolled back",
   "graphStatus_merged": "merged",
-  "rightPanelGraph": "Graph"
+  "rightPanelGraph": "Graph",
+  "visualizationLabel": "Visualization",
+  "visualizationCollapse": "Collapse visualization",
+  "visualizationExpand": "Expand visualization",
+  "visualizationCopy": "Copy as text",
+  "visualizationCopied": "Copied",
+  "visualizationFlow": "Flow",
+  "visualizationCardGrid": "Grouped details",
+  "visualizationCallout": "Important note"
 }

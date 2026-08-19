@@ -128,16 +128,24 @@ export type KunLabPptAgentSettingsV1 = {
   imageFirst: boolean
 }
 
+/** Experimental Lab feature settings for inline conversation visualizations. */
+export type KunLabConversationVisualizationSettingsV1 = {
+  /** Master switch. Default false while the feature is experimental. */
+  enabled: boolean
+}
+
 /** Experimental Lab feature settings written into Kun config `lab`. */
 export type KunLabSettingsV1 = {
   fastContext: KunLabFastContextSettingsV1
   pptAgent: KunLabPptAgentSettingsV1
+  conversationVisualization: KunLabConversationVisualizationSettingsV1
 }
 
 /** Partial settings patch for the Lab section. Nested fields merge with current values. */
 export type KunLabSettingsPatchV1 = {
   fastContext?: Partial<KunLabFastContextSettingsV1>
   pptAgent?: Partial<KunLabPptAgentSettingsV1>
+  conversationVisualization?: Partial<KunLabConversationVisualizationSettingsV1>
 }
 
 export const KUN_GRAPH_ROLLOUT_STAGES = [

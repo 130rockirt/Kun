@@ -288,5 +288,13 @@
   "writeEnableLineWrapping": "行折り返しを有効にする",
   "writeDisableLineWrapping": "行の折り返しを無効にする",
   "systemPrompt": "システムプロンプト",
-  "toolPolicy": "ツールへのアクセス"
+  "toolPolicy": "ツールへのアクセス",
+  "visualizationLabel": "Visualization",
+  "visualizationCollapse": "Collapse visualization",
+  "visualizationExpand": "Expand visualization",
+  "visualizationCopy": "Copy as text",
+  "visualizationCopied": "Copied",
+  "visualizationFlow": "Flow",
+  "visualizationCardGrid": "Grouped details",
+  "visualizationCallout": "Important note"
 }

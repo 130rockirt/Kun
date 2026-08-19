@@ -31,6 +31,7 @@ export type TurnSections = {
   runtimeErrorsBeforeFinalContent: TurnRuntimeErrorBlock[]
   runtimeErrorsAfterFinalContent: TurnRuntimeErrorBlock[]
   componentPrototypeBlocks: ToolBlock[]
+  conversationVisualizationBlocks: ToolBlock[]
   generatedFileBlocks: ToolBlock[]
   turnFileChanges: ToolBlock[]
 }
@@ -261,6 +262,11 @@ export function deriveTurnSections({
     block.meta?.toolName === 'design_component' &&
     Boolean(block.meta.componentPrototype)
   ))
+  const conversationVisualizationBlocks: ToolBlock[] = turn.blocks.filter((block): block is ToolBlock => (
+    block.kind === 'tool' &&
+    block.meta?.toolName === 'show_visualization' &&
+    Boolean(block.meta.conversationVisualization)
+  ))
 
   return {
     processBlocks,
@@ -270,6 +276,7 @@ export function deriveTurnSections({
     runtimeErrorsBeforeFinalContent,
     runtimeErrorsAfterFinalContent,
     componentPrototypeBlocks,
+    conversationVisualizationBlocks,
     generatedFileBlocks,
     turnFileChanges
   }

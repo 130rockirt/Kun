@@ -179,7 +179,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
               providerId: 'codex-2',
               fast: true,
               imageFirst: true
-            }
+            },
+            conversationVisualization: { enabled: false }
           },
           modelProviders,
           leadProviderId: 'codex-2',

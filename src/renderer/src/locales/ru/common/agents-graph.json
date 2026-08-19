@@ -288,5 +288,13 @@
   "writeEnableLineWrapping": "Включить перенос строк",
   "writeDisableLineWrapping": "Отключить перенос строк",
   "systemPrompt": "Системная подсказка",
-  "toolPolicy": "Доступ к инструментам"
+  "toolPolicy": "Доступ к инструментам",
+  "visualizationLabel": "Visualization",
+  "visualizationCollapse": "Collapse visualization",
+  "visualizationExpand": "Expand visualization",
+  "visualizationCopy": "Copy as text",
+  "visualizationCopied": "Copied",
+  "visualizationFlow": "Flow",
+  "visualizationCardGrid": "Grouped details",
+  "visualizationCallout": "Important note"
 }
