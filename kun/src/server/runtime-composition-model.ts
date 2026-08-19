@@ -44,6 +44,8 @@ import {
   hydrateLegacyCredentialOptions,
   modelConnectionSeedsForOptions
 } from './runtime-factory-model.js'
+import { aggregateCodexProviderLocalCosts } from '../services/provider-local-cost.js'
+import { loadUsageHistory } from '../services/usage-history.js'
 
 export async function createRuntimeModelComposition(
   core: Awaited<ReturnType<typeof createRuntimeCore>>
@@ -378,6 +380,12 @@ export async function createRuntimeModelComposition(
       ...(proxyUrl ? { proxyUrl } : {})
     }
   }
+  const providerUsageHistorySource = {
+    threadService: core.threadService,
+    sessionStore: core.sessionStore,
+    usageService,
+    nowIso
+  }
   const providerQuotaService = new ProviderQuotaService({
     loadSource: async () => {
       const [snapshot, materialized] = await Promise.all([
@@ -417,6 +425,14 @@ export async function createRuntimeModelComposition(
         proxyUrl: snapshot.proxy.enabled ? snapshot.proxy.url : ''
       }
     },
+    loadLocalCosts: async (profiles) => aggregateCodexProviderLocalCosts({
+      profiles: profiles.map((profile) => ({
+        id: profile.id,
+        ...(profile.presetId ? { presetId: profile.presetId } : {})
+      })),
+      records: await loadUsageHistory(providerUsageHistorySource),
+      now: new Date(nowIso())
+    }),
     subscriptionRuntime: {
       resolveCodexCredential: async (provider, rejectedAccessToken) => {
         if (!provider.credentialSourceId) {

@@ -124,6 +124,7 @@ export function buildModelClientRouterInput(
           ...(llmDebug ? { debugSink: llmDebug } : {})
         })
       : new CompatModelClient({
+          providerId: activeProviderId,
           baseUrl: options.baseUrl,
           apiKey: options.apiKey,
           modelProxyUrl: options.modelProxyUrl,
@@ -181,6 +182,7 @@ export function buildModelClientRouterInput(
           ...(llmDebug ? { debugSink: llmDebug } : {})
         })
       : new CompatModelClient({
+          providerId: trimmedId,
           baseUrl: provider.baseUrl ?? options.baseUrl ?? '',
           apiKey: provider.apiKey,
           modelProxyUrl: provider.modelProxyUrl ?? options.modelProxyUrl,

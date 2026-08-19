@@ -241,6 +241,27 @@ describe('provider mutation lifecycle across settings remounts', () => {
     expect(tabs).toBeTruthy()
   })
 
+  it('uses the shared provider mark in configured, detail, and add-provider surfaces', async () => {
+    const fixture = providerFixture('codex-2')
+    const provider: ModelProviderProfileV1 = {
+      ...fixture.provider,
+      name: 'ChatGPT subscription 2',
+      presetSource: { presetId: 'codex', mode: 'api' }
+    }
+    const renderer = await mount(contextFor(fixture.settings, provider))
+    await flush()
+
+    expect(renderer.root.findAllByProps({ 'data-provider-icon': 'codex' }).length)
+      .toBeGreaterThanOrEqual(2)
+
+    await act(async () => findButton(renderer, 'modelProviderAdd').props.onClick())
+
+    expect(renderer.root.findAllByProps({ 'data-provider-icon': 'codex' }).length)
+      .toBeGreaterThanOrEqual(3)
+    expect(renderer.root.findAllByProps({ 'data-provider-icon': 'kun' }).length)
+      .toBeGreaterThanOrEqual(1)
+  })
+
   it('hides the delete action for the default API provider', async () => {
     const { settings, provider } = providerFixture('deepseek')
     const runtimeRequest = vi.fn(async (path: string) => {

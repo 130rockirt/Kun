@@ -28,6 +28,8 @@ import { extractPlanMetadataFromBlock } from '../../plan/plan-tool'
 import { planDisplayNameFromRelativePath } from '../../plan/plan-path'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { TimelineRuntimeError, liveTurnProgressClass } from './message-timeline-jump-preview'
+import type { TurnUsageSummary } from '../../hooks/use-turn-usage'
+import { TurnUsageRow } from './TurnUsageRow'
 
 export type ConversationTurnProps = {
   turn: Turn
@@ -52,6 +54,8 @@ export type ConversationTurnProps = {
   compactCards?: boolean
   /** Main-thread actions must stay disabled for isolated side conversations. */
   allowMainThreadActions?: boolean
+  turnUsage?: TurnUsageSummary
+  turnUsageStale?: boolean
 }
 
 export function ConversationTurn({
@@ -75,7 +79,9 @@ export function ConversationTurn({
   filePreviewWorkspaceRoot,
   viewportRef,
   compactCards = false,
-  allowMainThreadActions = true
+  allowMainThreadActions = true,
+  turnUsage,
+  turnUsageStale = false
 }: ConversationTurnProps): ReactElement {
   const { t } = useTranslation('common')
   const forkThreadFromTurn = useChatStore((s) => s.forkThreadFromTurn)
@@ -320,6 +326,10 @@ export function ConversationTurn({
         />
       ))}
 
+      {!isProcessing && assistantContentBlocks.length > 0 && turnUsage ? (
+        <TurnUsageRow usage={turnUsage} stale={turnUsageStale} />
+      ) : null}
+
       {allowMainThreadActions && !isProcessing && forkTurnId ? (
         <div className="flex justify-end">
           <button
@@ -476,5 +486,7 @@ export const MemoMessageTurn = memo(ConversationTurn, (prev, next) => (
   prev.filePreviewWorkspaceRoot === next.filePreviewWorkspaceRoot &&
   prev.compactCards === next.compactCards &&
   prev.allowMainThreadActions === next.allowMainThreadActions &&
+  prev.turnUsage === next.turnUsage &&
+  prev.turnUsageStale === next.turnUsageStale &&
   prev.viewportRef === next.viewportRef
 ))

@@ -65,6 +65,7 @@ export function FloatingComposerFooterView({
     costCny: threadUsage.costCny,
     valueEstimateUsd: threadUsage.valueEstimateUsd,
     valueEstimateCny: threadUsage.valueEstimateCny,
+    valueEstimateCoverage: threadUsage.valueEstimateCoverage,
     locale: usageLocale
   }) : []
 
@@ -146,6 +147,11 @@ export function FloatingComposerFooterView({
                     {item.kind === 'estimate'
                       ? t('sessionUsageFooterEstimate', { value: item.value, defaultValue: 'Estimate ≈{{value}}' })
                       : t('sessionUsageFooterActualCost', { value: item.value, defaultValue: 'Cost {{value}}' })}
+                    {item.kind === 'estimate' && item.coverage === 'partial' ? (
+                      <span className="ml-1" data-session-usage-estimate-partial>
+                        · {t('turnUsageEstimatePartial', { defaultValue: 'Partial estimate' })}
+                      </span>
+                    ) : null}
                   </span>
                 )) : threadUsage.totalTokens > 0 ? (
                   <span

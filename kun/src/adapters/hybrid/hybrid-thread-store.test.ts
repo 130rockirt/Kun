@@ -31,6 +31,7 @@ function usageEvent(seq: number, usage: UsageSnapshot): UsageEvent {
     threadId: 'thread-usage-1',
     seq,
     timestamp: `2026-08-08T00:00:${String(seq).padStart(2, '0')}.000Z`,
+    turnId: `turn-${seq}`,
     model: 'gpt-5.6-sol',
     usage
   }
@@ -80,7 +81,7 @@ describe('HybridThreadStore usage timing persistence', () => {
     }
   })
 
-  it('keeps subscription attribution while producing differential usage records', async () => {
+  it('keeps turn, cache-write, and current request attribution in differential records', async () => {
     const { store } = await createStore()
     try {
       await store.noteEvent(usageEvent(1, {
@@ -88,16 +89,47 @@ describe('HybridThreadStore usage timing persistence', () => {
         completionTokens: 700,
         totalTokens: 26_000,
         cacheHitRate: 0,
+        cacheWriteTokens: 300,
+        actualProviderId: 'codex-work',
         actualModelId: 'gpt-5.6-luna',
         billingKind: 'subscription',
+        serviceTier: 'priority',
         turns: 1
+      }))
+      await store.noteEvent(usageEvent(2, {
+        promptTokens: 30_000,
+        completionTokens: 1_000,
+        totalTokens: 31_000,
+        cacheHitRate: 0,
+        cacheWriteTokens: 500,
+        actualProviderId: 'openai-api',
+        actualModelId: 'gpt-5.4-mini',
+        billingKind: 'api',
+        turns: 2
       }))
 
       const records = await store.loadUsageRecords({ threadId: 'thread-usage-1' })
-      expect(records[0]?.usage).toMatchObject({
-        actualModelId: 'gpt-5.6-luna',
-        billingKind: 'subscription'
+      expect(records[0]).toMatchObject({
+        turnId: 'turn-1',
+        usage: {
+          cacheWriteTokens: 300,
+          actualProviderId: 'codex-work',
+          actualModelId: 'gpt-5.6-luna',
+          billingKind: 'subscription',
+          serviceTier: 'priority'
+        }
       })
+      expect(records[1]).toMatchObject({
+        turnId: 'turn-2',
+        usage: {
+          promptTokens: 4_700,
+          cacheWriteTokens: 200,
+          actualProviderId: 'openai-api',
+          actualModelId: 'gpt-5.4-mini',
+          billingKind: 'api'
+        }
+      })
+      expect(records[1]?.usage.serviceTier).toBeUndefined()
     } finally {
       store.close()
     }

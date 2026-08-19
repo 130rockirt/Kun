@@ -8,6 +8,8 @@ import type { ModelStreamLimits } from './model-stream-resource-budget.js'
 import type { CompatChatMessage } from './compat-request-codecs.js'
 
 export type CompatModelClientConfig = {
+  /** Stable configured provider identity retained in durable usage. */
+  providerId?: string
   baseUrl: string
   apiKey: string
   model: string

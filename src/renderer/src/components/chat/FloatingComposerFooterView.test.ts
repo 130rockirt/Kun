@@ -19,6 +19,7 @@ function translate(key: string, values: Record<string, unknown> = {}): string {
     sessionUsageEstimateTitle: 'Reference estimate.',
     sessionUsagePriceUnavailable: 'Price unavailable',
     sessionUsagePriceUnavailableTitle: 'No trusted price.',
+    turnUsageEstimatePartial: 'Partial estimate',
     sessionUsageFooterCache: `${values.cache} cache`,
     sessionUsageFooterTurns: `${values.turns} turns`,
     sessionUsageFooterTtft: `TTFT ${values.ttft}`,
@@ -129,6 +130,32 @@ describe('FloatingComposerFooterView', () => {
     expect(html).toContain('Price unavailable')
     expect(html).toContain('title="No trusted price."')
     expect(html.indexOf('ds-composer-usage-tps')).toBeLessThan(html.indexOf('ds-composer-usage-money'))
+  })
+
+  it('keeps zero-price estimates visible and labels partial cumulative coverage', () => {
+    const zero = renderFooter({
+      threadUsage: usageSummary({
+        costUsd: null,
+        costCny: null,
+        valueEstimateUsd: 0,
+        valueEstimateCny: 0,
+        valueEstimateCoverage: 'complete'
+      })
+    })
+    expect(zero).toContain('Estimate ≈$0.0000')
+    expect(zero).not.toContain('Price unavailable')
+
+    const partial = renderFooter({
+      threadUsage: usageSummary({
+        costUsd: null,
+        costCny: null,
+        valueEstimateUsd: 0.03,
+        valueEstimateCny: 0.216,
+        valueEstimateCoverage: 'partial'
+      })
+    })
+    expect(partial).toContain('Partial estimate')
+    expect(partial).toContain('data-session-usage-estimate-partial')
   })
 
   it('falls back to cumulative cache telemetry when latest-request telemetry is unavailable', () => {

@@ -20,6 +20,8 @@ export const UsageSnapshotSchema = z.object({
   actualModelId: z.string().min(1).optional(),
   /** Whether this usage came from a real API bill or a subscription benefit. */
   billingKind: z.enum(['api', 'subscription']).optional(),
+  /** Provider request class used for this model call. */
+  serviceTier: z.literal('priority').optional(),
   routePoolId: z.string().min(1).optional(),
   routeTargetId: z.string().min(1).optional(),
   totalTokens: z.number().int().nonnegative(),
@@ -76,18 +78,24 @@ export const UsageSnapshotSchema = z.object({
 export type UsageSnapshot = z.infer<typeof UsageSnapshotSchema>
 
 const DateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+export const ReferencePriceCoverageSchema = z.enum(['complete', 'partial', 'unavailable'])
+export type ReferencePriceCoverage = z.infer<typeof ReferencePriceCoverageSchema>
 
 export const DailyUsageCountersSchema = z.object({
   input_tokens: z.number().int().nonnegative(),
   output_tokens: z.number().int().nonnegative(),
   reasoning_tokens: z.number().int().nonnegative(),
   cached_tokens: z.number().int().nonnegative(),
+  cache_write_tokens: z.number().int().nonnegative(),
   cache_miss_tokens: z.number().int().nonnegative(),
   total_tokens: z.number().int().nonnegative(),
   cost_usd: z.number().nonnegative(),
   cost_cny: z.number().nonnegative(),
   value_estimate_usd: z.number().nonnegative(),
   value_estimate_cny: z.number().nonnegative(),
+  value_estimate_coverage: ReferencePriceCoverageSchema,
+  value_estimate_priced_requests: z.number().int().nonnegative(),
+  value_estimate_unpriced_requests: z.number().int().nonnegative(),
   cache_savings_usd: z.number().nonnegative(),
   cache_savings_cny: z.number().nonnegative(),
   token_economy_savings_tokens: z.number().int().nonnegative(),
@@ -173,6 +181,41 @@ export const ModelUsageResponseSchema = z.object({
   totals: DailyUsageTotalsSchema
 })
 export type ModelUsageResponse = z.infer<typeof ModelUsageResponseSchema>
+
+export const TurnUsageActualCostSchema = z.object({
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  amount: z.number().nonnegative()
+}).strict()
+export type TurnUsageActualCost = z.infer<typeof TurnUsageActualCostSchema>
+
+export const TurnUsageCountersSchema = z.object({
+  requests: z.number().int().nonnegative(),
+  input_tokens: z.number().int().nonnegative(),
+  output_tokens: z.number().int().nonnegative(),
+  reasoning_tokens: z.number().int().nonnegative(),
+  cached_tokens: z.number().int().nonnegative(),
+  cache_write_tokens: z.number().int().nonnegative(),
+  total_tokens: z.number().int().nonnegative(),
+  actual_cost: TurnUsageActualCostSchema.nullable(),
+  reference_estimate_usd: z.number().nonnegative().nullable(),
+  estimate_coverage: ReferencePriceCoverageSchema,
+  provider_ids: z.array(z.string().min(1)),
+  models: z.array(z.string().min(1))
+}).strict()
+export type TurnUsageCounters = z.infer<typeof TurnUsageCountersSchema>
+
+export const TurnUsageBucketSchema = TurnUsageCountersSchema.extend({
+  turn_id: z.string().min(1)
+}).strict()
+export type TurnUsageBucket = z.infer<typeof TurnUsageBucketSchema>
+
+export const TurnUsageResponseSchema = z.object({
+  group_by: z.literal('turn'),
+  thread_id: z.string().min(1),
+  buckets: z.array(TurnUsageBucketSchema),
+  totals: TurnUsageCountersSchema
+}).strict()
+export type TurnUsageResponse = z.infer<typeof TurnUsageResponseSchema>
 
 export const emptyUsageSnapshot = (): UsageSnapshot => ({
   promptTokens: 0,

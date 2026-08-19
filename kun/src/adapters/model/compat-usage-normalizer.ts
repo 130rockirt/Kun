@@ -19,7 +19,13 @@ export function normalizeCompatUsage(input: {
   const hasNativeCache = nativeHit > 0 || nativeMiss > 0
   const cachedTokens = numberValue(promptDetails.cached_tokens ?? inputDetails.cached_tokens)
   const cacheRead = numberValue(usage.cache_read_input_tokens)
-  const cacheCreation = numberValue(usage.cache_creation_input_tokens)
+  const cacheCreation = numberValue(
+    usage.cache_creation_input_tokens ??
+    usage.cache_write_input_tokens ??
+    usage.cache_write_tokens ??
+    promptDetails.cache_write_tokens ??
+    inputDetails.cache_write_tokens
+  )
   const anthropicUsage = usage.prompt_tokens === undefined &&
     usage.prompt_eval_count === undefined &&
     usage.input_tokens !== undefined &&
@@ -65,10 +71,11 @@ export function normalizeCompatUsage(input: {
     cachedTokens: cacheHit || cachedTokens || cacheRead || 0,
     cacheHitTokens: cacheHit,
     cacheMissTokens: cacheMiss,
+    cacheWriteTokens: pricingCacheWrite,
     cacheHitRate: cacheTotal === 0 ? null : cacheHit / cacheTotal,
     turns: 1,
     actualModelId: model,
-    ...(subscription ? { billingKind: 'subscription' as const } : {}),
+    billingKind: subscription ? 'subscription' : 'api',
     costUsd: Number.isFinite(reportedCostUsd) ? reportedCostUsd : estimatedCost?.costUsd,
     costCny: Number.isFinite(reportedCostCny) ? reportedCostCny : estimatedCost?.costCny
   }
