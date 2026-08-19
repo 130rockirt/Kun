@@ -267,15 +267,16 @@ describe('FloatingComposer input history and shortcut hint', () => {
     expect(lockedDesign).toContain('data-task-surface="design"')
   })
 
-  it('renders the persona picker when a legacy preset has no icon field', () => {
+  it('moves the persona picker out of the composer toolbar', () => {
     const html = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
       composerPersonaId: 'doubter',
       codeAgentPresets: [{ id: 'doubter' }],
       onComposerPersonaChange: () => undefined
     })))
 
-    expect(html).toContain('data-composer-persona="doubter"')
-    expect(html).toContain('lucide-search-check')
+    expect(html).not.toContain('data-composer-persona="doubter"')
+    expect(html).not.toContain('ds-composer-persona-control')
+    expect(html).toContain('ds-composer-menu-button')
   })
 
   it('restores previous sent text with ArrowUp when the caret is on the first line', async () => {

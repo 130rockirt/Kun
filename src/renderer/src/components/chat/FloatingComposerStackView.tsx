@@ -8,24 +8,18 @@ export function FloatingComposerStackView({
   context: FloatingComposerRenderContext
 }): ReactElement {
   const {
-    BackgroundShellOverlay, FileText, FloatingComposerAboveInputStack,
+    BackgroundShellOverlay, FloatingComposerAboveInputStack, FloatingComposerActionMenu,
     FloatingComposerFileMentionMenu, FloatingComposerGraphProgress, FloatingComposerQueuedMessages,
     FloatingComposerSlashCommandMenu, FloatingComposerTodoProgress, FloatingComposerUserInputPanel,
-    Folder, ImagePlus, ListTodo, Loader2, Paperclip, PauseCircle, Pencil, PlayCircle, Share2,
-    Target, Trash2, X, activeThreadGoal, activeThreadId, activeThreadTodos, applySlashCommand,
-    attachmentUploadBusy, attachmentUploadEnabled, busy, canOpenGoalPanel, canPickAttachment,
-    canPickDesignReference, canPickFileReference, canPickLocalFileReference, canSetGoalPanelDraft,
-    canToggleGraphMode, canTogglePlanMode, clearActiveThreadGoal, compact, composerMenuOpen,
-    composerMenuPanelRef, currentTurnOrchestration, draft, fileMentions, fileReferenceEnabled,
-    filteredSlashCommands, goalBannerLabel, goalElapsedLabel, goalMenuChecked, goalPanelOpen,
-    goalPanelRef, graphEnabled, handleAttachmentMenuClick, handleDesignReferenceMenuClick,
-    handleFileReferenceMenuClick, handleGoalMenuClick, handleGraphToolbarClick,
-    handleLocalFileReferenceMenuClick, handlePlanToolbarClick, highlightedSlashCommand, mode,
-    onGuideQueuedMessage, onOpenGraph, onOpenGraphChild, onPickAttachments, onRemoveQueuedMessage,
-    orchestration, pendingUserInputBlock, queuedMessages, reorderQueuedMessage,
-    returnQueuedMessageToComposer, runtimeReady, setActiveThreadGoalStatus, setGoalFromComposerInput,
-    setGoalPanelOpen, setInput, showGoalFloater, showGoalMenuOption, showGraphMenuOption,
-    showGraphProgress, showPlanMenuOption, showTodoProgress, slashCommandMenu, slashQuery, t, userInput
+    PauseCircle, Pencil, PlayCircle, Target, Trash2, X, activeThreadGoal, activeThreadId, activeThreadTodos, applySlashCommand,
+    busy, canOpenGoalPanel, canSetGoalPanelDraft, clearActiveThreadGoal, compact, composerMenuOpen,
+    currentTurnOrchestration, draft, fileMentions, filteredSlashCommands, goalBannerLabel,
+    goalElapsedLabel, goalPanelOpen, goalPanelRef, graphEnabled, highlightedSlashCommand,
+    onGuideQueuedMessage, onOpenGraph, onOpenGraphChild, onRemoveQueuedMessage, pendingUserInputBlock,
+    queuedMessages, reorderQueuedMessage, returnQueuedMessageToComposer, runtimeReady,
+    setActiveThreadGoalStatus, setGoalFromComposerInput, setGoalPanelOpen, setInput,
+    showGoalFloater, showGoalMenuOption, showGraphProgress, showTodoProgress, slashCommandMenu,
+    slashQuery, t, userInput
   } = context
   return (
     <>
@@ -127,164 +121,8 @@ export function FloatingComposerStackView({
         )}
       />
 
-      {composerMenuOpen && slashQuery == null ? (
-          <div
-            ref={composerMenuPanelRef}
-            className="absolute bottom-12 left-1 z-40 w-48 overflow-hidden rounded-[18px] border border-ds-border bg-white py-1.5 text-[13px] text-ds-muted shadow-[0_18px_48px_rgba(20,47,95,0.16)] dark:bg-ds-card"
-          >
-            {fileReferenceEnabled ? (
-              <button
-                type="button"
-                disabled={!canPickLocalFileReference}
-                onClick={handleLocalFileReferenceMenuClick}
-                className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
-              >
-                <FileText className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-                <span className="min-w-0 flex-1 truncate">{t('composerAddLocalFiles')}</span>
-              </button>
-            ) : null}
-            {fileReferenceEnabled ? (
-              <button
-                type="button"
-                disabled={!canPickFileReference}
-                onClick={handleFileReferenceMenuClick}
-                className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
-              >
-                <Paperclip className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-                <span className="min-w-0 flex-1 truncate">{t('composerBrowseWorkspaceFiles')}</span>
-              </button>
-            ) : null}
-            {fileReferenceEnabled ? (
-              <button
-                type="button"
-                disabled={!canPickDesignReference}
-                onClick={handleDesignReferenceMenuClick}
-                className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
-              >
-                <Folder className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-                <span className="min-w-0 flex-1 truncate">{t('composerBrowseDesignDocs')}</span>
-              </button>
-            ) : null}
-            {attachmentUploadEnabled ? (
-              <>
-                {fileReferenceEnabled ? <div className="my-1 h-px bg-ds-border-muted/70" /> : null}
-                <button
-                  type="button"
-                  disabled={!canPickAttachment || !onPickAttachments}
-                  onClick={handleAttachmentMenuClick}
-                  className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
-                >
-                  {attachmentUploadBusy ? (
-                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" strokeWidth={1.9} />
-                  ) : (
-                    <ImagePlus className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-                  )}
-                  <span className="min-w-0 flex-1 truncate">{t('composerAddImage')}</span>
-                </button>
-                <div className="my-1 h-px bg-ds-border-muted/70" />
-              </>
-            ) : null}
-            {showPlanMenuOption ? <button
-              type="button"
-              data-composer-plan-menu-item
-              disabled={!canTogglePlanMode}
-              onClick={handlePlanToolbarClick}
-              className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
-            >
-              <ListTodo className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-              <span className="min-w-0 flex-1 truncate">{t('composerMenuPlanMode')}</span>
-              <span
-                role="switch"
-                aria-checked={mode === 'plan'}
-                className={`relative h-5 w-9 shrink-0 rounded-full ring-1 transition ${
-                  mode === 'plan'
-                    ? 'bg-accent ring-accent/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.24)]'
-                    : 'bg-ds-border-muted ring-ds-border-muted'
-                }`}
-              >
-                <span
-                  className={`absolute top-0.5 h-4 w-4 rounded-full bg-white ring-1 ring-black/5 transition ${
-                    mode === 'plan' ? 'translate-x-[17px]' : 'translate-x-0.5'
-                  } shadow-[0_1px_4px_rgba(20,47,95,0.28)]`}
-                />
-              </span>
-            </button> : null}
-            {showGraphMenuOption ? (
-              <button
-                type="button"
-                data-composer-graph-menu-item
-                disabled={!canToggleGraphMode}
-                onClick={handleGraphToolbarClick}
-                aria-label={busy
-                  ? t('graphModeNextTurnGraph', { defaultValue: 'Next turn: Graph' })
-                  : t('graphModeGraph', { defaultValue: 'Graph' })}
-                title={busy
-                  ? t('graphModeNextTurnHint', {
-                        defaultValue: 'Controls the next turn and cannot change the turn already running'
-                      })
-                  : !graphEnabled
-                    ? t('graphModeDisabledHint', {
-                        defaultValue: 'Enable experimental Graph Mode in Settings → Agents'
-                      })
-                    : t('graphModeGraphHint', {
-                        defaultValue: 'Graph: plan, delegate, supervise, review, and synthesize'
-                      })}
-                className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
-              >
-                <Share2 className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-                <span className="min-w-0 flex-1 truncate">
-                  {busy
-                    ? t('graphModeNextTurnGraph', { defaultValue: 'Next turn: Graph' })
-                    : t('graphModeGraph', { defaultValue: 'Graph' })}
-                </span>
-                <span
-                  role="switch"
-                  aria-label={busy
-                    ? t('graphModeNextTurnGraph', { defaultValue: 'Next turn: Graph' })
-                    : t('graphModeGraph', { defaultValue: 'Graph' })}
-                  aria-checked={mode === 'agent' && orchestration === 'graph'}
-                  className={`relative h-5 w-9 shrink-0 rounded-full ring-1 transition ${
-                    mode === 'agent' && orchestration === 'graph'
-                      ? 'bg-accent ring-accent/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.24)]'
-                      : 'bg-ds-border-muted ring-ds-border-muted'
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white ring-1 ring-black/5 transition ${
-                      mode === 'agent' && orchestration === 'graph'
-                        ? 'translate-x-[17px]'
-                        : 'translate-x-0.5'
-                    } shadow-[0_1px_4px_rgba(20,47,95,0.28)]`}
-                  />
-                </span>
-              </button>
-            ) : null}
-            {showGoalMenuOption ? <button
-              type="button"
-              data-composer-goal-menu-item
-              disabled={!canOpenGoalPanel}
-              onClick={handleGoalMenuClick}
-              className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
-            >
-              <Target className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-              <span className="min-w-0 flex-1 truncate">{t('composerMenuPursueGoal')}</span>
-              <span
-                role="switch"
-                aria-checked={goalMenuChecked}
-                className={`relative h-5 w-9 shrink-0 rounded-full ring-1 transition ${
-                  goalMenuChecked
-                    ? 'bg-accent ring-accent/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.24)]'
-                    : 'bg-ds-border-muted ring-ds-border-muted'
-                }`}
-              >
-                <span
-                  className={`absolute top-0.5 h-4 w-4 rounded-full bg-white ring-1 ring-black/5 transition ${
-                    goalMenuChecked ? 'translate-x-[17px]' : 'translate-x-0.5'
-                  } shadow-[0_1px_4px_rgba(20,47,95,0.28)]`}
-                />
-              </span>
-            </button> : null}
-          </div>
+        {composerMenuOpen && slashQuery == null ? (
+          <FloatingComposerActionMenu context={context} />
         ) : null}
 
         {slashQuery != null ? (
