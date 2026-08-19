@@ -16,6 +16,7 @@ import { useCanvasViewportStore } from './canvas-viewport-store'
 import { parseProjectDesignMd } from '../design-md/design-md-adapter'
 import { useProjectDesignSystemStore } from './project-design-system-store'
 import { resetDesignSystemBoardLayoutForTests, setDesignSystemBoardRect } from './design-system-board-layout'
+import { generatedImageResultsForTurn } from './canvas-generated-image-replay'
 
 const target = { documentId: 'doc_design', boardArtifactId: 'board_design' }
 
@@ -109,6 +110,27 @@ describe('generated Design image canvas placement', () => {
     useProjectDesignSystemStore.getState().setMissing()
   })
 
+  it('normalizes producing tool identity and valid image dimensions', () => {
+    const blocks: ChatBlock[] = [{
+      kind: 'tool', id: 'tool-normalized', summary: 'Generated image', status: 'success',
+      meta: {
+        toolName: 'mcp__kun__generate_image',
+        generatedFiles: [{
+          absolutePath: '/workspace/.kun/images/normalized.png',
+          completionIdentity: 'normalized', width: 1200, height: 600
+        }]
+      }
+    }]
+
+    expect(generatedImageResultsForTurn(blocks)).toEqual([{
+      imageUrl: '/workspace/.kun/images/normalized.png',
+      completionIdentity: 'normalized',
+      toolBlockId: 'tool-normalized',
+      width: 1200,
+      height: 600
+    }])
+  })
+
   it('materializes every historical generated image without overlap or duplication', () => {
     useCanvasViewportStore.getState().setVbox({ x: 0, y: 0, width: 1600, height: 900 })
     const blocks: ChatBlock[] = [
@@ -117,7 +139,8 @@ describe('generated Design image canvas placement', () => {
         kind: 'tool', id: 'image-first', turnId: 'turn-first', summary: 'Generated image',
         status: 'success', meta: {
           toolName: 'generate_image', generatedFiles: [{
-            absolutePath: '/workspace/.kun/images/first.png', completionIdentity: 'first'
+            absolutePath: '/workspace/.kun/images/first.png', completionIdentity: 'first',
+            width: 1200, height: 600
           }]
         }
       },
@@ -126,7 +149,8 @@ describe('generated Design image canvas placement', () => {
         kind: 'tool', id: 'image-second', turnId: 'turn-second', summary: 'Generated image',
         status: 'success', meta: {
           toolName: 'generate_image', generatedFiles: [{
-            absolutePath: '/workspace/.kun/images/second.png', completionIdentity: 'second'
+            absolutePath: '/workspace/.kun/images/second.png', completionIdentity: 'second',
+            width: 600, height: 1200
           }]
         }
       }
@@ -140,6 +164,8 @@ describe('generated Design image canvas placement', () => {
     expect(firstPass).toHaveLength(2)
     expect(images).toHaveLength(2)
     expect(first && second).toBeTruthy()
+    expect({ width: first!.width, height: first!.height }).toEqual({ width: 640, height: 320 })
+    expect({ width: second!.width, height: second!.height }).toEqual({ width: 320, height: 640 })
     expect(first!.x + first!.width <= second!.x || second!.x + second!.width <= first!.x ||
       first!.y + first!.height <= second!.y || second!.y + second!.height <= first!.y).toBe(true)
     expect(materializeHistoricalGeneratedImages({ threadId: 'thread', blocks, target })).toEqual([])
@@ -168,6 +194,29 @@ describe('generated Design image canvas placement', () => {
     expect(materializeHistoricalGeneratedImages({ threadId: 'thread', blocks, target })).toEqual([])
     expect(Object.values(useCanvasShapeStore.getState().document.objects)
       .filter((shape) => shape.type === 'image')).toHaveLength(0)
+  })
+
+  it('adopts an existing legacy ShapeOps image instead of duplicating it during hydration', () => {
+    const existing = createDefaultShape('image', 40, 60)
+    existing.imageUrl = '/workspace/.kun/images/adopted.png'
+    useCanvasShapeStore.getState().addShape(existing)
+    const blocks: ChatBlock[] = [
+      { ...userBlock('user-adopted', target), turnId: 'turn-adopted' },
+      {
+        kind: 'tool', id: 'image-adopted', turnId: 'turn-adopted',
+        summary: 'Generated image', status: 'success', meta: {
+          toolName: 'generate_image', generatedFiles: [{
+            absolutePath: existing.imageUrl, completionIdentity: 'adopted'
+          }]
+        }
+      }
+    ]
+
+    expect(materializeHistoricalGeneratedImages({ threadId: 'thread', blocks, target }))
+      .toEqual([existing.id])
+    expect(Object.values(useCanvasShapeStore.getState().document.objects)
+      .filter((shape) => shape.type === 'image')).toHaveLength(1)
+    expect(materializeHistoricalGeneratedImages({ threadId: 'thread', blocks, target })).toEqual([])
   })
 
   it('uses a stable receipt for legacy Markdown image results', () => {
