@@ -17,5 +17,5 @@
 
 ## 4. Integration
 
-- [ ] 4.1 Commit, rebase onto local `develop`, rerun applicable gates, and fast-forward merge safely.
-- [ ] 4.2 Prove merged ancestry and remove the temporary worktree/branch.
+- [x] 4.1 Commit, rebase onto local `develop`, rerun applicable gates, and fast-forward merge safely.
+- [x] 4.2 Prove merged ancestry and remove the temporary worktree/branch.
