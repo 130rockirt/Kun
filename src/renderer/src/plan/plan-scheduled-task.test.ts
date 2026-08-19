@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { ScheduledTaskV1 } from '@shared/app-settings'
-import { activePlanScheduledTask, planScheduleCountdown, scheduledTaskTime } from './plan-scheduled-task'
+import {
+  activePlanScheduledTask,
+  formatPlanScheduleNextRun,
+  planScheduleCountdown,
+  scheduledTaskTime
+} from './plan-scheduled-task'
 
 function task(id: string, patch: Partial<ScheduledTaskV1> = {}): ScheduledTaskV1 {
   return {
@@ -28,6 +33,16 @@ describe('activePlanScheduledTask', () => {
     expect(scheduledTaskTime(task('valid', { nextRunAt: '2030-01-02T10:00:00.000Z' }))).toBe('2030-01-02T10:00:00.000Z')
     expect(activePlanScheduledTask([task('invalid', { schedule: { kind: 'at', everyMinutes: 60, timeOfDay: '09:00', atTime: '' } })], 'plan-1')).toBeNull()
     expect(activePlanScheduledTask([task('past')], 'plan-1', Date.parse('2031-01-01T00:00:00.000Z'))).toBeNull()
+  })
+})
+
+describe('formatPlanScheduleNextRun', () => {
+  it('uses relative calendar days in the scheduled time zone', () => {
+    const now = Date.parse('2030-01-01T15:30:00.000Z')
+    expect(formatPlanScheduleNextRun('2030-01-01T15:48:00.000Z', 'Asia/Shanghai', 'zh-CN', now))
+      .toBe('今天 23:48')
+    expect(formatPlanScheduleNextRun('2030-01-01T17:48:00.000Z', 'Asia/Shanghai', 'zh-CN', now))
+      .toBe('明天 01:48')
   })
 })
 
