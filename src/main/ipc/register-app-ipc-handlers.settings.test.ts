@@ -83,6 +83,23 @@ describe('registerAppIpcHandlers settings and approvals', () => {
     expect(applySettingsPatch).not.toHaveBeenCalled()
   })
 
+  it('passes the conversation visualization toggle through settings:set', async () => {
+    const applySettingsPatch = vi.fn(async () => settings())
+    const payload = {
+      agents: {
+        kun: {
+          lab: {
+            conversationVisualization: { enabled: true }
+          }
+        }
+      }
+    }
+    registerAppIpcHandlers(registerOptions({ applySettingsPatch }))
+
+    await expect(handlers.get('settings:set')?.({}, payload)).resolves.toEqual(settings())
+    expect(applySettingsPatch).toHaveBeenCalledWith(payload)
+  })
+
   it('includes the Zod path when settings:set rejects an empty primary model', async () => {
     const applySettingsPatch = vi.fn(async () => settings())
 
