@@ -32,7 +32,6 @@ import {
 import {
   prioritizeSidebarThreadActivity,
   sidebarThreadActivity,
-  sidebarThreadsHaveRunningActivity,
   sortSidebarThreads,
   workspaceContextLabel,
   worktreeRecordForSidebarThread,
@@ -177,9 +176,6 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
     submitMoveThreadDialog, closeActionDialog, submitActionDialog
   } = props
 
-  const projectsHaveRunning = displayGroups.some(([, threads]) =>
-    sidebarThreadsHaveRunningActivity(threads, sidebarThreadActivityContext)
-  )
   const runningLabel = t('sidebarThreadRunning')
 
   const renderThreadRow = (
@@ -225,7 +221,6 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
     <div className="ds-no-drag flex min-h-0 flex-1 flex-col">
       <SidebarProjectsHeader
         allGroupsCollapsed={allGroupsCollapsed}
-        hasRunning={projectsHaveRunning}
         searchVisible={searchVisible}
         workspaceRoot={workspaceRoot}
         onToggle={toggleAllGroups}

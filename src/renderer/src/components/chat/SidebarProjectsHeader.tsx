@@ -1,11 +1,9 @@
 import type { ReactElement } from 'react'
 import { ChevronDown, ChevronRight, FolderPlus, Search } from 'lucide-react'
 import { SidebarIconButton } from '../sidebar/SidebarPrimitives'
-import { ThreadRunningIndicator } from './SidebarProjectRows'
 
 type Props = {
   allGroupsCollapsed: boolean
-  hasRunning: boolean
   searchVisible: boolean
   workspaceRoot: string
   onToggle: () => void
@@ -16,7 +14,6 @@ type Props = {
 
 export function SidebarProjectsHeader({
   allGroupsCollapsed,
-  hasRunning,
   searchVisible,
   workspaceRoot,
   onToggle,
@@ -24,7 +21,6 @@ export function SidebarProjectsHeader({
   onPickWorkspace,
   t
 }: Props): ReactElement {
-  const runningLabel = t('sidebarThreadRunning')
   return (
     <div className="flex min-h-[38px] items-center justify-between px-2 pb-1.5 pt-3">
       <button
@@ -32,10 +28,9 @@ export function SidebarProjectsHeader({
         onClick={onToggle}
         className="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-muted"
         title={t('sidebarProjects')}
-        aria-label={[t('sidebarProjects'), hasRunning ? runningLabel : ''].filter(Boolean).join(' - ')}
+        aria-label={t('sidebarProjects')}
       >
         <span className="truncate">{t('sidebarProjects')}</span>
-        {hasRunning ? <ThreadRunningIndicator label={runningLabel} /> : null}
         {allGroupsCollapsed
           ? <ChevronRight className="h-3 w-3 shrink-0" strokeWidth={2} />
           : <ChevronDown className="h-3 w-3 shrink-0" strokeWidth={2} />}

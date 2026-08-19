@@ -75,7 +75,7 @@ function projectProps(threads: NormalizedThread[], workspaceRoot = '/Users/zxy/p
 }
 
 describe('sidebar running awareness', () => {
-  it('keeps a collapsed project folder neutral while its thread runs', () => {
+  it('keeps the project title and collapsed workspace folder neutral while its thread runs', () => {
     vi.stubGlobal('localStorage', storage({
       [SIDEBAR_COLLAPSE_STORAGE_KEY]: JSON.stringify({
         version: 1,
@@ -90,7 +90,8 @@ describe('sidebar running awareness', () => {
 
     expect(html).toContain('aria-label="/Users/zxy/project-a"')
     expect(html).not.toContain('aria-label="/Users/zxy/project-a - sidebarThreadRunning"')
-    expect(html).toContain('aria-label="sidebarProjects - sidebarThreadRunning"')
+    expect(html).toContain('aria-label="sidebarProjects"')
+    expect(html).not.toContain('aria-label="sidebarProjects - sidebarThreadRunning"')
     expect(html).not.toContain('running-project-thread</span>')
     vi.unstubAllGlobals()
   })
