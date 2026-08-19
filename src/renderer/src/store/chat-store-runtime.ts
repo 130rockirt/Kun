@@ -39,6 +39,7 @@ import {
 } from './chat-store-runtime-helpers'
 import {
   clearUnreadCompletion,
+  completionOutcomeForTurnStatus,
   completionIsCurrentlyVisible,
   markUnreadCompletion
 } from './unread-completions'
@@ -202,9 +203,10 @@ export function syncTurnCompletionPoll(
         const completedById = new Map(accepted.map((item) => [item.id, item]))
         for (const { id } of accepted) {
           delete watchTurnCompletion[id]
-          unreadThreadIds = completionIsCurrentlyVisible(snapshot, id)
+          const outcome = completionOutcomeForTurnStatus(completedById.get(id)?.latestTurnStatus)
+          unreadThreadIds = !outcome || completionIsCurrentlyVisible(snapshot, id)
             ? clearUnreadCompletion(unreadThreadIds, id)
-            : markUnreadCompletion(unreadThreadIds, id)
+            : markUnreadCompletion(unreadThreadIds, id, outcome)
         }
         return {
           watchTurnCompletion,
@@ -640,6 +642,11 @@ export function buildThreadEventSink(
       takePendingClawFeishuMirror(state.currentTurnId)
       set((current) => reduce(current, { type: 'turn_failed', error: err, options }))
       if (terminal && state.activeThreadId) {
+        set((current) => ({
+          unreadThreadIds: completionIsCurrentlyVisible(current, state.activeThreadId!)
+            ? clearUnreadCompletion(current.unreadThreadIds, state.activeThreadId!)
+            : markUnreadCompletion(current.unreadThreadIds, state.activeThreadId!, 'failed')
+        }))
         clearWatchedCompletionNotification(state.activeThreadId)
         void reconcileCompletedTurnFromThreadDetail({
           threadId: state.activeThreadId,

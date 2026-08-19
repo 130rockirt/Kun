@@ -227,6 +227,14 @@ export type SettingsRouteSection =
   | 'storage'
   | 'dataMigration'
 export type AppRoute = 'chat' | 'write' | 'design' | 'settings' | 'plugins' | 'extensions' | 'claw' | 'schedule' | 'workflow'
+export type ThreadCompletionOutcome = 'completed' | 'failed'
+export type CompletionAttentionRegistry = Record<string, ThreadCompletionOutcome | boolean>
+export type ScheduledThreadActivity = {
+  state: 'scheduled' | 'running'
+  taskCount: number
+  nextRunAt: string
+  queued: boolean
+}
 export type PluginHostRoute = 'chat' | 'claw'
 
 /**
@@ -417,7 +425,9 @@ export type ChatState = {
   /** Source-neutral, host-fenced context awaiting one main-chat turn. Legacy field name is persisted for compatibility. */
   extensionComposerContexts: PendingComposerContextEvent[]
   watchTurnCompletion: Record<string, boolean>
-  unreadThreadIds: Record<string, boolean>
+  /** Completion attention keyed by thread. Legacy boolean true reads as completed. */
+  unreadThreadIds: CompletionAttentionRegistry
+  scheduledThreadActivities: Record<string, ScheduledThreadActivity>
   /**
    * Side conversations opened via `/btw`. The main thread selection
    * and subscription are never touched by these entries.
@@ -494,6 +504,8 @@ export type ChatState = {
   clearWorkspace: () => Promise<void>
   deleteWorkspace: (workspacePath: string) => Promise<void>
   refreshThreads: () => Promise<void>
+  /** Reconcile lightweight runtime and scheduler activity for sidebar rows. */
+  syncSidebarActivity: () => Promise<boolean>
   /** Append the next older page of threads for a workspace ("show more"). */
   loadMoreThreads: (workspacePath: string) => Promise<void>
   setThreadKnowledgeBases: (threadId: string, mounts: KnowledgeBaseMount[]) => Promise<boolean>

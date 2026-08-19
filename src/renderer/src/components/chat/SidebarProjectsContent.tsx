@@ -182,16 +182,21 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
     thread: NormalizedThread,
     workspacePath: string,
     folderId: string | null
-  ): ReactElement => (
-    <ThreadRow
+  ): ReactElement => {
+    const activity = sidebarThreadActivity(thread, sidebarThreadActivityContext)
+    return <ThreadRow
       key={thread.id}
       thread={thread}
       worktreeRecord={worktreeRecordForSidebarThread(thread, threadWorktrees)}
       active={(activeView === 'chat' || activeView === 'write') && activeThreadId === thread.id}
       deleting={deletingThreadIds[thread.id] === true}
       locale={locale}
-      showRunning={sidebarThreadActivity(thread, sidebarThreadActivityContext) === 'running'}
-      showUnread={sidebarThreadActivity(thread, sidebarThreadActivityContext) === 'unread'}
+      showRunning={activity === 'running'}
+      showFailed={activity === 'failed'}
+      showUnread={activity === 'unread'}
+      scheduledActivity={activity === 'scheduled'
+        ? sidebarThreadActivityContext.scheduledThreadActivities?.[thread.id]
+        : undefined}
       onSelect={() => onSelectThread(thread.id)}
       onContextMenu={(event) => openThreadContextMenu(event, thread)}
       onPreviewOpen={openThreadPreview}
@@ -216,7 +221,7 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
       onDelete={() => void handleDeleteThread(thread)}
       onRestore={() => void handleRestoreThread(thread)}
     />
-  )
+  }
   return (
     <div className="ds-no-drag flex min-h-0 flex-1 flex-col">
       <SidebarProjectsHeader

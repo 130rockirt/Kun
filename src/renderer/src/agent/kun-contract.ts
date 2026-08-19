@@ -46,6 +46,8 @@ export type CoreThreadSummaryJson = {
   model: string
   mode: string
   status: CoreThreadStatus
+  /** Rebuildable event-log high-water mark available on lean list responses. */
+  latestSeq?: number
   approvalPolicy?: string
   sandboxMode?: string
   approvalReviewer?: string

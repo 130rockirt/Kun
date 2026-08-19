@@ -75,6 +75,7 @@ export function SidebarConversationsSection({
   const busy = useChatStore((s) => s.busy)
   const watchTurnCompletion = useChatStore((s) => s.watchTurnCompletion)
   const unreadThreadIds = useChatStore((s) => s.unreadThreadIds)
+  const scheduledThreadActivities = useChatStore((s) => s.scheduledThreadActivities)
 
   const [collapsed, setCollapsed] = useState(true)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -92,8 +93,9 @@ export function SidebarConversationsSection({
     activeThreadId,
     busy,
     watchTurnCompletion,
-    unreadThreadIds
-  }), [activeThreadId, busy, unreadThreadIds, watchTurnCompletion])
+    unreadThreadIds,
+    scheduledThreadActivities
+  }), [activeThreadId, busy, scheduledThreadActivities, unreadThreadIds, watchTurnCompletion])
 
   const allConversationThreads = useMemo(() => sortSidebarThreads(threads.filter((thread) =>
     isConversationWorkspacePath(thread.workspace, conversationRoot) && thread.archived !== true
@@ -315,15 +317,20 @@ export function SidebarConversationsSection({
             </button>
           ) : null}
 
-          {conversationThreads.map((thread) => (
-            <ThreadRow
+          {conversationThreads.map((thread) => {
+            const activity = sidebarThreadActivity(thread, sidebarThreadActivityContext)
+            return <ThreadRow
               key={thread.id}
               thread={thread}
               active={activeThreadId === thread.id}
               deleting={deletingThreadIds[thread.id] === true}
               locale={locale}
-              showRunning={sidebarThreadActivity(thread, sidebarThreadActivityContext) === 'running'}
-              showUnread={sidebarThreadActivity(thread, sidebarThreadActivityContext) === 'unread'}
+              showRunning={activity === 'running'}
+              showFailed={activity === 'failed'}
+              showUnread={activity === 'unread'}
+              scheduledActivity={activity === 'scheduled'
+                ? scheduledThreadActivities[thread.id]
+                : undefined}
               onSelect={() => onSelectThread(thread.id)}
               onContextMenu={noOp}
               onPreviewOpen={noOp}
@@ -342,7 +349,7 @@ export function SidebarConversationsSection({
               onDelete={() => void handleDelete(thread.id)}
               onRestore={() => void onRestoreThread(thread.id)}
             />
-          ))}
+          })}
         </div>
       ) : null}
 

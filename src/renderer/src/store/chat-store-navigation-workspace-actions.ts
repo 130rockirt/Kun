@@ -140,6 +140,7 @@ import {
 } from './chat-store-runtime'
 import {
   clearUnreadCompletion,
+  completionOutcomeForTurnStatus,
   completionIsCurrentlyVisible,
   markUnreadCompletion,
   retainUnreadCompletions
@@ -621,9 +622,10 @@ export function createNavigationWorkspaceActions(
         }
         let u = retainUnreadCompletions(s.unreadThreadIds, validIds)
         for (const id of reconciledCompletedWatchIds) {
-          u = completionIsCurrentlyVisible(s, id)
+          const outcome = completionOutcomeForTurnStatus(reconciledStateById.get(id)?.latestTurnStatus)
+          u = !outcome || completionIsCurrentlyVisible(s, id)
             ? clearUnreadCompletion(u, id)
-            : markUnreadCompletion(u, id)
+            : markUnreadCompletion(u, id, outcome)
         }
         return {
           threads: displayThreads,

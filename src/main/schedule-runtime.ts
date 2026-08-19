@@ -55,6 +55,7 @@ import {
   hasTaskDependencyCycle,
   scheduledThreadTitle
 } from './schedule-runtime-queue'
+import { boundThreadTasksForStatus } from './schedule-runtime-status'
 
 export {
   hasTaskDependencyCycle,
@@ -157,11 +158,14 @@ export class ScheduleRuntime {
 
   async status(): Promise<ScheduleRuntimeStatus> {
     const settings = await this.loadSettings()
+    const runningTaskIds = this.queue.runningIds()
+    const queuedTaskIds = this.queue.queuedIds()
     return {
       internalServerRunning: this.server !== null,
       internalUrl: internalUrl(settings),
-      runningTaskIds: this.queue.runningIds(),
-      queuedTaskIds: this.queue.queuedIds(),
+      runningTaskIds,
+      queuedTaskIds,
+      boundThreadTasks: boundThreadTasksForStatus(settings.schedule.tasks, runningTaskIds, queuedTaskIds),
       powerSaveBlockerActive: this.isPowerSaveBlockerActive()
     }
   }

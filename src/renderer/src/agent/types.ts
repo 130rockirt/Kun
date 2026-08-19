@@ -218,6 +218,7 @@ export type NormalizedThread = {
   workspace?: string
   knowledgeBases?: KnowledgeBaseMount[]
   status?: string
+  latestSeq?: number
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
   approvalReviewer?: ApprovalReviewer

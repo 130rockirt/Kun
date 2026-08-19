@@ -140,6 +140,7 @@ export function registerAppRuntimeIpcHandlers(options: RegisterAppIpcHandlersOpt
       internalUrl: '',
       runningTaskIds: [],
       queuedTaskIds: [],
+      boundThreadTasks: [],
       powerSaveBlockerActive: false
     }
   )

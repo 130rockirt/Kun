@@ -16,6 +16,8 @@ import {
   shouldOmitFromCodeWorkspaceRoots
 } from '../../lib/worktree-project-path'
 import { threadLooksRunning } from '../../store/chat-store-runtime-helpers'
+import { completionAttentionForThread } from '../../store/unread-completions'
+import type { CompletionAttentionRegistry, ScheduledThreadActivity } from '../../store/chat-store-types'
 import type { ThreadWorktreeRecord } from '../../lib/thread-worktree-registry'
 
 export type SidebarWorkspaceGroup = [workspacePath: string, threads: NormalizedThread[]]
@@ -31,13 +33,14 @@ const THREAD_PREVIEW_MAX_HEIGHT = 220
 const THREAD_PREVIEW_GAP = 10
 const THREAD_PREVIEW_VIEWPORT_MARGIN = 12
 
-export type SidebarThreadActivity = 'unread' | 'running' | 'read'
+export type SidebarThreadActivity = 'failed' | 'unread' | 'running' | 'scheduled' | 'read'
 
 export type SidebarThreadActivityContext = {
   activeThreadId: string | null
   busy: boolean
   watchTurnCompletion: Record<string, boolean>
-  unreadThreadIds: Record<string, boolean>
+  unreadThreadIds: CompletionAttentionRegistry
+  scheduledThreadActivities?: Record<string, ScheduledThreadActivity>
 }
 
 /**
@@ -53,9 +56,15 @@ export function sidebarThreadActivity(
   const running =
     threadLooksRunning(thread) ||
     context.watchTurnCompletion[id] === true ||
-    (context.activeThreadId === id && context.busy)
+    (context.activeThreadId === id && context.busy) ||
+    context.scheduledThreadActivities?.[id]?.state === 'running'
   if (running) return 'running'
-  if (context.activeThreadId !== id && context.unreadThreadIds[id] === true) return 'unread'
+  const attention = context.activeThreadId === id
+    ? null
+    : completionAttentionForThread(context.unreadThreadIds, id)
+  if (attention === 'failed') return 'failed'
+  if (attention === 'completed') return 'unread'
+  if (context.scheduledThreadActivities?.[id]?.state === 'scheduled') return 'scheduled'
   return 'read'
 }
 
@@ -65,16 +74,18 @@ export function prioritizeSidebarThreadActivity(
   context: SidebarThreadActivityContext
 ): NormalizedThread[] {
   const running: NormalizedThread[] = []
+  const failed: NormalizedThread[] = []
   const unread: NormalizedThread[] = []
   const read: NormalizedThread[] = []
   for (const thread of threads) {
     switch (sidebarThreadActivity(thread, context)) {
       case 'running': running.push(thread); break
+      case 'failed': failed.push(thread); break
       case 'unread': unread.push(thread); break
       default: read.push(thread)
     }
   }
-  return [...running, ...unread, ...read]
+  return [...running, ...failed, ...unread, ...read]
 }
 
 export function sidebarThreadsHaveRunningActivity(
