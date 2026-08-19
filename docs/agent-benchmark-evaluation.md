@@ -6,6 +6,10 @@
 - DeepSWE v1.1（固定任务 commit + Pier 0.3.0）；
 - Terminal-Bench 2.1（Harbor 0.21.0）。
 
+Windows 10/11 用户请使用 Docker Desktop WSL2 Linux engine，并按
+[`agent-benchmarks-windows.md`](./agent-benchmarks-windows.md) 完成安装、PowerShell 委派、
+资源配置和三套评测验证；不支持用 Windows Python 或 Windows containers 直接运行。
+
 SWE-bench 的 patch 生成和评分细节另见
 [`swe-bench-evaluation.md`](./swe-bench-evaluation.md)。
 
