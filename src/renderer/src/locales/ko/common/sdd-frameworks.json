@@ -612,6 +612,8 @@
   "subagentSwarmRunning": "{{count}}개 실행 중",
   "subagentSwarmQueued": "{{count}}개 대기 중",
   "subagentSwarmDone": "{{count}}개 완료",
+  "subagentProactiveRetryProgress": "재시도 {{count}}/{{limit}}",
+  "subagentProactiveRetryRemaining": "사전 재시도 {{remaining}}회 남음",
   "sidebarFooterHint": "로컬 런타임을 연결하여 스레드를 생성하고 에이전트와 채팅하세요.",
   "appErrorTitle": "문제가 발생했습니다.",
   "appErrorReload": "새로고침",

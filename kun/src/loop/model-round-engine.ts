@@ -401,6 +401,7 @@ export class ModelRoundEngine {
               this.deps.rememberFailure(input.turnId, {
                 error: intent.message,
                 ...(intent.code ? { code: intent.code } : {}),
+                ...(intent.failure ? { details: { modelFailure: intent.failure } } : {}),
                 severity: 'error'
               })
               await this.deps.events.record({
@@ -409,6 +410,7 @@ export class ModelRoundEngine {
                 turnId: input.turnId,
                 message: intent.message,
                 code: intent.code,
+                ...(intent.failure ? { details: { modelFailure: intent.failure } } : {}),
                 severity: 'error'
               })
               break

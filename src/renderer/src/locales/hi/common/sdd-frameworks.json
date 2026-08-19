@@ -612,6 +612,8 @@
   "subagentSwarmRunning": "{{count}} running",
   "subagentSwarmQueued": "{{count}} queued",
   "subagentSwarmDone": "{{count}} done",
+  "subagentProactiveRetryProgress": "पुनः प्रयास {{count}}/{{limit}}",
+  "subagentProactiveRetryRemaining": "{{remaining}} सक्रिय पुनः प्रयास शेष",
   "sidebarFooterHint": "थ्रेड बनाने और एजेंट के साथ चैट करने के लिए स्थानीय रनटाइम कनेक्ट करें।",
   "appErrorTitle": "कुछ ग़लत हो गया",
   "appErrorReload": "पुनः लोड करें",

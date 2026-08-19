@@ -392,6 +392,14 @@ export function mergeKunSubagentsSettings(
     ...effectivePatch,
     enabled: effectivePatch?.enabled ?? effectiveCurrent?.enabled ?? true,
     useExistingAgents: effectivePatch?.useExistingAgents ?? effectiveCurrent?.useExistingAgents ?? true,
+    proactiveRetry: {
+      enabled: effectivePatch?.proactiveRetry?.enabled
+        ?? effectiveCurrent?.proactiveRetry?.enabled
+        ?? true,
+      maxAttempts: effectivePatch?.proactiveRetry?.maxAttempts
+        ?? effectiveCurrent?.proactiveRetry?.maxAttempts
+        ?? 3
+    },
     // A roster diff is an intentional whole-array replacement (including []
     // for deleting every custom profile). Omitting it keeps the current roster.
     profiles: effectivePatch?.profiles !== undefined

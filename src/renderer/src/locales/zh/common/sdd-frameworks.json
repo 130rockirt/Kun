@@ -646,6 +646,8 @@
   "subagentSwarmRunning": "{{count}} 运行",
   "subagentSwarmQueued": "{{count}} 排队",
   "subagentSwarmDone": "{{count}} 完成",
+  "subagentProactiveRetryProgress": "主动恢复 {{count}}/{{limit}}",
+  "subagentProactiveRetryRemaining": "剩余 {{remaining}} 次主动恢复",
   "sidebarFooterHint": "连接本地运行后即可创建会话并与代理对话。",
   "appErrorTitle": "应用出了点问题",
   "appErrorReload": "重新加载",

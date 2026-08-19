@@ -261,6 +261,10 @@ const subagentsPatchSchema = z
     enabled: z.boolean().optional(),
     useExistingAgents: z.boolean().optional(),
     maxParallel: z.number().int().positive().max(256).optional(),
+    proactiveRetry: z.object({
+      enabled: z.boolean().optional(),
+      maxAttempts: z.number().int().min(1).max(3).optional()
+    }).strict().optional(),
     // Compatibility input only. The transform below prevents old persisted or
     // renderer-supplied cumulative limits from reaching effective settings.
     maxChildRuns: z.number().int().nonnegative().max(10_000).optional(),

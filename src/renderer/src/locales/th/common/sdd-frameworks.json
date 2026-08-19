@@ -612,6 +612,8 @@
   "subagentSwarmRunning": "{{count}} วิ่งอยู่",
   "subagentSwarmQueued": "{{count}} เข้าคิวแล้ว",
   "subagentSwarmDone": "เสร็จสิ้นแล้ว {{count}}",
+  "subagentProactiveRetryProgress": "ลองใหม่ {{count}}/{{limit}}",
+  "subagentProactiveRetryRemaining": "เหลือการลองใหม่เชิงรุก {{remaining}} ครั้ง",
   "sidebarFooterHint": "เชื่อมต่อรันไทม์ในเครื่องเพื่อสร้างเธรดและแชทกับตัวแทน",
   "appErrorTitle": "มีบางอย่างผิดพลาด",
   "appErrorReload": "โหลดซ้ำ",

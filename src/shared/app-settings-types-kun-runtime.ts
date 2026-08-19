@@ -73,6 +73,11 @@ export type KunSubagentsSettingsV1 = {
   /** Defaults to true when absent for settings written by older app versions. */
   useExistingAgents?: boolean
   maxParallel?: number
+  /** Main-agent continuation policy for failed ordinary delegate_task children. */
+  proactiveRetry?: {
+    enabled: boolean
+    maxAttempts: number
+  }
   defaultToolPolicy?: 'readOnly' | 'inherit'
   defaultProfile?: string
   profiles: KunSubagentProfileV1[]

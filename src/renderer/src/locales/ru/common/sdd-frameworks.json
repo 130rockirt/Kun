@@ -612,6 +612,8 @@
   "subagentSwarmRunning": "{{count}} работает",
   "subagentSwarmQueued": "{{count}} в очереди",
   "subagentSwarmDone": "{{count}} выполнено",
+  "subagentProactiveRetryProgress": "Повтор {{count}}/{{limit}}",
+  "subagentProactiveRetryRemaining": "Осталось проактивных повторов: {{remaining}}",
   "sidebarFooterHint": "Подключите локальную среду выполнения, чтобы создавать потоки и общаться с агентом.",
   "appErrorTitle": "Что-то пошло не так",
   "appErrorReload": "Перезагрузить",

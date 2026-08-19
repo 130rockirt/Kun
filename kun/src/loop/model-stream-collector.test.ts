@@ -181,4 +181,27 @@ describe('ModelStreamCollector', () => {
       kind: 'generated_image', imageBase64: 'aW1hZ2U=', mimeType: 'image/png'
     }])
   })
+
+  it('preserves safe provider failure metadata on model errors', () => {
+    const stream = collector()
+    expect(stream.reduce({
+      kind: 'error',
+      message: 'model request failed with status 520',
+      code: 'http_520',
+      failure: {
+        category: 'unavailable',
+        httpStatus: 520,
+        failoverAllowed: true
+      }
+    }).intents).toEqual([{
+      kind: 'model_error',
+      message: 'model request failed with status 520',
+      code: 'http_520',
+      failure: {
+        category: 'unavailable',
+        httpStatus: 520,
+        failoverAllowed: true
+      }
+    }])
+  })
 })

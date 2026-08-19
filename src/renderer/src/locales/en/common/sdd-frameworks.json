@@ -646,6 +646,8 @@
   "subagentSwarmRunning": "{{count}} running",
   "subagentSwarmQueued": "{{count}} queued",
   "subagentSwarmDone": "{{count}} done",
+  "subagentProactiveRetryProgress": "Retry {{count}}/{{limit}}",
+  "subagentProactiveRetryRemaining": "{{remaining}} proactive retries left",
   "sidebarFooterHint": "Connect the local runtime to create threads and chat with the agent.",
   "appErrorTitle": "Something went wrong",
   "appErrorReload": "Reload",

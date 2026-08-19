@@ -612,6 +612,8 @@
   "subagentSwarmRunning": "{{count}} 個が実行中",
   "subagentSwarmQueued": "{{count}} 個がキューに入れられました",
   "subagentSwarmDone": "{{count}} 回完了しました",
+  "subagentProactiveRetryProgress": "再試行 {{count}}/{{limit}}",
+  "subagentProactiveRetryRemaining": "残り {{remaining}} 回のプロアクティブ再試行",
   "sidebarFooterHint": "ローカル ランタイムに接続してスレッドを作成し、エージェントとチャットします。",
   "appErrorTitle": "何か問題が発生しました",
   "appErrorReload": "リロード",

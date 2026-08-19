@@ -35,6 +35,20 @@ export type DelegateDetail = {
   terminationReason?: 'user_stop' | 'manual_stop' | 'runtime_restart' | 'child_error'
   resumable?: boolean
   resumeCount?: number
+  failure?: {
+    source: 'model' | 'runtime' | 'contract'
+    code?: string
+    category?: string
+    httpStatus?: number
+    retryAfterMs?: number
+  }
+  proactiveRetry?: {
+    enabled: boolean
+    eligible: boolean
+    count: number
+    limit: number
+    remaining: number
+  }
   /** Short UI title from fast_context (or early lifecycle updates). */
   title?: string
   /** Narrow explore query from the initial tool arguments payload. */
@@ -124,6 +138,8 @@ export function parseDelegateDetail(detail: string | undefined): DelegateDetail 
   const evidencePack = parseFastContextEvidencePack(detail)
   const singleTask = evidencePack?.tasks.length === 1 ? evidencePack.tasks[0] : undefined
   const resultRef = recordValue(obj.resultRef) ?? recordValue(child?.resultRef)
+  const failure = recordValue(obj.failure) ?? recordValue(child?.failure)
+  const proactiveRetry = recordValue(obj.proactiveRetry) ?? recordValue(child?.proactiveRetry)
   const artifactId = str(resultRef?.artifactId)
   const byteSize = num(resultRef?.byteSize)
   const lineCount = num(resultRef?.lineCount)
@@ -144,6 +160,31 @@ export function parseDelegateDetail(detail: string | undefined): DelegateDetail 
       ? obj.resumable
       : typeof child?.resumable === 'boolean' ? child.resumable : undefined,
     resumeCount: num(obj.resumeCount) ?? num(child?.resumeCount),
+    ...(failure?.source === 'model' || failure?.source === 'runtime' || failure?.source === 'contract'
+      ? {
+          failure: {
+            source: failure.source,
+            ...(str(failure.code) ? { code: str(failure.code) } : {}),
+            ...(str(failure.category) ? { category: str(failure.category) } : {}),
+            ...(num(failure.httpStatus) !== undefined ? { httpStatus: num(failure.httpStatus) } : {}),
+            ...(num(failure.retryAfterMs) !== undefined ? { retryAfterMs: num(failure.retryAfterMs) } : {})
+          }
+        }
+      : {}),
+    ...(proactiveRetry && typeof proactiveRetry.enabled === 'boolean' &&
+      typeof proactiveRetry.eligible === 'boolean' &&
+      num(proactiveRetry.count) !== undefined && num(proactiveRetry.limit) !== undefined &&
+      num(proactiveRetry.remaining) !== undefined
+      ? {
+          proactiveRetry: {
+            enabled: proactiveRetry.enabled,
+            eligible: proactiveRetry.eligible,
+            count: num(proactiveRetry.count)!,
+            limit: num(proactiveRetry.limit)!,
+            remaining: num(proactiveRetry.remaining)!
+          }
+        }
+      : {}),
     title: str(obj.title) ?? str(obj.label) ?? str(child?.title) ?? str(child?.label) ?? singleTask?.title,
     query: str(obj.query) ?? str(child?.query) ?? singleTask?.query,
     summary: str(obj.summary) ?? str(child?.summary),
@@ -318,6 +359,8 @@ export type ChildMeta = {
   childTerminationReason?: DelegateDetail['terminationReason']
   resumable?: boolean
   resumeCount?: number
+  failure?: DelegateDetail['failure']
+  proactiveRetry?: DelegateDetail['proactiveRetry']
   parentThreadId?: string
   parentTurnId?: string
   toolInvocations?: number
@@ -360,6 +403,12 @@ export function readChildMeta(block: ChatBlock): ChildMeta {
       : undefined,
     resumable: typeof child.resumable === 'boolean' ? child.resumable : undefined,
     resumeCount: typeof child.resumeCount === 'number' ? child.resumeCount : undefined,
+    ...(child.failure && typeof child.failure === 'object'
+      ? { failure: child.failure as DelegateDetail['failure'] }
+      : {}),
+    ...(child.proactiveRetry && typeof child.proactiveRetry === 'object'
+      ? { proactiveRetry: child.proactiveRetry as DelegateDetail['proactiveRetry'] }
+      : {}),
     parentThreadId: str(child.parentThreadId),
     parentTurnId: str(child.parentTurnId),
     toolInvocations: typeof child.toolInvocations === 'number' ? child.toolInvocations : undefined,
@@ -524,6 +573,39 @@ export function MetaChip({ children, title }: { children: React.ReactNode; title
       title={title}
     >
       {children}
+    </span>
+  )
+}
+
+export function ProactiveRetryBadge({
+  retry,
+  t,
+  remaining = false
+}: {
+  retry: NonNullable<DelegateDetail['proactiveRetry']>
+  t: TFunction<'common'>
+  remaining?: boolean
+}): ReactElement {
+  if (remaining) {
+    return (
+      <MetaChip>
+        {t('subagentProactiveRetryRemaining', {
+          defaultValue: '{{remaining}} proactive retries left',
+          remaining: retry.remaining
+        })}
+      </MetaChip>
+    )
+  }
+  return (
+    <span
+      className="whitespace-nowrap rounded-full bg-sky-500/10 px-2 py-[2px] text-[10.5px] font-semibold text-sky-700 dark:text-sky-300"
+      data-testid="subagent-proactive-retry-progress"
+    >
+      {t('subagentProactiveRetryProgress', {
+        defaultValue: 'Retry {{count}}/{{limit}}',
+        count: retry.count,
+        limit: retry.limit
+      })}
     </span>
   )
 }

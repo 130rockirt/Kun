@@ -33,7 +33,7 @@ function failureUsage(): ChildRunRecord['usage'] {
 }
 
 function failureExecutor(
-  settlement: { usage?: ChildRunRecord['usage']; toolInvocations?: number } | undefined
+  settlement: ConstructorParameters<typeof ChildResultExecutionError>[2]
 ): ChildRunExecutor {
   return async () => {
     throw new ChildResultExecutionError('insufficient balance', { summary: 'partial work' }, settlement)
@@ -64,6 +64,52 @@ describe('DelegationRuntime failed/aborted child usage settlement', () => {
       expect(externalUsage[0]).toMatchObject({
         threadId: record.id,
         usage: { promptTokens: 5621, totalTokens: 5795 }
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('persists HTTP 520 classification and makes the ordinary child resumable', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-delegation-http-520-'))
+    try {
+      const runtime = new DelegationRuntime({
+        config: subagentConfig(),
+        store: new FileDelegationStore(dir),
+        executor: failureExecutor({
+          usage: failureUsage(),
+          failure: {
+            source: 'model',
+            code: 'http_520',
+            category: 'unavailable',
+            httpStatus: 520
+          }
+        })
+      })
+      const record = await runtime.runChild({
+        parentThreadId: 'parent',
+        parentTurnId: 'turn-1',
+        launcher: 'delegate_task',
+        prompt: 'review the change',
+        workspace: '/workspace',
+        inlineProfile: {
+          id: 'reviewer', source: 'builtin',
+          profile: { mode: 'subagent', toolPolicy: 'readOnly' }
+        },
+        security: { sandboxRoot: '/workspace', memoryEnabled: false },
+        signal: new AbortController().signal
+      })
+
+      expect(record).toMatchObject({
+        status: 'failed',
+        terminationReason: 'child_error',
+        resumable: true,
+        failure: {
+          source: 'model',
+          code: 'http_520',
+          category: 'unavailable',
+          httpStatus: 520
+        }
       })
     } finally {
       await rm(dir, { recursive: true, force: true })
