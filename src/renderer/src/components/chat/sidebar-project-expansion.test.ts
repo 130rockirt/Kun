@@ -25,6 +25,13 @@ describe('sidebar project expansion', () => {
     ])
   })
 
+  it('advances a six-thread project to its complete local batch before collapsing', () => {
+    const stages = expansionCycle(6, 2)
+
+    expect(stages).toEqual([0, 1, 0])
+    expect(stages.map((stage) => sidebarProjectVisibleThreadCount(6, stage))).toEqual([5, 6, 5])
+  })
+
   it.each([
     [8, [5, 8, 5]],
     [12, [5, 10, 12, 5]]

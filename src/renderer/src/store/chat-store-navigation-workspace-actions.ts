@@ -106,7 +106,7 @@ import {
   stopTurnCompletionPoll
 } from './chat-store-schedulers'
 import { saveThreadListCache } from './thread-list-cache'
-import { loadMoreThreads as loadMoreThreadsAction, buildWorkspaceCursorByWorkspace } from './chat-store-thread-pagination'
+import { loadMoreThreads as loadMoreThreadsAction } from './chat-store-thread-pagination'
 import {
   collectRunningWatchTargets,
   normalizeListedThreadActivity
@@ -370,7 +370,6 @@ export function createNavigationWorkspaceActions(
     try {
       const p = getProvider()
       let rawThreads: NormalizedThread[]
-      let listPageMeta: { nextCursor?: string; hasMore: boolean; total?: number } | null = null
       try {
         if (typeof p.listThreadsPage === 'function') {
           const page = await p.listThreadsPage({
@@ -379,7 +378,6 @@ export function createNavigationWorkspaceActions(
             lean: true
           })
           rawThreads = page.threads
-          listPageMeta = { nextCursor: page.nextCursor, hasMore: page.hasMore, total: page.total }
         } else {
           rawThreads = await p.listThreads({
             includeArchived: true,
@@ -634,11 +632,7 @@ export function createNavigationWorkspaceActions(
           unreadThreadIds: u,
           threadListStatus: 'ready',
           threadListError: null,
-          ...(listPageMeta
-            ? {
-                threadListCursorByWorkspace: buildWorkspaceCursorByWorkspace(displayThreads, listPageMeta)
-              }
-            : {}),
+          threadListCursorByWorkspace: {},
           ...(staleCodeThreadMemory ? { lastCodeThreadId: null } : {}),
           ...(shouldClearSelection ? clearedThreadSelection() : {})
         }

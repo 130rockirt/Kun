@@ -314,10 +314,10 @@ export type ChatState = {
   threadListStatus: 'idle' | 'loading' | 'ready' | 'refreshing' | 'error'
   threadListError: string | null
   /**
-   * Per-workspace pagination state for the sidebar thread list. Each workspace
-   * loads its most recent page first and appends older pages on "show more".
+   * Per-workspace pagination state, keyed by normalized workspace identity.
+   * Only a workspace-scoped Runtime response may populate this map.
    */
-  threadListCursorByWorkspace: Record<string, { nextCursor?: string; hasMore: boolean; total?: number }>
+  threadListCursorByWorkspace: Record<string, import('./chat-store-thread-pagination').WorkspaceThreadPageMeta>
   knowledgeBaseStatuses: Record<string, KnowledgeBaseIndexStatus[]>
   threadSearch: string
   showArchivedThreads: boolean

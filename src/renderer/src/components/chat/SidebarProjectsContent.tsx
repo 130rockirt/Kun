@@ -79,7 +79,12 @@ export type SidebarProjectsContentProps = {
   threadListStatus: SidebarThreadListStatus; threadListError: string | null
   onRetryThreads: () => void
   onLoadMoreThreads: (workspacePath: string) => void
-  threadListCursorByWorkspace: Record<string, { nextCursor?: string; hasMore: boolean; total?: number }>
+  threadListCursorByWorkspace: Record<string, {
+    workspaceKey: string
+    nextCursor?: string
+    hasMore: boolean
+    total?: number
+  }>
   activeView: 'chat' | 'write' | 'claw'; activeThreadId: string | null; locale: string
   displayGroups: SidebarWorkspaceGroup[]
   sidebarCollapse: SidebarCollapseRegistry; sidebarOrder: SidebarOrderRegistry; sidebarFolders: SidebarFolderRegistry
@@ -313,6 +318,13 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
           )
           const visibleThreads = visibleSelection.items
           const hiddenThreadCount = visibleSelection.hiddenCount
+          const workspaceCursor = threadListCursorByWorkspace[workspaceRootIdentityKey(workspacePath)]
+          const hasWorkspaceRemoteMore = workspaceCursor?.hasMore === true
+          const knownWorkspaceRemoteCount = Math.max(
+            0,
+            (workspaceCursor?.total ?? rootThreads.length) - rootThreads.length
+          )
+          const hasMoreProjectThreads = hiddenThreadCount > 0 || hasWorkspaceRemoteMore
           return (
             <div
               key={workspacePath}
@@ -536,12 +548,11 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                       <SidebarThreadSkeleton />
                     )
                   ) : visibleThreads.map((thread) => renderThreadRow(thread, workspacePath, null))}
-                  {rootThreads.length > 5 ? (
+                  {hasMoreProjectThreads || rootThreads.length > 5 ? (
                     <button
                       type="button"
                       data-cursor-spotlight-target
                       onClick={() => {
-                        const workspaceCursor = threadListCursorByWorkspace[workspacePath]
                         if (workspaceCursor?.hasMore === true) {
                           onLoadMoreThreads(workspacePath)
                           return
@@ -556,11 +567,11 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                       }}
                       className="ml-1 mt-1 rounded-md px-2.5 py-1.5 text-[12.5px] text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
                     >
-                      {hiddenThreadCount > 0
+                      {hasMoreProjectThreads
                         ? t('sidebarWorkspaceShowMore', {
                             count: Math.max(
                               hiddenThreadCount,
-                              (threadListCursorByWorkspace[workspacePath]?.total ?? rootThreads.length) - rootThreads.length
+                              knownWorkspaceRemoteCount
                             )
                           })
                         : t('sidebarWorkspaceShowLess')}

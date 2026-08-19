@@ -154,7 +154,7 @@ type SidebarProjectsSectionProps = {
   threadListError: string | null
   onRetryThreads: () => void
   onLoadMoreThreads: (workspacePath: string) => void
-  threadListCursorByWorkspace: Record<string, { nextCursor?: string; hasMore: boolean; total?: number }>
+  threadListCursorByWorkspace: Record<string, import('../../store/chat-store-thread-pagination').WorkspaceThreadPageMeta>
   searchQuery: string
   showArchived: boolean
   workspaceRoot: string
