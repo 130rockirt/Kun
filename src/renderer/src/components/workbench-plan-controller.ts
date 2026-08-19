@@ -338,7 +338,7 @@ export function useWorkbenchPlanController({
         orchestration,
         graphEnabled: chatState.graphEnabled,
         usePromptWorktree: orchestration === 'direct' && preference?.initialized === true &&
-          preference.featureEnabled && preference.usePromptWorktree,
+          preference.usePromptWorktree,
         branchPrefix: preference?.branchPrefix ?? 'codex/',
         activeThreadId: chatState.activeThreadId,
         save: savePlanContentToDisk,

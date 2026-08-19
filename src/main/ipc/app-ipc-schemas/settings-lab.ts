@@ -31,9 +31,6 @@ export const kunLabPatchSchema = z.preprocess(
       reasoningEffort: z.enum(['auto', 'off', 'low', 'medium', 'high', 'max']).optional(),
       fast: z.boolean().optional(),
       imageFirst: z.boolean().optional()
-    }).strict().optional(),
-    planWorktree: z.object({
-      enabled: z.boolean().optional()
     }).strict().optional()
   }).strict()
 )

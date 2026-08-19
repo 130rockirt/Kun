@@ -38,8 +38,7 @@ const t = (key: string): string => labels[key] ?? key
 function settings(imageFirst: boolean): KunLabSettingsV1 {
   return {
     fastContext: { enabled: true, model: '', providerId: '', fast: false },
-    pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst },
-    planWorktree: { enabled: false }
+    pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst }
   }
 }
 

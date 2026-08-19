@@ -185,7 +185,7 @@ export function PlanBuildActions({
   const settingsPending = Boolean(resolvedPlanId && !preference?.initialized)
   const buildDisabled = disabled || settingsPending || submitting
   const graphSelected = selectedMode === 'graph'
-  const worktreeControl = resolvedPlanId && preference?.initialized && preference.featureEnabled ? (
+  const worktreeControl = resolvedPlanId && preference?.initialized ? (
     <div data-plan-worktree-control className={variant === 'card'
       ? 'flex min-w-[260px] flex-1 items-center gap-2.5'
       : 'flex min-w-0 flex-wrap items-center gap-2 text-[11.5px] text-ds-muted'}>
