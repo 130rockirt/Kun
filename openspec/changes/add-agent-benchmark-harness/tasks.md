@@ -27,5 +27,5 @@
 ## 5. Validation and Integration
 
 - [x] 5.1 Run dry-run, Python, CLI, typecheck, build, file-line, and diff validation gates; distinguish baseline failures.
-- [ ] 5.2 Commit scoped changes, rebase onto current local `develop`, rerun applicable gates, and fast-forward integrate safely.
-- [ ] 5.3 Prove merged ancestry, remove the temporary worktree/branch, and report the deferred real-smoke blockers.
+- [x] 5.2 Commit scoped changes, rebase onto current local `develop`, rerun applicable gates, and fast-forward integrate safely.
+- [x] 5.3 Prove merged ancestry, remove the temporary worktree/branch, and report the deferred real-smoke blockers.
