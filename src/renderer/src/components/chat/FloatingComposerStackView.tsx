@@ -29,103 +29,105 @@ export function FloatingComposerStackView({
   } = context
   return (
     <>
-        <FloatingComposerAboveInputStack
-          todo={showTodoProgress && activeThreadTodos ? (
-            <FloatingComposerTodoProgress todos={activeThreadTodos} enabled={showGraphProgress} />
-          ) : null}
-          graph={(
+      <FloatingComposerAboveInputStack
+        floatingStatuses={(
+          <>
+            {showTodoProgress && activeThreadTodos ? (
+              <FloatingComposerTodoProgress todos={activeThreadTodos} enabled={showGraphProgress} />
+            ) : null}
             <FloatingComposerGraphProgress
               threadId={activeThreadId}
               enabled={showGraphProgress}
               onOpenGraph={onOpenGraph}
               onOpenChild={onOpenGraphChild}
             />
-          )}
-          incoming={(
-            <>
-              {runtimeReady ? <BackgroundShellOverlay threadId={activeThreadId} /> : null}
-              <FloatingComposerQueuedMessages
-                messages={queuedMessages}
-                guidanceTarget={currentTurnOrchestration === 'graph' ? 'graph' : 'turn'}
-                onRemove={onRemoveQueuedMessage}
-                onGuide={onGuideQueuedMessage}
-                onReorder={reorderQueuedMessage}
-                onEdit={(message: QueuedComposerMessage) => {
-                  returnQueuedMessageToComposer(message, onRemoveQueuedMessage, setInput)
-                  draft.focusComposer()
-                }}
+            {showGoalFloater && activeThreadGoal && !pendingUserInputBlock ? (
+              <div
+                data-composer-stack-item="goal"
+                className="ds-composer-status-glass pointer-events-auto flex min-h-11 w-full max-w-[46rem] items-center gap-2 rounded-full border px-3 py-1.5 text-ds-muted"
+              >
+                <Target className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.9} />
+                <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] leading-5">
+                  <span className="shrink-0 font-semibold text-ds-ink">
+                    {goalBannerLabel}
+                  </span>
+                  <span className="min-w-0 truncate text-ds-muted">
+                    {activeThreadGoal.objective}
+                  </span>
+                  <span className="shrink-0 text-ds-faint">
+                    · {goalElapsedLabel}
+                  </span>
+                </div>
+                <div className="flex shrink-0 items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGoalPanelOpen(true)
+                      draft.focusComposer()
+                    }}
+                    className="ds-no-drag flex h-7 w-7 items-center justify-center rounded-full text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                    aria-label={t('goalActionEdit')}
+                    title={t('goalActionEdit')}
+                  >
+                    <Pencil className="h-3.5 w-3.5" strokeWidth={1.9} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void setActiveThreadGoalStatus(activeThreadGoal.status === 'active' ? 'paused' : 'active')
+                    }}
+                    className="ds-no-drag flex h-7 w-7 items-center justify-center rounded-full text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                    aria-label={activeThreadGoal.status === 'active' ? t('goalActionPause') : t('goalActionResume')}
+                    title={activeThreadGoal.status === 'active' ? t('goalActionPause') : t('goalActionResume')}
+                  >
+                    {activeThreadGoal.status === 'active' ? (
+                      <PauseCircle className="h-3.5 w-3.5" strokeWidth={1.9} />
+                    ) : (
+                      <PlayCircle className="h-3.5 w-3.5" strokeWidth={1.9} />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void clearActiveThreadGoal()
+                    }}
+                    className="ds-no-drag flex h-7 w-7 items-center justify-center rounded-full text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                    aria-label={t('goalActionClear')}
+                    title={t('goalActionClear')}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </>
+        )}
+        flowPanels={(
+          <>
+            {runtimeReady ? <BackgroundShellOverlay threadId={activeThreadId} /> : null}
+            <FloatingComposerQueuedMessages
+              messages={queuedMessages}
+              guidanceTarget={currentTurnOrchestration === 'graph' ? 'graph' : 'turn'}
+              onRemove={onRemoveQueuedMessage}
+              onGuide={onGuideQueuedMessage}
+              onReorder={reorderQueuedMessage}
+              onEdit={(message: QueuedComposerMessage) => {
+                returnQueuedMessageToComposer(message, onRemoveQueuedMessage, setInput)
+                draft.focusComposer()
+              }}
+            />
+            {userInput.active ? (
+              <FloatingComposerUserInputPanel
+                controller={userInput}
+                t={t}
+                variant={compact ? 'compact' : 'main'}
               />
-              {userInput.active ? (
-                <FloatingComposerUserInputPanel
-                  controller={userInput}
-                  t={t}
-                  variant={compact ? 'compact' : 'main'}
-                />
-              ) : null}
-            </>
-          )}
-          goal={showGoalFloater && activeThreadGoal && !pendingUserInputBlock ? (
-            <div
-              data-composer-stack-item="goal"
-              className="pointer-events-auto flex min-h-11 w-full max-w-[46rem] items-center gap-2 rounded-full border border-ds-border bg-white px-3 py-1.5 text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card"
-            >
-              <Target className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.9} />
-              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] leading-5">
-                <span className="shrink-0 font-semibold text-ds-ink">
-                  {goalBannerLabel}
-                </span>
-                <span className="min-w-0 truncate text-ds-muted">
-                  {activeThreadGoal.objective}
-                </span>
-                <span className="shrink-0 text-ds-faint">
-                  · {goalElapsedLabel}
-                </span>
-              </div>
-              <div className="flex shrink-0 items-center gap-0.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGoalPanelOpen(true)
-                    draft.focusComposer()
-                  }}
-                  className="ds-no-drag flex h-7 w-7 items-center justify-center rounded-full text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
-                  aria-label={t('goalActionEdit')}
-                  title={t('goalActionEdit')}
-                >
-                  <Pencil className="h-3.5 w-3.5" strokeWidth={1.9} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void setActiveThreadGoalStatus(activeThreadGoal.status === 'active' ? 'paused' : 'active')
-                  }}
-                  className="ds-no-drag flex h-7 w-7 items-center justify-center rounded-full text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
-                  aria-label={activeThreadGoal.status === 'active' ? t('goalActionPause') : t('goalActionResume')}
-                  title={activeThreadGoal.status === 'active' ? t('goalActionPause') : t('goalActionResume')}
-                >
-                  {activeThreadGoal.status === 'active' ? (
-                    <PauseCircle className="h-3.5 w-3.5" strokeWidth={1.9} />
-                  ) : (
-                    <PlayCircle className="h-3.5 w-3.5" strokeWidth={1.9} />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void clearActiveThreadGoal()
-                  }}
-                  className="ds-no-drag flex h-7 w-7 items-center justify-center rounded-full text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
-                  aria-label={t('goalActionClear')}
-                  title={t('goalActionClear')}
-                >
-                  <Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />
-                </button>
-              </div>
-            </div>
-          ) : null}
-        />
+            ) : null}
+          </>
+        )}
+      />
 
-        {composerMenuOpen && slashQuery == null ? (
+      {composerMenuOpen && slashQuery == null ? (
           <div
             ref={composerMenuPanelRef}
             className="absolute bottom-12 left-1 z-40 w-48 overflow-hidden rounded-[18px] border border-ds-border bg-white py-1.5 text-[13px] text-ds-muted shadow-[0_18px_48px_rgba(20,47,95,0.16)] dark:bg-ds-card"
