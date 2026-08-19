@@ -449,15 +449,18 @@ export function resolveStatus(block: ChatBlock, child: ChildMeta, detail?: Deleg
   if (detail?.status === 'aborted') return userStopped ? 'stopped' : 'failed'
   if (detail?.status === 'failed') return 'failed'
 
-  // The tool projection is monotonic: success/error means the child settled,
-  // even if a stale lifecycle snapshot still says queued/running.
-  if (blockStatus === 'success') return 'done'
-  if (blockStatus === 'error') return 'failed'
-
+  // Detaching settles the wrapper tool call, not the child run. Keep live
+  // detached lifecycle evidence authoritative until a child terminal event arrives.
   if (detached) {
     if (cs === 'queued' || cs === 'running') return 'running'
     if (detail?.status === 'queued' || detail?.status === 'running') return 'running'
   }
+
+  // For foreground and legacy records, a settled wrapper result remains a
+  // useful fallback when lifecycle metadata is missing or stale.
+  if (blockStatus === 'success') return 'done'
+  if (blockStatus === 'error') return 'failed'
+
   if (cs === 'queued') return 'queued'
   if (cs === 'running') return 'running'
   if (detail?.status === 'queued') return 'queued'
