@@ -17,6 +17,7 @@ function usage(overrides: Partial<TurnUsageSummary> = {}): TurnUsageSummary {
     totalTokens: 1_200,
     actualCost: null,
     referenceEstimateUsd: null,
+    referencePriceBreakdown: null,
     estimateCoverage: 'unavailable',
     providerIds: ['codex'],
     models: ['gpt-5.6-sol'],

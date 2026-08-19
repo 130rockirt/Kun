@@ -9,6 +9,30 @@ export type TurnUsageActualCost = {
   amount: number
 }
 
+export type TurnUsageReferencePriceItem = {
+  kind: 'uncached_input' | 'cache_read' | 'cache_write' | 'output'
+  tokens: number
+  ratePerMillion: number
+  amount: number
+}
+
+export type TurnUsageReferencePriceGroup = {
+  model: string
+  pricingMode: 'standard' | 'fast' | 'long_context'
+  requestCount: number
+  fastMultiplier: number | null
+  amount: number
+  items: TurnUsageReferencePriceItem[]
+}
+
+export type TurnUsageReferencePriceBreakdown = {
+  currency: 'USD'
+  amount: number
+  pricedRequests: number
+  unpricedRequests: number
+  groups: TurnUsageReferencePriceGroup[]
+}
+
 export type TurnUsageSummary = {
   turnId: string
   requests: number
@@ -20,6 +44,7 @@ export type TurnUsageSummary = {
   totalTokens: number
   actualCost: TurnUsageActualCost | null
   referenceEstimateUsd: number | null
+  referencePriceBreakdown: TurnUsageReferencePriceBreakdown | null
   estimateCoverage: 'complete' | 'partial' | 'unavailable'
   providerIds: string[]
   models: string[]
@@ -73,6 +98,7 @@ export function parseTurnUsageResponse(
     const reportedTotal = countValue(value.total_tokens)
     const actualCost = parseActualCost(value.actual_cost)
     const referenceEstimateUsd = nullableAmount(value.reference_estimate_usd)
+    const referencePriceBreakdown = parseReferencePriceBreakdown(value.reference_price_breakdown)
     byTurnId.set(turnId, {
       turnId,
       requests: countValue(value.requests),
@@ -84,12 +110,52 @@ export function parseTurnUsageResponse(
       totalTokens: reportedTotal || inputTokens + outputTokens,
       actualCost,
       referenceEstimateUsd,
+      referencePriceBreakdown,
       estimateCoverage: coverage,
       providerIds: stringArray(value.provider_ids),
       models: stringArray(value.models)
     })
   }
   return byTurnId
+}
+
+function parseReferencePriceBreakdown(value: unknown): TurnUsageReferencePriceBreakdown | null {
+  if (!isRecord(value) || value.currency !== 'USD' || !Array.isArray(value.groups)) return null
+  const amount = nullableAmount(value.amount)
+  if (amount === null) return null
+  const groups = value.groups.flatMap(parseReferencePriceGroup)
+  return {
+    currency: 'USD',
+    amount,
+    pricedRequests: countValue(value.priced_requests),
+    unpricedRequests: countValue(value.unpriced_requests),
+    groups
+  }
+}
+
+function parseReferencePriceGroup(value: unknown): TurnUsageReferencePriceGroup[] {
+  if (!isRecord(value) || !Array.isArray(value.items)) return []
+  const model = stringValue(value.model)
+  const pricingMode = pricingModeValue(value.pricing_mode)
+  const amount = nullableAmount(value.amount)
+  if (!model || !pricingMode || amount === null) return []
+  return [{
+    model,
+    pricingMode,
+    requestCount: countValue(value.request_count),
+    fastMultiplier: nullablePositiveAmount(value.fast_multiplier),
+    amount,
+    items: value.items.flatMap(parseReferencePriceItem)
+  }]
+}
+
+function parseReferencePriceItem(value: unknown): TurnUsageReferencePriceItem[] {
+  if (!isRecord(value)) return []
+  const kind = priceItemKindValue(value.kind)
+  const ratePerMillion = nullableAmount(value.rate_per_million)
+  const amount = nullableAmount(value.amount)
+  if (!kind || ratePerMillion === null || amount === null) return []
+  return [{ kind, tokens: countValue(value.tokens), ratePerMillion, amount }]
 }
 
 export function useTurnUsageState(
@@ -163,6 +229,20 @@ function coverageValue(value: unknown): TurnUsageSummary['estimateCoverage'] | n
 
 function nullableAmount(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function nullablePositiveAmount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
+function pricingModeValue(value: unknown): TurnUsageReferencePriceGroup['pricingMode'] | null {
+  return value === 'standard' || value === 'fast' || value === 'long_context' ? value : null
+}
+
+function priceItemKindValue(value: unknown): TurnUsageReferencePriceItem['kind'] | null {
+  return value === 'uncached_input' || value === 'cache_read' || value === 'cache_write' || value === 'output'
+    ? value
+    : null
 }
 
 function countValue(value: unknown): number {

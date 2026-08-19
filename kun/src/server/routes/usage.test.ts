@@ -259,7 +259,17 @@ describe('usageJsonResponse', () => {
         turn_id: 'turn-1',
         requests: 1,
         total_tokens: 120,
-        estimate_coverage: 'complete'
+        estimate_coverage: 'complete',
+        reference_price_breakdown: expect.objectContaining({
+          currency: 'USD',
+          priced_requests: 1,
+          unpriced_requests: 0,
+          groups: [expect.objectContaining({
+            model: 'gpt-5.6-sol',
+            pricing_mode: 'standard',
+            request_count: 1
+          })]
+        })
       })]
     })
   })

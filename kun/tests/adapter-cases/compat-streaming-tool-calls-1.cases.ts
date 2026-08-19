@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { CompatModelClient, type ModelStreamLimits } from '../../src/adapters/model/compat-model-client.js'
+import {
+  CompatModelClient,
+  type CompatModelClientConfig,
+  type ModelStreamLimits
+} from '../../src/adapters/model/compat-model-client.js'
 
 import {
   ModelStreamResourceBudget,
@@ -130,7 +134,8 @@ function chatToolCallDeltas(): string[] {
 function makeClient(
   fetchImpl: typeof fetch,
   modelCapabilities?: (model: string) => ModelCapabilityMetadata,
-  streamLimits?: Partial<ModelStreamLimits>
+  streamLimits?: Partial<ModelStreamLimits>,
+  retry?: CompatModelClientConfig['retry']
 ) {
   return new CompatModelClient({
     baseUrl: 'https://provider.example/v1/chat/completions',
@@ -139,7 +144,8 @@ function makeClient(
     endpointFormat: 'chat_completions',
     fetchImpl,
     ...(modelCapabilities ? { modelCapabilities } : {}),
-    ...(streamLimits ? { streamLimits } : {})
+    ...(streamLimits ? { streamLimits } : {}),
+    ...(retry ? { retry } : {})
   })
 }
 
@@ -264,9 +270,14 @@ it('reports malformed or truncated SSE instead of completing a partial response'
     const malformed = await drain(makeClient(streamingFetch(['data: {bad-json}\n\n'])).stream(request()))
     expect(malformed).toEqual([{ kind: 'error', message: 'model stream contained invalid SSE JSON', code: 'stream_invalid_frame' }])
 
-    const truncated = await drain(makeClient(streamingFetch([
-      frame({ choices: [{ index: 0, delta: { content: 'partial' } }] })
-    ])).stream(request()))
+    const truncated = await drain(makeClient(
+      streamingFetch([
+        frame({ choices: [{ index: 0, delta: { content: 'partial' } }] })
+      ]),
+      undefined,
+      undefined,
+      { maxAttempts: 0 }
+    ).stream(request()))
     expect(truncated).toEqual([
       { kind: 'assistant_text_delta', text: 'partial' },
       expect.objectContaining({

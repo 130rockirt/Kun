@@ -79,6 +79,38 @@ export type CodexSubscriptionValueInput = {
 export type CodexSubscriptionEstimate = {
   valueEstimateUsd: number
   valueEstimateCny: number
+  normalizedModel: string
+  pricingMode: CodexReferencePricingMode
+  fastMultiplier: number | null
+  items: CodexReferencePriceItem[]
+}
+
+export type CodexReferencePricingMode = 'standard' | 'fast' | 'long_context'
+
+export type CodexReferencePriceItemKind =
+  | 'uncached_input'
+  | 'cache_read'
+  | 'cache_write'
+  | 'output'
+
+export type CodexReferencePriceItem = {
+  kind: CodexReferencePriceItemKind
+  tokens: number
+  ratePerMillionUsd: number
+  amountUsd: number
+}
+
+export type CodexReferencePriceGroup = {
+  model: string
+  pricingMode: CodexReferencePricingMode
+  requestCount: number
+  fastMultiplier: number | null
+  amountUsd: number
+  items: CodexReferencePriceItem[]
+}
+
+export type CodexReferencePriceBreakdown = CodexReferenceValueSummary & {
+  groups: CodexReferencePriceGroup[]
 }
 
 export type CodexReferenceCoverage = 'complete' | 'partial' | 'unavailable'
@@ -106,29 +138,40 @@ export function estimateCodexSubscriptionValue(
   const cacheRead = Math.min(nonNegative(input.cacheHitTokens), totalInput)
   const cacheWrite = Math.min(nonNegative(input.cacheWriteTokens), totalInput - cacheRead)
   const freshInput = totalInput - cacheRead - cacheWrite
-  const longContext = totalInput > LONG_CONTEXT_THRESHOLD
+  const overLongContextThreshold = totalInput > LONG_CONTEXT_THRESHOLD
+  const usesLongContextRates = overLongContextThreshold && prices.longContext !== undefined
 
-  const rates = longContext && prices.longContext ? prices.longContext : prices
+  const rates = usesLongContextRates ? prices.longContext as NonNullable<CodexPrice['longContext']> : prices
   const inputRate = rates.input
   const cacheReadRate = rates.cacheRead ?? inputRate
   const cacheWriteRate = rates.cacheWrite ?? inputRate
   const outputRate = rates.output
-  const standardUsd = (
-    freshInput * inputRate +
-    cacheRead * cacheReadRate +
-    cacheWrite * cacheWriteRate +
-    nonNegative(input.completionTokens) * outputRate
-  ) / TOKENS_PER_MILLION
   // Priority is the backward-compatible request tag for API Fast. Fast is not
   // available for long context or every historical model; those requests
   // remain priceable at their normal Standard/long-context rate.
-  const fastMultiplier = input.serviceTier === 'priority' && !longContext
+  const multiplier = input.serviceTier === 'priority' && !overLongContextThreshold
     ? recordValue(FAST_MULTIPLIERS, model) ?? 1
     : 1
-  const usd = standardUsd * fastMultiplier
+  const pricingMode: CodexReferencePricingMode = usesLongContextRates
+    ? 'long_context'
+    : multiplier > 1
+      ? 'fast'
+      : 'standard'
+  const fastMultiplier = pricingMode === 'fast' ? multiplier : null
+  const items = [
+    priceItem('uncached_input', freshInput, inputRate * multiplier),
+    priceItem('cache_read', cacheRead, cacheReadRate * multiplier),
+    priceItem('cache_write', cacheWrite, cacheWriteRate * multiplier),
+    priceItem('output', nonNegative(input.completionTokens), outputRate * multiplier)
+  ]
+  const usd = items.reduce((sum, item) => sum + item.amountUsd, 0)
   return {
     valueEstimateUsd: usd,
-    valueEstimateCny: usd * USD_TO_CNY_REFERENCE_RATE
+    valueEstimateCny: usd * USD_TO_CNY_REFERENCE_RATE,
+    normalizedModel: model,
+    pricingMode,
+    fastMultiplier,
+    items
   }
 }
 
@@ -136,9 +179,24 @@ export function estimateCodexSubscriptionValue(
 export function aggregateCodexReferenceValue(
   inputs: readonly CodexSubscriptionValueInput[]
 ): CodexReferenceValueSummary {
+  const breakdown = aggregateCodexReferencePriceBreakdown(inputs)
+  return {
+    amountUsd: breakdown.amountUsd,
+    amountCny: breakdown.amountCny,
+    coverage: breakdown.coverage,
+    pricedRequests: breakdown.pricedRequests,
+    unpricedRequests: breakdown.unpricedRequests
+  }
+}
+
+/** Aggregate value and exact effective-rate groups for a per-turn explanation. */
+export function aggregateCodexReferencePriceBreakdown(
+  inputs: readonly CodexSubscriptionValueInput[]
+): CodexReferencePriceBreakdown {
   let amountUsd = 0
   let pricedRequests = 0
   let unpricedRequests = 0
+  const groups = new Map<string, CodexReferencePriceGroup>()
   for (const input of inputs) {
     const requests = referenceRequestCount(input)
     if (requests <= 0) continue
@@ -149,6 +207,7 @@ export function aggregateCodexReferenceValue(
     }
     amountUsd += estimate.valueEstimateUsd
     pricedRequests += requests
+    addReferencePriceGroup(groups, estimate, requests)
   }
   const coverage: CodexReferenceCoverage = pricedRequests === 0
     ? 'unavailable'
@@ -160,7 +219,8 @@ export function aggregateCodexReferenceValue(
     amountCny: pricedRequests > 0 ? amountUsd * USD_TO_CNY_REFERENCE_RATE : null,
     coverage,
     pricedRequests,
-    unpricedRequests
+    unpricedRequests,
+    groups: [...groups.values()]
   }
 }
 
@@ -222,6 +282,52 @@ function recordValue<T>(table: Readonly<Record<string, T>>, key: string): T | un
 function referenceRequestCount(input: CodexSubscriptionValueInput): number {
   if (input.requestCount !== undefined) return Math.max(0, Math.floor(input.requestCount))
   return 1
+}
+
+function priceItem(
+  kind: CodexReferencePriceItemKind,
+  tokens: number,
+  ratePerMillionUsd: number
+): CodexReferencePriceItem {
+  return {
+    kind,
+    tokens,
+    ratePerMillionUsd,
+    amountUsd: tokens * ratePerMillionUsd / TOKENS_PER_MILLION
+  }
+}
+
+function addReferencePriceGroup(
+  groups: Map<string, CodexReferencePriceGroup>,
+  estimate: CodexSubscriptionEstimate,
+  requests: number
+): void {
+  const key = JSON.stringify([
+    estimate.normalizedModel,
+    estimate.pricingMode,
+    estimate.fastMultiplier,
+    ...estimate.items.map((item) => item.ratePerMillionUsd)
+  ])
+  const existing = groups.get(key)
+  if (!existing) {
+    groups.set(key, {
+      model: estimate.normalizedModel,
+      pricingMode: estimate.pricingMode,
+      requestCount: requests,
+      fastMultiplier: estimate.fastMultiplier,
+      amountUsd: estimate.valueEstimateUsd,
+      items: estimate.items.map((item) => ({ ...item }))
+    })
+    return
+  }
+  existing.requestCount += requests
+  existing.amountUsd += estimate.valueEstimateUsd
+  for (const [index, item] of estimate.items.entries()) {
+    const target = existing.items[index]
+    if (!target) continue
+    target.tokens += item.tokens
+    target.amountUsd += item.amountUsd
+  }
 }
 
 function price(input: number, cacheRead: number | undefined, output: number): CodexPrice {

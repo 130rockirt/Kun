@@ -1,6 +1,8 @@
 import {
+  aggregateCodexReferencePriceBreakdown,
   aggregateCodexReferenceValue,
   isLegacyCodexModel,
+  type CodexReferencePriceBreakdown,
   type CodexSubscriptionValueInput
 } from '../adapters/model/codex-subscription-pricing.js'
 import type {
@@ -9,6 +11,7 @@ import type {
   ThreadUsageResponse,
   TurnUsageActualCost,
   TurnUsageCounters,
+  TurnUsageReferencePriceBreakdown,
   TurnUsageResponse,
   UsageSnapshot
 } from '../contracts/usage.js'
@@ -176,7 +179,7 @@ export function buildTurnUsageResponse(
     buckets: [...buckets.values()]
       .sort((left, right) => left.completedAt.localeCompare(right.completedAt) ||
         left.turnId.localeCompare(right.turnId))
-      .map((bucket) => ({ turn_id: bucket.turnId, ...finalizeTurnCounters(bucket) })),
+      .map(finalizeTurnBucket),
     totals: finalizeTurnCounters(totals)
   }
 }
@@ -247,6 +250,40 @@ function finalizeTurnCounters(bucket: TurnAccumulator): TurnUsageCounters {
     estimate_coverage: reference.coverage,
     provider_ids: [...bucket.providerIds].sort(),
     models: [...bucket.models].sort()
+  }
+}
+
+function finalizeTurnBucket(bucket: TurnAccumulator): TurnUsageResponse['buckets'][number] {
+  const reference = aggregateCodexReferencePriceBreakdown(bucket.referenceInputs)
+  return {
+    turn_id: bucket.turnId,
+    ...finalizeTurnCounters(bucket),
+    reference_price_breakdown: mapReferencePriceBreakdown(reference)
+  }
+}
+
+function mapReferencePriceBreakdown(
+  reference: CodexReferencePriceBreakdown
+): TurnUsageReferencePriceBreakdown | null {
+  if (reference.amountUsd === null || reference.pricedRequests === 0) return null
+  return {
+    currency: 'USD',
+    amount: reference.amountUsd,
+    priced_requests: reference.pricedRequests,
+    unpriced_requests: reference.unpricedRequests,
+    groups: reference.groups.map((group) => ({
+      model: group.model,
+      pricing_mode: group.pricingMode,
+      request_count: group.requestCount,
+      fast_multiplier: group.fastMultiplier,
+      amount: group.amountUsd,
+      items: group.items.map((item) => ({
+        kind: item.kind,
+        tokens: item.tokens,
+        rate_per_million: item.ratePerMillionUsd,
+        amount: item.amountUsd
+      }))
+    }))
   }
 }
 

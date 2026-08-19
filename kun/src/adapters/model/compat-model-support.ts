@@ -327,15 +327,6 @@ export function isRecoverableStreamTransportError(
   )
 }
 
-export function isCommittedStreamOutput(chunk: ModelStreamChunk): boolean {
-  return (
-    chunk.kind === 'assistant_text_delta' ||
-    chunk.kind === 'tool_call_delta' ||
-    chunk.kind === 'tool_call_complete' ||
-    chunk.kind === 'image_generation_complete'
-  )
-}
-
 export async function readStreamChunk(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   signal: AbortSignal,

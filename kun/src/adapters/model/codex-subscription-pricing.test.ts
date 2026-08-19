@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  aggregateCodexReferencePriceBreakdown,
   aggregateCodexReferenceValue,
   estimateCodexSubscriptionValue,
   resolveCodexUsageProviderId,
@@ -117,6 +118,36 @@ describe('estimateCodexSubscriptionValue', () => {
       model: 'gpt-5.6-sol', promptTokens: 100, completionTokens: 20, reasoningTokens: 10_000
     })).toEqual(base)
   })
+
+  it('returns auditable effective-rate items for the observed Fast turn', () => {
+    const value = aggregateCodexReferencePriceBreakdown([
+      ...Array.from({ length: 20 }, () => ({
+        model: 'gpt-5.6-sol', promptTokens: 27_000, cacheHitTokens: 24_500,
+        completionTokens: 200, serviceTier: 'priority' as const
+      })),
+      {
+        model: 'gpt-5.6-sol', promptTokens: 35_361, cacheHitTokens: 31_216,
+        completionTokens: 466, serviceTier: 'priority'
+      }
+    ])
+    const group = value.groups[0]
+
+    expect(value.amountUsd).toBeCloseTo(1.330626)
+    expect(group).toMatchObject({
+      model: 'gpt-5.6-sol',
+      pricingMode: 'fast',
+      requestCount: 21,
+      fastMultiplier: 2,
+      items: [
+        { kind: 'uncached_input', tokens: 54_145, ratePerMillionUsd: 10 },
+        { kind: 'cache_read', tokens: 521_216, ratePerMillionUsd: 1 },
+        { kind: 'cache_write', tokens: 0, ratePerMillionUsd: 12.5 },
+        { kind: 'output', tokens: 4_466, ratePerMillionUsd: 60 }
+      ]
+    })
+    expect(group?.items.reduce((sum, item) => sum + item.amountUsd, 0))
+      .toBeCloseTo(group?.amountUsd ?? 0)
+  })
 })
 
 describe('aggregateCodexReferenceValue', () => {
@@ -139,6 +170,43 @@ describe('aggregateCodexReferenceValue', () => {
       pricedRequests: 0,
       unpricedRequests: 1
     })
+  })
+
+  it('groups identical rates and separates mixed modes, historical rates, and unknown requests', () => {
+    const result = aggregateCodexReferencePriceBreakdown([
+      { model: 'gpt-5.6-sol', promptTokens: 100, completionTokens: 20, requestCount: 2 },
+      { model: 'gpt-5.6-sol', promptTokens: 200, completionTokens: 30 },
+      {
+        model: 'gpt-5.6-sol', promptTokens: 300, completionTokens: 40,
+        serviceTier: 'priority'
+      },
+      {
+        model: 'gpt-5.6-luna', promptTokens: 400, completionTokens: 50,
+        completedAt: '2026-07-29T00:00:00.000Z'
+      },
+      {
+        model: 'gpt-5.6-luna', promptTokens: 500, completionTokens: 60,
+        completedAt: '2026-08-01T00:00:00.000Z'
+      },
+      { model: 'unknown', promptTokens: 100, completionTokens: 10 }
+    ])
+
+    expect(result).toMatchObject({
+      coverage: 'partial',
+      pricedRequests: 6,
+      unpricedRequests: 1
+    })
+    expect(result.groups).toHaveLength(4)
+    expect(result.groups[0]).toMatchObject({
+      model: 'gpt-5.6-sol', pricingMode: 'standard', requestCount: 3
+    })
+    expect(result.groups[1]).toMatchObject({
+      model: 'gpt-5.6-sol', pricingMode: 'fast', requestCount: 1, fastMultiplier: 2
+    })
+    expect(result.groups[2]?.items[0]?.ratePerMillionUsd).toBe(1)
+    expect(result.groups[3]?.items[0]?.ratePerMillionUsd).toBe(0.2)
+    expect(result.groups.reduce((sum, group) => sum + group.amountUsd, 0))
+      .toBe(result.amountUsd)
   })
 })
 

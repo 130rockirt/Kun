@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildModelUsageResponse,
   buildThreadUsageResponse,
+  buildTurnUsageResponse,
   type ThreadUsageRecord,
   UsageService
 } from './usage-service.js'
@@ -254,6 +255,54 @@ describe('model usage aggregation', () => {
     ])
     expect(response.buckets).toHaveLength(tokensByModel.length)
     expect(response.totals.total_tokens).toBe(2_900)
+  })
+})
+
+describe('turn reference price breakdown', () => {
+  it('returns mixed effective-rate groups only on buckets and preserves partial coverage', () => {
+    const response = buildTurnUsageResponse([
+      {
+        threadId: 'thread-priced', turnId: 'turn-mixed', model: 'gpt-5.6-sol',
+        completedAt: '2026-08-20T00:00:00.000Z',
+        usage: {
+          promptTokens: 100_000, completionTokens: 1_000, totalTokens: 101_000,
+          cacheHitTokens: 80_000, cacheHitRate: 0.8, turns: 1,
+          billingKind: 'subscription', serviceTier: 'priority'
+        }
+      },
+      {
+        threadId: 'thread-priced', turnId: 'turn-mixed', model: 'gpt-5.6-sol',
+        completedAt: '2026-08-20T00:01:00.000Z',
+        usage: {
+          promptTokens: 300_000, completionTokens: 2_000, totalTokens: 302_000,
+          cacheHitTokens: 250_000, cacheHitRate: 5 / 6, turns: 1,
+          billingKind: 'subscription'
+        }
+      },
+      {
+        threadId: 'thread-priced', turnId: 'turn-mixed', model: 'unknown-model',
+        completedAt: '2026-08-20T00:02:00.000Z',
+        usage: {
+          promptTokens: 10, completionTokens: 1, totalTokens: 11,
+          cacheHitRate: null, turns: 1, billingKind: 'subscription'
+        }
+      }
+    ], { groupBy: 'turn', threadId: 'thread-priced' })
+
+    expect(response.buckets[0]).toMatchObject({
+      estimate_coverage: 'partial',
+      reference_price_breakdown: {
+        currency: 'USD', priced_requests: 2, unpriced_requests: 1,
+        groups: [
+          expect.objectContaining({ pricing_mode: 'fast', fast_multiplier: 2 }),
+          expect.objectContaining({ pricing_mode: 'long_context', fast_multiplier: null })
+        ]
+      }
+    })
+    expect(response.totals).not.toHaveProperty('reference_price_breakdown')
+    const breakdown = response.buckets[0]?.reference_price_breakdown
+    expect(breakdown?.groups.reduce((sum, group) => sum + group.amount, 0))
+      .toBe(response.buckets[0]?.reference_estimate_usd)
   })
 })
 

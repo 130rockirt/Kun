@@ -188,6 +188,33 @@ export const TurnUsageActualCostSchema = z.object({
 }).strict()
 export type TurnUsageActualCost = z.infer<typeof TurnUsageActualCostSchema>
 
+export const TurnUsageReferencePriceItemSchema = z.object({
+  kind: z.enum(['uncached_input', 'cache_read', 'cache_write', 'output']),
+  tokens: z.number().int().nonnegative(),
+  rate_per_million: z.number().nonnegative(),
+  amount: z.number().nonnegative()
+}).strict()
+export type TurnUsageReferencePriceItem = z.infer<typeof TurnUsageReferencePriceItemSchema>
+
+export const TurnUsageReferencePriceGroupSchema = z.object({
+  model: z.string().min(1),
+  pricing_mode: z.enum(['standard', 'fast', 'long_context']),
+  request_count: z.number().int().nonnegative(),
+  fast_multiplier: z.number().positive().nullable(),
+  amount: z.number().nonnegative(),
+  items: z.array(TurnUsageReferencePriceItemSchema)
+}).strict()
+export type TurnUsageReferencePriceGroup = z.infer<typeof TurnUsageReferencePriceGroupSchema>
+
+export const TurnUsageReferencePriceBreakdownSchema = z.object({
+  currency: z.literal('USD'),
+  amount: z.number().nonnegative(),
+  priced_requests: z.number().int().nonnegative(),
+  unpriced_requests: z.number().int().nonnegative(),
+  groups: z.array(TurnUsageReferencePriceGroupSchema)
+}).strict()
+export type TurnUsageReferencePriceBreakdown = z.infer<typeof TurnUsageReferencePriceBreakdownSchema>
+
 export const TurnUsageCountersSchema = z.object({
   requests: z.number().int().nonnegative(),
   input_tokens: z.number().int().nonnegative(),
@@ -205,7 +232,8 @@ export const TurnUsageCountersSchema = z.object({
 export type TurnUsageCounters = z.infer<typeof TurnUsageCountersSchema>
 
 export const TurnUsageBucketSchema = TurnUsageCountersSchema.extend({
-  turn_id: z.string().min(1)
+  turn_id: z.string().min(1),
+  reference_price_breakdown: TurnUsageReferencePriceBreakdownSchema.nullable().optional()
 }).strict()
 export type TurnUsageBucket = z.infer<typeof TurnUsageBucketSchema>
 
