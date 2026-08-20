@@ -164,6 +164,8 @@ export function WriteAssistantPanel({
         })
       : t('writeAssistantQuoteSpreadsheetSelectionSub')
     : t(selectionIsReadOnly ? 'writeAssistantExplainPdfSelectionSub' : 'writeAssistantPolishSelectionSub')
+  const showSpreadsheetQuoteCandidate =
+    !viewingChildThread && selectionIsSpreadsheet && selection.charCount > 0
 
   useEffect(() => {
     setChildThreadId(null)
@@ -224,6 +226,11 @@ export function WriteAssistantPanel({
     if (!input.trim()) {
       setInput(t(selectionIsReadOnly ? 'writeAssistantExplainPdfSelectionPrompt' : 'writeAssistantPolishSelectionPrompt'))
     }
+  }
+
+  const quoteSpreadsheetSelection = (): void => {
+    if (!workspaceRoot.trim()) return
+    quoteCurrentSelection(workspaceRoot)
   }
 
   const openChildThread = (threadId: string): void => {
@@ -397,29 +404,31 @@ export function WriteAssistantPanel({
                   <span className="mt-0.5 block truncate text-[12px] text-ds-faint">{t('writeAssistantOutlineSub')}</span>
                 </span>
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (selection.charCount > 0) {
-                    quoteSelectionForAssistant()
-                  } else {
-                    setAssistantPrompt(t('writeAssistantPolishSelectionPrompt'))
-                  }
-                }}
-                className="write-assistant-action-row border-t border-ds-border-muted"
-              >
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-300">
-                  <MessageSquareQuote className="h-4 w-4" strokeWidth={1.9} />
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-[13.5px] font-semibold text-ds-ink">
-                    {selectionActionLabel}
+              {!selectionIsSpreadsheet ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selection.charCount > 0) {
+                      quoteSelectionForAssistant()
+                    } else {
+                      setAssistantPrompt(t('writeAssistantPolishSelectionPrompt'))
+                    }
+                  }}
+                  className="write-assistant-action-row border-t border-ds-border-muted"
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-300">
+                    <MessageSquareQuote className="h-4 w-4" strokeWidth={1.9} />
                   </span>
-                  <span className="mt-0.5 block truncate text-[12px] text-ds-faint">
-                    {selectionActionDescription}
+                  <span className="min-w-0">
+                    <span className="block text-[13.5px] font-semibold text-ds-ink">
+                      {selectionActionLabel}
+                    </span>
+                    <span className="mt-0.5 block truncate text-[12px] text-ds-faint">
+                      {selectionActionDescription}
+                    </span>
                   </span>
-                </span>
-              </button>
+                </button>
+              ) : null}
             </div>
           </div>
         )}
@@ -428,6 +437,30 @@ export function WriteAssistantPanel({
       <div className="write-assistant-footer ds-sidebar-surface-chrome shrink-0 border-t border-ds-border-muted px-3 pb-3 pt-3">
         {!viewingChildThread && presentationView ? (
           <WritePresentationViewChip view={presentationView} />
+        ) : null}
+        {showSpreadsheetQuoteCandidate ? (
+          <div
+            className="mb-3 flex min-w-0 items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/[0.07] px-3 py-2 text-[12px] text-ds-muted"
+            data-selection-ignore="true"
+            data-testid="write-spreadsheet-selection-quote"
+          >
+            <MessageSquareQuote className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-300" strokeWidth={1.9} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium text-ds-ink">
+                {selectionActionLabel}
+              </span>
+              <span className="block truncate text-[11px] text-ds-faint" title={selectionActionDescription}>
+                {selectionActionDescription}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={quoteSpreadsheetSelection}
+              className="shrink-0 rounded-lg bg-amber-500/15 px-2 py-1 text-[11px] font-semibold text-amber-700 transition hover:bg-amber-500/25 dark:text-amber-200"
+            >
+              {t('writeSelectionQuote')}
+            </button>
+          </div>
         ) : null}
         {!viewingChildThread && quotedSelections.length > 0 ? (
           <div className="mb-3 flex flex-col gap-1.5">

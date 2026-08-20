@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 import type { FUniver, IRange, Univer } from '@univerjs/presets'
 import type { FRange, FWorkbook, FWorksheet } from '@univerjs/preset-sheets-core'
 import type {
@@ -41,12 +41,6 @@ type UniverSession = {
   baseline: NormalizedSpreadsheetWorkbook
 }
 
-type PointerAnchor = {
-  x: number
-  y: number
-  capturedAt: number
-}
-
 export function WorkspaceUniverSpreadsheetEditor({
   result,
   mutations,
@@ -66,7 +60,6 @@ export function WorkspaceUniverSpreadsheetEditor({
   const lastCommitRef = useRef(commitRevision)
   const seenMutationsRef = useRef(JSON.stringify(mutations))
   const mutationTimerRef = useRef<number | null>(null)
-  const pointerAnchorRef = useRef<PointerAnchor | null>(null)
   const preparedSnapshotsRef = useRef(new Map<string, NormalizedSpreadsheetWorkbook>())
   const [externalEpoch, setExternalEpoch] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -240,8 +233,7 @@ export function WorkspaceUniverSpreadsheetEditor({
           charCount: Array.from(selectionText).length,
           sheetName: worksheet.getSheetName(),
           cellRange: range.getA1Notation(),
-          formulas: annotations,
-          ...selectionAnchor(pointerAnchorRef.current, host)
+          formulas: annotations
         })
       }))
       setLoading(false)
@@ -276,9 +268,6 @@ export function WorkspaceUniverSpreadsheetEditor({
       <div
         ref={hostRef}
         className="min-h-0 min-w-0 flex-1 [&_.univer-app]:!h-full"
-        onPointerDownCapture={(event) => capturePointerAnchor(pointerAnchorRef, event)}
-        onPointerMoveCapture={(event) => capturePointerAnchor(pointerAnchorRef, event)}
-        onPointerUpCapture={(event) => capturePointerAnchor(pointerAnchorRef, event)}
       />
       {loading ? (
         <div className="absolute inset-0 flex items-center justify-center bg-ds-card/85 text-[13px] text-ds-muted backdrop-blur-sm">
@@ -297,35 +286,6 @@ export function WorkspaceUniverSpreadsheetEditor({
       ) : null}
     </div>
   )
-}
-
-function capturePointerAnchor(
-  ref: { current: PointerAnchor | null },
-  event: ReactPointerEvent<HTMLDivElement>
-): void {
-  ref.current = { x: event.clientX, y: event.clientY, capturedAt: Date.now() }
-}
-
-function selectionAnchor(
-  pointer: PointerAnchor | null,
-  host: HTMLElement
-): Pick<WorkspaceOfficeSelection, 'anchorRect'> | Record<string, never> {
-  if (!pointer || Date.now() - pointer.capturedAt > 1_500) return {}
-  const bounds = host.getBoundingClientRect()
-  if (
-    pointer.x < bounds.left || pointer.x > bounds.right ||
-    pointer.y < bounds.top || pointer.y > bounds.bottom
-  ) return {}
-  return {
-    anchorRect: {
-      left: pointer.x,
-      right: pointer.x + 1,
-      top: pointer.y,
-      bottom: pointer.y + 1,
-      width: 1,
-      height: 1
-    }
-  }
 }
 
 function formatCellValue(value: unknown): string {

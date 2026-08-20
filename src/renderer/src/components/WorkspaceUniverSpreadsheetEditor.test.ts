@@ -111,10 +111,7 @@ describe('WorkspaceUniverSpreadsheetEditor', () => {
   it('creates a workbook, publishes mutations and selections, and disposes the session', async () => {
     const onMutationsChange = vi.fn()
     const onSelectionChange = vi.fn()
-    const host = {
-      replaceChildren: vi.fn(),
-      getBoundingClientRect: () => ({ left: 0, right: 800, top: 0, bottom: 600 })
-    }
+    const host = { replaceChildren: vi.fn() }
     let renderer!: ReactTestRenderer
     await act(async () => {
       renderer = create(createElement(WorkspaceUniverSpreadsheetEditor, {
@@ -146,10 +143,6 @@ describe('WorkspaceUniverSpreadsheetEditor', () => {
       { kind: 'cell', sheetName: 'Data', address: 'A1', value: 42 }
     ], undefined, undefined)
 
-    const editorHost = renderer.root.findAllByType('div').find((node) => (
-      typeof node.props.onPointerDownCapture === 'function'
-    ))!
-    act(() => editorHost.props.onPointerDownCapture({ clientX: 120, clientY: 240 }))
     act(() => mocks.selectionCallback?.({
       worksheet: {
         getSheetName: () => 'Data',
@@ -167,16 +160,11 @@ describe('WorkspaceUniverSpreadsheetEditor', () => {
       sheetName: 'Data',
       cellRange: 'A1:B1',
       text: 'A\t¥2.00',
-      formulas: ['B1: =SUM(A1:A2)'],
-      anchorRect: {
-        left: 120,
-        right: 121,
-        top: 240,
-        bottom: 241,
-        width: 1,
-        height: 1
-      }
+      formulas: ['B1: =SUM(A1:A2)']
     }))
+    expect(onSelectionChange).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ anchorRect: expect.anything() })
+    )
 
     await act(async () => renderer.unmount())
     expect(mocks.disposeCommand).toHaveBeenCalledOnce()

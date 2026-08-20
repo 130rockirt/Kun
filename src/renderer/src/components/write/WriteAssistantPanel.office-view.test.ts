@@ -79,7 +79,7 @@ describe('WriteAssistantPanel presentation view', () => {
     }
   })
 
-  it('quotes a formatted spreadsheet selection only after the explicit sidebar action', async () => {
+  it('adds a formatted spreadsheet quote from the single footer action without changing the composer', async () => {
     const path = '/workspace/book.xlsx'
     useWriteWorkspaceStore.setState({
       activeFilePath: path,
@@ -120,13 +120,20 @@ describe('WriteAssistantPanel presentation view', () => {
       presentationViewByGroup: {}
     })
     let renderer: ReactTestRenderer | undefined
+    const setInput = vi.fn()
     try {
-      await act(async () => { renderer = create(createElement(WriteAssistantPanel, props())) })
+      await act(async () => {
+        renderer = create(createElement(WriteAssistantPanel, {
+          ...props(), input: 'Keep this question', setInput
+        }))
+      })
       expect(useWriteWorkspaceStore.getState().quotedSelections).toHaveLength(0)
-      const label = renderer!.root.findByProps({ children: 'Quote selected cells' })
-      const button = label.parent?.parent
-      expect(button?.type).toBe('button')
-      await act(async () => button?.props.onClick())
+      const candidates = renderer!.root.findAllByProps({ 'data-testid': 'write-spreadsheet-selection-quote' })
+      expect(candidates).toHaveLength(1)
+      expect(renderer!.root.findAllByProps({ children: 'Quote selected cells' })).toHaveLength(1)
+      expect(candidates[0]?.props['data-selection-ignore']).toBe('true')
+      const button = candidates[0]!.findByType('button')
+      await act(async () => button.props.onClick())
       expect(useWriteWorkspaceStore.getState().quotedSelections).toEqual([
         expect.objectContaining({
           sourceKind: 'spreadsheet',
@@ -137,6 +144,28 @@ describe('WriteAssistantPanel presentation view', () => {
           formulas: ['G2: =E2*F2']
         })
       ])
+      expect(setInput).not.toHaveBeenCalled()
+      expect(renderer!.root.findAllByProps({ 'data-testid': 'write-spreadsheet-selection-quote' })).toHaveLength(0)
+    } finally {
+      if (renderer) act(() => renderer!.unmount())
+    }
+  })
+
+  it('keeps the spreadsheet quote action available above an active main timeline', async () => {
+    useWriteWorkspaceStore.setState({
+      selection: {
+        text: '¥1,299.00', ranges: [], charCount: 9,
+        sourceKind: 'spreadsheet', sourceFormat: 'xlsx', sheetName: '随机数据', cellRange: 'F2'
+      }
+    })
+    let renderer: ReactTestRenderer | undefined
+    try {
+      await act(async () => {
+        renderer = create(createElement(WriteAssistantPanel, {
+          ...props(), blocks: [{ kind: 'assistant', id: 'answer', text: '分析完成' }]
+        }))
+      })
+      expect(renderer!.root.findAllByProps({ 'data-testid': 'write-spreadsheet-selection-quote' })).toHaveLength(1)
     } finally {
       if (renderer) act(() => renderer!.unmount())
     }

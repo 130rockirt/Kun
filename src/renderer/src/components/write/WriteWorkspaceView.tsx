@@ -50,6 +50,7 @@ import { createWriteWorkspaceFileActions } from './write-workspace-file-actions'
 import { useWriteWorkspaceViewEffects } from './use-write-workspace-view-effects'
 import { WriteEditorGroups } from './WriteEditorGroups'
 import { useWriteEditorGroupFileWatches } from './use-write-editor-group-file-watches'
+import { shouldShowWriteInlineAgent } from './write-inline-agent-visibility'
 
 type Props = {
   leftSidebarCollapsed: boolean; onToggleLeftSidebar: () => void
@@ -246,7 +247,7 @@ export function WriteWorkspaceView({
     : renderSafety.readOnly ? t('writeReadOnly') : formatSaveLabel(saveStatus, t)
   // Only surface the toolbar once the selection gesture settles: while the
   // pointer is down (dragging to select) it stays hidden to avoid flicker.
-  const selectionAction = selection.charCount > 0 && !pointerSelecting
+  const selectionAction = shouldShowWriteInlineAgent(selection, pointerSelecting)
     ? inlineAgentPosition(selection, { compact: activeFileIsPdf || activeFileIsOffice })
     : null
   const activeFileLabel = activeFilePath
