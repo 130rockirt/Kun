@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type MutableRefObject, type ReactElement, type RefObject } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, type MutableRefObject, type ReactElement, type RefObject } from 'react'
 import { Maximize2, Minimize2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { WriteInlineCompletionSettingsV1 } from '@shared/app-settings'
@@ -21,6 +21,7 @@ import type {
   WorkspacePresentationViewReference,
   WorkspacePresentationViewSource
 } from '@shared/office-document'
+import type { WorkspaceSpreadsheetMutation } from '@shared/workspace-spreadsheet'
 import { writeSelectionFromOffice } from '../../write/write-office-selection'
 import {
   isWriteFocusModeFormControl,
@@ -46,6 +47,11 @@ type Props = {
   officeLoading?: boolean
   officeRefreshError?: string | null
   officeAgentEditing?: boolean
+  spreadsheetMutations?: WorkspaceSpreadsheetMutation[]
+  spreadsheetSourceSha256?: string
+  spreadsheetCommitRevision?: number
+  spreadsheetUnsupportedReason?: string | null
+  spreadsheetConflict?: boolean
   fileSize: number
   workspaceRoot: string
   workspaceName: string
@@ -84,6 +90,12 @@ type Props = {
     view: WorkspacePresentationViewReference | null,
     source: WorkspacePresentationViewSource
   ) => void
+  onSpreadsheetMutations?: (
+    mutations: WorkspaceSpreadsheetMutation[],
+    unsupportedReason?: string
+  ) => void
+  onConvertSpreadsheet?: () => void
+  onReloadSpreadsheetConflict?: () => void
   onMarkdownReviewStateChange?: (active: boolean) => void
   focused: boolean
   focusMode: boolean
@@ -91,6 +103,11 @@ type Props = {
   onboarding?: boolean
   workspaceLoading?: boolean
 }
+
+const WorkspaceUniverSpreadsheetEditor = lazy(async () => {
+  const module = await import('../WorkspaceUniverSpreadsheetEditor')
+  return { default: module.WorkspaceUniverSpreadsheetEditor }
+})
 
 export function WriteWorkspaceDocumentPane({
   activeFilePath,
@@ -111,6 +128,11 @@ export function WriteWorkspaceDocumentPane({
   officeLoading = false,
   officeRefreshError = null,
   officeAgentEditing = false,
+  spreadsheetMutations = [],
+  spreadsheetSourceSha256 = '',
+  spreadsheetCommitRevision = 0,
+  spreadsheetUnsupportedReason = null,
+  spreadsheetConflict = false,
   fileSize,
   workspaceRoot,
   workspaceName,
@@ -146,6 +168,9 @@ export function WriteWorkspaceDocumentPane({
   onImagePasteSaved,
   onImagePasteError,
   onPresentationViewChange,
+  onSpreadsheetMutations,
+  onConvertSpreadsheet,
+  onReloadSpreadsheetConflict,
   onMarkdownReviewStateChange,
   focused,
   focusMode,
@@ -241,8 +266,56 @@ export function WriteWorkspaceDocumentPane({
   }
 
   if (activeFileIsOffice && officePreview) {
+    if (officePreview.sourceFormat === 'xlsx' && onSpreadsheetMutations) {
+      return (
+        <div ref={editorPaneRef} className="flex h-full min-h-0 min-w-0 flex-col">
+          {spreadsheetUnsupportedReason || spreadsheetConflict ? (
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+              <span>{spreadsheetUnsupportedReason || officeRefreshError}</span>
+              {spreadsheetConflict && onReloadSpreadsheetConflict ? (
+                <button
+                  type="button"
+                  onClick={onReloadSpreadsheetConflict}
+                  className="shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-semibold hover:bg-amber-100 dark:border-amber-700 dark:bg-white/10 dark:hover:bg-white/15"
+                >
+                  {t('writeSpreadsheetReloadExternal')}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          <Suspense fallback={(
+            <div className="flex min-h-0 flex-1 items-center justify-center text-[13px] text-ds-muted">
+              {t('filePreviewLoading')}
+            </div>
+          )}>
+            <WorkspaceUniverSpreadsheetEditor
+              result={officePreview}
+              mutations={spreadsheetMutations}
+              sourceSha256={spreadsheetSourceSha256 || officePreview.sourceSha256}
+              commitRevision={spreadsheetCommitRevision}
+              focused={focused}
+              onMutationsChange={onSpreadsheetMutations}
+              onSelectionChange={handleOfficeSelection}
+            />
+          </Suspense>
+        </div>
+      )
+    }
     return (
       <div ref={editorPaneRef} className="flex h-full min-h-0 min-w-0 flex-col">
+        {officePreview.sourceFormat === 'xls' && onConvertSpreadsheet ? (
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-ds-border bg-ds-surface-subtle px-4 py-2 text-[12px] text-ds-muted">
+            <span>{t('writeSpreadsheetLegacyReadOnly')}</span>
+            <button
+              type="button"
+              disabled={officeLoading}
+              onClick={onConvertSpreadsheet}
+              className="shrink-0 rounded-lg bg-accent px-3 py-1.5 font-semibold text-white hover:brightness-105 disabled:opacity-50"
+            >
+              {t('writeSpreadsheetConvertToXlsx')}
+            </button>
+          </div>
+        ) : null}
         <WorkspaceOfficePreview
           result={officePreview}
           loading={officeLoading || officeAgentEditing}

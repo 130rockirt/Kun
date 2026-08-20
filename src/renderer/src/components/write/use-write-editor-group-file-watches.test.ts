@@ -3,7 +3,10 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createWriteDocumentSession, emptyWriteEditorLayout } from '../../write/write-editor-layout'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
-import { useWriteEditorGroupFileWatches } from './use-write-editor-group-file-watches'
+import {
+  applyWriteOfficePreviewUpdate,
+  useWriteEditorGroupFileWatches
+} from './use-write-editor-group-file-watches'
 
 function WatchHarness(): ReactElement {
   const workspaceRoot = useWriteWorkspaceStore((state) => state.workspaceRoot)
@@ -19,6 +22,7 @@ async function flushPromises(): Promise<void> {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   useWriteWorkspaceStore.setState({
     workspaceRoot: '',
@@ -180,5 +184,61 @@ describe('useWriteEditorGroupFileWatches', () => {
     })
 
     await act(async () => renderer.unmount())
+  })
+
+  it('retains dirty XLSX edits as a conflict until the external version is reloaded', () => {
+    const original = {
+      ok: true as const,
+      path: '/work/book.xlsx',
+      name: 'book.xlsx',
+      sourceFormat: 'xlsx' as const,
+      renderFormat: 'xlsx' as const,
+      viewer: 'spreadsheet' as const,
+      size: 10,
+      mtimeMs: 1,
+      sourceSha256: 'a'.repeat(64),
+      data: new Uint8Array([1])
+    }
+    const external = {
+      ...original,
+      mtimeMs: 2,
+      sourceSha256: 'b'.repeat(64),
+      data: new Uint8Array([2])
+    }
+    const document = createWriteDocumentSession({
+      path: original.path,
+      kind: 'office',
+      officePreview: original,
+      spreadsheetMutations: [{ kind: 'cell', sheetName: 'Data', address: 'A1', value: 'Local' }],
+      saveStatus: 'dirty'
+    })
+    const conflicted = applyWriteOfficePreviewUpdate(document, external, 'External conflict')
+    useWriteWorkspaceStore.setState({
+      workspaceRoot: '/work',
+      documentsByPath: { [original.path]: conflicted },
+      editorLayout: {
+        ...emptyWriteEditorLayout(),
+        groups: [{
+          id: 'primary',
+          tabs: [{ path: original.path, viewMode: 'rich' }],
+          activePath: original.path
+        }]
+      }
+    })
+
+    act(() => useWriteWorkspaceStore.getState().reloadSpreadsheetConflict(original.path))
+    const reloaded = useWriteWorkspaceStore.getState().documentsByPath[original.path]
+    expect(conflicted).toMatchObject({
+      officePreview: { sourceSha256: original.sourceSha256 },
+      spreadsheetConflictPreview: { sourceSha256: external.sourceSha256 },
+      spreadsheetMutations: expect.arrayContaining([expect.objectContaining({ value: 'Local' })]),
+      saveStatus: 'error'
+    })
+    expect(reloaded).toMatchObject({
+      officePreview: { sourceSha256: external.sourceSha256 },
+      spreadsheetConflictPreview: null,
+      spreadsheetMutations: [],
+      saveStatus: 'saved'
+    })
   })
 })

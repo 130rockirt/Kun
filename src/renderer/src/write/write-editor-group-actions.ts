@@ -38,6 +38,7 @@ type WriteEditorActions = Pick<
   | 'setSplitOrientation'
   | 'setSplitRatio'
   | 'setDocumentContent'
+  | 'setSpreadsheetMutations'
   | 'saveDocument'
   | 'saveAllDocuments'
 >
@@ -131,7 +132,72 @@ export function createWriteEditorGroupActions(
       if (capturedDocuments !== rawSnapshot.documentsByPath) set({ documentsByPath: capturedDocuments })
       const snapshot = { ...rawSnapshot, documentsByPath: capturedDocuments }
       const document = snapshot.documentsByPath[key]
-      if (!document || document.kind !== 'text') return true
+      if (!document) return true
+      if (document.kind === 'office' && document.officePreview?.sourceFormat === 'xlsx') {
+        if (document.spreadsheetUnsupportedReason) return false
+        if (document.spreadsheetConflictPreview) return false
+        if (document.spreadsheetMutations.length === 0) {
+          set((state) => {
+            const documentsByPath = updateDocument(state.documentsByPath, path, (current) => ({
+              ...current, saveStatus: 'saved', fileError: null
+            }))
+            return withProjection(documentsByPath, state.editorLayout)
+          })
+          return true
+        }
+        const revision = document.contentRevision
+        const mutations = document.spreadsheetMutations
+        const expectedSha256 = document.spreadsheetSourceSha256 || document.officePreview.sourceSha256
+        set((state) => {
+          const documentsByPath = updateDocument(state.documentsByPath, path, (current) => (
+            current.contentRevision === revision ? { ...current, saveStatus: 'saving' } : current
+          ))
+          return withProjection(documentsByPath, state.editorLayout)
+        })
+        let result: Awaited<ReturnType<typeof window.kunGui.saveWorkspaceSpreadsheet>>
+        try {
+          result = await window.kunGui.saveWorkspaceSpreadsheet({
+            path: document.path,
+            workspaceRoot,
+            expectedSha256,
+            mutations
+          })
+        } catch (error) {
+          result = {
+            ok: false,
+            code: 'mutation_failed',
+            message: error instanceof Error ? error.message : String(error)
+          }
+        }
+        if (!result.ok) {
+          set((state) => {
+            const documentsByPath = updateDocument(state.documentsByPath, path, (current) => ({
+              ...current,
+              saveStatus: 'error',
+              fileError: result.message,
+              ...(result.code === 'source_changed' && current.officePreview?.sourceSha256 !== expectedSha256
+                ? { spreadsheetConflictPreview: current.officePreview }
+                : {})
+            }))
+            return withProjection(documentsByPath, state.editorLayout)
+          })
+          return false
+        }
+        set((state) => {
+          const documentsByPath = updateDocument(state.documentsByPath, path, (current) => ({
+            ...current,
+            spreadsheetSourceSha256: result.sourceSha256,
+            spreadsheetMutations: current.contentRevision === revision ? [] : current.spreadsheetMutations,
+            spreadsheetCommitRevision: current.spreadsheetCommitRevision + 1,
+            saveStatus: current.contentRevision === revision ? 'saved' : 'dirty',
+            fileSize: result.size,
+            fileError: null
+          }))
+          return withProjection(documentsByPath, state.editorLayout)
+        })
+        return true
+      }
+      if (document.kind !== 'text') return true
       if (document.fileTruncated) return false
       const resolveConflict = options.resolveExternalConflict === 'keep-local'
       if (document.reviewActive && !document.pendingAgentReview) return false
@@ -226,11 +292,14 @@ export function createWriteEditorGroupActions(
         document.saveStatus === 'dirty' || document.saveStatus === 'error' || document.reviewActive
       )
       if (needsDecision && !force) {
-        if (snapshot.autoSaveEnabled && document.kind === 'text') {
+        const savable = document.kind === 'text' || (
+          document.kind === 'office' && document.officePreview?.sourceFormat === 'xlsx'
+        )
+        if (snapshot.autoSaveEnabled && savable) {
           const saved = await saveDocument(snapshot.workspaceRoot, filePath ?? path, { resolveExternalConflict: 'keep-local' })
           if (!saved) return false
         } else {
-          const saveBeforeClosing = document.kind === 'text' && window.confirm(
+          const saveBeforeClosing = savable && window.confirm(
             i18n.t('common:writeSaveUnsavedTabConfirm')
           )
           if (saveBeforeClosing) {
@@ -406,11 +475,34 @@ export function createWriteEditorGroupActions(
       })
     },
 
+    setSpreadsheetMutations: (path, mutations, unsupportedReason = null) => {
+      set((state) => {
+        const documentsByPath = updateDocument(state.documentsByPath, path, (document) => {
+          if (document.kind !== 'office' || document.officePreview?.sourceFormat !== 'xlsx') return document
+          const sameMutations = JSON.stringify(document.spreadsheetMutations) === JSON.stringify(mutations)
+          const sameReason = document.spreadsheetUnsupportedReason === unsupportedReason
+          if (sameMutations && sameReason) return document
+          return {
+            ...document,
+            spreadsheetMutations: mutations,
+            spreadsheetUnsupportedReason: unsupportedReason,
+            contentRevision: document.contentRevision + 1,
+            saveStatus: unsupportedReason ? 'error' : mutations.length ? 'dirty' : 'saved',
+            fileError: unsupportedReason
+          }
+        })
+        return withProjection(documentsByPath, state.editorLayout)
+      })
+    },
+
     saveDocument,
 
     saveAllDocuments: async (workspaceRoot) => {
       const paths = Object.values(get().documentsByPath)
-        .filter((document) => document.kind === 'text' && document.saveStatus !== 'saved')
+        .filter((document) => (
+          document.kind === 'text' ||
+          (document.kind === 'office' && document.officePreview?.sourceFormat === 'xlsx')
+        ) && document.saveStatus !== 'saved')
         .map((document) => document.path)
       const results = await Promise.all(paths.map((path) => saveDocument(workspaceRoot, path)))
       return results.every(Boolean)

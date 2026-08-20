@@ -18,6 +18,7 @@ import {
   MIN_KUN_LOCAL_PORT,
   KUN_CONTEXT_COMPACTION_DEFAULTS_VERSION,
   KUN_RUNTIME_TUNING_DEFAULTS_VERSION,
+  MODEL_REQUEST_RETRY_DEFAULTS_VERSION,
   SCHEDULE_MODEL_IDS,
   SCHEDULE_REASONING_EFFORT_IDS,
   SPEECH_TO_TEXT_PROTOCOLS,
@@ -153,7 +154,8 @@ export const modelProviderPatchSchema = z.object({
     retry: z.object({
       maxAttempts: z.number().int().min(0).max(10).optional(),
       initialDelayMs: z.number().int().min(0).max(600_000).optional(),
-      httpStatusCodes: z.array(z.number().int().min(400).max(599)).max(64).optional()
+      httpStatusCodes: z.array(z.number().int().min(400).max(599)).max(64).optional(),
+      defaultsVersion: z.number().int().min(0).max(MODEL_REQUEST_RETRY_DEFAULTS_VERSION).optional()
     }).strict().optional(),
     kind: z.enum([
       'http',
@@ -289,7 +291,8 @@ export const kunRuntimePatchSchema = z.object({
   retry: z.object({
     maxAttempts: z.number().int().min(0).max(10).optional(),
     initialDelayMs: z.number().int().min(0).max(600_000).optional(),
-    httpStatusCodes: z.array(z.number().int().min(400).max(599)).max(64).optional()
+    httpStatusCodes: z.array(z.number().int().min(400).max(599)).max(64).optional(),
+    defaultsVersion: z.number().int().min(0).max(MODEL_REQUEST_RETRY_DEFAULTS_VERSION).optional()
   }).strict().optional(),
   runtimeToken: z.string().max(MAX_BODY_BYTES).optional(),
   dataDir: defaultPathSchema,

@@ -100,6 +100,12 @@ import type {
   WorkspaceOfficeSemanticResult,
   WorkspaceOfficeSemanticTarget
 } from './office-document'
+import type {
+  WorkspaceSpreadsheetConvertPayload,
+  WorkspaceSpreadsheetConvertResult,
+  WorkspaceSpreadsheetSavePayload,
+  WorkspaceSpreadsheetSaveResult
+} from './workspace-spreadsheet'
 import type { ProjectDesignMdOfficialLintResult } from './project-design-md'
 import type {
   WriteInlineCompletionDebugEntry,
@@ -372,6 +378,12 @@ export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & {
   readWorkspaceOfficeSemantic: (
     options: WorkspaceOfficeSemanticTarget
   ) => Promise<WorkspaceOfficeSemanticResult>
+  saveWorkspaceSpreadsheet: (
+    payload: WorkspaceSpreadsheetSavePayload
+  ) => Promise<WorkspaceSpreadsheetSaveResult>
+  convertWorkspaceSpreadsheet: (
+    payload: WorkspaceSpreadsheetConvertPayload
+  ) => Promise<WorkspaceSpreadsheetConvertResult>
   resolveKunApproval: (request: KunProtectedApprovalRequest) => Promise<KunProtectedApprovalResult>
   restartRuntime: () => Promise<void>
   restartKunServe: () => Promise<{ accepted: boolean; error?: string }>

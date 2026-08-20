@@ -10,8 +10,10 @@ import { emptySelection } from '../../write/write-workspace-store-helpers'
 import { isWriteWorkspaceSaveContentPending } from '../../write/write-save-coordinator'
 import {
   useWriteWorkspaceStore,
+  type WriteDocumentSession,
   type WriteEditorLayoutV1
 } from '../../write/write-workspace-store'
+import type { WorkspaceOfficePreviewSuccess } from '@shared/office-document'
 
 type Options = {
   workspaceRoot: string
@@ -52,23 +54,13 @@ export function useWriteEditorGroupFileWatches({ workspaceRoot, editorLayout }: 
                 const key = writeDocumentKey(path)
                 const latest = current.documentsByPath[key]
                 if (!latest || latest.kind !== 'office') return {}
-                const sourceChanged = latest.officePreview?.sourceSha256 !== officePreview.sourceSha256
                 const documentsByPath = {
                   ...current.documentsByPath,
-                  [key]: {
-                    ...latest,
+                  [key]: applyWriteOfficePreviewUpdate(
+                    latest,
                     officePreview,
-                    officeLoading: false,
-                    officeRefreshError: null,
-                    fileError: null,
-                    fileSize: officePreview.size,
-                    ...(sourceChanged ? {
-                      officeSemanticText: '',
-                      officeSemanticSha256: '',
-                      officeSemanticTruncated: false,
-                      selection: emptySelection()
-                    } : {})
-                  }
+                    i18n.t('common:writeSpreadsheetExternalConflict')
+                  )
                 }
                 return { documentsByPath, ...projectFocusedDocument(current.editorLayout, documentsByPath) }
               })
@@ -183,6 +175,46 @@ export function useWriteEditorGroupFileWatches({ workspaceRoot, editorLayout }: 
     })
     return () => cleanups.forEach((cleanup) => cleanup())
   }, [visibleKey, workspaceRoot])
+}
+
+export function applyWriteOfficePreviewUpdate(
+  latest: WriteDocumentSession,
+  officePreview: WorkspaceOfficePreviewSuccess,
+  conflictMessage: string
+): WriteDocumentSession {
+  const sourceChanged = latest.officePreview?.sourceSha256 !== officePreview.sourceSha256
+  const editableSpreadsheet = latest.officePreview?.sourceFormat === 'xlsx' || officePreview.sourceFormat === 'xlsx'
+  if (
+    sourceChanged &&
+    editableSpreadsheet &&
+    latest.spreadsheetMutations.length > 0 &&
+    latest.saveStatus !== 'saving'
+  ) {
+    return {
+      ...latest,
+      spreadsheetConflictPreview: officePreview,
+      officeLoading: false,
+      officeRefreshError: conflictMessage,
+      fileError: conflictMessage,
+      saveStatus: 'error'
+    }
+  }
+  return {
+    ...latest,
+    officePreview,
+    spreadsheetSourceSha256: officePreview.sourceSha256,
+    spreadsheetConflictPreview: null,
+    officeLoading: false,
+    officeRefreshError: null,
+    fileError: null,
+    fileSize: officePreview.size,
+    ...(sourceChanged ? {
+      officeSemanticText: '',
+      officeSemanticSha256: '',
+      officeSemanticTruncated: false,
+      selection: emptySelection()
+    } : {})
+  }
 }
 
 function patchOfficeDocument(
