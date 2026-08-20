@@ -78,4 +78,67 @@ describe('WriteAssistantPanel presentation view', () => {
       if (renderer) act(() => renderer!.unmount())
     }
   })
+
+  it('quotes a formatted spreadsheet selection only after the explicit sidebar action', async () => {
+    const path = '/workspace/book.xlsx'
+    useWriteWorkspaceStore.setState({
+      activeFilePath: path,
+      activeFileKind: 'office',
+      selection: {
+        text: '日期\t¥1,299.00',
+        ranges: [{
+          from: 0, to: 13, startLine: 1, startColumn: 1, endLine: 1, endColumn: 14,
+          text: '日期\t¥1,299.00', charCount: 13
+        }],
+        charCount: 13,
+        sourceKind: 'spreadsheet',
+        sourceFormat: 'xlsx',
+        sheetName: '随机数据',
+        cellRange: 'A1:F2',
+        formulas: ['G2: =E2*F2']
+      },
+      quotedSelections: [],
+      documentsByPath: {
+        [path]: createWriteDocumentSession({
+          path,
+          kind: 'office',
+          selection: {
+            text: '日期\t¥1,299.00',
+            ranges: [{
+              from: 0, to: 13, startLine: 1, startColumn: 1, endLine: 1, endColumn: 14,
+              text: '日期\t¥1,299.00', charCount: 13
+            }],
+            charCount: 13,
+            sourceKind: 'spreadsheet',
+            sourceFormat: 'xlsx',
+            sheetName: '随机数据',
+            cellRange: 'A1:F2',
+            formulas: ['G2: =E2*F2']
+          }
+        })
+      },
+      presentationViewByGroup: {}
+    })
+    let renderer: ReactTestRenderer | undefined
+    try {
+      await act(async () => { renderer = create(createElement(WriteAssistantPanel, props())) })
+      expect(useWriteWorkspaceStore.getState().quotedSelections).toHaveLength(0)
+      const label = renderer!.root.findByProps({ children: 'Quote selected cells' })
+      const button = label.parent?.parent
+      expect(button?.type).toBe('button')
+      await act(async () => button?.props.onClick())
+      expect(useWriteWorkspaceStore.getState().quotedSelections).toEqual([
+        expect.objectContaining({
+          sourceKind: 'spreadsheet',
+          sourceFormat: 'xlsx',
+          sheetName: '随机数据',
+          cellRange: 'A1:F2',
+          text: '日期\t¥1,299.00',
+          formulas: ['G2: =E2*F2']
+        })
+      ])
+    } finally {
+      if (renderer) act(() => renderer!.unmount())
+    }
+  })
 })

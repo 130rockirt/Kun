@@ -145,7 +145,7 @@ async function readWorkspaceFileSignal(
 }
 export function registerAppFileIpcHandlers(options: RegisterAppIpcHandlersOptions): void {
   const { getMainWindow, runtimeRequest, logError } = options
-  registerWorkspaceSpreadsheetIpcHandlers({ getMainWindow })
+  registerWorkspaceSpreadsheetIpcHandlers({ getMainWindow, logError, logInfo: options.logInfo })
   const workspaceFileWatchers = new Map<string, WorkspaceFileWatchRecord>()
   const workspaceFileWatchSenders = new Map<number, WorkspaceFileWatchSenderRecord>()
   const releaseWorkspaceFileWatchSender = (sender: WebContents): void => {

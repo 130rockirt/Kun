@@ -62,10 +62,15 @@ type Props = {
   onSpreadsheetMutations: (
     path: string,
     mutations: WorkspaceSpreadsheetMutation[],
-    unsupportedReason?: string
+    unsupportedReason?: string,
+    baseFingerprints?: Record<string, string>
   ) => void
   onConvertSpreadsheet: (path: string) => void
   onReloadSpreadsheetConflict: (path: string) => void
+  onResolveSpreadsheetConflict: (
+    path: string,
+    decision: 'keep-local' | 'use-external'
+  ) => void
   onboarding?: boolean
   workspaceLoading?: boolean
 }
@@ -106,6 +111,7 @@ export function WriteEditorGroupContent({
   onSpreadsheetMutations,
   onConvertSpreadsheet,
   onReloadSpreadsheetConflict,
+  onResolveSpreadsheetConflict,
   onboarding,
   workspaceLoading
 }: Props): ReactElement {
@@ -190,7 +196,13 @@ export function WriteEditorGroupContent({
         spreadsheetSourceSha256={document?.spreadsheetSourceSha256 ?? ''}
         spreadsheetCommitRevision={document?.spreadsheetCommitRevision ?? 0}
         spreadsheetUnsupportedReason={document?.spreadsheetUnsupportedReason ?? null}
+        spreadsheetSaveError={
+          document?.saveStatus === 'error' && !document.spreadsheetConflictPreview
+            ? document.fileError
+            : null
+        }
         spreadsheetConflict={Boolean(document?.spreadsheetConflictPreview)}
+        spreadsheetConflictTargets={document?.spreadsheetConflictTargets ?? []}
         fileSize={document?.fileSize ?? 0}
         workspaceRoot={workspaceRoot}
         workspaceName={workspaceName}
@@ -233,10 +245,15 @@ export function WriteEditorGroupContent({
         onImagePasteError={onImagePasteError}
         onPresentationViewChange={onPresentationViewChange}
         onSpreadsheetMutations={path
-          ? (mutations, unsupportedReason) => onSpreadsheetMutations(path, mutations, unsupportedReason)
+          ? (mutations, unsupportedReason, baseFingerprints) => onSpreadsheetMutations(
+              path, mutations, unsupportedReason, baseFingerprints
+            )
           : undefined}
         onConvertSpreadsheet={path ? () => onConvertSpreadsheet(path) : undefined}
         onReloadSpreadsheetConflict={path ? () => onReloadSpreadsheetConflict(path) : undefined}
+        onResolveSpreadsheetConflict={path
+          ? (decision) => onResolveSpreadsheetConflict(path, decision)
+          : undefined}
       />
     </div>
   )

@@ -3,6 +3,7 @@ import {
   writeDocumentKey
 } from './write-editor-layout'
 import { emptySelection } from './write-workspace-store-helpers'
+import { spreadsheetMutationTargetKey } from '../lib/workspace-univer-model'
 import type {
   WriteWorkspaceGet,
   WriteWorkspaceSet,
@@ -11,7 +12,7 @@ import type {
 
 type SpreadsheetActions = Pick<
   WriteWorkspaceState,
-  'convertSpreadsheet' | 'reloadSpreadsheetConflict'
+  'convertSpreadsheet' | 'reloadSpreadsheetConflict' | 'resolveSpreadsheetConflict'
 >
 
 export function createWriteSpreadsheetActions(
@@ -76,14 +77,58 @@ export function createWriteSpreadsheetActions(
             officePreview: preview,
             spreadsheetSourceSha256: preview.sourceSha256,
             spreadsheetMutations: [],
+            spreadsheetMutationBaseFingerprints: {},
             spreadsheetUnsupportedReason: null,
             spreadsheetConflictPreview: null,
+            spreadsheetConflictTargets: [],
+            spreadsheetConflictBaseFingerprints: {},
             spreadsheetCommitRevision: document.spreadsheetCommitRevision + 1,
             officeSemanticText: '',
             officeSemanticSha256: '',
             officeSemanticTruncated: false,
             selection: emptySelection(),
             saveStatus: 'saved' as const,
+            fileError: null,
+            officeRefreshError: null
+          }
+        }
+        return { documentsByPath, ...projectFocusedDocument(state.editorLayout, documentsByPath) }
+      })
+    },
+
+    resolveSpreadsheetConflict: (path, decision) => {
+      const key = writeDocumentKey(path)
+      set((state) => {
+        const document = state.documentsByPath[key]
+        const preview = document?.spreadsheetConflictPreview
+        if (!document || document.kind !== 'office' || !preview) return {}
+        const conflicts = new Set(document.spreadsheetConflictTargets)
+        const mutations = decision === 'keep-local'
+          ? document.spreadsheetMutations
+          : document.spreadsheetMutations.filter((mutation) => (
+              !conflicts.has(spreadsheetMutationTargetKey(mutation))
+            ))
+        const fingerprints = Object.fromEntries(mutations.flatMap((mutation) => {
+          const target = spreadsheetMutationTargetKey(mutation)
+          const fingerprint = document.spreadsheetConflictBaseFingerprints[target]
+          return fingerprint ? [[target, fingerprint]] : []
+        }))
+        const documentsByPath = {
+          ...state.documentsByPath,
+          [key]: {
+            ...document,
+            officePreview: preview,
+            spreadsheetSourceSha256: preview.sourceSha256,
+            spreadsheetMutations: mutations,
+            spreadsheetMutationBaseFingerprints: fingerprints,
+            spreadsheetConflictPreview: null,
+            spreadsheetConflictTargets: [],
+            spreadsheetConflictBaseFingerprints: {},
+            officeSemanticText: '',
+            officeSemanticSha256: '',
+            officeSemanticTruncated: false,
+            selection: emptySelection(),
+            saveStatus: mutations.length ? 'dirty' as const : 'saved' as const,
             fileError: null,
             officeRefreshError: null
           }

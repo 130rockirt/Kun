@@ -51,7 +51,9 @@ type Props = {
   spreadsheetSourceSha256?: string
   spreadsheetCommitRevision?: number
   spreadsheetUnsupportedReason?: string | null
+  spreadsheetSaveError?: string | null
   spreadsheetConflict?: boolean
+  spreadsheetConflictTargets?: string[]
   fileSize: number
   workspaceRoot: string
   workspaceName: string
@@ -92,10 +94,12 @@ type Props = {
   ) => void
   onSpreadsheetMutations?: (
     mutations: WorkspaceSpreadsheetMutation[],
-    unsupportedReason?: string
+    unsupportedReason?: string,
+    baseFingerprints?: Record<string, string>
   ) => void
   onConvertSpreadsheet?: () => void
   onReloadSpreadsheetConflict?: () => void
+  onResolveSpreadsheetConflict?: (decision: 'keep-local' | 'use-external') => void
   onMarkdownReviewStateChange?: (active: boolean) => void
   focused: boolean
   focusMode: boolean
@@ -132,7 +136,9 @@ export function WriteWorkspaceDocumentPane({
   spreadsheetSourceSha256 = '',
   spreadsheetCommitRevision = 0,
   spreadsheetUnsupportedReason = null,
+  spreadsheetSaveError = null,
   spreadsheetConflict = false,
+  spreadsheetConflictTargets = [],
   fileSize,
   workspaceRoot,
   workspaceName,
@@ -171,6 +177,7 @@ export function WriteWorkspaceDocumentPane({
   onSpreadsheetMutations,
   onConvertSpreadsheet,
   onReloadSpreadsheetConflict,
+  onResolveSpreadsheetConflict,
   onMarkdownReviewStateChange,
   focused,
   focusMode,
@@ -269,16 +276,37 @@ export function WriteWorkspaceDocumentPane({
     if (officePreview.sourceFormat === 'xlsx' && onSpreadsheetMutations) {
       return (
         <div ref={editorPaneRef} className="flex h-full min-h-0 min-w-0 flex-col">
-          {spreadsheetUnsupportedReason || spreadsheetConflict ? (
+          {spreadsheetUnsupportedReason || spreadsheetConflict || spreadsheetSaveError ? (
             <div className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
-              <span>{spreadsheetUnsupportedReason || officeRefreshError}</span>
-              {spreadsheetConflict && onReloadSpreadsheetConflict ? (
+              <span>{spreadsheetUnsupportedReason || officeRefreshError || spreadsheetSaveError}</span>
+              {spreadsheetConflict && onResolveSpreadsheetConflict ? (
+                <span className="flex shrink-0 items-center gap-2" data-spreadsheet-conflict-count={spreadsheetConflictTargets.length}>
+                  <button
+                    type="button"
+                    onClick={() => onResolveSpreadsheetConflict('keep-local')}
+                    className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-semibold hover:bg-amber-100 dark:border-amber-700 dark:bg-white/10 dark:hover:bg-white/15"
+                  >
+                    {t('writeSpreadsheetKeepLocalChanges')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onResolveSpreadsheetConflict('use-external')}
+                    className="rounded-lg border border-amber-300 bg-amber-100 px-3 py-1.5 font-semibold hover:bg-amber-200 dark:border-amber-700 dark:bg-amber-900/50 dark:hover:bg-amber-900/70"
+                  >
+                    {t('writeSpreadsheetUseExternalChanges')}
+                  </button>
+                </span>
+              ) : spreadsheetConflict && onReloadSpreadsheetConflict ? (
+                <button type="button" onClick={onReloadSpreadsheetConflict} className="shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-semibold">
+                  {t('writeSpreadsheetReloadExternal')}
+                </button>
+              ) : spreadsheetSaveError && !spreadsheetUnsupportedReason ? (
                 <button
                   type="button"
-                  onClick={onReloadSpreadsheetConflict}
-                  className="shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-semibold hover:bg-amber-100 dark:border-amber-700 dark:bg-white/10 dark:hover:bg-white/15"
+                  onClick={onSaveShortcut}
+                  className="shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-semibold hover:bg-amber-100 dark:border-amber-700 dark:bg-white/10"
                 >
-                  {t('writeSpreadsheetReloadExternal')}
+                  {t('writeSpreadsheetRetrySave')}
                 </button>
               ) : null}
             </div>

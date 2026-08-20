@@ -13,6 +13,8 @@ import {
 
 export function registerWorkspaceSpreadsheetIpcHandlers(options: {
   getMainWindow: () => BrowserWindow | null
+  logError?: (category: string, message: string, detail?: unknown) => void
+  logInfo?: (category: string, message: string, detail?: unknown) => void
 }): void {
   const { getMainWindow } = options
   ipcMain.handle('file:save-workspace-spreadsheet', async (event, payload: unknown) => {
@@ -45,7 +47,18 @@ export function registerWorkspaceSpreadsheetIpcHandlers(options: {
         path: resolved.path,
         expectedSha256: input.expectedSha256,
         mutations: input.mutations
-      }, { binaryPath, signal: abortController.signal })
+      }, {
+        binaryPath,
+        signal: abortController.signal,
+        logSave: (detail) => {
+          const logger = detail.status === 'failed' ? options.logError : options.logInfo
+          logger?.(
+            'spreadsheet-save',
+            detail.status === 'failed' ? 'Spreadsheet save failed' : 'Spreadsheet save completed',
+            detail
+          )
+        }
+      })
     } finally {
       event.sender.removeListener('destroyed', cancelWhenRendererCloses)
     }

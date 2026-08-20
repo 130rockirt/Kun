@@ -151,6 +151,19 @@ export function WriteAssistantPanel({
   const hasParentTimeline =
     blocks.length > 0 || liveReasoning.trim().length > 0 || liveAssistant.trim().length > 0
   const selectionIsReadOnly = selection.sourceKind != null && selection.sourceKind !== 'text'
+  const selectionIsSpreadsheet = selection.sourceKind === 'spreadsheet'
+  const selectionActionLabel = selectionIsSpreadsheet
+    ? t('writeAssistantQuoteSpreadsheetSelection')
+    : t(selectionIsReadOnly ? 'writeAssistantExplainPdfSelection' : 'writeAssistantPolishSelection')
+  const selectionActionDescription = selectionIsSpreadsheet
+    ? selection.charCount > 0
+      ? t('writeAssistantQuoteSpreadsheetSelectionActiveSub', {
+          sheet: selection.sheetName || t('writeSpreadsheetUnknownSheet'),
+          range: selection.cellRange || '—',
+          count: selection.charCount
+        })
+      : t('writeAssistantQuoteSpreadsheetSelectionSub')
+    : t(selectionIsReadOnly ? 'writeAssistantExplainPdfSelectionSub' : 'writeAssistantPolishSelectionSub')
 
   useEffect(() => {
     setChildThreadId(null)
@@ -400,10 +413,10 @@ export function WriteAssistantPanel({
                 </span>
                 <span className="min-w-0">
                   <span className="block text-[13.5px] font-semibold text-ds-ink">
-                    {t(selectionIsReadOnly ? 'writeAssistantExplainPdfSelection' : 'writeAssistantPolishSelection')}
+                    {selectionActionLabel}
                   </span>
                   <span className="mt-0.5 block truncate text-[12px] text-ds-faint">
-                    {t(selectionIsReadOnly ? 'writeAssistantExplainPdfSelectionSub' : 'writeAssistantPolishSelectionSub')}
+                    {selectionActionDescription}
                   </span>
                 </span>
               </button>

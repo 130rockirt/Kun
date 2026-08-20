@@ -41,10 +41,21 @@ export type WorkspaceSpreadsheetServiceDependencies = {
   runOfficeCli?: (args: string[]) => Promise<OfficeCliResult>
   beforeReplace?: () => Promise<void> | void
   convertLegacyDocument?: typeof convertLegacyOfficeDocument
+  logSave?: (entry: WorkspaceSpreadsheetSaveDiagnostic) => void
 } & Pick<
   LegacyOfficeDocumentConversionDependencies,
   'resolveLibreOfficeBinary' | 'runLibreOffice' | 'temporaryDirectory'
 >
+
+export type WorkspaceSpreadsheetSaveDiagnostic = {
+  stage: 'preflight' | 'batch' | 'validation' | 'replace' | 'complete'
+  status: 'succeeded' | 'failed'
+  fileName: string
+  mutationCount: number
+  expectedSha256Prefix: string
+  currentSha256Prefix?: string
+  code?: Extract<WorkspaceSpreadsheetSaveResult, { ok: false }>['code']
+}
 
 export async function saveWorkspaceSpreadsheet(
   input: {
@@ -55,10 +66,26 @@ export async function saveWorkspaceSpreadsheet(
   dependencies: WorkspaceSpreadsheetServiceDependencies = {}
 ): Promise<WorkspaceSpreadsheetSaveResult> {
   const filePath = input.path.trim()
+  let stage: WorkspaceSpreadsheetSaveDiagnostic['stage'] = 'preflight'
+  const logSave = (
+    status: WorkspaceSpreadsheetSaveDiagnostic['status'],
+    code?: Extract<WorkspaceSpreadsheetSaveResult, { ok: false }>['code'],
+    currentSha256?: string
+  ): void => dependencies.logSave?.({
+    stage,
+    status,
+    fileName: basename(filePath),
+    mutationCount: input.mutations.length,
+    expectedSha256Prefix: input.expectedSha256.slice(0, 12).toLowerCase(),
+    ...(currentSha256 ? { currentSha256Prefix: currentSha256.slice(0, 12) } : {}),
+    ...(code ? { code } : {})
+  })
   if (extname(filePath).toLowerCase() !== '.xlsx') {
+    logSave('failed', 'unsupported_type')
     return failure('unsupported_type', 'Editable spreadsheet saves require an .xlsx file.')
   }
   if (!dependencies.binaryPath && !dependencies.runOfficeCli) {
+    logSave('failed', 'officecli_unavailable')
     return failure('officecli_unavailable', 'Spreadsheet saving is unavailable because OfficeCLI was not found.')
   }
 
@@ -71,6 +98,7 @@ export async function saveWorkspaceSpreadsheet(
     assertSupportedSourceSize(identity)
     const beforeSha256 = await sha256File(filePath)
     if (beforeSha256 !== input.expectedSha256.toLowerCase()) {
+      logSave('failed', 'source_changed', beforeSha256)
       return failure('source_changed', 'The spreadsheet changed after it was opened. Reload it before saving.')
     }
     const commands = spreadsheetMutationsToOfficeCliBatch(input.mutations)
@@ -79,9 +107,11 @@ export async function saveWorkspaceSpreadsheet(
 
     const run = dependencies.runOfficeCli ?? ((args: string[]) =>
       runOfficeCli(dependencies.binaryPath!, args, dependencies.signal))
+    stage = 'batch'
     const batch = await run(['batch', temporaryPath, '--input', commandPath, '--json'])
     assertOfficeCliSuccess(batch, 'Spreadsheet edit batch failed')
     await assertOoxmlPackageType(temporaryPath, 'xlsx')
+    stage = 'validation'
     const validation = await run(['validate', temporaryPath, '--json'])
     assertOfficeCliSuccess(validation, 'Edited spreadsheet failed OpenXML validation')
     await dependencies.beforeReplace?.()
@@ -91,21 +121,24 @@ export async function saveWorkspaceSpreadsheet(
       return failure('source_changed', 'The spreadsheet changed while the save was being prepared.')
     }
 
+    stage = 'replace'
     await rename(temporaryPath, filePath)
     const saved = await stat(filePath)
+    const sourceSha256 = await sha256File(filePath)
+    stage = 'complete'
+    logSave('succeeded', undefined, sourceSha256)
     return {
       ok: true,
       path: filePath,
-      sourceSha256: await sha256File(filePath),
+      sourceSha256,
       size: saved.size,
       mtimeMs: saved.mtimeMs,
       appliedMutations: input.mutations.length
     }
   } catch (error) {
-    return failure(
-      isSourceChangeError(error) ? 'source_changed' : 'mutation_failed',
-      errorMessage(error)
-    )
+    const code = isSourceChangeError(error) ? 'source_changed' : 'mutation_failed'
+    logSave('failed', code)
+    return failure(code, errorMessage(error))
   } finally {
     await Promise.all([
       rm(temporaryPath, { force: true }).catch(() => undefined),

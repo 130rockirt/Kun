@@ -134,7 +134,11 @@ export function normalizeUniverWorkbook(
 export function diffUniverWorkbook(
   baseline: NormalizedSpreadsheetWorkbook,
   workbookData: IWorkbookData
-): { mutations: WorkspaceSpreadsheetMutation[]; unsupportedReason?: string } {
+): {
+  mutations: WorkspaceSpreadsheetMutation[]
+  unsupportedReason?: string
+  baseFingerprints?: Record<string, string>
+} {
   const current = normalizeUniverWorkbook(workbookData, baseline.sourceSha256)
   if (
     current.sheetOrder.length !== baseline.sheetOrder.length ||
@@ -167,7 +171,35 @@ export function diffUniverWorkbook(
       }
     }
   }
-  return { mutations }
+  return mutations.length > 0
+    ? {
+        mutations,
+        baseFingerprints: Object.fromEntries(mutations.map((mutation) => [
+          spreadsheetMutationTargetKey(mutation),
+          fingerprintSpreadsheetMutationTarget(baseline, mutation)
+        ]))
+      }
+    : { mutations }
+}
+
+export function spreadsheetMutationTargetKey(mutation: WorkspaceSpreadsheetMutation): string {
+  if (mutation.kind === 'cell') return `cell:${mutation.sheetName}:${mutation.address}`
+  if (mutation.kind === 'merge') return `merge:${mutation.sheetName}:${mutation.range}`
+  return `${mutation.kind}:${mutation.sheetName}:${mutation.index}`
+}
+
+export function fingerprintSpreadsheetMutationTarget(
+  workbook: NormalizedSpreadsheetWorkbook,
+  mutation: WorkspaceSpreadsheetMutation
+): string {
+  const sheet = workbook.sheetOrder
+    .map((id) => workbook.sheets[id])
+    .find((candidate) => candidate?.name === mutation.sheetName)
+  if (!sheet) return fingerprintValue(null)
+  if (mutation.kind === 'cell') return fingerprintValue(sheet.cells[mutation.address] ?? null)
+  if (mutation.kind === 'merge') return fingerprintValue(sheet.merges.includes(mutation.range))
+  const dimensions = mutation.kind === 'row' ? sheet.rows : sheet.columns
+  return fingerprintValue(dimensions[mutation.index] ?? null)
 }
 
 export function applySpreadsheetMutations(
@@ -581,4 +613,23 @@ function pixelsToColumnWidth(pixels: number): number {
 
 function round(value: number): number {
   return Math.round(value * 100) / 100
+}
+
+function fingerprintValue(value: unknown): string {
+  const input = stableStringify(value)
+  let hash = 0x811c9dc5
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'undefined'
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+    .join(',')}}`
 }

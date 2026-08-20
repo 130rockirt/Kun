@@ -2,6 +2,10 @@ import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorkspaceUniverSpreadsheetEditor } from './WorkspaceUniverSpreadsheetEditor'
+import {
+  clearWriteSpreadsheetEditorRegistrationsForTests,
+  prepareWriteSpreadsheetEditorSave
+} from '../write/write-spreadsheet-editor-coordinator'
 
 const mocks = vi.hoisted(() => ({
   disposeUniver: vi.fn(),
@@ -9,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   disposeSelection: vi.fn(),
   createWorkbook: vi.fn(),
   getSnapshot: vi.fn(() => ({ id: 'book', sheetOrder: ['sheet_1'], sheets: {} })),
+  endEditingAsync: vi.fn(async () => true),
   commandCallback: undefined as undefined | (() => void),
   selectionCallback: undefined as undefined | ((params: unknown) => void),
   baseline: { sourceSha256: 'a'.repeat(64), sheetOrder: ['sheet_1'], sheets: {} },
@@ -23,7 +28,10 @@ vi.mock('@univerjs/presets', () => ({
     univerAPI: {
       Event: { CommandExecuted: 'CommandExecuted', SelectionChanged: 'SelectionChanged' },
       createWorkbook: mocks.createWorkbook,
-      getActiveWorkbook: () => ({ getSnapshot: mocks.getSnapshot }),
+      getActiveWorkbook: () => ({
+        getSnapshot: mocks.getSnapshot,
+        endEditingAsync: mocks.endEditingAsync
+      }),
       addEvent: (event: string, callback: (params: unknown) => void) => {
         if (event === 'CommandExecuted') {
           mocks.commandCallback = callback as () => void
@@ -88,11 +96,13 @@ beforeEach(() => {
   mocks.disposeCommand.mockClear()
   mocks.disposeSelection.mockClear()
   mocks.createWorkbook.mockClear()
+  mocks.endEditingAsync.mockClear()
   mocks.commandCallback = undefined
   mocks.selectionCallback = undefined
 })
 
 afterEach(() => {
+  clearWriteSpreadsheetEditorRegistrationsForTests()
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
@@ -101,7 +111,10 @@ describe('WorkspaceUniverSpreadsheetEditor', () => {
   it('creates a workbook, publishes mutations and selections, and disposes the session', async () => {
     const onMutationsChange = vi.fn()
     const onSelectionChange = vi.fn()
-    const host = { replaceChildren: vi.fn() }
+    const host = {
+      replaceChildren: vi.fn(),
+      getBoundingClientRect: () => ({ left: 0, right: 800, top: 0, bottom: 600 })
+    }
     let renderer!: ReactTestRenderer
     await act(async () => {
       renderer = create(createElement(WorkspaceUniverSpreadsheetEditor, {
@@ -117,20 +130,32 @@ describe('WorkspaceUniverSpreadsheetEditor', () => {
     })
     expect(mocks.createWorkbook).toHaveBeenCalledWith(mocks.workbookData)
 
+    let prepared!: Awaited<ReturnType<typeof prepareWriteSpreadsheetEditorSave>>
+    await act(async () => { prepared = await prepareWriteSpreadsheetEditorSave(result.path) })
+    expect(mocks.endEditingAsync).toHaveBeenCalledWith(true)
+    expect(prepared?.prepared).toMatchObject({
+      token: expect.any(String),
+      mutations: [{ kind: 'cell', sheetName: 'Data', address: 'A1', value: 42 }]
+    })
+
     await act(async () => {
       mocks.commandCallback?.()
       await vi.advanceTimersByTimeAsync(120)
     })
-    expect(onMutationsChange).toHaveBeenCalledWith([
+    expect(onMutationsChange).toHaveBeenLastCalledWith([
       { kind: 'cell', sheetName: 'Data', address: 'A1', value: 42 }
-    ], undefined)
+    ], undefined, undefined)
 
+    const editorHost = renderer.root.findAllByType('div').find((node) => (
+      typeof node.props.onPointerDownCapture === 'function'
+    ))!
+    act(() => editorHost.props.onPointerDownCapture({ clientX: 120, clientY: 240 }))
     act(() => mocks.selectionCallback?.({
       worksheet: {
-        getName: () => 'Data',
+        getSheetName: () => 'Data',
         getRange: () => ({
           getA1Notation: () => 'A1:B1',
-          getValues: () => [['A', 2]],
+          getDisplayValues: () => [['A', '¥2.00']],
           getFormulas: () => [['', '=SUM(A1:A2)']]
         })
       },
@@ -141,8 +166,16 @@ describe('WorkspaceUniverSpreadsheetEditor', () => {
       sourceFormat: 'xlsx',
       sheetName: 'Data',
       cellRange: 'A1:B1',
-      text: 'A\t2',
-      formulas: ['B1: =SUM(A1:A2)']
+      text: 'A\t¥2.00',
+      formulas: ['B1: =SUM(A1:A2)'],
+      anchorRect: {
+        left: 120,
+        right: 121,
+        top: 240,
+        bottom: 241,
+        width: 1,
+        height: 1
+      }
     }))
 
     await act(async () => renderer.unmount())

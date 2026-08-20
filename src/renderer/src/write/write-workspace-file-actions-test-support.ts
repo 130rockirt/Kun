@@ -59,6 +59,7 @@ export function makeWriteFileActionBaseState(): WriteWorkspaceState {
     setSpreadsheetMutations: () => undefined,
     convertSpreadsheet: async () => null,
     reloadSpreadsheetConflict: () => undefined,
+    resolveSpreadsheetConflict: () => undefined,
     saveDocument: async () => true,
     saveAllDocuments: async () => true,
     setFileContent: () => undefined,

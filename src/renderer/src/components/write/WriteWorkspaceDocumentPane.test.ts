@@ -275,6 +275,46 @@ describe('WriteWorkspaceDocumentPane focus mode', () => {
     })
     expect(renderer.root.findAllByProps({ 'data-office-preview-mock': 'true' })).toHaveLength(0)
 
+    const onResolveSpreadsheetConflict = vi.fn()
+    await act(async () => {
+      renderer.update(createElement(WriteWorkspaceDocumentPane, {
+        ...paneProps(false, onFocusModeChange),
+        activeFilePath: xlsxPreview.path,
+        activeFileIsOffice: true,
+        activeFileIsText: false,
+        officePreview: xlsxPreview,
+        officeRefreshError: 'Two targets conflict',
+        spreadsheetConflict: true,
+        spreadsheetConflictTargets: ['cell:Data:A1', 'cell:Data:B2'],
+        onSpreadsheetMutations,
+        onResolveSpreadsheetConflict
+      }))
+      await Promise.resolve()
+    })
+    const keepLocal = renderer.root.findByProps({ children: 'writeSpreadsheetKeepLocalChanges' })
+    const useExternal = renderer.root.findByProps({ children: 'writeSpreadsheetUseExternalChanges' })
+    await act(async () => keepLocal.props.onClick())
+    await act(async () => useExternal.props.onClick())
+    expect(onResolveSpreadsheetConflict.mock.calls).toEqual([['keep-local'], ['use-external']])
+
+    const onSaveShortcut = vi.fn()
+    await act(async () => {
+      renderer.update(createElement(WriteWorkspaceDocumentPane, {
+        ...paneProps(false, onFocusModeChange),
+        activeFilePath: xlsxPreview.path,
+        activeFileIsOffice: true,
+        activeFileIsText: false,
+        officePreview: xlsxPreview,
+        spreadsheetSaveError: 'OfficeCLI validation failed',
+        onSpreadsheetMutations,
+        onSaveShortcut
+      }))
+      await Promise.resolve()
+    })
+    const retry = renderer.root.findByProps({ children: 'writeSpreadsheetRetrySave' })
+    await act(async () => retry.props.onClick())
+    expect(onSaveShortcut).toHaveBeenCalledOnce()
+
     const onConvertSpreadsheet = vi.fn()
     const xlsPreview: WorkspaceOfficePreviewSuccess = {
       ...xlsxPreview,

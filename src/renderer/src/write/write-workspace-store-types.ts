@@ -80,8 +80,11 @@ export type WriteDocumentSession = {
   officeSemanticSha256: string
   officeSemanticTruncated: boolean
   spreadsheetMutations: WorkspaceSpreadsheetMutation[]
+  spreadsheetMutationBaseFingerprints: Record<string, string>
   spreadsheetUnsupportedReason: string | null
   spreadsheetConflictPreview: WorkspaceOfficePreviewSuccess | null
+  spreadsheetConflictTargets: string[]
+  spreadsheetConflictBaseFingerprints: Record<string, string>
   spreadsheetCommitRevision: number
   spreadsheetSourceSha256: string
   fileSize: number
@@ -232,10 +235,15 @@ export type WriteWorkspaceState = {
   setSpreadsheetMutations: (
     path: string,
     mutations: WorkspaceSpreadsheetMutation[],
-    unsupportedReason?: string | null
+    unsupportedReason?: string | null,
+    baseFingerprints?: Record<string, string>
   ) => void
   convertSpreadsheet: (workspaceRoot: string, path: string) => Promise<string | null>
   reloadSpreadsheetConflict: (path: string) => void
+  resolveSpreadsheetConflict: (
+    path: string,
+    decision: 'keep-local' | 'use-external'
+  ) => void
   saveDocument: (
     workspaceRoot: string,
     path: string,

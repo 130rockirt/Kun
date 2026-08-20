@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import * as xlsx from 'xlsx'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { promisify } from 'node:util'
+import JSZip from 'jszip'
 import { OfficeDocumentConversionError } from './office-document-legacy'
 import {
   convertWorkspaceSpreadsheet,
@@ -17,6 +18,7 @@ import {
 const roots: string[] = []
 const execFileAsync = promisify(execFile)
 const bundledOfficeCli = join(process.cwd(), 'resources', 'officecli', 'current', process.platform === 'win32' ? 'officecli.exe' : 'officecli')
+const currentSampleWorkbook = join(homedir(), '.deepseekgui', 'write_workspace', '随机示例数据.xlsx')
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
@@ -73,6 +75,18 @@ async function applyingRunner(args: string[]) {
   return { stdout: '{}', stderr: '', exitCode: 0 }
 }
 
+async function bundledRunner(args: string[]) {
+  try {
+    const result = await execFileAsync(bundledOfficeCli, args, {
+      env: { ...process.env, OFFICECLI_NO_AUTO_RESIDENT: '1', OFFICECLI_RESIDENT_FLUSH: 'each' }
+    })
+    return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 }
+  } catch (error) {
+    const failure = error as { stdout?: string; stderr?: string; code?: number }
+    return { stdout: failure.stdout ?? '', stderr: failure.stderr ?? '', exitCode: failure.code ?? 1 }
+  }
+}
+
 describe('workspace spreadsheet mutation service', () => {
   it('builds controlled OfficeCLI commands for content, styles, merges, and dimensions', () => {
     expect(spreadsheetMutationsToOfficeCliBatch([
@@ -100,11 +114,12 @@ describe('workspace spreadsheet mutation service', () => {
   it('edits a sibling copy and replaces the source only after validation', async () => {
     const { root, path, source } = await fixture()
     const runOfficeCli = vi.fn(applyingRunner)
+    const logSave = vi.fn()
     const result = await saveWorkspaceSpreadsheet({
       path,
       expectedSha256: sha(source),
       mutations: [{ kind: 'cell', sheetName: 'Data', address: 'B2', value: 42 }]
-    }, { runOfficeCli })
+    }, { runOfficeCli, logSave })
 
     expect(result).toMatchObject({ ok: true, path, appliedMutations: 1 })
     const saved = xlsx.read(await readFile(path), { type: 'buffer', cellFormula: true })
@@ -112,6 +127,14 @@ describe('workspace spreadsheet mutation service', () => {
     expect(saved.Sheets.Data?.A1).toMatchObject({ v: 'Name' })
     expect(runOfficeCli.mock.calls.map(([args]) => args[0])).toEqual(['batch', 'validate'])
     expect(await readdir(root)).toEqual(['book.xlsx'])
+    expect(logSave).toHaveBeenLastCalledWith(expect.objectContaining({
+      stage: 'complete', status: 'succeeded', fileName: 'book.xlsx', mutationCount: 1,
+      expectedSha256Prefix: sha(source).slice(0, 12), currentSha256Prefix: expect.stringMatching(/^[a-f0-9]{12}$/)
+    }))
+    const diagnostic = logSave.mock.calls.at(-1)?.[0]
+    expect(diagnostic).not.toHaveProperty('path')
+    expect(diagnostic).not.toHaveProperty('mutations')
+    expect(diagnostic).not.toHaveProperty('value')
   })
 
   it('rejects a stale source hash without invoking OfficeCLI', async () => {
@@ -134,15 +157,19 @@ describe('workspace spreadsheet mutation service', () => {
       if (args[0] === 'batch') return applyingRunner(args)
       return { stdout: '', stderr: 'schema failure', exitCode: 1 }
     })
+    const logSave = vi.fn()
     const result = await saveWorkspaceSpreadsheet({
       path,
       expectedSha256: sha(source),
       mutations: [{ kind: 'cell', sheetName: 'Data', address: 'A1', value: 'Changed' }]
-    }, { runOfficeCli })
+    }, { runOfficeCli, logSave })
 
     expect(result).toMatchObject({ ok: false, code: 'mutation_failed' })
     expect(await readFile(path)).toEqual(source)
     expect(await readdir(root)).toEqual(['book.xlsx'])
+    expect(logSave).toHaveBeenLastCalledWith(expect.objectContaining({
+      stage: 'validation', status: 'failed', code: 'mutation_failed', fileName: 'book.xlsx'
+    }))
   })
 
   it('does not overwrite a concurrent external change', async () => {
@@ -211,6 +238,41 @@ describe('workspace spreadsheet mutation service', () => {
       expect(a1.stdout).toContain('FFFF00')
       await expect(run('validate', path, '--json')).resolves.toMatchObject({ stderr: '' })
       expect(await readdir(root)).toEqual(['roundtrip.xlsx'])
+    },
+    30_000
+  )
+
+  ;(existsSync(bundledOfficeCli) && existsSync(currentSampleWorkbook) ? it : it.skip)(
+    'saves a copy of the current random sample without changing tables or conditional formatting',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'kun-work-sheet-sample-'))
+      roots.push(root)
+      const path = join(root, '随机示例数据.xlsx')
+      const source = await readFile(currentSampleWorkbook)
+      await writeFile(path, source)
+      const beforeZip = await JSZip.loadAsync(source)
+      const beforeTable = await beforeZip.file('xl/tables/table1.xml')?.async('string')
+      const beforeSheet = await beforeZip.file('xl/worksheets/sheet1.xml')?.async('string') ?? ''
+      const beforeConditionalFormatting = beforeSheet.match(/<conditionalFormatting\b[\s\S]*?<\/conditionalFormatting>/g)
+
+      const saved = await saveWorkspaceSpreadsheet({
+        path,
+        expectedSha256: sha(source),
+        mutations: [{ kind: 'cell', sheetName: '随机数据', address: 'B2', value: 'Work 保存验证' }]
+      }, { runOfficeCli: bundledRunner })
+      expect(saved).toMatchObject({ ok: true, appliedMutations: 1 })
+
+      const output = await readFile(path)
+      const workbook = xlsx.read(output, { type: 'buffer', cellFormula: true, cellStyles: true })
+      expect(workbook.Sheets['随机数据']?.B2).toMatchObject({ v: 'Work 保存验证' })
+      expect(workbook.Sheets['汇总']?.B3).toMatchObject({ f: "COUNTA('随机数据'!A2:A61)" })
+      const afterZip = await JSZip.loadAsync(output)
+      expect(await afterZip.file('xl/tables/table1.xml')?.async('string')).toBe(beforeTable)
+      const afterSheet = await afterZip.file('xl/worksheets/sheet1.xml')?.async('string') ?? ''
+      expect(afterSheet.match(/<conditionalFormatting\b[\s\S]*?<\/conditionalFormatting>/g))
+        .toEqual(beforeConditionalFormatting)
+      expect(await bundledRunner(['validate', path, '--json'])).toMatchObject({ exitCode: 0 })
+      expect(await readdir(root)).toEqual(['随机示例数据.xlsx'])
     },
     30_000
   )

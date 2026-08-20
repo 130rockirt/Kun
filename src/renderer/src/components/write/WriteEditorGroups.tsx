@@ -84,6 +84,7 @@ export function WriteEditorGroups({
     setSpreadsheetMutations,
     convertSpreadsheet,
     reloadSpreadsheetConflict,
+    resolveSpreadsheetConflict,
     saveDocument,
     setSelection,
     setPresentationViewForGroup,
@@ -116,6 +117,7 @@ export function WriteEditorGroups({
     setSpreadsheetMutations: state.setSpreadsheetMutations,
     convertSpreadsheet: state.convertSpreadsheet,
     reloadSpreadsheetConflict: state.reloadSpreadsheetConflict,
+    resolveSpreadsheetConflict: state.resolveSpreadsheetConflict,
     saveDocument: state.saveDocument,
     setSelection: state.setSelection,
     setPresentationViewForGroup: state.setPresentationViewForGroup,
@@ -301,6 +303,7 @@ export function WriteEditorGroups({
               onSpreadsheetMutations={setSpreadsheetMutations}
               onConvertSpreadsheet={(nextPath) => { void convertSpreadsheet(workspaceRoot, nextPath) }}
               onReloadSpreadsheetConflict={reloadSpreadsheetConflict}
+              onResolveSpreadsheetConflict={resolveSpreadsheetConflict}
               onboarding={group.id === 'primary' && onboardingDecision === 'show'}
               workspaceLoading={group.id === 'primary' && onboardingDecision === 'pending' && !settingsError && !treeError}
             />

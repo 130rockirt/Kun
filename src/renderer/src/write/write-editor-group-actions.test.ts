@@ -3,6 +3,10 @@ import { createWriteDocumentSession, emptyWriteEditorLayout } from './write-edit
 import { clearWriteWorkspaceSaveQueueForTests } from './write-save-coordinator'
 import { useWriteWorkspaceStore } from './write-workspace-store'
 import { initialState } from './write-workspace-store-helpers'
+import {
+  clearWriteSpreadsheetEditorRegistrationsForTests,
+  registerWriteSpreadsheetEditor
+} from './write-spreadsheet-editor-coordinator'
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void
@@ -93,6 +97,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearWriteWorkspaceSaveQueueForTests()
+  clearWriteSpreadsheetEditorRegistrationsForTests()
   vi.unstubAllGlobals()
 })
 
@@ -199,6 +204,51 @@ describe('write editor group actions', () => {
       spreadsheetMutations: [],
       spreadsheetSourceSha256: 'b'.repeat(64),
       spreadsheetCommitRevision: 1
+    })
+  })
+
+  it('commits the active Univer cell before sending the exact save mutations', async () => {
+    addSpreadsheet()
+    const order: string[] = []
+    registerWriteSpreadsheetEditor('/work/book.xlsx', {
+      isFocused: () => true,
+      setSaving: (saving) => order.push(saving ? 'lock' : 'unlock'),
+      prepareSave: async () => {
+        order.push('end-editing')
+        return {
+          token: 'snapshot-final',
+          mutations: [{ kind: 'cell', sheetName: 'Data', address: 'A1', value: 'final cell value' }]
+        }
+      },
+      commitSave: () => {
+        order.push('commit-baseline')
+        return { mutations: [] }
+      }
+    })
+    const saveWorkspaceSpreadsheet = vi.fn(async () => {
+      order.push('main-save')
+      return {
+        ok: true as const,
+        path: '/work/book.xlsx', sourceSha256: 'b'.repeat(64), size: 120, mtimeMs: 2, appliedMutations: 1
+      }
+    })
+    vi.stubGlobal('window', {
+      localStorage: { getItem: () => null, setItem: () => undefined },
+      confirm: () => true,
+      kunGui: { writeWorkspaceFile: vi.fn(), saveWorkspaceSpreadsheet }
+    })
+    useWriteWorkspaceStore.getState().setSpreadsheetMutations('/work/book.xlsx', [
+      { kind: 'cell', sheetName: 'Data', address: 'A1', value: 'stale value' }
+    ])
+
+    await expect(useWriteWorkspaceStore.getState().saveDocument('/work', '/work/book.xlsx'))
+      .resolves.toBe(true)
+    expect(saveWorkspaceSpreadsheet).toHaveBeenCalledWith(expect.objectContaining({
+      mutations: [{ kind: 'cell', sheetName: 'Data', address: 'A1', value: 'final cell value' }]
+    }))
+    expect(order).toEqual(['lock', 'end-editing', 'main-save', 'commit-baseline', 'unlock'])
+    expect(useWriteWorkspaceStore.getState().documentsByPath['/work/book.xlsx']).toMatchObject({
+      spreadsheetMutations: [], saveStatus: 'saved', spreadsheetSourceSha256: 'b'.repeat(64)
     })
   })
 
