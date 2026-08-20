@@ -481,6 +481,7 @@
   "sidebarThreadArchiveConfirmButton": "归档",
   "sidebarThreadRestore": "恢复会话",
   "sidebarThreadRename": "重命名会话",
+  "sidebarThreadCopyId": "复制会话 ID",
   "sidebarThreadRenamePrompt": "输入新的会话名称",
   "sidebarThreadMove": "移动到项目...",
   "sidebarThreadMoveDialogTitle": "移动“{{title}}”？",

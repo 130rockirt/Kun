@@ -471,6 +471,7 @@
   "sidebarThreadArchiveConfirmButton": "पुरालेख",
   "sidebarThreadRestore": "धागा पुनर्स्थापित करें",
   "sidebarThreadRename": "थ्रेड का नाम बदलें",
+  "sidebarThreadCopyId": "सत्र ID कॉपी करें",
   "sidebarThreadRenamePrompt": "नया थ्रेड नाम दर्ज करें",
   "sidebarThreadMove": "प्रोजेक्ट पर जाएँ...",
   "sidebarThreadMoveDialogTitle": "Move “{{title}}”?",

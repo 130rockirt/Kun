@@ -471,6 +471,7 @@
   "sidebarThreadArchiveConfirmButton": "아카이브",
   "sidebarThreadRestore": "스레드 복원",
   "sidebarThreadRename": "스레드 이름 바꾸기",
+  "sidebarThreadCopyId": "세션 ID 복사",
   "sidebarThreadRenamePrompt": "새 스레드 이름을 입력하세요.",
   "sidebarThreadMove": "프로젝트로 이동...",
   "sidebarThreadMoveDialogTitle": "'{{title}}'을(를) 이동하시겠습니까?",

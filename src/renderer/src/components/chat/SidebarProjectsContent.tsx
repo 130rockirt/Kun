@@ -136,6 +136,7 @@ export type SidebarProjectsContentProps = {
   handlePinThread: (thread: NormalizedThread, pinned: boolean) => Promise<void>
   openRenameThreadDialog: (thread: NormalizedThread) => void
   handleSummarizeThread: (thread: NormalizedThread) => Promise<void>
+  handleCopyThreadId: (thread: NormalizedThread) => Promise<void>
   handleArchiveThread: (thread: NormalizedThread) => Promise<void>
   handleDeleteThread: (thread: NormalizedThread) => Promise<void>
   handleRestoreThread: (thread: NormalizedThread) => Promise<void>
@@ -169,7 +170,8 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
     handleWorkspaceDragLeave, handleWorkspaceDrop, handleThreadDragStart, handleThreadDragEnd,
     handleThreadDragOver, handleThreadDragLeave, handleThreadDrop, handleFolderDragOver,
     handleFolderDragLeave, handleFolderDrop, threadMoveDisabledReason, openMoveThreadDialog,
-    handlePinThread, openRenameThreadDialog, handleSummarizeThread, handleArchiveThread,
+    handlePinThread, openRenameThreadDialog, handleSummarizeThread, handleCopyThreadId,
+    handleArchiveThread,
     handleDeleteThread, handleRestoreThread, openWorkspaceInSystem, handleArchiveWorkspaceThreads,
     handleRemoveWorkspace, archivableWorkspaceThreads, closeRenameThreadDialog,
     submitRenameThreadDialog, closeMoveThreadDialog, confirmThreadWorkspaceMove,
@@ -595,6 +597,7 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
           onPin={() => void handlePinThread(threadContextMenu.thread, threadContextMenu.thread.pinned !== true)}
           onRename={() => openRenameThreadDialog(threadContextMenu.thread)}
           onSummarize={() => void handleSummarizeThread(threadContextMenu.thread)}
+          onCopyId={() => void handleCopyThreadId(threadContextMenu.thread)}
           onArchive={() => void handleArchiveThread(threadContextMenu.thread)}
           onDelete={() => void handleDeleteThread(threadContextMenu.thread)}
           onRestore={() => void handleRestoreThread(threadContextMenu.thread)}

@@ -471,6 +471,7 @@
   "sidebarThreadArchiveConfirmButton": "アーカイブ",
   "sidebarThreadRestore": "スレッドを復元する",
   "sidebarThreadRename": "スレッド名の変更",
+  "sidebarThreadCopyId": "セッション ID をコピー",
   "sidebarThreadRenamePrompt": "新しいスレッド名を入力してください",
   "sidebarThreadMove": "プロジェクトに移動...",
   "sidebarThreadMoveDialogTitle": "「{{title}}」を移動しますか?",
