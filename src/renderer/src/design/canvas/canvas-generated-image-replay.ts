@@ -1,5 +1,6 @@
 import type { ChatBlock, GeneratedFileReference } from '../../agent/types'
 import type { DesignImagePlacementTarget } from '../../agent/design-task-profile'
+import { isWorkspaceGeneratedImagePath } from '@shared/generated-image-path'
 import { isImplicitImageSlot, type CanvasDocument } from './canvas-types'
 
 export type GeneratedImageFallbackTarget = { id: string; imageUrl: string }
@@ -100,10 +101,8 @@ function generatedFileCompletionIdentity(
   return `${blockId}:${generatedFileImageUrl(candidate) || `file:${index}`}`
 }
 
-const GENERATED_IMAGE_PATH_PREFIXES = ['.kun/images/', '.deepseekgui-images/'] as const
-
 function isGeneratedImagePath(path: string): boolean {
-  return GENERATED_IMAGE_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))
+  return isWorkspaceGeneratedImagePath(path)
 }
 
 function latestGeneratedImageMarkdownPath(text: string): string | null {

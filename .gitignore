@@ -58,6 +58,8 @@ TestResults.xml
 .workbuddy/
 .kun-design/
 .kun/images/
+# Generated images from releases before the Kun directory migration.
+.deepseekgui-images/
 .kun-canvas/
 .kun-whiteboards/
 .kunsdd/
