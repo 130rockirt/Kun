@@ -205,3 +205,170 @@ describe('PlanBuildActions card i18n', () => {
     await act(async () => renderer.unmount())
   })
 })
+
+describe('PlanBuildActions panel flat toolbar', () => {
+  beforeEach(() => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      setInterval,
+      clearInterval,
+      kunGui: {}
+    })
+    vi.stubGlobal('document', {
+      visibilityState: 'visible',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      querySelector: vi.fn(() => null),
+      querySelectorAll: vi.fn(() => [])
+    })
+    resetPlanWorktreePreferenceStoreForTests()
+    usePlanWorktreePreferenceStore.getState().initializePlan('plan-1', true, 'codex/')
+    vi.spyOn(rendererRuntimeClient, 'getSettings')
+      .mockResolvedValue(normalizeAppSettings({} as never))
+  })
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    resetPlanWorktreePreferenceStoreForTests()
+    await i18n.changeLanguage('en')
+  })
+
+  async function renderPanel(props: Partial<Parameters<typeof PlanBuildActions>[0]> = {}): Promise<ReactTestRenderer> {
+    let renderer!: ReactTestRenderer
+    await act(async () => {
+      renderer = create(createElement(PlanBuildActions, {
+        disabled: false,
+        graphEnabled: false,
+        variant: 'panel',
+        planId: 'plan-1',
+        onBuild: vi.fn(),
+        ...props
+      }))
+    })
+    return renderer
+  }
+
+  function openPanelMenu(renderer: ReactTestRenderer): void {
+    const toggle = renderer.root.findByProps({ 'data-plan-build-menu-toggle': true })
+    act(() => {
+      toggle.props.onClick({ stopPropagation: vi.fn() })
+    })
+  }
+
+  it('renders a compact toolbar with direct split button and worktree select', async () => {
+    const renderer = await renderPanel({ graphEnabled: true })
+
+    expect(renderer.root.findAllByProps({ 'data-plan-build-direct': true })).toHaveLength(1)
+    expect(renderer.root.findAllByProps({ 'data-plan-build-menu-toggle': true })).toHaveLength(1)
+    expect(renderer.root.findAllByProps({ 'data-plan-worktree-select': true })).toHaveLength(1)
+    expect(renderer.root.findAllByProps({ 'data-plan-build-schedule': true })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ 'data-plan-build-menu': true })).toHaveLength(0)
+
+    await act(async () => renderer.unmount())
+  })
+
+  it('direct segment triggers onBuild(direct) without opening the menu', async () => {
+    const onBuild = vi.fn()
+    const renderer = await renderPanel({ onBuild })
+    const direct = renderer.root.findByProps({ 'data-plan-build-direct': true })
+
+    await act(async () => {
+      direct.props.onClick()
+    })
+
+    expect(onBuild).toHaveBeenCalledTimes(1)
+    expect(onBuild).toHaveBeenCalledWith('direct')
+    expect(renderer.root.findAllByProps({ 'data-plan-build-menu': true })).toHaveLength(0)
+
+    await act(async () => renderer.unmount())
+  })
+
+  it('menu offers schedule build when no task exists', async () => {
+    await i18n.changeLanguage('en')
+    const renderer = await renderPanel()
+    openPanelMenu(renderer)
+
+    expect(renderer.root.findAllByProps({ 'data-plan-build-menu': true })).toHaveLength(1)
+    const text = rendererText(renderer)
+    expect(text).toContain('Schedule build')
+    expect(text).not.toContain('Edit schedule')
+    expect(renderer.root.findAllByProps({ 'data-plan-build-menu-graph': true })).toHaveLength(0)
+
+    await act(async () => renderer.unmount())
+  })
+
+  it('menu shows edit schedule when an active task exists', async () => {
+    await i18n.changeLanguage('zh')
+    vi.mocked(rendererRuntimeClient.getSettings).mockResolvedValue(normalizeAppSettings({
+      schedule: { tasks: [scheduledTask()] }
+    } as never))
+    const renderer = await renderPanel()
+    openPanelMenu(renderer)
+
+    const text = rendererText(renderer)
+    expect(text).toContain('修改定时')
+    expect(text).not.toContain('定时构建')
+
+    await act(async () => renderer.unmount())
+  })
+
+  it('menu includes graph build only when graph is enabled', async () => {
+    await i18n.changeLanguage('en')
+    const onBuild = vi.fn()
+    const renderer = await renderPanel({ graphEnabled: true, onBuild })
+    openPanelMenu(renderer)
+
+    const graphItem = renderer.root.findByProps({ 'data-plan-build-menu-graph': true })
+    await act(async () => {
+      graphItem.props.onClick()
+    })
+
+    expect(onBuild).toHaveBeenCalledWith('graph')
+    expect(renderer.root.findAllByProps({ 'data-plan-build-menu': true })).toHaveLength(0)
+
+    await act(async () => renderer.unmount())
+  })
+
+  it('worktree select updates the plan preference', async () => {
+    const renderer = await renderPanel()
+    const select = renderer.root.findByProps({ 'data-plan-worktree-select': true })
+
+    await act(async () => {
+      select.props.onChange({ target: { value: 'workspace' } })
+    })
+    expect(usePlanWorktreePreferenceStore.getState().plans['plan-1']?.usePromptWorktree).toBe(false)
+
+    await act(async () => {
+      select.props.onChange({ target: { value: 'worktree' } })
+    })
+    expect(usePlanWorktreePreferenceStore.getState().plans['plan-1']?.usePromptWorktree).toBe(true)
+
+    await act(async () => renderer.unmount())
+  })
+
+  it('keeps the split button disabled when disabled', async () => {
+    const renderer = await renderPanel({ disabled: true })
+
+    expect(renderer.root.findByProps({ 'data-plan-build-direct': true }).props.disabled).toBe(true)
+    expect(renderer.root.findByProps({ 'data-plan-build-menu-toggle': true }).props.disabled).toBe(true)
+
+    await act(async () => renderer.unmount())
+  })
+
+  it('closes the menu via Escape and returns focus to the toggle', async () => {
+    const renderer = await renderPanel()
+    openPanelMenu(renderer)
+    const menu = renderer.root.findByProps({ 'data-plan-build-menu': true })
+
+    act(() => {
+      menu.props.onKeyDown({ key: 'Escape', preventDefault: vi.fn() })
+    })
+
+    expect(renderer.root.findAllByProps({ 'data-plan-build-menu': true })).toHaveLength(0)
+
+    await act(async () => renderer.unmount())
+  })
+})

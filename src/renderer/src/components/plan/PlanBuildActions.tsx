@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
-import { CalendarClock, GitBranch, Hammer, Share2 } from 'lucide-react'
+import { CalendarClock, ChevronDown, GitBranch, Hammer, Share2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { systemTimeZone, type AppSettingsV1, type ScheduleReasoningEffort, type ScheduledTaskV1 } from '@shared/app-settings'
 import { rendererRuntimeClient } from '../../agent/runtime-client'
@@ -55,8 +55,34 @@ export function PlanBuildActions({
   const [scheduleError, setScheduleError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [nowMs, setNowMs] = useState(Date.now())
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuId = 'plan-build-actions-menu'
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null)
+  const menuListRef = useRef<HTMLDivElement | null>(null)
   const resolvedPlanIdRef = useRef(resolvedPlanId)
   resolvedPlanIdRef.current = resolvedPlanId
+
+  const closeMenu = useCallback((restoreFocus = true): void => {
+    setMenuOpen(false)
+    if (restoreFocus && menuButtonRef.current) menuButtonRef.current.focus()
+  }, [])
+
+  useEffect(() => {
+    if (!menuOpen || variant !== 'panel') return
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as Node | null
+      if (menuListRef.current?.contains(target) || menuButtonRef.current?.contains(target)) return
+      closeMenu(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [closeMenu, menuOpen, variant])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const firstItem = menuListRef.current?.querySelector<HTMLButtonElement>('button[role="menuitem"]:not([disabled])')
+    firstItem?.focus()
+  }, [menuOpen])
 
   const refreshSchedule = useCallback(async (): Promise<void> => {
     if (!resolvedPlanId) {
@@ -184,26 +210,45 @@ export function PlanBuildActions({
 
   const settingsPending = Boolean(resolvedPlanId && !preference?.initialized)
   const buildDisabled = disabled || settingsPending || submitting
+
+  useEffect(() => {
+    if (menuOpen && (buildDisabled || !resolvedPlanId)) closeMenu(false)
+  }, [buildDisabled, closeMenu, menuOpen, resolvedPlanId])
+
   const graphSelected = selectedMode === 'graph'
   const worktreeControl = resolvedPlanId && preference?.initialized ? (
-    <div data-plan-worktree-control className={variant === 'card'
-      ? 'flex min-w-[260px] flex-1 items-center gap-2.5'
-      : 'flex min-w-0 flex-wrap items-center gap-2 text-[11.5px] text-ds-muted'}>
-      <button type="button" role="switch" aria-checked={preference.usePromptWorktree}
-        aria-label={t('planWorktreeUsePrompt')}
-        onClick={() => setUsePromptWorktree(resolvedPlanId, !preference.usePromptWorktree)}
-        disabled={graphSelected}
-        className={`relative h-5 w-9 shrink-0 rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${preference.usePromptWorktree ? 'bg-accent' : 'bg-ds-faint'} disabled:cursor-not-allowed disabled:opacity-45`}>
-        <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${preference.usePromptWorktree ? 'translate-x-4' : 'translate-x-0'}`} />
-      </button>
-      {variant === 'panel' ? <GitBranch className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} /> : null}
-      <div className="min-w-0">
-        <div className="text-[12.5px] font-medium text-ds-ink">{t('planWorktreeUsePrompt')}</div>
-        <div className={`mt-0.5 text-[11px] ${graphSelected ? 'text-amber-700 dark:text-amber-300' : 'text-ds-muted'}`}>
-          {graphSelected ? t('planWorktreeGraphUnsupported') : preference.usePromptWorktree ? t('planWorktreePromptHint') : t('planWorktreeCurrentWorkspaceWarning')}
+    variant === 'card' ? (
+      <div data-plan-worktree-control className="flex min-w-[260px] flex-1 items-center gap-2.5">
+        <button type="button" role="switch" aria-checked={preference.usePromptWorktree}
+          aria-label={t('planWorktreeUsePrompt')}
+          onClick={() => setUsePromptWorktree(resolvedPlanId, !preference.usePromptWorktree)}
+          disabled={graphSelected}
+          className={`relative h-5 w-9 shrink-0 rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${preference.usePromptWorktree ? 'bg-accent' : 'bg-ds-faint'} disabled:cursor-not-allowed disabled:opacity-45`}>
+          <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${preference.usePromptWorktree ? 'translate-x-4' : 'translate-x-0'}`} />
+        </button>
+        <div className="min-w-0">
+          <div className="text-[12.5px] font-medium text-ds-ink">{t('planWorktreeUsePrompt')}</div>
+          <div className={`mt-0.5 text-[11px] ${graphSelected ? 'text-amber-700 dark:text-amber-300' : 'text-ds-muted'}`}>
+            {graphSelected ? t('planWorktreeGraphUnsupported') : preference.usePromptWorktree ? t('planWorktreePromptHint') : t('planWorktreeCurrentWorkspaceWarning')}
+          </div>
         </div>
       </div>
-    </div>
+    ) : (
+      <label data-plan-worktree-control
+        className="inline-flex h-9 min-w-0 max-w-full items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-2 text-[12px] font-medium text-ds-ink"
+        title={preference.usePromptWorktree ? t('planWorktreePromptHint') : t('planWorktreeCurrentWorkspaceWarning')}>
+        <GitBranch className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.8} />
+        <span className="sr-only">{t('planBuildEnvironment')}</span>
+        <select data-plan-worktree-select
+          value={preference.usePromptWorktree ? 'worktree' : 'workspace'}
+          disabled={graphSelected}
+          onChange={(event) => setUsePromptWorktree(resolvedPlanId, event.target.value === 'worktree')}
+          className="max-w-[140px] min-w-0 shrink cursor-pointer truncate bg-transparent text-[12px] font-medium text-ds-ink outline-none disabled:cursor-not-allowed disabled:opacity-45">
+          <option value="worktree">{t('planWorktreeOptionAgent')}</option>
+          <option value="workspace">{t('planWorktreeOptionCurrent')}</option>
+        </select>
+      </label>
+    )
   ) : null
 
   const dialog = dialogOpen && settings ? (
@@ -212,26 +257,73 @@ export function PlanBuildActions({
   ) : null
 
   if (variant === 'panel') {
+    const scheduleMenuItem = scheduledTask && taskTime && hasActiveSchedule ? scheduledTask : null
+    const runMenuItem = (action: () => void): void => {
+      closeMenu(false)
+      action()
+    }
     return (
       <div className="flex min-w-0 flex-col gap-2">
         {dialog}
-        {worktreeControl}
-        <div data-plan-build-actions data-plan-build-actions-variant={variant} className={`grid w-full ${graphEnabled ? 'grid-cols-2' : 'grid-cols-1'} gap-2`}>
-          <button type="button" data-plan-build-schedule disabled={buildDisabled}
-            onClick={() => void openSchedule(scheduledTask)}
-            className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-ds-border bg-ds-card px-3 text-[13px] font-semibold text-ds-ink hover:bg-ds-hover disabled:opacity-50">
-            <CalendarClock className="h-3.5 w-3.5" />
-            <span className="truncate">{t(scheduledTask ? 'planScheduleBuildModify' : 'planScheduleBuild')}</span>
-          </button>
-          <button type="button" disabled={buildDisabled} onClick={() => onBuild('direct')}
-            className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 text-[13px] font-semibold text-white disabled:opacity-50">
-            <Hammer className="h-3.5 w-3.5" />{t('planBuildDirect')}
-          </button>
-          {graphEnabled ? <button type="button" disabled={disabled} onClick={() => onBuild('graph')}
-            className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 text-[13px] font-semibold text-white disabled:opacity-50">
-            <Share2 className="h-3.5 w-3.5" />{t('planBuildGraph')}
-          </button> : null}
+        <div data-plan-build-actions data-plan-build-actions-variant={variant}
+          className="flex min-w-0 flex-wrap items-center gap-2">
+          {worktreeControl}
+          <div className="ml-auto inline-flex shrink-0 overflow-hidden rounded-lg">
+            <button type="button" data-plan-build-direct disabled={buildDisabled} onClick={() => onBuild('direct')}
+              className="inline-flex h-9 items-center gap-1.5 bg-accent px-3 text-[12.5px] font-semibold text-white transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 disabled:opacity-50">
+              <Hammer className="h-3.5 w-3.5" />
+              <span className="truncate">{t('planBuildDirect')}</span>
+            </button>
+            <button type="button" ref={menuButtonRef} data-plan-build-menu-toggle disabled={buildDisabled}
+              aria-haspopup="menu" aria-expanded={menuOpen} aria-controls={menuId}
+              aria-label={t('planBuildMoreWays')}
+              onClick={() => { if (!menuOpen) setMenuOpen(true); else closeMenu() }}
+              onKeyDown={(event) => { if (event.key === 'ArrowDown' && !menuOpen) { event.preventDefault(); setMenuOpen(true) } }}
+              className="inline-flex h-9 w-8 items-center justify-center border-l border-white/25 bg-accent text-white transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 disabled:opacity-50">
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
+            </button>
+          </div>
         </div>
+        {menuOpen ? (
+          <div ref={menuListRef} id={menuId} role="menu" aria-label={t('planBuildMoreWays')} data-plan-build-menu
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                closeMenu()
+                return
+              }
+              if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') return
+              const items = Array.from(menuListRef.current?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])
+              if (items.length === 0) return
+              event.preventDefault()
+              const enabled = items.filter((item) => !item.disabled)
+              const current = enabled.indexOf(document.activeElement as HTMLButtonElement)
+              const nextIndex = event.key === 'Home' ? 0
+                : event.key === 'End' ? enabled.length - 1
+                  : event.key === 'ArrowDown' ? (current + 1) % enabled.length
+                    : (current - 1 + enabled.length) % enabled.length
+              enabled[nextIndex]?.focus()
+            }}
+            className="absolute bottom-full right-0 z-50 mb-2 min-w-[200px] overflow-hidden rounded-[12px] border border-ds-border bg-ds-card p-1.5 shadow-[0_18px_52px_rgba(15,23,42,0.18)] dark:shadow-[0_22px_58px_rgba(0,0,0,0.38)]">
+            <button type="button" role="menuitem" data-plan-build-menu-schedule disabled={buildDisabled}
+              onClick={() => runMenuItem(() => void openSchedule(scheduleMenuItem))}
+              className="flex w-full items-center gap-2 rounded-[8px] px-2.5 py-2 text-left text-[12.5px] font-medium text-ds-ink transition hover:bg-ds-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:opacity-50">
+              <CalendarClock className="h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 truncate">{t(scheduleMenuItem ? 'planScheduleBuildModify' : 'planScheduleBuild')}</span>
+            </button>
+            {graphEnabled ? (
+              <>
+                <div className="my-1 h-px bg-ds-border-muted" />
+                <button type="button" role="menuitem" data-plan-build-menu-graph disabled={buildDisabled}
+                  onClick={() => runMenuItem(() => onBuild('graph'))}
+                  className="flex w-full items-center gap-2 rounded-[8px] px-2.5 py-2 text-left text-[12.5px] font-medium text-ds-ink transition hover:bg-ds-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:opacity-50">
+                  <Share2 className="h-3.5 w-3.5 shrink-0" />
+                  <span className="min-w-0 truncate">{t('planBuildGraph')}</span>
+                </button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     )
   }
