@@ -42,7 +42,8 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
     messageContributionsForSurface,
     extensionSurfaceItems, openExtensionSurface, openCodeRightTool, currentSideRunningCount,
     extensionRightRailItems, selectRightRailExtension, imageAnnotationHost, planOverlay,
-    openManagedExtensionView, activeExtensionAuxiliaryPanel, workspaceContextMenu, activeGuiPlan
+    openManagedExtensionView, activeExtensionAuxiliaryPanel, workspaceContextMenu, activeGuiPlan,
+    focusedCanvasWorkspace
   } = context
   const normalizedRoute = normalizeWorkbenchRoute(route)
   const activeConversationThread = threads.find((thread: any) => thread.id === activeThreadId)
@@ -115,7 +116,7 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
         onBeginResize={beginLeftResize}
       />
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       {activeExtensionCenterView ? (
         <main className="ds-stage-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div className="ds-stage-route-host relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -265,6 +266,7 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
       />
       )}
       <AgentBrowserFloatingPreview activeThreadId={activeThreadId} />
+      {focusedCanvasWorkspace}
       {activeExtensionAuxiliaryPanel ? (
         <div className="ds-no-drag h-[min(38vh,360px)] min-h-48 shrink-0 border-t border-ds-border-muted">
           <ExtensionViewOutlet

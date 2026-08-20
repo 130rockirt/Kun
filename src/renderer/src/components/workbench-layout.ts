@@ -122,6 +122,10 @@ export function useWorkbenchLayout({
   codeRightTabsRef.current = codeRightTabs
   const codeRightTabsOwnerThreadIdRef = useRef(activeThreadId)
   const [transientRightPanelMode, setTransientRightPanelMode] = useState<RightPanelMode>(null)
+  // Transient presentation state: the focused whiteboard expands the SAME
+  // canvas panel over the stage instead of widening the right rail. Never
+  // persisted; a restart returns to the ordinary workbench layout.
+  const [canvasFocusMode, setCanvasFocusMode] = useState(false)
   const [filePreviewTarget, setFilePreviewTarget] = useState<WorkspaceFileTarget | null>(null)
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(() =>
     readStoredWidth(LEFT_PANEL_WIDTH_KEY, LEFT_PANEL_DEFAULT)
@@ -271,20 +275,23 @@ export function useWorkbenchLayout({
 
   useEffect(() => {
     const onCanvasFocusRequest = (): void => {
-      // Presentation-only: widen to a focused full-width presentation without
-      // touching the bound document or canvas state.
+      // Presentation-only: activate the canvas tab and switch the stage into
+      // the focused whiteboard presentation. The bound document, board, and
+      // canvas state stay untouched, and the persisted right-rail width is
+      // preserved for the moment focus exits.
+      ensureInitialCodePanelWidth()
       setCodeRightTabs((current) => openCodeRightTab(current, BUILTIN_RIGHT_PANEL_IDS.canvas))
-      const focusedWidth = Math.min(1280, Math.max(720, Math.round(window.innerWidth * 0.62)))
-      setRightSidebarWidth((width) => Math.max(width, focusedWidth))
+      setCanvasFocusMode(true)
     }
     window.addEventListener(CODE_CANVAS_FOCUS_REQUEST_EVENT, onCanvasFocusRequest)
     return () => window.removeEventListener(CODE_CANVAS_FOCUS_REQUEST_EVENT, onCanvasFocusRequest)
-  }, [])
+  }, [ensureInitialCodePanelWidth])
 
   useEffect(() => {
     if (layoutThreadIdRef.current === activeThreadId) return
     layoutThreadIdRef.current = activeThreadId
     codeRightTabsOwnerThreadIdRef.current = activeThreadId
+    setCanvasFocusMode(false)
     setCodeRightTabs((current) => transitionCodeRightTabsForThread(
       current,
       activeThreadId,
@@ -393,6 +400,27 @@ export function useWorkbenchLayout({
   const openDevPreview = (): void => {
     openRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.browser)
   }
+
+  const exitCanvasFocusMode = useCallback((): void => {
+    setCanvasFocusMode(false)
+  }, [])
+
+  // Focused presentation only makes sense while the canvas tab exists on the
+  // chat route. Closing the tab or switching routes exits focus so the stage
+  // can never pin a stale whiteboard over the UI.
+  const canvasTabStillOpen = codeRightTabs.tabs.includes(BUILTIN_RIGHT_PANEL_IDS.canvas)
+  useEffect(() => {
+    if (!canvasFocusMode) return
+    if (route !== 'chat' || !canvasTabStillOpen) setCanvasFocusMode(false)
+  }, [canvasFocusMode, canvasTabStillOpen, route])
+
+  const focusWorkspaceScopeRef = useRef(codeRightTabsWorkspaceScope(workspaceRoot))
+  useEffect(() => {
+    const nextScope = codeRightTabsWorkspaceScope(workspaceRoot)
+    if (nextScope === focusWorkspaceScopeRef.current) return
+    focusWorkspaceScopeRef.current = nextScope
+    setCanvasFocusMode(false)
+  }, [workspaceRoot])
 
   const beginLeftResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (leftSidebarCollapsed || event.button !== 0) return
@@ -532,11 +560,13 @@ export function useWorkbenchLayout({
     beginLeftResize,
     beginRightResize,
     beginTerminalResize,
+    canvasFocusMode,
     codeRightTabs,
     activateRightPanelTab,
     closeRightPanelTab,
     collapseRightPanel,
     expandRightPanel,
+    exitCanvasFocusMode,
     filePreviewTarget,
     leftSidebarCollapsed,
     leftSidebarWidth,
