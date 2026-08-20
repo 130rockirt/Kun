@@ -229,20 +229,38 @@ export function coalesceGeneratedImageAddsForTurn(
     generatedImageResultsForTurn(blocks).map((result) => result.imageUrl)
   )
   if (generatedUrls.size === 0) return value
+  const user = blocks.find((block) => block.kind === 'user')
+  const placement = user?.kind === 'user' && isRecord(user.meta?.designImagePlacementTarget)
+    ? user.meta.designImagePlacementTarget
+    : undefined
+  const filledDesignTarget = user?.kind === 'user' && isRecord(user.meta?.designDocumentTarget) &&
+    placement && typeof placement.shapeId === 'string' &&
+    typeof placement.expectedImageUrl === 'string'
+    ? { shapeId: placement.shapeId.trim(), expectedImageUrl: placement.expectedImageUrl.trim() }
+    : null
   const existingUrls = new Set(
     Object.values(document.objects)
       .filter((shape) => shape?.type === 'image' && shape.parentId === document.rootId && shape.imageUrl)
       .map((shape) => shape.imageUrl!)
       .filter((url) => generatedUrls.has(url))
   )
-  if (existingUrls.size === 0) return value
+  if (existingUrls.size === 0 && !filledDesignTarget) return value
   const ops = value.ops.filter((operation) => {
-    if (!isRecord(operation) || operation.op !== 'add' || operation.parentId !== undefined ||
+    if (!isRecord(operation)) return true
+    if (operation.op === 'update' && filledDesignTarget && operation.id === filledDesignTarget.shapeId &&
+      isRecord(operation.patch)) {
+      const imageUrl = typeof operation.patch.imageUrl === 'string'
+        ? operation.patch.imageUrl.trim()
+        : ''
+      if (imageUrl && generatedUrls.has(imageUrl)) return false
+    }
+    if (operation.op !== 'add' || operation.parentId !== undefined ||
       !isRecord(operation.shape) || operation.shape.type !== 'image') return true
     const imageUrl = typeof operation.shape.imageUrl === 'string'
       ? operation.shape.imageUrl.trim()
       : ''
-    return !imageUrl || !existingUrls.has(imageUrl)
+    if (!imageUrl) return true
+    return filledDesignTarget ? !generatedUrls.has(imageUrl) : !existingUrls.has(imageUrl)
   })
   return ops.length === value.ops.length ? value : { ...value, ops }
 }

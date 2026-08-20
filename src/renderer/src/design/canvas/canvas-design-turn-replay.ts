@@ -6,10 +6,10 @@ import {
 } from './canvas-generated-image-replay'
 import { canvasReplayResult } from './canvas-replay-receipt'
 import { currentCanvasOccupiedRects } from './canvas-occupied-regions'
-import { placeRectInViewportAvoiding } from './canvas-placement'
+import { placeRectInViewportAvoiding, placeRectNearAnchorAvoiding } from './canvas-placement'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useCanvasShapeStore } from './canvas-shape-store'
-import { createDefaultShape, isImplicitImageSlot } from './canvas-types'
+import { createDefaultShape, isImplicitImageSlot, shapeGeometry } from './canvas-types'
 import { useCanvasViewportStore } from './canvas-viewport-store'
 
 export type CanvasDesignDocumentTarget = {
@@ -278,7 +278,8 @@ export function placeGeneratedImagesForTurn(options: {
         : options.affectedIds,
       ...(result.width ? { imageWidth: result.width } : {}),
       ...(result.height ? { imageHeight: result.height } : {}),
-      ...(placeholderId ? { resizeTargetId: placeholderId } : {})
+      ...(placeholderId ? { resizeTargetId: placeholderId } : {}),
+      preserveTargetAsRevision: Boolean(options.target && target?.expectedImageUrl)
     })
     if (placed) placedIds.push(placed)
     if (placeholderId && placed !== placeholderId) {
@@ -454,7 +455,8 @@ export function materializeHistoricalGeneratedImages(options: {
         // selected while reopening a board.
         preferredShapeIds,
         ...(result.width ? { imageWidth: result.width } : {}),
-        ...(result.height ? { imageHeight: result.height } : {})
+        ...(result.height ? { imageHeight: result.height } : {}),
+        preserveTargetAsRevision: Boolean(placementTarget?.expectedImageUrl)
       })
       if (placed) {
         placedIds.push(placed)
@@ -488,6 +490,7 @@ export function ensureGeneratedImageOnCanvas(imageUrl: string, options?: {
   imageWidth?: number
   imageHeight?: number
   resizeTargetId?: string
+  preserveTargetAsRevision?: boolean
 }): string | null {
   const shapeStore = useCanvasShapeStore.getState()
   if (options?.replayKey) {
@@ -522,6 +525,25 @@ export function ensureGeneratedImageOnCanvas(imageUrl: string, options?: {
   const preferredImage = (options?.preferredShapeIds ?? [])
     .map((id) => shapeStore.document.objects[id])
     .find((shape) => shape?.type === 'image' && shape.imageUrl === imageUrl)
+  if (options?.preserveTargetAsRevision && validTarget?.type === 'image' &&
+    options.target?.expectedImageUrl) {
+    if (preferredImage && preferredImage.id !== validTarget.id) {
+      return recordReceipt(preferredImage.id)
+    }
+    const anchor = shapeGeometry(validTarget).selrect
+    const placement = placeRectNearAnchorAvoiding(
+      { width: anchor.width, height: anchor.height },
+      anchor,
+      currentCanvasOccupiedRects()
+    )
+    const revision = createDefaultShape('image', placement.x, placement.y)
+    revision.name = `${validTarget.name || 'AI image'} revision`
+    revision.width = anchor.width
+    revision.height = anchor.height
+    revision.imageUrl = imageUrl
+    shapeStore.addShape(revision)
+    return recordReceipt(revision.id)
+  }
   const submittedTargetStillValid = Boolean(
     validTarget && validTarget.id !== options?.resizeTargetId
   )

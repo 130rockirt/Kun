@@ -28,6 +28,72 @@ function DurableDesignReplayHarness(): null {
 }
 
 describe('useApplyShapeOpsLive durable Design replay', () => {
+  it('replays a filled-image edit as a preserved source plus an adjacent revision', async () => {
+    const previous = useChatStore.getState()
+    useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), durableDocumentKey)
+    const source = createDefaultShape('image', 40, 60)
+    source.width = 300
+    source.height = 180
+    source.imageUrl = '/workspace/.kun/images/source.png'
+    useCanvasShapeStore.getState().addShape(source)
+    const generatedUrl = '/workspace/.kun/images/revision.png'
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'user', id: 'user-revision', turnId: 'turn-revision', text: 'Edit this image',
+        meta: {
+          designDocumentTarget: durableTarget,
+          designImagePlacementTarget: {
+            shapeId: source.id, expectedImageUrl: source.imageUrl
+          }
+        }
+      },
+      {
+        kind: 'tool', id: 'tool-generate-revision', turnId: 'turn-revision',
+        summary: 'Generated image', status: 'success', detail: '{}',
+        meta: {
+          toolName: 'generate_image', sourceItemKind: 'tool_result',
+          generatedFiles: [{ absolutePath: generatedUrl, completionIdentity: 'revision' }]
+        }
+      },
+      {
+        kind: 'tool', id: 'tool-update-source', turnId: 'turn-revision',
+        summary: 'Update source', status: 'success',
+        meta: { toolName: 'design_update_shapes', sourceItemKind: 'tool_result' },
+        detail: JSON.stringify({
+          ops: [{ op: 'update', id: source.id, patch: { imageUrl: generatedUrl } }]
+        })
+      }
+    ]
+    useChatStore.setState({
+      activeThreadId: 'thread-design', currentTurnId: null, currentTurnUserId: null,
+      busy: false, blocks, liveAssistant: ''
+    })
+
+    let renderer: ReturnType<typeof create> | undefined
+    await act(async () => { renderer = create(createElement(DurableDesignReplayHarness)) })
+    const images = Object.values(useCanvasShapeStore.getState().document.objects)
+      .filter((shape) => shape.type === 'image')
+
+    expect(useCanvasShapeStore.getState().document.objects[source.id]?.imageUrl)
+      .toBe('/workspace/.kun/images/source.png')
+    expect(images).toHaveLength(2)
+    expect(images.find((shape) => shape.id !== source.id)).toMatchObject({
+      imageUrl: generatedUrl, width: 300, height: 180, x: 420, y: 60
+    })
+    expect([...useCanvasSelectionStore.getState().selectedIds]).toEqual([
+      images.find((shape) => shape.id !== source.id)!.id
+    ])
+
+    await act(async () => renderer?.unmount())
+    useCanvasShapeStore.getState().resetDocument()
+    useCanvasSelectionStore.getState().clearSelection()
+    useChatStore.setState({
+      activeThreadId: previous.activeThreadId, currentTurnId: previous.currentTurnId,
+      currentTurnUserId: previous.currentTurnUserId, busy: previous.busy,
+      blocks: previous.blocks, liveAssistant: previous.liveAssistant
+    })
+  })
+
   it('materializes a successful HTML-profile image before turn completion and coalesces a legacy add', async () => {
     const previous = useChatStore.getState()
     useCanvasShapeStore.getState().loadDocument(createEmptyDocument(), durableDocumentKey)

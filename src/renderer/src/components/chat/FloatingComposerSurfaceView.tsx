@@ -29,9 +29,9 @@ export function FloatingComposerSurfaceView({
     handlePromptOptimizationClick, hideModelPicker, input, isComposerDirectoryReference, mode,
     imageGenerationEnabled, imageGenerationAvailable, imageGenerationReason, modelControlVariant, modelPickerMode, onComposerFastModeChange, onComposerModelChange,
     onComposerReasoningEffortChange, onConfigureImageGeneration, onConfigureProviders, onDesignTaskProfileChange, onExecutionSettingsChange, onInterrupt,
-        onRemoveAttachment, onRemoveContextChip, onRemoveFileReference, onToggleWorktreeMode,
+    onRemoveAttachment, onRemoveContextChip, onRemoveFileReference, onToggleWorktreeMode,
     onWorktreeBranchChange, openSettings, orchestration, placeholder, primaryActionDisabled,
-    primaryActionLabel, primaryActionLoading, promptOptimizationBusy, promptOptimizationError,
+    primaryActionKind, primaryActionLabel, primaryActionLoading, promptOptimizationBusy, promptOptimizationError,
     promptOptimizationSettings, route, runningGraphTurn, runtimeReady, setGoalInputMode, showComposerMenuButton,
     showCodeExecutionControls, showExecutionSettingsPicker, showProviderInModelLabel, showToolbarStartControls,
     showVoiceDictation, showWorkspaceControls, side, stretchModelPicker, t, useWorktreePool,
@@ -435,26 +435,19 @@ export function FloatingComposerSurfaceView({
                       )}
                     </button>
                   ) : null}
-                  {busy ? (
-                    <button
-                      type="button"
-                      onClick={() => onInterrupt()}
-                      className="ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-control text-control-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-                      aria-label={t('interrupt')}
-                      title={t('interrupt')}
-                    >
-                      <Square className="h-3.5 w-3.5 fill-current" strokeWidth={2.4} />
-                    </button>
-                  ) : null}
                   <button
                     type="button"
-                    disabled={primaryActionDisabled}
-                    onClick={handlePrimaryAction}
+                    disabled={primaryActionKind === 'submit' && primaryActionDisabled}
+                    onClick={primaryActionKind === 'interrupt'
+                      ? () => onInterrupt()
+                      : handlePrimaryAction}
                     className="ds-composer-primary-action ds-no-drag flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-control text-control-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:bg-ds-card disabled:text-ds-faint"
-                    aria-label={primaryActionLabel}
-                    title={primaryActionLabel}
+                    aria-label={primaryActionKind === 'interrupt' ? t('interrupt') : primaryActionLabel}
+                    title={primaryActionKind === 'interrupt' ? t('interrupt') : primaryActionLabel}
                   >
-                    {primaryActionLoading ? (
+                    {primaryActionKind === 'interrupt' ? (
+                      <Square className="h-3.5 w-3.5 fill-current" strokeWidth={2.4} />
+                    ) : primaryActionLoading ? (
                       <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.2} />
                     ) : (
                       <Send className="h-4 w-4" strokeWidth={2.2} />

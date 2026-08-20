@@ -126,6 +126,7 @@ import {
   EMPTY_MODEL_GROUPS,
   EMPTY_SKILL_COMMANDS,
   codeExecutionControlsAvailable,
+  resolveComposerPrimaryActionKind,
   returnQueuedMessageToComposer,
   formatGoalElapsedSeconds,
   shouldShowGoalFloater,
@@ -540,6 +541,14 @@ export function FloatingComposer({
       ? false
     : !canSend
   const primaryActionLoading = !runtimeReady
+  const primaryActionKind = resolveComposerPrimaryActionKind({
+    busy,
+    input,
+    attachmentUploadEnabled,
+    attachmentCount: attachments.length,
+    fileReferenceEnabled,
+    fileReferenceCount: fileReferences.length
+  })
   const canOptimizePrompt =
     promptOptimizationSettings?.enabled === true &&
     canEditComposer &&
@@ -665,7 +674,7 @@ export function FloatingComposer({
     primaryActionLabel, primaryActionLoading, promptOptimizationBusy, promptOptimizationError, promptOptimizationSettings, queuedMessages, reorderQueuedMessage, returnQueuedMessageToComposer,
     route, runningGraphTurn, runtimeReady, setActiveThreadGoalStatus, setGoalInputMode, setGoalPanelOpen, setInput, showComposerMenuButton,
     showCodeExecutionControls, showExecutionSettingsPicker, showGoalFloater, showGoalMenuOption, showGraphMenuOption, showGraphProgress, showPlanMenuOption, showProviderInModelLabel, showTodoProgress, showToolbarStartControls, showUsageHistoryFooter,
-    showVoiceDictation, showWorkspaceControls, side, slashCommandMenu, slashQuery, stretchModelPicker, t, threadUsage,
+    showVoiceDictation, showWorkspaceControls, side, slashCommandMenu, slashQuery, stretchModelPicker, t, threadUsage, primaryActionKind,
     taskSurface, taskSurfaceLocked, emptyTaskLayout, onTaskSurfaceChange, onNewRequirement, threadUsageState, timingThreadUsage, useWorktreePool, userInput, worktreeBranch
   }
 

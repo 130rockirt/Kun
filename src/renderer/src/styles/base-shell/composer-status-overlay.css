@@ -19,7 +19,7 @@
 .ds-chat-stage:not([data-empty-task-layout='true']) .ds-composer-dock::before {
   position: absolute;
   z-index: 0;
-  top: calc(0px - var(--ds-composer-transition-height));
+  top: 0;
   right: 0;
   left: 0;
   height: var(--ds-composer-transition-height);

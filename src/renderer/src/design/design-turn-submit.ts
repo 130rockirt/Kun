@@ -91,6 +91,7 @@ export type SubmitDesignTurnOptions = SubmitDesignTurnDeps & {
   htmlElementContext?: DesignHtmlElementContext | null
   explicitScreenShapeId?: string | null
   explicitSvgArtifactId?: string | null
+  imageEditReferencePath?: string
   clearAutoRepairScope?: (scopeKey: string) => void
   designTaskProfileForTarget?: (target: DesignDocumentTarget) => DesignTaskProfileInput
   /**
@@ -284,7 +285,10 @@ export async function submitDesignTurn(
       ...(resolvedTarget.canvasSnapshot ? { canvasSnapshot: resolvedTarget.canvasSnapshot } : {}),
       ...(resolvedTarget.htmlFrameContext ? { frameContext: resolvedTarget.htmlFrameContext } : {}),
       ...(resolvedTarget.selectedFrame ? { selectedFrame: resolvedTarget.selectedFrame } : {}),
-      ...(resolvedTarget.target === 'canvas' ? { previousOpErrors: takeCanvasErrors(canvasErrorKey) } : {})
+      ...(resolvedTarget.target === 'canvas' ? { previousOpErrors: takeCanvasErrors(canvasErrorKey) } : {}),
+      ...(options.imageEditReferencePath
+        ? { imageEditReferencePath: options.imageEditReferencePath }
+        : {})
     })
   } catch (error) {
     return failAfterResolve(error instanceof Error ? error.message : String(error))

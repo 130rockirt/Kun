@@ -16,7 +16,10 @@ import { useCanvasViewportStore } from './canvas-viewport-store'
 import { parseProjectDesignMd } from '../design-md/design-md-adapter'
 import { useProjectDesignSystemStore } from './project-design-system-store'
 import { resetDesignSystemBoardLayoutForTests, setDesignSystemBoardRect } from './design-system-board-layout'
-import { generatedImageResultsForTurn } from './canvas-generated-image-replay'
+import {
+  coalesceGeneratedImageAddsForTurn,
+  generatedImageResultsForTurn
+} from './canvas-generated-image-replay'
 
 const target = { documentId: 'doc_design', boardArtifactId: 'board_design' }
 
@@ -316,6 +319,127 @@ colors:
       y: 36,
       width: 360,
       height: 220
+    })
+  })
+
+  it('preserves a filled Design source and places a same-size revision beside it', () => {
+    const source = createDefaultShape('image', 100, 200)
+    source.name = 'Source'
+    source.width = 320
+    source.height = 180
+    source.imageUrl = '/workspace/.kun/images/source.png'
+    useCanvasShapeStore.getState().addShape(source)
+
+    const revisionId = ensureGeneratedImageOnCanvas('/workspace/.kun/images/revision.png', {
+      replayKey: 'thread\0turn\0doc\0board\0image:revision',
+      target: { id: source.id, expectedImageUrl: source.imageUrl },
+      preserveTargetAsRevision: true
+    })
+    const document = useCanvasShapeStore.getState().document
+
+    expect(document.objects[source.id]?.imageUrl).toBe('/workspace/.kun/images/source.png')
+    expect(document.objects[revisionId ?? '']).toMatchObject({
+      type: 'image', imageUrl: '/workspace/.kun/images/revision.png',
+      x: 500, y: 200, width: 320, height: 180
+    })
+  })
+
+  it('expands source-relative revision placement when the preferred side is occupied', () => {
+    const source = createDefaultShape('image', 100, 200)
+    source.width = 320
+    source.height = 180
+    source.imageUrl = '/workspace/.kun/images/source.png'
+    const blocker = createDefaultShape('rect', 500, 200)
+    blocker.width = 320
+    blocker.height = 180
+    useCanvasShapeStore.getState().addShape(source)
+    useCanvasShapeStore.getState().addShape(blocker)
+
+    const revisionId = ensureGeneratedImageOnCanvas('/workspace/.kun/images/revision.png', {
+      replayKey: 'thread\0turn\0doc\0board\0image:revision-left',
+      target: { id: source.id, expectedImageUrl: source.imageUrl },
+      preserveTargetAsRevision: true
+    })
+
+    expect(useCanvasShapeStore.getState().document.objects[revisionId ?? '']).toMatchObject({
+      x: -300, y: 200, width: 320, height: 180
+    })
+  })
+
+  it('keeps the complete chain when editing a generated revision again', () => {
+    const source = createDefaultShape('image', 0, 0)
+    source.width = 240
+    source.height = 160
+    source.imageUrl = '/workspace/.kun/images/source.png'
+    useCanvasShapeStore.getState().addShape(source)
+    const firstId = ensureGeneratedImageOnCanvas('/workspace/.kun/images/revision-1.png', {
+      replayKey: 'thread\0turn-1\0doc\0board\0image:revision-1',
+      target: { id: source.id, expectedImageUrl: source.imageUrl },
+      preserveTargetAsRevision: true
+    })!
+    const secondId = ensureGeneratedImageOnCanvas('/workspace/.kun/images/revision-2.png', {
+      replayKey: 'thread\0turn-2\0doc\0board\0image:revision-2',
+      target: { id: firstId, expectedImageUrl: '/workspace/.kun/images/revision-1.png' },
+      preserveTargetAsRevision: true
+    })!
+
+    const images = Object.values(useCanvasShapeStore.getState().document.objects)
+      .filter((shape) => shape.type === 'image')
+    expect(images.map((shape) => shape.imageUrl)).toEqual(expect.arrayContaining([
+      source.imageUrl,
+      '/workspace/.kun/images/revision-1.png',
+      '/workspace/.kun/images/revision-2.png'
+    ]))
+    expect(new Set([source.id, firstId, secondId]).size).toBe(3)
+  })
+
+  it('keeps Code-style filled-image edits as in-place replacements', () => {
+    const source = createDefaultShape('image', 100, 200)
+    source.imageUrl = '/workspace/.kun/images/source.png'
+    useCanvasShapeStore.getState().addShape(source)
+
+    const placedId = ensureGeneratedImageOnCanvas('/workspace/.kun/images/replacement.png', {
+      target: { id: source.id, expectedImageUrl: source.imageUrl }
+    })
+
+    expect(placedId).toBe(source.id)
+    expect(useCanvasShapeStore.getState().document.objects[source.id]?.imageUrl)
+      .toBe('/workspace/.kun/images/replacement.png')
+  })
+
+  it('filters a legacy same-turn update that would overwrite a filled Design source', () => {
+    const source = createDefaultShape('image', 100, 200)
+    source.imageUrl = '/workspace/.kun/images/source.png'
+    useCanvasShapeStore.getState().addShape(source)
+    const generatedUrl = '/workspace/.kun/images/revision.png'
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'user', id: 'user-revision', text: 'Edit this image', meta: {
+          designDocumentTarget: target,
+          designImagePlacementTarget: {
+            shapeId: source.id, expectedImageUrl: source.imageUrl
+          }
+        }
+      },
+      {
+        kind: 'tool', id: 'tool-revision', summary: 'Generated image', status: 'success',
+        meta: {
+          toolName: 'generate_image',
+          generatedFiles: [{ absolutePath: generatedUrl, completionIdentity: 'revision' }]
+        }
+      }
+    ]
+    const value = {
+      ops: [
+        { op: 'update', id: source.id, patch: { imageUrl: generatedUrl } },
+        { op: 'update', id: source.id, patch: { opacity: 0.8 } }
+      ]
+    }
+
+    expect(coalesceGeneratedImageAddsForTurn(
+      value, blocks, useCanvasShapeStore.getState().document
+    )).toEqual({
+      ops: [{ op: 'update', id: source.id, patch: { opacity: 0.8 } }]
     })
   })
 

@@ -3,6 +3,10 @@ import { cloneDesignTaskProfile } from '../agent/design-task-profile'
 import type { NormalizedThread } from '../agent/types'
 import { useDesignWorkspaceStore } from './design-workspace-store'
 import { designContextFromTaskProfile } from './design-task-profile-input'
+import { useCodeCanvasDesignSurface } from './code-canvas-design-surface'
+import { canvasDocumentKey } from './canvas/canvas-persistence'
+import { useCanvasShapeStore } from './canvas/canvas-shape-store'
+import { requestCodeCanvasPanelOpen } from '../lib/code-canvas-panel-event'
 
 const inflightProfileByThread = new Map<string, Promise<DesignTaskProfile | null>>()
 
@@ -54,7 +58,8 @@ export async function restoreLockedDesignDocument(profile: DesignTaskProfile): P
 
 export async function activateLockedDesignDocument(
   profile: DesignTaskProfile | null,
-  onError: (message: string) => void
+  onError: (message: string) => void,
+  options?: { threadId?: string | null; canvasReadyTimeoutMs?: number }
 ): Promise<boolean> {
   if (!profile) return true
   const restored = await restoreLockedDesignDocument(profile)
@@ -64,7 +69,69 @@ export async function activateLockedDesignDocument(
     onError(message)
     return false
   }
+  const threadId = options?.threadId?.trim()
+  if (threadId) {
+    const state = useDesignWorkspaceStore.getState()
+    const workspaceRoot = state.workspaceRoot
+    const { documentId, boardArtifactId } = profile.documentTarget
+    useCodeCanvasDesignSurface.getState().showDesignDocument(
+      threadId,
+      workspaceRoot,
+      documentId,
+      { boardArtifactId }
+    )
+    requestCodeCanvasPanelOpen({ threadId })
+    const expectedKey = canvasDocumentKey(
+      workspaceRoot,
+      boardArtifactId,
+      `.kun-design/${documentId}`
+    )
+    const ready = await waitForCanvasDocumentKey(
+      expectedKey,
+      options?.canvasReadyTimeoutMs
+    )
+    if (!ready) {
+      const message = 'The whiteboard bound to this Design task did not become ready.'
+      useDesignWorkspaceStore.getState().setFileError(message)
+      onError(message)
+      return false
+    }
+  }
   return true
+}
+
+export function waitForCanvasDocumentKey(
+  expectedKey: string,
+  timeoutMs = 5_000,
+  deps?: {
+    getDocumentKey?: () => string | null
+    subscribe?: (listener: () => void) => () => void
+    setTimer?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>
+    clearTimer?: (timer: ReturnType<typeof setTimeout>) => void
+  }
+): Promise<boolean> {
+  const getDocumentKey = deps?.getDocumentKey ?? (() => useCanvasShapeStore.getState().documentKey)
+  if (getDocumentKey() === expectedKey) return Promise.resolve(true)
+  const subscribe = deps?.subscribe ?? ((listener: () => void) => useCanvasShapeStore.subscribe(listener))
+  const setTimer = deps?.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs))
+  const clearTimer = deps?.clearTimer ?? ((timer) => clearTimeout(timer))
+  return new Promise((resolve) => {
+    let settled = false
+    let unsubscribe = (): void => undefined
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const finish = (ready: boolean): void => {
+      if (settled) return
+      settled = true
+      unsubscribe()
+      if (timer) clearTimer(timer)
+      resolve(ready)
+    }
+    unsubscribe = subscribe(() => {
+      if (getDocumentKey() === expectedKey) finish(true)
+    })
+    timer = setTimer(() => finish(false), Math.max(0, timeoutMs))
+    if (getDocumentKey() === expectedKey) finish(true)
+  })
 }
 
 export async function resolveAuthoritativeDesignProfile(input: {

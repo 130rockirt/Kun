@@ -76,6 +76,8 @@ describe('FloatingComposerAboveInputStack', () => {
     expect(baseShell).toContain("@import './base-shell/composer-status-overlay.css';")
     expect(css).toContain('--ds-composer-transition-height: 2.5rem')
     expect(css).not.toContain('--ds-composer-transition-height: 4rem')
+    expect(css).toMatch(/\.ds-composer-dock::before\s*\{[^}]*top:\s*0;/s)
+    expect(css).not.toContain('top: calc(0px - var(--ds-composer-transition-height))')
     expect(css).toContain('var(--ds-composer-floating-status-height)')
     expect(css).toContain('var(--bg-canvas)')
     expect(css).toContain('backdrop-filter: blur(12px)')

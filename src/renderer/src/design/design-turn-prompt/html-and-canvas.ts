@@ -314,10 +314,13 @@ export function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
   const snapshotJson = snapshot ? snapshotToCompactJson(snapshot) : '(empty canvas)'
   const errorLines = formatPreviousOpErrorLines(options.previousOpErrors)
   const editHint = deriveSelectedImageEditHint(snapshot)
+  const editReferencePath = options.imageEditReferencePath?.trim() || editHint?.imageUrl
   const targetFrameSize = defaultFrameSizeForDesignTarget(options.designContext?.designTarget)
   const editHintLines = editHint
     ? [
-        `IMPORTANT PRIOR — the user has EXACTLY ONE filled image selected (id "${editHint.id}", imageUrl \`${editHint.imageUrl}\`). Unless they EXPLICITLY ask for a NEW page / screen / 页面, this is the EDIT AN EXISTING IMAGE lane: call generate_image with reference_image_paths: ["${editHint.imageUrl}"], then call design_update_shapes to update that SAME shape's imageUrl. Do NOT call design_create_screen / add-screen and do NOT write or edit HTML.`,
+        codeCanvasMode
+          ? `IMPORTANT PRIOR — the user has EXACTLY ONE filled image selected (id "${editHint.id}", imageUrl \`${editHint.imageUrl}\`). Unless they EXPLICITLY ask for a NEW page / screen / 页面, this is the EDIT AN EXISTING IMAGE lane: call generate_image with reference_image_paths: ["${editReferencePath}"], then call design_update_shapes to update that SAME shape's imageUrl. Do NOT call design_create_screen / add-screen and do NOT write or edit HTML.`
+          : `IMPORTANT PRIOR — the user has EXACTLY ONE filled source image selected (id "${editHint.id}", imageUrl \`${editHint.imageUrl}\`). This is the EDIT AN EXISTING IMAGE lane: call generate_image with reference_image_paths: ["${editReferencePath}"]. Preserve the selected source shape and URL; the renderer adds the result as a same-size revision beside it. Do NOT call design_update_shapes for the generated URL, do not create a screen, and do not write or edit HTML.`,
         ''
       ]
     : []
@@ -355,7 +358,9 @@ export function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
         ]),
     '',
     'FIRST classify the request and commit to ONE primary lane:',
-    '- EDIT AN EXISTING IMAGE — the user wants to change/edit/restyle/redo/recolor/fix/transform a picture that is ALREADY on the canvas, and the snapshot has a SELECTED `image` shape carrying an `imageUrl`. Phrasings like "change X into Y", "把这张图改成…", "改成 X", or "改一下这张图" all land here when the selected picture is the thing being changed. → call `generate_image` with `reference_image_paths` set to that `imageUrl`, then `design_update_shapes` that same shape (full rules under "Editing or restyling an EXISTING image" below). In this lane you MUST NOT use `design_create_screen` / `add-screen` and MUST NOT write or edit any HTML file.',
+    codeCanvasMode
+      ? '- EDIT AN EXISTING IMAGE — when a filled image is selected and the user asks to edit it, call `generate_image` with that imageUrl and then update the same shape. Do not create a screen.'
+      : '- EDIT AN EXISTING IMAGE — when a filled image is selected and the user asks to edit it, call `generate_image` with the selected or explicit annotation reference. Preserve the source shape; renderer adds the result as a separate nearby revision. Do not update the source or create a screen.',
     '- FILL AN EMPTY SLOT — a selected empty holder / frame / rect (no `imageUrl`) needs a fresh picture. → `generate_image` from text only, then place it (see "Filling a selected panel" below).',
     ...(codeCanvasMode ? [] : [
       '- ANIMATE A DESIGN FRAME OR LAYERS — the user asks for timeline/keyframe animation of existing canvas shapes or a whole HTML/running-app/SVG frame container. → use `design_motion_set_timeline`, `design_motion_upsert_keyframes`, `design_motion_apply_preset`, or `design_motion_delete` with stable ids from `snapshot.motion`. This is editable per-frame Motion; do NOT generate CSS/GSAP/HTML animation and do NOT use ShapeOps for keyframes.',
@@ -524,11 +529,15 @@ export function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     '',
     'Editing or restyling an EXISTING image (image-to-image with a reference):',
     '- Trigger: the user asks to modify, edit, restyle, redo, transform, recolor, enhance, fix, or otherwise change a picture that is ALREADY in the canvas — including "change X into Y" / "把这张图改成…" / "改成 X" where the selected picture is the thing being changed — AND the snapshot shows the target `image` shape carries an `imageUrl` (a workspace-relative path like `.deepseekgui-images/…`). Selected `image` shapes with `imageUrl` are the primary target; same applies if the user names one by id/position. This is an image edit, NOT a request to build a new screen — do NOT call `design_create_screen` / `add-screen` and do NOT write HTML for it.',
-    '- Implicit target via container: if the user selects a `frame` or `group` that contains EXACTLY ONE `image` child with an `imageUrl`, treat that child as the implicit edit target — use the child\'s `imageUrl` as the reference and `update` the child shape\'s `imageUrl` (do NOT add a new image, do NOT touch the parent frame\'s bounds). Two or more `image` children with `imageUrl` ⇒ ask the user which one (or apply the multi-reference clause below only if they explicitly asked to compose).',
+    codeCanvasMode
+      ? '- Implicit target via container: if a selected frame/group contains exactly one filled image child, use it as the edit reference and update that child without changing the parent.'
+      : '- Implicit target via container: if a selected frame/group contains exactly one filled image child, use it as the edit reference but preserve it; renderer adds the result as a root-level comparison revision. If there are multiple image children, ask which source to edit.',
     codeCanvasMode
       ? '- Action: call `generate_image` with the selected imageUrl in `reference_image_paths`, then update THAT selected image with the returned imageUrl without changing its bounds.'
-      : '- Action: call `generate_image` with `reference_image_paths: ["<that imageUrl exactly as it appears in the snapshot>"]` so the model edits the existing picture instead of inventing a fresh one. Keep `aspect_ratio` ≈ the shape\'s w:h. The renderer replaces THAT selected image while preserving x/y/width/height; do not send a redundant update.',
-    '- Multiple selected images for a single composed result: pass each filled shape\'s `imageUrl` in `reference_image_paths` (cap at 4 — drop extras if there are more). The references are treated symmetrically by the model — compose freely from all of them and pick the most coherent result; the order in the array is not load-bearing. Then `update` the PRIMARY target shape\'s `imageUrl` with the new file (when the user named a specific shape, that one; otherwise the first filled `image` in the selection as it appears in the snapshot). Do not touch the other reference shapes unless the user asked you to.',
+      : '- Action: call `generate_image` with the explicit annotation reference when provided, otherwise with the selected source imageUrl. Keep `aspect_ratio` ≈ the source bounds. Preserve the selected source; renderer adds the clean result as a same-size nearby revision.',
+    codeCanvasMode
+      ? '- Multiple selected images for one composed result: pass up to four imageUrls, then update the primary target shape with the result.'
+      : '- Multiple selected images for one composed result: pass up to four imageUrls and preserve every source; renderer adds the composed result as a new comparison image.',
     '- Do NOT pass `reference_image_paths` when filling an empty `aiImageHolder` (no `imageUrl` in the snapshot) or any empty `frame`/`rect` slot — those are fresh generations from text only. The empty-holder rule above still applies unchanged.',
     '- Before constructing `reference_image_paths`, locate each target shape in the snapshot by its `id` and copy its `imageUrl` verbatim. If the `imageUrl` field is absent on any target, drop that target from the array (do not guess or reconstruct a path from the shape name, position, or any other field).',
     '- Do NOT invent paths. If the target shape has no `imageUrl` field in the snapshot, treat it as empty and generate fresh.',

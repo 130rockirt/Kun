@@ -95,6 +95,7 @@ export type SendDesignPromptOptions = {
   source?: DesignPromptSource
   screenShapeId?: string
   svgArtifactId?: string
+  imageEditReferencePath?: string
 }
 
 type PreparedDrawing = {
@@ -219,7 +220,9 @@ export function useDesignPromptController({
   const activateLockedDesignDocument = async (
     profileLock: DesignTaskProfile | null = lockedDesignProfile ?? null
   ): Promise<boolean> => {
-    return restoreAuthoritativeDesignDocument(profileLock, setError)
+    return restoreAuthoritativeDesignDocument(profileLock, setError, {
+      threadId: expectedThreadId
+    })
   }
 
   const prepareDrawingForFirstPrompt = (
@@ -614,6 +617,7 @@ export function useDesignPromptController({
         htmlElementContext: drawing.created ? null : designHtmlElementContext,
         explicitScreenShapeId: options.screenShapeId,
         explicitSvgArtifactId: options.svgArtifactId,
+        imageEditReferencePath: options.imageEditReferencePath,
         clearAutoRepairScope: clearDesignAutoRepairScope,
         ...(drawing.created ? { waitForRuntimeAdmission: true } : {}),
         ...(authoritativeProfile || designTaskProfileSelection

@@ -5,6 +5,9 @@ import { useCodeCanvasDesignSurface } from '../../design/code-canvas-design-surf
 import type { DesignDocument } from '../../design/design-types'
 import { submitDesignTurn } from '../../design/design-turn-submit'
 import { useChatStore } from '../../store/chat-store'
+import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
+import { createEmptyDocument } from '../../design/canvas/canvas-types'
+import { canvasDocumentKey } from '../../design/canvas/canvas-persistence'
 import { useDesignPromptController } from './useDesignPromptController'
 
 vi.mock('react-i18next', () => ({
@@ -57,6 +60,7 @@ describe('useDesignPromptController locked follow-up', () => {
 
   afterEach(() => {
     useDesignWorkspaceStore.setState({ drawingHistoryMutation: null })
+    useCanvasShapeStore.getState().resetDocument()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
@@ -102,6 +106,10 @@ describe('useDesignPromptController locked follow-up', () => {
       multiPageMode: false,
       designIntentMode: 'modify'
     })
+    useCanvasShapeStore.getState().loadDocument(
+      createEmptyDocument(),
+      canvasDocumentKey('/workspace', board.id, `.kun-design/${canonical.id}`)
+    )
     const fetched = lockedProfile(canonical.id, board.id)
     registryMock.getProvider.mockReturnValue({
       getThreadDetail: vi.fn(async () => ({ designProfile: fetched }))
@@ -153,6 +161,9 @@ describe('useDesignPromptController locked follow-up', () => {
     await expect(controller.sendDesignPrompt('Revise the original board')).resolves.toBe(true)
     expect(useDesignWorkspaceStore.getState().documents).toHaveLength(2)
     expect(useDesignWorkspaceStore.getState().activeDocumentId).toBe(canonical.id)
+    expect(useCodeCanvasDesignSurface.getState().surface).toMatchObject({
+      threadId: 'thr_locked', documentId: canonical.id, boardArtifactId: board.id
+    })
     expect(ensureDesignThreadForWorkspace).toHaveBeenCalledWith('/workspace', canonical.id)
     expect(useChatStore.getState().threads[0]?.designProfile).toEqual(fetched)
   })
