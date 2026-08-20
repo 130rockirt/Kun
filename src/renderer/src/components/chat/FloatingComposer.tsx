@@ -494,11 +494,7 @@ export function FloatingComposer({
             : t('clawComposerHintNeedsInbound')
           : useWorktreePool
             ? t('composerWorktreeModeHint')
-            : input.trim().length > 0
-              ? null
-              : composerSendKey === 'shiftEnter'
-                ? t('composerShortcutShiftEnter')
-                : t('composerShortcut')
+            : null
   const showTodoProgress = !compact
     && route === 'chat'
     && Boolean(activeThreadId)

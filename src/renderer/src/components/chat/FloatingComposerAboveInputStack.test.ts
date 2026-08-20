@@ -67,14 +67,15 @@ describe('FloatingComposerAboveInputStack', () => {
     expect(publishComposerFloatingStatusHeight(detachedStack, 20)).toBeNull()
   })
 
-  it('defines a theme-aware 80px frost with dynamic scroll reserve', async () => {
+  it('defines a theme-aware 40px frost with dynamic scroll reserve', async () => {
     const [css, baseShell] = await Promise.all([
       readFile(new URL('../../styles/base-shell/composer-status-overlay.css', import.meta.url), 'utf8'),
       readFile(new URL('../../styles/base-shell.css', import.meta.url), 'utf8')
     ])
 
     expect(baseShell).toContain("@import './base-shell/composer-status-overlay.css';")
-    expect(css).toContain('--ds-composer-transition-height: 5rem')
+    expect(css).toContain('--ds-composer-transition-height: 2.5rem')
+    expect(css).not.toContain('--ds-composer-transition-height: 4rem')
     expect(css).toContain('var(--ds-composer-floating-status-height)')
     expect(css).toContain('var(--bg-canvas)')
     expect(css).toContain('backdrop-filter: blur(12px)')

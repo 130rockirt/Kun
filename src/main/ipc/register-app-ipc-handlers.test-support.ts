@@ -45,6 +45,7 @@ const electronMock = vi.hoisted(() => ({
   showMessageBox: vi.fn(),
   openPath: vi.fn(async () => ''),
   showItemInFolder: vi.fn(),
+  appLocale: 'en-US',
   userDataPath: '/tmp/kun-user-data',
   setBadgeCount: vi.fn(() => true)
 }))
@@ -79,6 +80,7 @@ vi.mock('electron', () => ({
     quit: vi.fn(),
     getPath: vi.fn(() => electronMock.userDataPath),
     getAppPath: vi.fn(() => '/tmp/kun-app'),
+    getLocale: vi.fn(() => electronMock.appLocale),
     isPackaged: false,
     setBadgeCount: electronMock.setBadgeCount
   },
@@ -312,6 +314,7 @@ export function registerOptions(overrides: Partial<Parameters<typeof import('./r
 
 export function resetAppIpcHandlerTestState(): void {
     handlers.clear()
+    electronMock.appLocale = 'en-US'
     electronMock.userDataPath = '/tmp/kun-user-data'
     electronMock.showMessageBox.mockReset()
     electronMock.openPath.mockClear()

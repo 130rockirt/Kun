@@ -35,6 +35,8 @@ const ACTION_MENU_MAX_HEIGHT = 440
 const ACTION_MENU_ESTIMATED_HEIGHT = 320
 const ACTION_MENU_MARGIN = 12
 const ACTION_MENU_GAP = 8
+const PERSONA_MENU_ESTIMATED_HEIGHT = 240
+const PERSONA_MENU_MAX_HEIGHT = 360
 
 export type ComposerActionMenuPlacement = {
   left: number
@@ -90,6 +92,53 @@ export function calculateActionMenuPlacement({
   return { left, top, width, maxHeight }
 }
 
+export function calculatePersonaMenuPlacement({
+  triggerRect,
+  parentMenuRect,
+  shellRect,
+  menuHeight,
+  viewportWidth,
+  preferredWidth = ACTION_MENU_WIDTH,
+  maximumHeight = PERSONA_MENU_MAX_HEIGHT,
+  margin = ACTION_MENU_MARGIN,
+  gap = ACTION_MENU_GAP,
+  coordinateScale = 1
+}: {
+  triggerRect: Pick<DOMRect, 'top'>
+  parentMenuRect: Pick<DOMRect, 'left' | 'right'>
+  shellRect: Pick<DOMRect, 'top'>
+  menuHeight: number
+  viewportWidth: number
+  preferredWidth?: number
+  maximumHeight?: number
+  margin?: number
+  gap?: number
+  coordinateScale?: number
+}): ComposerActionMenuPlacement {
+  const scale = Number.isFinite(coordinateScale) && coordinateScale > 0 ? coordinateScale : 1
+  const viewportWidthNormalized = viewportWidth / scale
+  const parentMenu = {
+    left: parentMenuRect.left / scale,
+    right: parentMenuRect.right / scale
+  }
+  const width = Math.min(preferredWidth, Math.max(1, viewportWidthNormalized - margin * 2))
+  const rightSideLeft = parentMenu.right + gap
+  const leftSideLeft = parentMenu.left - gap - width
+  const left = rightSideLeft + width <= viewportWidthNormalized - margin
+    ? rightSideLeft
+    : leftSideLeft >= margin
+      ? leftSideLeft
+      : clamp(parentMenu.left, margin, Math.max(margin, viewportWidthNormalized - margin - width))
+  const anchorTop = shellRect.top / scale
+  const availableHeight = Math.max(0, anchorTop - margin - gap)
+  const maxHeight = Math.min(maximumHeight, availableHeight)
+  const visibleHeight = Math.min(Math.max(0, menuHeight), maxHeight)
+  const latestTop = Math.max(margin, anchorTop - gap - visibleHeight)
+  const top = clamp(triggerRect.top / scale, margin, latestTop)
+
+  return { left, top, width, maxHeight }
+}
+
 const rowClass = 'ds-no-drag flex min-h-8 w-full items-center gap-2 px-3 py-1.5 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted'
 
 export function FloatingComposerActionMenu({
@@ -110,7 +159,11 @@ export function FloatingComposerActionMenu({
   } = context
   const [personaOpen, setPersonaOpen] = useState(false)
   const [style, setStyle] = useState<CSSProperties>({ visibility: 'hidden' })
+  const [personaStyle, setPersonaStyle] = useState<CSSProperties>({ visibility: 'hidden' })
   const initialFocusAppliedRef = useRef(false)
+  const mainMenuRef = useRef<HTMLDivElement | null>(null)
+  const personaMenuRef = useRef<HTMLDivElement | null>(null)
+  const personaTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   const updatePosition = useCallback((): void => {
     const buttonRect = composerMenuButtonRef.current?.getBoundingClientRect()
@@ -119,7 +172,7 @@ export function FloatingComposerActionMenu({
     const placement = calculateActionMenuPlacement({
       buttonRect,
       shellRect: composerRect,
-      menuHeight: composerMenuPanelRef.current?.offsetHeight ?? ACTION_MENU_ESTIMATED_HEIGHT,
+      menuHeight: mainMenuRef.current?.offsetHeight ?? ACTION_MENU_ESTIMATED_HEIGHT,
       viewportWidth: window.innerWidth,
       coordinateScale: currentComposerBodyZoom()
     })
@@ -127,7 +180,23 @@ export function FloatingComposerActionMenu({
       ...placement,
       visibility: placement.maxHeight > 0 ? 'visible' : 'hidden'
     })
-  }, [composerMenuButtonRef, composerMenuPanelRef, composerShellRef])
+    if (!personaOpen) return
+    const triggerRect = personaTriggerRef.current?.getBoundingClientRect()
+    const parentMenuRect = mainMenuRef.current?.getBoundingClientRect()
+    if (!triggerRect || !parentMenuRect) return
+    const personaPlacement = calculatePersonaMenuPlacement({
+      triggerRect,
+      parentMenuRect,
+      shellRect: composerRect,
+      menuHeight: personaMenuRef.current?.offsetHeight ?? PERSONA_MENU_ESTIMATED_HEIGHT,
+      viewportWidth: window.innerWidth,
+      coordinateScale: currentComposerBodyZoom()
+    })
+    setPersonaStyle({
+      ...personaPlacement,
+      visibility: personaPlacement.maxHeight > 0 ? 'visible' : 'hidden'
+    })
+  }, [composerMenuButtonRef, composerShellRef, personaOpen])
 
   useEffect(() => {
     if (!canCompose) setPersonaOpen(false)
@@ -218,7 +287,7 @@ export function FloatingComposerActionMenu({
 
   const menu = (
     <div
-      ref={composerMenuPanelRef}
+      ref={mainMenuRef}
       id="floating-composer-action-menu"
       role="menu"
       aria-label={t('composerMenuTitle')}
@@ -307,12 +376,15 @@ export function FloatingComposerActionMenu({
         <>
           {(showPlanMenuOption || showGraphMenuOption || showGoalMenuOption) ? <div className="my-1 h-px bg-ds-border-muted/70" /> : null}
           <button
+            ref={personaTriggerRef}
             role="menuitem"
             tabIndex={-1}
             type="button"
             data-composer-persona-menu-item
             disabled={!canCompose}
             aria-expanded={personaOpen}
+            aria-haspopup="menu"
+            aria-controls="floating-composer-persona-menu"
             onClick={() => {
               if (canCompose) setPersonaOpen((open) => !open)
             }}
@@ -329,46 +401,61 @@ export function FloatingComposerActionMenu({
               ? <ChevronUp className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
               : <ChevronDown className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />}
           </button>
-          {personaOpen ? (
-            <div role="group" aria-label={t('codeAgentPersonaLabel')} className="mx-1 rounded-xl bg-ds-hover/45 py-1">
-              <PersonaOption disabled={!canCompose} selected={!composerPersonaId} icon="" label={t('codeAgentPersonaNone')} onClick={() => selectPersona('')} />
-              {resolvedCodeAgentPresets.map((preset: { id: string; icon: string; name: string; persona: string }) => (
-                <PersonaOption
-                  key={preset.id}
-                  selected={preset.id === composerPersonaId}
-                  disabled={!canCompose}
-                  icon={preset.icon}
-                  label={preset.name}
-                  description={preset.persona}
-                  onClick={() => selectPersona(preset.id === composerPersonaId ? '' : preset.id)}
-                />
-              ))}
-              {resolvedCodeAgentPresets.length === 0 ? (
-                <p className="px-3 py-1.5 text-[12px] text-ds-faint">{t('codeAgentPersonaEmptyHint')}</p>
-              ) : null}
-              <button
-                role="menuitem"
-                tabIndex={-1}
-                type="button"
-                onClick={() => {
-                  close(false)
-                  openSettings('laboratory')
-                }}
-                className={rowClass}
-              >
-                <Settings2 className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-                <span className="min-w-0 flex-1 truncate">{t('codeAgentPersonaManage')}</span>
-              </button>
-            </div>
-          ) : null}
         </>
       ) : null}
+    </div>
+  )
+  const personaMenu = personaAvailable && personaOpen ? (
+    <div
+      ref={personaMenuRef}
+      id="floating-composer-persona-menu"
+      role="menu"
+      aria-label={t('codeAgentPersonaLabel')}
+      style={personaStyle}
+      data-composer-persona-panel
+      onKeyDown={handleMenuKeyDown}
+      className="ds-composer-persona-menu fixed z-50 box-border overflow-y-auto rounded-[18px] border border-ds-border bg-white py-1.5 text-[13px] text-ds-muted shadow-[0_18px_52px_rgba(15,23,42,0.18)] dark:bg-ds-card"
+    >
+      <PersonaOption disabled={!canCompose} selected={!composerPersonaId} icon="" label={t('codeAgentPersonaNone')} onClick={() => selectPersona('')} />
+      {resolvedCodeAgentPresets.map((preset: { id: string; icon: string; name: string; persona: string }) => (
+        <PersonaOption
+          key={preset.id}
+          selected={preset.id === composerPersonaId}
+          disabled={!canCompose}
+          icon={preset.icon}
+          label={preset.name}
+          description={preset.persona}
+          onClick={() => selectPersona(preset.id === composerPersonaId ? '' : preset.id)}
+        />
+      ))}
+      {resolvedCodeAgentPresets.length === 0 ? (
+        <p className="px-3 py-1.5 text-[12px] text-ds-faint">{t('codeAgentPersonaEmptyHint')}</p>
+      ) : null}
+      <button
+        role="menuitem"
+        tabIndex={-1}
+        type="button"
+        onClick={() => {
+          close(false)
+          openSettings('laboratory')
+        }}
+        className={rowClass}
+      >
+        <Settings2 className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+        <span className="min-w-0 flex-1 truncate">{t('codeAgentPersonaManage')}</span>
+      </button>
+    </div>
+  ) : null
+  const menus = (
+    <div ref={composerMenuPanelRef} className="contents">
+      {menu}
+      {personaMenu}
     </div>
   )
   const portalHost = typeof Element !== 'undefined' && document.body instanceof Element
     ? document.body
     : null
-  return portalHost ? createPortal(menu, portalHost) : menu
+  return portalHost ? createPortal(menus, portalHost) : menus
 }
 
 function MenuSwitch({ checked }: { checked: boolean }): ReactElement {

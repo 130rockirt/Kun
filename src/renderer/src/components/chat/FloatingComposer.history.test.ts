@@ -102,7 +102,7 @@ const CODEX_PROVIDER_GROUP: ModelProviderModelGroup = {
   }
 }
 
-describe('FloatingComposer input history and shortcut hint', () => {
+describe('FloatingComposer input history and footer hints', () => {
   class MemoryStorage {
     private values = new Map<string, string>()
 
@@ -172,12 +172,13 @@ describe('FloatingComposer input history and shortcut hint', () => {
     }
   }
 
-  it('shows the Shift+Enter newline shortcut in the footer when ready', async () => {
+  it('omits the send shortcut from the footer while keeping newline guidance in the placeholder', async () => {
     const previousLanguage = i18n.language
     await i18n.changeLanguage('en')
     try {
       const html = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps()))
-      expect(html).toContain('Enter to send · Shift+Enter for newline')
+      expect(html).not.toContain('ds-composer-footer-hint')
+      expect(html).not.toContain('Enter to send · Shift+Enter for newline')
       expect(html).toContain('Ask the agent… (Shift+Enter for newline)')
       expect(html.indexOf('ds-chat-composer')).toBeLessThan(html.indexOf('ds-composer-footer'))
     } finally {
@@ -185,7 +186,7 @@ describe('FloatingComposer input history and shortcut hint', () => {
     }
   })
 
-  it('hides the send shortcut while the composer has input and restores it when cleared', async () => {
+  it('keeps the send shortcut out of the footer as the draft changes', async () => {
     const previousLanguage = i18n.language
     await i18n.changeLanguage('en')
     try {
@@ -199,21 +200,20 @@ describe('FloatingComposer input history and shortcut hint', () => {
       const whitespaceOnly = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
         input: '   '
       })))
-      expect(whitespaceOnly).toContain('Enter to send · Shift+Enter for newline')
+      expect(whitespaceOnly).not.toContain('Enter to send · Shift+Enter for newline')
 
       const cleared = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps()))
-      expect(cleared).toContain('Enter to send · Shift+Enter for newline')
+      expect(cleared).not.toContain('Enter to send · Shift+Enter for newline')
     } finally {
       await i18n.changeLanguage(previousLanguage)
     }
   })
 
-  it('hides the reversed send shortcut too when input is present', async () => {
+  it('omits the reversed send shortcut too', async () => {
     const previousLanguage = i18n.language
     await i18n.changeLanguage('en')
     try {
       const html = renderToStaticMarkup(createElement(FloatingComposer, baseComposerProps({
-        input: 'draft prompt',
         composerSendKey: 'shiftEnter' as const
       })))
       expect(html).not.toContain('ds-composer-footer-hint')

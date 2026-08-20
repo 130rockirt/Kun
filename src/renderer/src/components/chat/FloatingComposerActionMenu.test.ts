@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { act, create as createRenderer } from 'react-test-renderer'
-import { FloatingComposerActionMenu, calculateActionMenuPlacement } from './FloatingComposerActionMenu'
+import {
+  FloatingComposerActionMenu,
+  calculateActionMenuPlacement,
+  calculatePersonaMenuPlacement
+} from './FloatingComposerActionMenu'
 
 describe('calculateActionMenuPlacement', () => {
   it('keeps the menu above the composer shell with the requested gap', () => {
@@ -77,12 +81,40 @@ describe('calculateActionMenuPlacement', () => {
   })
 })
 
+describe('calculatePersonaMenuPlacement', () => {
+  it('opens to the right of the parent menu and stays above the composer', () => {
+    const placement = calculatePersonaMenuPlacement({
+      triggerRect: { top: 310 },
+      parentMenuRect: { left: 20, right: 244 },
+      shellRect: { top: 500 },
+      menuHeight: 220,
+      viewportWidth: 1000
+    })
+
+    expect(placement.left).toBe(252)
+    expect(placement.top + 220).toBe(492)
+  })
+
+  it('flips to the left when there is not enough room on the right', () => {
+    const placement = calculatePersonaMenuPlacement({
+      triggerRect: { top: 180 },
+      parentMenuRect: { left: 340, right: 564 },
+      shellRect: { top: 600 },
+      menuHeight: 180,
+      viewportWidth: 600
+    })
+
+    expect(placement.left).toBe(108)
+    expect(placement.top).toBe(180)
+  })
+})
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
 describe('FloatingComposerActionMenu persona controls', () => {
-  it('expands personas, selects one, and closes the menu', async () => {
+  it('opens personas in a separate panel, selects one, and closes both menus', async () => {
     installMenuGlobals()
     const onComposerPersonaChange = vi.fn()
     const setComposerMenuOpen = vi.fn()
@@ -95,6 +127,7 @@ describe('FloatingComposerActionMenu persona controls', () => {
     })
 
     await act(async () => renderer!.root.findByProps({ 'data-composer-persona-menu-item': true }).props.onClick())
+    expect(renderer!.root.findByProps({ 'data-composer-persona-panel': true }).props.role).toBe('menu')
     const options = renderer!.root.findAllByProps({ role: 'menuitemradio' })
     expect(options).toHaveLength(2)
     await act(async () => options[1].props.onClick())

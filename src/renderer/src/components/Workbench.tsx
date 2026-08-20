@@ -107,7 +107,7 @@ const extensionSurfaceLayoutStorage = {
 export function Workbench(): ReactElement {
   const { t, i18n } = useTranslation('common')
   const {
-    threads, threadSearch, showArchivedThreads, activeThreadId, activeThreadRelation,
+    threads, threadSearch, showArchivedThreads, activeThreadId, threadLoadingId, activeThreadRelation,
     activeThreadParentId, selectThread, createThread, createConversation, blocks,
     liveReasoning, liveAssistant, error, runtimeErrorDetail, runtimeStatus, busy,
     currentTurnOrchestration,
@@ -261,7 +261,7 @@ export function Workbench(): ReactElement {
   const {
     activeClawChannel, activeCodeCanvasWorkspace, activeSkillWorkspace, codeThreads,
     currentSideConversations, currentSideRunningCount, devPreviewBlocks,
-    latestAutoOpenDevPreviewUrl, latestDevPreviewUrl,
+    latestAutoOpenDevPreviewSignal, latestDevPreviewUrl,
     timelineBlocks, timelineLiveAssistant, timelineLiveReasoning
   } = useWorkbenchDerivedState({
     activeClawChannelId,
@@ -284,9 +284,9 @@ export function Workbench(): ReactElement {
     activeThreadId,
     designAssistantOpen,
     designImplementOpen,
-    latestAutoOpenDevPreviewUrl,
-    latestDevPreviewUrl,
+    latestAutoOpenDevPreviewSignal,
     route,
+    threadLoadingId,
     workspaceRoot: extensionWorkspaceRoot,
     writeAssistantOpen
   })

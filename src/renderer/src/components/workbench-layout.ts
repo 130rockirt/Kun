@@ -2,7 +2,13 @@ import type { Dispatch, PointerEvent as ReactPointerEvent, SetStateAction } from
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
 import type { AppRoute } from '../store/chat-store-types'
+import type { DevPreviewAutoOpenSignal } from '../lib/dev-preview-detection'
 import { removeBrowserStorageItem } from '../lib/browser-storage'
+import {
+  readThreadRightPanelExpansionRegistry,
+  rememberThreadRightPanelExpansion,
+  saveThreadRightPanelExpansionRegistry
+} from '../lib/thread-right-panel-expansion'
 import { WORKSPACE_FILE_PREVIEW_EVENT, type WorkspaceFilePreviewDetail } from '../lib/workspace-file-preview'
 import {
   CODE_CANVAS_OPEN_REQUEST_EVENT,
@@ -23,6 +29,12 @@ import {
   type CodeRightTabsState,
   type StoredCodeRightTabsRegistry
 } from './workbench/code-right-tabs-state'
+import {
+  advancePreviewAutoOpenTracker,
+  applyThreadRightPanelExpansion,
+  createPreviewAutoOpenTracker,
+  transitionCodeRightTabsForThread
+} from './workbench/thread-right-panel-state'
 
 export {
   CODE_PANEL_PREFERRED,
@@ -78,31 +90,37 @@ export function useWorkbenchLayout({
   activeThreadId,
   designAssistantOpen,
   designImplementOpen,
-  latestAutoOpenDevPreviewUrl,
-  latestDevPreviewUrl,
+  latestAutoOpenDevPreviewSignal,
   route,
+  threadLoadingId,
   workspaceRoot,
   writeAssistantOpen
 }: {
   activeThreadId: string | null
   designAssistantOpen: boolean
   designImplementOpen: boolean
-  latestAutoOpenDevPreviewUrl: string | null
-  latestDevPreviewUrl: string | null
+  latestAutoOpenDevPreviewSignal: DevPreviewAutoOpenSignal | null
   route: AppRoute
+  threadLoadingId: string | null
   workspaceRoot: string
   writeAssistantOpen: boolean
 }) {
   const initialScopeRef = useRef(codeRightTabsWorkspaceScope(workspaceRoot))
   const tabsRegistryRef = useRef(readStoredCodeRightTabsRegistry())
   const widthsRegistryRef = useRef(readStoredCodeRightWidthsRegistry())
+  const threadExpansionRegistryRef = useRef(readThreadRightPanelExpansionRegistry())
   const legacyModeRef = useRef(readStoredRightPanelMode())
   const [codeRightTabs, setCodeRightTabs] = useState<CodeRightTabsState>(() => {
     const stored = tabsRegistryRef.current.workspaces[initialScopeRef.current]
-    return initialCodeRightTabsForLaunch(stored, legacyModeRef.current)
+    return applyThreadRightPanelExpansion(
+      initialCodeRightTabsForLaunch(stored, legacyModeRef.current),
+      activeThreadId,
+      threadExpansionRegistryRef.current
+    )
   })
   const codeRightTabsRef = useRef(codeRightTabs)
   codeRightTabsRef.current = codeRightTabs
+  const codeRightTabsOwnerThreadIdRef = useRef(activeThreadId)
   const [transientRightPanelMode, setTransientRightPanelMode] = useState<RightPanelMode>(null)
   const [filePreviewTarget, setFilePreviewTarget] = useState<WorkspaceFileTarget | null>(null)
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(() =>
@@ -122,8 +140,12 @@ export function useWorkbenchLayout({
     readStoredWidth(TERMINAL_HEIGHT_KEY, TERMINAL_HEIGHT_DEFAULT)
   )
   const shellRef = useRef<HTMLDivElement | null>(null)
-  const previewThreadId = useRef<string | null>(activeThreadId)
-  const autoOpenedPreviewUrlRef = useRef<string | null>(null)
+  const layoutThreadIdRef = useRef<string | null>(activeThreadId)
+  const previewAutoOpenTrackerRef = useRef(createPreviewAutoOpenTracker({
+    threadId: activeThreadId,
+    threadLoadingId,
+    signal: latestAutoOpenDevPreviewSignal
+  }))
   const rightPanelMode = route === 'chat'
     ? transientRightPanelMode ?? (codeRightTabs.expanded ? codeRightTabs.activeId : null)
     : null
@@ -175,6 +197,15 @@ export function useWorkbenchLayout({
     }
     persistCodeRightTabsRegistry(tabsRegistryRef.current)
     persistRightPanelMode(codeRightTabs.expanded ? codeRightTabs.activeId : null)
+    const ownerThreadId = codeRightTabsOwnerThreadIdRef.current
+    if (ownerThreadId) {
+      threadExpansionRegistryRef.current = rememberThreadRightPanelExpansion(
+        ownerThreadId,
+        codeRightTabs.expanded,
+        threadExpansionRegistryRef.current
+      )
+      saveThreadRightPanelExpansionRegistry(threadExpansionRegistryRef.current)
+    }
   }, [codeRightTabs])
 
   useEffect(() => {
@@ -190,14 +221,18 @@ export function useWorkbenchLayout({
     }
     initialScopeRef.current = nextScope
     setTransientRightPanelMode(transientRightPanelModeForWorkspaceChange)
-    const nextTabs = tabsRegistryRef.current.workspaces[nextScope] ?? emptyCodeRightTabsState()
+    const nextTabs = applyThreadRightPanelExpansion(
+      tabsRegistryRef.current.workspaces[nextScope] ?? emptyCodeRightTabsState(),
+      activeThreadId,
+      threadExpansionRegistryRef.current
+    )
     setCodeRightTabs(nextTabs)
     const nextWidth = widthsRegistryRef.current.workspaces[nextScope]
     if (nextWidth) setRightSidebarWidth(nextWidth)
     else if (nextTabs.expanded) {
       setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
     }
-  }, [codeRightTabs, workspaceRoot])
+  }, [activeThreadId, codeRightTabs, workspaceRoot])
 
   useEffect(() => {
     removeBrowserStorageItem(TERMINAL_OPEN_KEY)
@@ -247,24 +282,33 @@ export function useWorkbenchLayout({
   }, [])
 
   useEffect(() => {
-    if (previewThreadId.current === activeThreadId) return
-    previewThreadId.current = activeThreadId
-    autoOpenedPreviewUrlRef.current = null
-    setCodeRightTabs((current) => {
-      let next = closeCodeRightTab(current, BUILTIN_RIGHT_PANEL_IDS.browser)
-      next = closeCodeRightTab(next, BUILTIN_RIGHT_PANEL_IDS.sideConversations)
-      next = closeCodeRightTab(next, BUILTIN_RIGHT_PANEL_IDS.plan)
-      return next
-    })
+    if (layoutThreadIdRef.current === activeThreadId) return
+    layoutThreadIdRef.current = activeThreadId
+    codeRightTabsOwnerThreadIdRef.current = activeThreadId
+    setCodeRightTabs((current) => transitionCodeRightTabsForThread(
+      current,
+      activeThreadId,
+      threadExpansionRegistryRef.current
+    ))
   }, [activeThreadId])
 
   useEffect(() => {
-    if (!latestAutoOpenDevPreviewUrl || route !== 'chat') return
-    if (autoOpenedPreviewUrlRef.current === latestAutoOpenDevPreviewUrl) return
-    autoOpenedPreviewUrlRef.current = latestAutoOpenDevPreviewUrl
+    const transition = advancePreviewAutoOpenTracker(previewAutoOpenTrackerRef.current, {
+      threadId: activeThreadId,
+      threadLoadingId,
+      signal: latestAutoOpenDevPreviewSignal
+    })
+    previewAutoOpenTrackerRef.current = transition.tracker
+    if (!transition.shouldOpen || route !== 'chat') return
     ensureInitialCodePanelWidth()
     setCodeRightTabs((current) => openCodeRightTab(current, BUILTIN_RIGHT_PANEL_IDS.browser))
-  }, [ensureInitialCodePanelWidth, latestAutoOpenDevPreviewUrl, route])
+  }, [
+    activeThreadId,
+    ensureInitialCodePanelWidth,
+    latestAutoOpenDevPreviewSignal,
+    route,
+    threadLoadingId
+  ])
 
   useLayoutEffect(() => {
     const sync = (): void => {
@@ -347,9 +391,6 @@ export function useWorkbenchLayout({
   }
 
   const openDevPreview = (): void => {
-    if (latestDevPreviewUrl) {
-      autoOpenedPreviewUrlRef.current = latestDevPreviewUrl
-    }
     openRightPanelTab(BUILTIN_RIGHT_PANEL_IDS.browser)
   }
 
