@@ -31,9 +31,9 @@ import { SessionCompactionScheduler } from './session-compaction-scheduler.js'
 import { searchItemTextFile } from './file-session-text-search.js'
 import { writeSessionArchive } from './session-history-archive.js'
 import { compactUsageEventsIfLarge, sessionDirectoryExists } from './file-session-usage-compaction.js'
+import { scanHighestSeqFromTail } from './file-session-seq-tail-scan.js'
 
 export { readLatestItemsFromJsonl } from './file-session-jsonl.js'
-
 const DEFAULT_USAGE_EVENT_COMPACTION_MAX_BYTES = 5 * 1024 * 1024
 const DEFAULT_USAGE_EVENT_RETENTION_DAYS = 365
 /** Log a warning when a cold loadItems read blocks the loop for at least this long (#621). */
@@ -99,25 +99,19 @@ export class FileSessionStore implements SessionStore {
     compactionDelayMs?: number
   }) {
     this.dataDir = resolve(options.dataDir, 'threads')
-    this.itemsCacheMaxBytes = Math.max(
-      1,
-      Math.floor(options.itemsCacheMaxBytes ?? DEFAULT_ITEMS_CACHE_MAX_BYTES)
-    )
-    this.itemHistoryCompactionMinBytes = Math.max(
-      1,
-      Math.floor(
-        options.itemHistoryCompactionMinBytes ?? DEFAULT_ITEM_HISTORY_COMPACTION_MIN_BYTES
-      )
-    )
+    this.itemsCacheMaxBytes = Math.max(1, Math.floor(
+      options.itemsCacheMaxBytes ?? DEFAULT_ITEMS_CACHE_MAX_BYTES
+    ))
+    this.itemHistoryCompactionMinBytes = Math.max(1, Math.floor(
+      options.itemHistoryCompactionMinBytes ?? DEFAULT_ITEM_HISTORY_COMPACTION_MIN_BYTES
+    ))
     this.usageEventCompaction = {
-      maxBytes: Math.max(
-        1,
-        Math.floor(options.usageEventCompaction?.maxBytes ?? DEFAULT_USAGE_EVENT_COMPACTION_MAX_BYTES)
-      ),
-      retentionDays: Math.max(
-        1,
-        Math.floor(options.usageEventCompaction?.retentionDays ?? DEFAULT_USAGE_EVENT_RETENTION_DAYS)
-      ),
+      maxBytes: Math.max(1, Math.floor(
+        options.usageEventCompaction?.maxBytes ?? DEFAULT_USAGE_EVENT_COMPACTION_MAX_BYTES
+      )),
+      retentionDays: Math.max(1, Math.floor(
+        options.usageEventCompaction?.retentionDays ?? DEFAULT_USAGE_EVENT_RETENTION_DAYS
+      )),
       nowIso: options.usageEventCompaction?.nowIso ?? (() => new Date().toISOString())
     }
     this.compactionScheduler = new SessionCompactionScheduler({
@@ -443,8 +437,7 @@ export class FileSessionStore implements SessionStore {
     const elapsedMs = performance.now() - startedAt
     if (elapsedMs >= SLOW_LOAD_ITEMS_LOG_MS) {
       // A slow cold read points at an oversized thread log as the likely
-      // event-loop staller behind a watchdog restart (#621); the counts say
-      // how bloated messages.jsonl has become.
+      // event-loop staller behind a watchdog restart (#621); counts show the bloat.
       console.warn(
         `[kun] loadItems(${threadId}) took ${Math.round(elapsedMs)}ms ` +
           `for ${rawCount} raw → ${ordered.length} items`
@@ -483,6 +476,13 @@ export class FileSessionStore implements SessionStore {
     if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) {
       this.cacheHighestSeq(threadId, cached.seq, info)
       return cached.seq
+    }
+    // Events append in seq order: the newest max sits at the tail, so a
+    // backwards scan avoids stream-parsing the whole log on a cache miss (#621).
+    const tail = await scanHighestSeqFromTail({ path, fileSize: info.size })
+    if (tail.ok) {
+      this.cacheHighestSeq(threadId, tail.highestSeq, info)
+      return tail.highestSeq
     }
     let highest = 0
     for await (const event of this.iterateEventsSince(threadId, -1)) {

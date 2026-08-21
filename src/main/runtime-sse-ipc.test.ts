@@ -171,6 +171,75 @@ describe('runtime-sse-ipc', () => {
     expect(allEvents[2].text).toBe('bye')
   })
 
+  it('retries a bounded number of times on 404 before surfacing the error', async () => {
+    registerRuntimeSseIpc({
+      ipcMain: mockIpcMain,
+      store: mockStore,
+      ensureRuntime: mockEnsureRuntime,
+      logError: mockLogError
+    })
+    const startHandler = handlers.get('runtime:sse:start')
+    expect(startHandler).toBeDefined()
+
+    // 1 initial attempt + first 2 retries 404; the 3rd retry reaches a
+    // stream that ends cleanly (one event) so the loop stops without an
+    // endless immediate-reconnect spin against the mock reader.
+    let fetchCalls = 0
+    mockFetch.mockImplementation(async () => {
+      fetchCalls += 1
+      if (fetchCalls <= 3) return { ok: false, status: 404, body: null }
+      return { ok: false, status: 400, body: null }
+    })
+
+    const started = await startHandler!(mockEvent, {
+      threadId: 'thread-404-race',
+      sinceSeq: 0
+    })
+
+    // Retries use 750ms → 1.5s → 3s backoff; one large advance covers all
+    // pending sleeps plus the terminal 400 that follows.
+    await vi.advanceTimersByTimeAsync(6_000)
+
+    expect(mockFetch).toHaveBeenCalledTimes(4)
+    // The 404s retried instead of terminating on the first response.
+    expect(mockLogError).toHaveBeenCalledWith(
+      'sse',
+      expect.stringContaining('SSE 404 for thread thread-404-race; retry 1/3'),
+      expect.objectContaining({ streamId: started.streamId })
+    )
+  })
+
+  it('reports a terminal error after exhausting 404 retries', async () => {
+    registerRuntimeSseIpc({
+      ipcMain: mockIpcMain,
+      store: mockStore,
+      ensureRuntime: mockEnsureRuntime,
+      logError: mockLogError
+    })
+    const startHandler = handlers.get('runtime:sse:start')
+    expect(startHandler).toBeDefined()
+
+    mockFetch.mockImplementation(async () => ({ ok: false, status: 404, body: null }))
+
+    const started = await startHandler!(mockEvent, {
+      threadId: 'thread-404-final',
+      sinceSeq: 0
+    })
+
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(mockFetch).toHaveBeenCalledTimes(4)
+    expect(mockEvent.sender.send).toHaveBeenCalledWith(
+      'runtime:sse-error',
+      expect.objectContaining({ streamId: started.streamId, status: 404, threadMissing: true })
+    )
+    expect(mockLogError).toHaveBeenCalledWith(
+      'sse',
+      expect.stringContaining('SSE 404'),
+      expect.objectContaining({ streamId: started.streamId })
+    )
+  })
+
   it('treats terminated stream reads as reconnectable SSE disconnects', async () => {
     registerRuntimeSseIpc({
       ipcMain: mockIpcMain,
