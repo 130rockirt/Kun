@@ -311,10 +311,11 @@ export type ApprovalReviewCompletedEvent = z.infer<typeof ApprovalReviewComplete
 export const UserInputEvent = RuntimeEventBase.extend({
   kind: z.enum(['user_input_requested', 'user_input_resolved']),
   inputId: z.string().min(1),
-  status: z.enum(['pending', 'submitted', 'cancelled']),
+  status: z.enum(['pending', 'submitted', 'cancelled', 'timeout']),
   prompt: z.string().optional(),
   questions: z.array(UserInputQuestionSchema).optional(),
-  answers: z.array(UserInputAnswerSchema).optional()
+  answers: z.array(UserInputAnswerSchema).optional(),
+  timeoutSeconds: z.number().int().positive().optional()
 })
 export type UserInputEvent = z.infer<typeof UserInputEvent>
 

@@ -76,6 +76,7 @@ export function SidebarConversationsSection({
   const watchTurnCompletion = useChatStore((s) => s.watchTurnCompletion)
   const unreadThreadIds = useChatStore((s) => s.unreadThreadIds)
   const scheduledThreadActivities = useChatStore((s) => s.scheduledThreadActivities)
+  const awaitingUserInputThreadIds = useChatStore((s) => s.awaitingUserInputThreadIds)
 
   const [collapsed, setCollapsed] = useState(true)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -94,8 +95,9 @@ export function SidebarConversationsSection({
     busy,
     watchTurnCompletion,
     unreadThreadIds,
-    scheduledThreadActivities
-  }), [activeThreadId, busy, scheduledThreadActivities, unreadThreadIds, watchTurnCompletion])
+    scheduledThreadActivities,
+    awaitingUserInputThreadIds
+  }), [activeThreadId, awaitingUserInputThreadIds, busy, scheduledThreadActivities, unreadThreadIds, watchTurnCompletion])
 
   const allConversationThreads = useMemo(() => sortSidebarThreads(threads.filter((thread) =>
     isConversationWorkspacePath(thread.workspace, conversationRoot) && thread.archived !== true
@@ -328,6 +330,7 @@ export function SidebarConversationsSection({
               showRunning={activity === 'running'}
               showFailed={activity === 'failed'}
               showUnread={activity === 'unread'}
+              showAwaitingInput={activity === 'awaiting-input'}
               scheduledActivity={activity === 'scheduled'
                 ? scheduledThreadActivities[thread.id]
                 : undefined}

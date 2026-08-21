@@ -362,6 +362,7 @@ export const kunEventNormalizerDeps: KunEventNormalizerDeps = {
     createdAt: event.timestamp,
     prompt: event.prompt,
     questions: event.questions,
+    timeoutSeconds: event.timeoutSeconds,
     seq: event.seq
   }),
   userInputAnswers: userInputAnswersFromCore,

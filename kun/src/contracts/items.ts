@@ -273,7 +273,8 @@ export const UserInputTurnItem = TurnItemBase.extend({
   prompt: z.string(),
   questions: z.array(UserInputQuestionSchema).default([]),
   answers: z.array(UserInputAnswerSchema).optional(),
-  status: z.enum(['pending', 'submitted', 'cancelled'])
+  status: z.enum(['pending', 'submitted', 'cancelled', 'timeout']),
+  timeoutSeconds: z.number().int().positive().optional()
 })
 export type UserInputTurnItem = z.infer<typeof UserInputTurnItem>
 

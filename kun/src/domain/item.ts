@@ -279,6 +279,7 @@ export function makeUserInputItem(input: {
   inputId: string
   prompt: string
   questions?: UserInputQuestion[]
+  timeoutSeconds?: number
 }): TurnItem {
   return {
     id: input.id,
@@ -290,7 +291,8 @@ export function makeUserInputItem(input: {
     inputId: input.inputId,
     prompt: input.prompt,
     questions: input.questions ?? [],
-    status: 'pending'
+    status: 'pending',
+    ...(input.timeoutSeconds !== undefined ? { timeoutSeconds: input.timeoutSeconds } : {})
   }
 }
 

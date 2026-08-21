@@ -27,6 +27,12 @@ import { isBackgroundShellNoticeUserMessage } from '@shared/background-shell-not
 import type { ChatState } from './chat-store-types'
 import { drainBackgroundQueuedMessage } from './chat-store-background-queue'
 import { isPendingQueuedMessage } from './queued-message-persistence'
+import {
+  clearThreadAwaitingUserInput,
+  markThreadAwaitingUserInput,
+  withoutAwaitingUserInput
+} from './awaiting-user-input-registry'
+import { reconcileCompletedTurnFromThreadDetail } from './chat-store-runtime-reconcile'
 import { hydrateBlockModelLabels, isClawThread } from './chat-store-helpers'
 import {
   collectAssistantTextForTurn,
@@ -292,65 +298,6 @@ export type ThreadEventSinkBinding = {
   getThreadDetail?: AgentProvider['getThreadDetail']
 }
 
-async function reconcileCompletedTurnFromThreadDetail(input: {
-  threadId: string | null | undefined
-  turnId: string | null | undefined
-  userBlockId: string | null | undefined
-  loadThreadDetail: AgentProvider['getThreadDetail']
-  set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void
-  get: () => ChatState
-}): Promise<void> {
-  const threadId = input.threadId?.trim()
-  if (!threadId) return
-
-  try {
-    const {
-      blocks: rawBlocks,
-      latestSeq,
-      threadStatus,
-      latestTurnId,
-      latestTurnStatus,
-      goal,
-      todos
-    } = await input.loadThreadDetail(threadId)
-    const loaded = hydrateBlockModelLabels(threadId, rawBlocks)
-
-    input.set((state) => reduceChatProjection(state, {
-      type: 'thread_snapshot_reconciled',
-      payload: {
-        threadId,
-        blocks: loaded,
-        latestSeq,
-        threadStatus,
-        latestTurnId,
-        latestTurnStatus,
-        goal,
-        todos,
-        turnId: input.turnId,
-        userBlockId: input.userBlockId
-      }
-    }, {
-      now: Date.now(),
-      clearRecoveringError: clearRuntimeStreamRecoveringError,
-      goalTimelineText,
-      runtimeStatusText,
-      runtimeErrorView: (event) => describeRuntimeError(runtimeErrorPayloadToError(event)),
-      upsertRuntimeError: upsertRuntimeErrorBlock,
-      formatRuntimeError,
-      runtimeErrorDetail,
-      isInterruptSettledError,
-      settlePendingRuntimeWork: settlePendingRuntimeWorkAfterInterrupt,
-      threadSnapshotLooksRunning
-    }))
-  } catch (error) {
-    if (typeof window === 'undefined') return
-    void window.kunGui?.logError?.('turn-completion-reconcile', 'Failed to reconcile completed turn', {
-      message: error instanceof Error ? error.message : String(error),
-      threadId
-    }).catch(() => undefined)
-  }
-}
-
 export function buildThreadEventSink(
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
   get: () => ChatState,
@@ -550,11 +497,13 @@ export function buildThreadEventSink(
       if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
       clearBusyWatchdog()
+      markThreadAwaitingUserInput(set, get, boundThreadId || get().activeThreadId)
       set((state) => reduce(state, { type: 'user_input_requested', payload: request }))
     },
     onUserInputStatus: (event) => {
       if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
+      clearThreadAwaitingUserInput(set, get, boundThreadId || get().activeThreadId)
       if (event.status === 'submitted' && get().busy) armBusyWatchdog(set, get)
       set((state) => reduce(state, { type: 'user_input_status_changed', payload: event }))
     },
@@ -615,6 +564,10 @@ export function buildThreadEventSink(
         if (!completedThreadId) return patch
         return {
           ...patch,
+          awaitingUserInputThreadIds: withoutAwaitingUserInput(
+            state.awaitingUserInputThreadIds,
+            completedThreadId
+          ),
           unreadThreadIds: status === 'aborted' || completionIsCurrentlyVisible(state, completedThreadId)
             ? clearUnreadCompletion(state.unreadThreadIds, completedThreadId)
             : markUnreadCompletion(state.unreadThreadIds, completedThreadId)

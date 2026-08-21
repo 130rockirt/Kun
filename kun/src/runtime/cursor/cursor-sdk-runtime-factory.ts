@@ -35,7 +35,7 @@ import type {
   UserInputRequest,
   UserInputResolution
 } from '../../ports/user-input-gate.js'
-import { awaitAbortableGate } from '../../services/interactive-gate.js'
+import { armUserInputTimeout, awaitAbortableGate } from '../../services/interactive-gate.js'
 import { sessionEventExists } from '../../adapters/session-event-query.js'
 import type { SkillRuntime } from '../../skills/skill-runtime.js'
 import {
@@ -153,7 +153,8 @@ export function createCursorSdkRuntime(
         turnId,
         itemId: input.itemId,
         prompt: input.prompt,
-        questions: input.questions
+        questions: input.questions,
+        ...(input.timeoutSeconds !== undefined ? { timeoutSeconds: input.timeoutSeconds } : {})
       }
       const pending = userInputGate.request(request)
       const item = makeUserInputItem({
@@ -162,7 +163,8 @@ export function createCursorSdkRuntime(
         turnId,
         inputId: input.id,
         prompt: input.prompt,
-        questions: input.questions
+        questions: input.questions,
+        ...(input.timeoutSeconds !== undefined ? { timeoutSeconds: input.timeoutSeconds } : {})
       })
       try {
         await deps.turns.applyItem(threadId, item)
@@ -174,13 +176,19 @@ export function createCursorSdkRuntime(
           inputId: input.id,
           status: 'pending',
           prompt: input.prompt,
-          questions: input.questions
+          questions: input.questions,
+          ...(input.timeoutSeconds !== undefined ? { timeoutSeconds: input.timeoutSeconds } : {})
         })
       } catch (error) {
         userInputGate.resolve(input.id, { status: 'cancelled' })
         void pending.catch(() => undefined)
         throw error
       }
+      const disarmTimeout = armUserInputTimeout(
+        (resolution) => userInputGate.resolve(input.id, resolution),
+        input.id,
+        input.timeoutSeconds
+      )
       let resolution: UserInputResolution
       try {
         resolution = await awaitAbortableGate(
@@ -191,6 +199,8 @@ export function createCursorSdkRuntime(
         )
       } catch {
         resolution = { status: 'cancelled' }
+      } finally {
+        disarmTimeout()
       }
       await deps.turns.updateItem(threadId, item.id, {
         status: resolution.status,

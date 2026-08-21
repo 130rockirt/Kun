@@ -77,7 +77,7 @@ import {
 import type { ApprovalReviewPort } from '../../ports/approval-review.js'
 import type { ActingTurnModelRoute } from '../../contracts/turns.js'
 import { makeUserInputItem } from '../../domain/item.js'
-import { awaitAbortableGate } from '../../services/interactive-gate.js'
+import { armUserInputTimeout, awaitAbortableGate } from '../../services/interactive-gate.js'
 import {
   buildHistoryTranscript,
   DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
@@ -188,7 +188,8 @@ export function createAgentSdkFactoryContext(deps: AgentSdkRuntimeFactoryDeps) {
           turnId,
           itemId: input.itemId,
           prompt: input.prompt,
-          questions: input.questions
+          questions: input.questions,
+          ...(input.timeoutSeconds !== undefined ? { timeoutSeconds: input.timeoutSeconds } : {})
         }
         // Arm first so an event subscriber can immediately submit a response.
         const pending = gate.request(request)
@@ -198,7 +199,8 @@ export function createAgentSdkFactoryContext(deps: AgentSdkRuntimeFactoryDeps) {
           turnId,
           inputId: input.id,
           prompt: input.prompt,
-          questions: input.questions
+          questions: input.questions,
+          ...(input.timeoutSeconds !== undefined ? { timeoutSeconds: input.timeoutSeconds } : {})
         })
         try {
           await deps.turns.applyItem(threadId, item)
@@ -210,18 +212,26 @@ export function createAgentSdkFactoryContext(deps: AgentSdkRuntimeFactoryDeps) {
             inputId: input.id,
             status: 'pending',
             prompt: input.prompt,
-            questions: input.questions
+            questions: input.questions,
+            ...(input.timeoutSeconds !== undefined ? { timeoutSeconds: input.timeoutSeconds } : {})
           })
         } catch (error) {
           gate.resolve(input.id, { status: 'cancelled' })
           void pending.catch(() => undefined)
           throw error
         }
+        const disarmTimeout = armUserInputTimeout(
+          (resolution) => gate.resolve(input.id, resolution),
+          input.id,
+          input.timeoutSeconds
+        )
         let resolution: UserInputResolution
         try {
           resolution = await waitForGate(gate, request, signal, pending)
         } catch {
           resolution = { status: 'cancelled' }
+        } finally {
+          disarmTimeout()
         }
         await deps.turns.updateItem(threadId, item.id, {
           status: resolution.status,

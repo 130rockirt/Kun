@@ -78,6 +78,7 @@ export function createInitialChatStoreState(workingDirectoryLabel: string) {
     queuedMessages: [],
     extensionComposerContexts: [],
     watchTurnCompletion: {},
+    awaitingUserInputThreadIds: {},
     unreadThreadIds: readUnreadCompletions(),
     scheduledThreadActivities: {},
     sideConversations: {},

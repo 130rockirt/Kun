@@ -172,11 +172,16 @@ function normalizeKunRuntimeEventPayload(
     }
     case 'user_input_resolved': {
       const answers = deps.userInputAnswers(event.answers)
+      const status = event.status === 'cancelled'
+        ? 'cancelled'
+        : event.status === 'timeout'
+          ? 'timeout'
+          : 'submitted'
       return [{
         type: 'user_input_status_changed',
         payload: {
           itemId: event.itemId ?? event.inputId ?? `input_${event.seq ?? 'unknown'}`,
-          status: event.status === 'cancelled' ? 'cancelled' : 'submitted',
+          status,
           ...(answers ? { answers } : {})
         }
       }]

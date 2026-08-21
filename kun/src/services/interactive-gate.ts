@@ -33,3 +33,24 @@ export function awaitAbortableGate<T>(
     )
   })
 }
+
+/**
+ * Arm the optional self-resolution timer for a pending user-input request.
+ * When the budget elapses, the gate resolves with status "timeout" so the
+ * model can proceed on its own instead of blocking the turn forever. Duplicate
+ * resolution is a no-op; the gate already settles exclusively by input id.
+ */
+export function armUserInputTimeout(
+  resolve: (resolution: { status: 'timeout' }) => boolean,
+  inputId: string,
+  timeoutSeconds: number | undefined
+): () => void {
+  if (timeoutSeconds === undefined || !(timeoutSeconds > 0)) return () => undefined
+  const timer = setTimeout(() => {
+    // A false return means the request already settled (user answered or the
+    // turn aborted first); duplicate resolution is safely ignored.
+    resolve({ status: 'timeout' })
+  }, timeoutSeconds * 1000)
+  timer.unref?.()
+  return () => clearTimeout(timer)
+}

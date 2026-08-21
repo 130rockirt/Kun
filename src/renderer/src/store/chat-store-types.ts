@@ -425,6 +425,8 @@ export type ChatState = {
   /** Source-neutral, host-fenced context awaiting one main-chat turn. Legacy field name is persisted for compatibility. */
   extensionComposerContexts: PendingComposerContextEvent[]
   watchTurnCompletion: Record<string, boolean>
+  /** Threads whose live runtime is currently awaiting a user_input answer. */
+  awaitingUserInputThreadIds: Record<string, true>
   /** Completion attention keyed by thread. Legacy boolean true reads as completed. */
   unreadThreadIds: CompletionAttentionRegistry
   scheduledThreadActivities: Record<string, ScheduledThreadActivity>

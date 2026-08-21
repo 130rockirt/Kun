@@ -196,6 +196,7 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
       showRunning={activity === 'running'}
       showFailed={activity === 'failed'}
       showUnread={activity === 'unread'}
+      showAwaitingInput={activity === 'awaiting-input'}
       scheduledActivity={activity === 'scheduled'
         ? sidebarThreadActivityContext.scheduledThreadActivities?.[thread.id]
         : undefined}

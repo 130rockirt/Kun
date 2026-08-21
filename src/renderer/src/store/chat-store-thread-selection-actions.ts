@@ -374,9 +374,21 @@ export function createThreadSelectionActions(
         turnId: latestTurnId,
         blocks
       })
+      // Re-derive the awaiting-input marker from the runtime's pending gate so
+      // switching threads (or restarting) keeps the sidebar hint accurate.
+      const hasLivePendingUserInput = blocks.some(
+        (block) => block.kind === 'user_input' && block.status === 'pending' && block.live === true
+      )
       set({
         watchTurnCompletion: nextWatch,
         unreadThreadIds: nextUnread,
+        awaitingUserInputThreadIds: hasLivePendingUserInput
+          ? { ...get().awaitingUserInputThreadIds, [id]: true }
+          : (() => {
+              const next = { ...get().awaitingUserInputThreadIds }
+              delete next[id]
+              return next
+            })(),
         activeThreadId: id,
         threadLoadingId: null,
         threadHistoryCursor: historyCursor ?? null,

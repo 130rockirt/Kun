@@ -28,11 +28,14 @@ export type UserInputRequest = {
   itemId: string
   prompt: string
   questions: UserInputQuestion[]
+  /** Optional wall-clock budget; when it elapses the gate self-resolves. */
+  timeoutSeconds?: number
 }
 
 export type UserInputResolution =
   | { status: 'submitted'; answers: UserInputAnswer[] }
   | { status: 'cancelled'; answers?: UserInputAnswer[] }
+  | { status: 'timeout'; answers?: UserInputAnswer[] }
 
 /**
  * Exclusive reservation used by the HTTP route to persist a resolution event

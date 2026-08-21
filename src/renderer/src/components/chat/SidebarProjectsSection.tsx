@@ -165,6 +165,7 @@ type SidebarProjectsSectionProps = {
   watchTurnCompletion: Record<string, boolean>
   unreadThreadIds: Parameters<typeof sidebarThreadActivity>[1]['unreadThreadIds']
   scheduledThreadActivities?: Parameters<typeof sidebarThreadActivity>[1]['scheduledThreadActivities']
+  awaitingUserInputThreadIds?: Parameters<typeof sidebarThreadActivity>[1]['awaitingUserInputThreadIds']
   locale: string
   onPickWorkspace: () => void
   onRemoveWorkspace: (workspacePath: string) => Promise<void>
@@ -207,6 +208,7 @@ export function SidebarProjectsSection({
   watchTurnCompletion,
   unreadThreadIds,
   scheduledThreadActivities = {},
+  awaitingUserInputThreadIds,
   locale,
   onPickWorkspace,
   onRemoveWorkspace,
@@ -293,7 +295,8 @@ export function SidebarProjectsSection({
     busy,
     watchTurnCompletion,
     unreadThreadIds,
-    scheduledThreadActivities
+    scheduledThreadActivities,
+    awaitingUserInputThreadIds
   }
 
   const groups = useMemo(() => {

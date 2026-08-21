@@ -273,6 +273,7 @@ export type CoreTurnItemJson = {
   decisionSource?: 'user' | 'agent'
   inputId?: string
   prompt?: string
+  timeoutSeconds?: number
   questions?: Array<{
     header?: string
     id: string
@@ -573,6 +574,7 @@ export type CoreRuntimeEventJson = {
   rationale?: string
   prompt?: string
   inputId?: string
+  timeoutSeconds?: number
   questions?: Array<{
     header?: string
     id: string

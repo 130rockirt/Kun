@@ -365,17 +365,19 @@ export function UserInputBubble({
       ? t('userInputSubmitted')
       : block.status === 'cancelled'
         ? t('userInputCancelled')
-        : block.status === 'error'
-          ? t('userInputFailed')
-          : pending
-            ? t('userInputPending')
-            : t('userInputCancelled')
+        : block.status === 'timeout'
+          ? t('userInputTimedOut')
+          : block.status === 'error'
+            ? t('userInputFailed')
+            : pending
+              ? t('userInputPending')
+              : t('userInputCancelled')
   const tone =
     block.status === 'error'
       ? 'error'
       : block.status === 'submitted'
         ? 'success'
-        : block.status === 'cancelled'
+        : block.status === 'cancelled' || block.status === 'timeout'
           ? 'muted'
           : pending
             ? 'active'

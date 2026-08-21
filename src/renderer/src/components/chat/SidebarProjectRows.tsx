@@ -12,6 +12,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
+  CircleHelp,
   ClipboardList,
   FolderPlus,
   GitBranch,
@@ -156,6 +157,7 @@ type ThreadRowProps = {
   showRunning: boolean
   showUnread: boolean
   showFailed?: boolean
+  showAwaitingInput?: boolean
   scheduledActivity?: ScheduledThreadActivity
   onSelect: () => void
   onContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => void
@@ -188,6 +190,7 @@ export function ThreadRow({
   showRunning,
   showUnread,
   showFailed = false,
+  showAwaitingInput = false,
   scheduledActivity,
   onSelect,
   onContextMenu,
@@ -239,6 +242,7 @@ export function ThreadRow({
     thread.title,
     updatedLabel,
     pinned ? t('sidebarThreadPinned') : '',
+    showAwaitingInput ? t('sidebarThreadAwaitingInput') : '',
     showRunning ? t('sidebarThreadRunning') : '',
     showFailed ? t('sidebarThreadFailed') : '',
     showUnreadDot ? t('sidebarThreadUnread') : '',
@@ -345,10 +349,12 @@ export function ThreadRow({
             running={showRunning}
             failed={showFailed}
             unread={showUnreadDot}
+            awaitingInput={showAwaitingInput}
             scheduled={!showRunning && !showFailed && !showUnreadDot ? scheduledActivity : undefined}
             unreadLabel={t(showRunning ? 'sidebarThreadRunning' : 'sidebarThreadUnread')}
             failedLabel={t('sidebarThreadFailed')}
             scheduledLabel={scheduledLabel}
+            awaitingInputLabel={t('sidebarThreadAwaitingInput')}
           />
         </span>
       </span>
@@ -378,18 +384,34 @@ function ThreadActivityIndicator({
   failed,
   unread,
   scheduled,
+  awaitingInput,
   unreadLabel,
   failedLabel,
-  scheduledLabel
+  scheduledLabel,
+  awaitingInputLabel
 }: {
   running: boolean
   failed: boolean
   unread: boolean
   scheduled?: ScheduledThreadActivity
+  awaitingInput: boolean
   unreadLabel: string
   failedLabel: string
   scheduledLabel: string
+  awaitingInputLabel: string
 }): ReactElement | null {
+  if (awaitingInput) {
+    return (
+      <span className="inline-flex" title={awaitingInputLabel}>
+        <CircleHelp
+          className="h-3.5 w-3.5 shrink-0 text-amber-500 motion-safe:animate-pulse"
+          strokeWidth={2.2}
+          role="img"
+          aria-label={awaitingInputLabel}
+        />
+      </span>
+    )
+  }
   if (running) return <ThreadRunningIndicator label={unreadLabel} />
   if (failed) {
     return (

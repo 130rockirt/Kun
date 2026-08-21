@@ -423,6 +423,7 @@ export function reduceChatProjection(
           createdAt: req.createdAt ?? new Date(context.now).toISOString(),
           requestId: req.requestId,
           questions: req.questions,
+          ...(req.timeoutSeconds !== undefined ? { timeoutSeconds: req.timeoutSeconds } : {}),
           status: 'pending',
           live: true
         }],

@@ -69,6 +69,13 @@ function createUserInputTool(name: string): LocalTool {
           minimum: 1,
           description: 'Maximum allowed selections for a multiple-choice question.'
         },
+        timeoutSeconds: {
+          type: 'integer',
+          minimum: 5,
+          maximum: 3600,
+          description:
+            'Optional. If the user does not answer within this many seconds, the request auto-resolves with status "timeout"; you must then proceed with your own best judgment instead of waiting or asking again.'
+        },
         questions: {
           type: 'array',
           description: 'One to three structured questions. Each question may include answer options.',
@@ -130,7 +137,24 @@ function createUserInputTool(name: string): LocalTool {
         }
       }
       const prompt = explicitPrompt ?? questions[0]!.question
-      const resolution = await context.awaitUserInput({ id: inputId, itemId, prompt, questions })
+      const timeoutSeconds = normalizeTimeoutSeconds(args.timeoutSeconds)
+      const resolution = await context.awaitUserInput({
+        id: inputId,
+        itemId,
+        prompt,
+        questions,
+        ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {})
+      })
+      if (resolution.status === 'timeout') {
+        return {
+          output: {
+            ...resolution,
+            message:
+              'No answer within the timeout. Do NOT call user_input again for the same question; proceed with your own best judgment based on the conversation so far.'
+          },
+          isError: false
+        }
+      }
       return {
         output: resolution,
         isError: resolution.status === 'cancelled'
@@ -148,6 +172,13 @@ export const defaultLocalTools: LocalTool[] = [
   userInputTool,
   requestUserInputTool
 ]
+
+function normalizeTimeoutSeconds(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  const normalized = Math.floor(value)
+  if (normalized < 5 || normalized > 3600) return undefined
+  return normalized
+}
 
 function normalizeUserInputQuestions(
   args: Record<string, unknown>,

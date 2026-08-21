@@ -33,7 +33,7 @@ const THREAD_PREVIEW_MAX_HEIGHT = 220
 const THREAD_PREVIEW_GAP = 10
 const THREAD_PREVIEW_VIEWPORT_MARGIN = 12
 
-export type SidebarThreadActivity = 'failed' | 'unread' | 'running' | 'scheduled' | 'read'
+export type SidebarThreadActivity = 'awaiting-input' | 'failed' | 'unread' | 'running' | 'scheduled' | 'read'
 
 export type SidebarThreadActivityContext = {
   activeThreadId: string | null
@@ -41,18 +41,22 @@ export type SidebarThreadActivityContext = {
   watchTurnCompletion: Record<string, boolean>
   unreadThreadIds: CompletionAttentionRegistry
   scheduledThreadActivities?: Record<string, ScheduledThreadActivity>
+  awaitingUserInputThreadIds?: Record<string, true>
 }
 
 /**
  * Classifies a sidebar row from transient renderer state without mutating the
- * durable thread record. Running wins over unread during refresh races, so a
- * live turn never appears as a completed notification.
+ * durable thread record. A thread waiting on the user's answer outranks
+ * everything else (only user action can move it forward); running wins over
+ * unread during refresh races, so a live turn never appears as a completed
+ * notification.
  */
 export function sidebarThreadActivity(
   thread: NormalizedThread,
   context: SidebarThreadActivityContext
 ): SidebarThreadActivity {
   const id = thread.id.trim()
+  if (context.awaitingUserInputThreadIds?.[id] === true) return 'awaiting-input'
   const running =
     threadLooksRunning(thread) ||
     context.watchTurnCompletion[id] === true ||
@@ -73,19 +77,21 @@ export function prioritizeSidebarThreadActivity(
   threads: readonly NormalizedThread[],
   context: SidebarThreadActivityContext
 ): NormalizedThread[] {
+  const awaitingInput: NormalizedThread[] = []
   const running: NormalizedThread[] = []
   const failed: NormalizedThread[] = []
   const unread: NormalizedThread[] = []
   const read: NormalizedThread[] = []
   for (const thread of threads) {
     switch (sidebarThreadActivity(thread, context)) {
+      case 'awaiting-input': awaitingInput.push(thread); break
       case 'running': running.push(thread); break
       case 'failed': failed.push(thread); break
       case 'unread': unread.push(thread); break
       default: read.push(thread)
     }
   }
-  return [...running, ...failed, ...unread, ...read]
+  return [...awaitingInput, ...running, ...failed, ...unread, ...read]
 }
 
 export function sidebarThreadsHaveRunningActivity(
