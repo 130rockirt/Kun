@@ -386,14 +386,16 @@ export function UserMessageBubble({
           <RuntimeMetaChips meta={block.meta} align="right" hideAttachments />
           </>
         )}
-        <div
-          data-user-message-actions="inline"
-          className={`${showClawInboundCard ? 'mt-2' : 'ds-user-message-footer mt-2 border-t border-black/5 pt-1.5 dark:border-white/10'} flex min-w-0 items-center justify-between gap-3 text-ds-faint opacity-70 transition group-hover:opacity-100 group-focus-within:opacity-100`}
-        >
-          <div className="min-w-0 flex-1">
-            <ModelMetaTag label={block.modelLabel} className="justify-start text-left" />
-          </div>
-          <div className="flex items-center justify-end gap-1">
+      </div>
+      <div
+        data-user-message-actions="inline"
+        className="invisible absolute right-0 top-full z-20 flex translate-y-0.5 items-center pt-1 text-ds-faint opacity-0 transition-[opacity,transform,visibility] duration-150 motion-reduce:transition-none group-hover:visible group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:visible group-focus-within:translate-y-0 group-focus-within:opacity-100"
+      >
+        <div className="flex items-center gap-0.5 rounded-full border border-ds-border/80 bg-ds-card px-1.5 py-1 shadow-[0_8px_20px_rgba(42,52,72,0.12)]">
+          <ModelMetaTag label={block.modelLabel} className="px-1 text-left" />
+          {block.modelLabel ? (
+            <span aria-hidden="true" className="h-3.5 w-px bg-ds-border/80" />
+          ) : null}
           <CopyFeedbackButton text={displayText} iconOnly />
           {canEdit ? (
             <button
@@ -407,7 +409,6 @@ export function UserMessageBubble({
               <PencilLine className="h-4 w-4" strokeWidth={1.8} />
             </button>
           ) : null}
-          </div>
         </div>
       </div>
     </div>
