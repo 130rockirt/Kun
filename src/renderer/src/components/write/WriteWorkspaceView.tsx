@@ -50,6 +50,7 @@ import { createWriteWorkspaceFileActions } from './write-workspace-file-actions'
 import { useWriteWorkspaceViewEffects } from './use-write-workspace-view-effects'
 import { WriteEditorGroups } from './WriteEditorGroups'
 import { useWriteEditorGroupFileWatches } from './use-write-editor-group-file-watches'
+import { shouldShowWriteInlineAgent } from './write-inline-agent-visibility'
 
 type Props = {
   leftSidebarCollapsed: boolean; onToggleLeftSidebar: () => void
@@ -201,6 +202,12 @@ export function WriteWorkspaceView({
   const activeFileIsOffice = activeFileKind === 'office'
   const activeFileIsCode = activeFileKind === 'code'
   const activeFileIsText = activeFileKind === 'text'
+  const activeOfficeSourceFormat = useWriteWorkspaceStore((state) => (
+    state.activeFilePath
+      ? state.documentsByPath[state.activeFilePath.replace(/\\/g, '/')]?.officePreview?.sourceFormat ?? null
+      : null
+  ))
+  const activeFileIsEditableSpreadsheet = activeFileIsOffice && activeOfficeSourceFormat === 'xlsx'
   const isMarkdown = activeFileIsCode
     ? false
     : activeFilePath && activeFileIsText ? isMarkdownFile(activeFilePath) : true
@@ -235,11 +242,12 @@ export function WriteWorkspaceView({
   const saveLabel = activeFileIsImage
     ? t('writeImagePreview')
     : activeFileIsPdf ? t('writePdfPreview')
-    : activeFileIsOffice ? t('writeOfficePreview')
+    : activeFileIsOffice
+      ? activeFileIsEditableSpreadsheet ? formatSaveLabel(saveStatus, t) : t('writeOfficePreview')
     : renderSafety.readOnly ? t('writeReadOnly') : formatSaveLabel(saveStatus, t)
   // Only surface the toolbar once the selection gesture settles: while the
   // pointer is down (dragging to select) it stays hidden to avoid flicker.
-  const selectionAction = selection.charCount > 0 && !pointerSelecting
+  const selectionAction = shouldShowWriteInlineAgent(selection, pointerSelecting)
     ? inlineAgentPosition(selection, { compact: activeFileIsPdf || activeFileIsOffice })
     : null
   const activeFileLabel = activeFilePath
@@ -321,7 +329,10 @@ export function WriteWorkspaceView({
     const handleBeforeUnload = (event: BeforeUnloadEvent): void => {
       const state = useWriteWorkspaceStore.getState()
       const hasDirtyDocuments = Object.values(state.documentsByPath).some(
-        (document) => document.kind === 'text' && document.saveStatus !== 'saved'
+        (document) => (
+          document.kind === 'text' ||
+          (document.kind === 'office' && document.officePreview?.sourceFormat === 'xlsx')
+        ) && document.saveStatus !== 'saved'
       )
       if (!hasDirtyDocuments) return
       if (state.autoSaveEnabled) void saveAllDocuments(workspaceRoot)
@@ -490,6 +501,7 @@ export function WriteWorkspaceView({
         activeFileIsImage={activeFileIsImage}
         activeFileIsPdf={activeFileIsPdf}
         activeFileIsOffice={activeFileIsOffice}
+        activeFileIsEditableSpreadsheet={activeFileIsEditableSpreadsheet}
         activeFileIsCode={activeFileIsCode}
         activeFileIsText={activeFileIsText}
         activeFileLabel={activeFileLabel}
