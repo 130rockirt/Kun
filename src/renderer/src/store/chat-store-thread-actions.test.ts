@@ -110,6 +110,7 @@ function expectSink(sink: ThreadEventSink | null): ThreadEventSink {
 describe('chat-store-thread-actions queued messages', () => {
   beforeEach(() => {
     clearThreadSnapshotCache()
+    vi.stubGlobal('localStorage', new MemoryStorage())
     rendererRuntimeClient.invalidateSettings()
     registryMock.getProvider.mockReset()
     registryMock.getProvider.mockReturnValue({})

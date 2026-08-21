@@ -50,18 +50,30 @@ export function composerSelectionForThread(
     stored?.source === 'user' ||
     stored?.source === 'default'
   )
+  // Before the catalog has loaded (empty pick list/groups), an explicit user
+  // selection is still trustworthy: returning it keeps the composer from
+  // flashing back to the first-sent thread model on every switch. Once the
+  // catalog is ready and really excludes the model, fall back as before.
+  const catalogLoaded =
+    pickList.length > 0 || state.composerModelGroups.length > 0
   const model = storedShouldWin
     ? storedModel
-    : composerModelSelectable(pickList, state.composerModelGroups, threadModel)
-      ? threadModel
-      : storedSelectable
-        ? storedModel
-        : ''
+    : storedModel && stored?.source === 'user' && !catalogLoaded
+      ? storedModel
+      : composerModelSelectable(pickList, state.composerModelGroups, threadModel)
+        ? threadModel
+        : storedSelectable
+          ? storedModel
+          : ''
   if (!model) return null
   const usesStoredModel = storedModel.toLowerCase() === model.toLowerCase()
+  // With an unloaded catalog there is no group data to validate the stored
+  // providerId against; trusting it keeps the selection stable across the
+  // catalog load instead of clearing it to ''.
   const storedProviderId =
     stored && usesStoredModel &&
-      providerIdMatchesComposerModel(state.composerModelGroups, stored.providerId, model)
+      (!catalogLoaded ||
+        providerIdMatchesComposerModel(state.composerModelGroups, stored.providerId, model))
       ? stored.providerId
       : ''
   return {

@@ -8,6 +8,7 @@ import { runtimePromptForSurface } from './chat-store-send-prompt'
 import { currentTurnStartGeneration } from './turn-start-fence'
 import {
   activeClawChannel,
+  readThreadComposerSelection,
   rememberCodeWorkspaceRoots,
   rememberThreadComposerSelection,
   rememberTurnModel
@@ -43,6 +44,23 @@ import {
   withoutConsumedComposerContexts
 } from './chat-store-thread-actions-support'
 import type { PreparedThreadSend } from './chat-store-thread-send-direct-types'
+
+/**
+ * A queued message freezes the model captured when it was enqueued. Draining
+ * that queue after the user already switched models must not write the stale
+ * capture back over the newer explicit user selection; only the user's own
+ * picker actions (or a non-queued send of the current selection) update it.
+ */
+function queuedModelWouldOverwriteUserSelection(
+  queued: PreparedThreadSend['queued'],
+  threadId: string,
+  sendingModel: string
+): boolean {
+  if (!queued?.model?.trim()) return false
+  const stored = readThreadComposerSelection(threadId)
+  return stored?.source === 'user' &&
+    stored.model.trim().toLowerCase() !== sendingModel.trim().toLowerCase()
+}
 
 export async function performPreparedThreadSend(input: PreparedThreadSend): Promise<boolean> {
   let {
@@ -207,7 +225,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
           throw new Error('Failed to resolve target thread id.')
         }
         activeThreadId = threadId
-        if (composerModel) {
+        if (composerModel && !queuedModelWouldOverwriteUserSelection(queued, threadId, composerModel)) {
           rememberThreadComposerSelection(threadId, composerModel, composerProviderId)
         }
         set((s) => ({
@@ -258,7 +276,11 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
     try {
       const seqAtSend = get().lastSeq
       const channel = get().route === 'claw' ? activeClawChannel(get()) : null
-      if (!channel && composerModel) {
+      if (
+        !channel &&
+        composerModel &&
+        !queuedModelWouldOverwriteUserSelection(queued, activeThreadId, composerModel)
+      ) {
         rememberThreadComposerSelection(activeThreadId, composerModel, composerProviderId)
       }
       await ensureRuntimeProviderForSend({

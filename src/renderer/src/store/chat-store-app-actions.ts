@@ -315,8 +315,16 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
             storedProviderId ||
             providerIdForComposerModel(groups, model)
           if (!activeThread && providerId !== state.composerProviderId) persistComposerProviderId(providerId)
+          // A catalog refresh must never downgrade an explicit user
+          // selection to a fallback (e.g. the first-sent thread model) while
+          // the stored model is merely missing from a partially loaded list.
+          // The fallback may show transiently in state but stays unpersisted.
+          const downgradeOfUserSelection =
+            threadSelection?.source === 'user' &&
+            threadSelection.model.trim().toLowerCase() !== model.trim().toLowerCase()
           if (
             activeThread &&
+            !downgradeOfUserSelection &&
             (!threadSelection || threadSelection.model !== model || threadSelection.providerId !== providerId) &&
             composerModelSelectable(pick, groups, model)
           ) {
