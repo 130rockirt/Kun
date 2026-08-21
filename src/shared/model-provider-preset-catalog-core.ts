@@ -328,13 +328,15 @@ export const MODEL_PROVIDER_PRESETS_CORE: ModelProviderPreset[] = [
 {
     id: OPENCODE_FREE_PROVIDER_ID,
     name: OPENCODE_FREE_PROVIDER_NAME,
-    // OpenCode Zen's public free tier is OpenAI-compatible and intentionally
-    // accepts requests without an Authorization header.
+    category: 'free',
+    // Anonymous requests use Bearer public; the gateway treats it as no
+    // account key and permits only allowAnonymous models.
     baseUrl: 'https://opencode.ai/zen/v1',
     endpointFormat: 'chat_completions',
     defaultRetryMaxAttempts: 10,
     models: [...OPENCODE_FREE_MODEL_IDS],
     modelProfiles: {
+      'gpt-5-nano': openCodeFreeProfile(128_000, 16_000),
       'ling-3.0-flash-free': openCodeFreeProfile(262_144, 32_768),
       'laguna-s-2.1-free': openCodeFreeProfile(256_000, 32_000),
       'nemotron-3.5-lightning-free': openCodeFreeProfile(262_144, 262_144),

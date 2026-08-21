@@ -82,10 +82,14 @@ export const OPENCODE_FREE_PROVIDER_ID = 'opencode-free'
 
 export const OPENCODE_FREE_PROVIDER_NAME = 'OpenCore Free'
 
+/** Transient OpenCode Zen credential for anonymous free-tier requests. */
+export const OPENCODE_ANONYMOUS_API_KEY = 'public'
+
 // Bootstrap snapshot from the OpenCode Zen catalog's zero-cost models. The
 // models.dev catalog remains authoritative and Settings imports newly added
 // free models without admitting paid ones.
 export const OPENCODE_FREE_MODEL_IDS = [
+  'gpt-5-nano',
   'ling-3.0-flash-free',
   'laguna-s-2.1-free',
   'nemotron-3.5-lightning-free',
@@ -244,10 +248,10 @@ export type ModelProviderPreset = {
   id: ModelProviderPresetId
   name: string
   /**
-   * 计费/接入大类。'subscription' = 固定费用套餐(Coding Plan、Token Plan 这类),
-   * 'api'(默认) = 按量付费。仅用于设置页把套餐类供应商收拢成一组,不写入存储的 profile。
+   * 'free' = 内置免 Key 供应商，'subscription' = 固定费用套餐，
+   * 'api'(默认) = 按量付费。仅用于设置页分组，不写入存储的 profile。
    */
-  category?: 'api' | 'subscription'
+  category?: 'api' | 'free' | 'subscription'
   /**
    * 套餐订阅筛选所使用的供应商归属地区。仅用于预设选择器展示，不写入 provider profile。
    * 同一个预设的 Token Plan 入口沿用这里的地区。

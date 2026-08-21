@@ -4,7 +4,8 @@ import type {
 } from '@shared/app-settings'
 import {
   DEFAULT_MODEL_REQUEST_RETRY_MAX_ATTEMPTS,
-  MODEL_ENDPOINT_FORMATS
+  MODEL_ENDPOINT_FORMATS,
+  modelProviderRequiresApiKey
 } from '@shared/app-settings'
 import type {
   ModelProviderTokenPlanRegion
@@ -56,6 +57,7 @@ export { sharedModelConnectionHasUsableCredential } from '../lib/provider-creden
 
 export function ProviderConnectionAdvancedPanels({ view }: { view: Record<string, any> }): ReactElement {
   const { t, showApiKey, selectControlClass, zh, sharedConnectionsError, credentialRevealError, activeTab, expandedCapabilities, activeProvider, activeRetry, isDraftActive, canEditActiveProviderId, patchProviderProfile, updateModelProvider, updateActiveProviderCredential, toggleActiveProviderCredentialVisibility, updateModelProviderImage, removeModelProviderImage, updateModelProviderId, activeProbe, probeNotice, activeBaseUrlInvalid, activeImageBaseUrlInvalid, activeMissingCredential, activeCursorAccount, activeCursorAccountFresh, activeCursorApiKeyUrl, activeSharedConnection, activeCredentialNeedsReplacement, activeApiKeyPlaceholder, activeApiKeyValue, activeCredentialRevealBusy } = view
+  const activeProviderNeedsApiKey = modelProviderRequiresApiKey(activeProvider)
   const activeTokenPlanRegions = view.activeTokenPlanRegions as ModelProviderTokenPlanRegion[]
   const sharedConnections = view.sharedConnections as SharedModelConnectionsSnapshot | null
   const selectSharedModel = view.selectSharedModel as (
@@ -187,6 +189,7 @@ export function ProviderConnectionAdvancedPanels({ view }: { view: Record<string
                     />
                   ) : (
                     <>
+                      {activeProviderNeedsApiKey ? (
                       <label className={fieldLabelClass}>
                         {t('modelProviderApiKey')}
                         <SecretInput
@@ -224,6 +227,7 @@ export function ProviderConnectionAdvancedPanels({ view }: { view: Record<string
                             </span>
                           ) : null}
                       </label>
+                      ) : null}
                       <label className={fieldLabelClass}>
                         {t('modelProviderBaseUrl')}
                         <input

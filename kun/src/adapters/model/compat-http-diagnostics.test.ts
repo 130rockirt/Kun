@@ -16,6 +16,12 @@ describe('compat HTTP diagnostics', () => {
     })
   })
 
+  it('sends the OpenCode anonymous public credential as a bearer token', () => {
+    expect(buildCompatRequestHeaders({
+      apiKey: 'public', stream: true, endpointFormat: 'chat_completions'
+    })).toMatchObject({ Authorization: 'Bearer public' })
+  })
+
   it('keeps provider guidance on 404 errors', async () => {
     await expect(classifyCompatHttpError({
       status: 404, text: 'not found', baseUrl: 'https://example.test', fetchImpl: vi.fn()
