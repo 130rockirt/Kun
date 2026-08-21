@@ -35,6 +35,18 @@ export function hasPendingRuntimeWork(block: ChatBlock): boolean {
   return false
 }
 
+/**
+ * True when the live runtime is actively awaiting a user_input answer for one
+ * of these blocks (not a stale pending record rehydrated from a finished
+ * thread). Shared by the timeline progress row and the top-bar badge so both
+ * switch from "running" to "awaiting your input" semantics together.
+ */
+export function hasLivePendingUserInput(blocks: ChatBlock[]): boolean {
+  return blocks.some(
+    (block) => block.kind === 'user_input' && block.status === 'pending' && block.live === true
+  )
+}
+
 export function isDetachedSubagentToolBlock(block: ChatBlock): boolean {
   if (block.kind !== 'tool') return false
   const child = block.meta?.child

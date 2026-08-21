@@ -96,6 +96,7 @@ import {
   completionNotificationDedupeKeyForWatchedThread,
   isInterruptSettledError,
   notifyTurnComplete,
+  notifyUserInputAwaiting,
   runtimeErrorDetail,
   takePendingClawFeishuMirror,
   watchTurnCompletionNotification,
@@ -497,7 +498,13 @@ export function buildThreadEventSink(
       if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
       clearBusyWatchdog()
-      markThreadAwaitingUserInput(set, get, boundThreadId || get().activeThreadId)
+      const awaitingThreadId = boundThreadId || get().activeThreadId
+      markThreadAwaitingUserInput(set, get, awaitingThreadId)
+      // Only notify when the asking thread is not on screen; the visible thread
+      // already shows the composer panel, awaiting progress row, and badge.
+      if (awaitingThreadId && awaitingThreadId !== get().activeThreadId) {
+        notifyUserInputAwaiting(awaitingThreadId, get(), `user-input:${request.requestId}`)
+      }
       set((state) => reduce(state, { type: 'user_input_requested', payload: request }))
     },
     onUserInputStatus: (event) => {

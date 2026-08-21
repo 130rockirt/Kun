@@ -30,6 +30,8 @@ import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { TimelineRuntimeError, liveTurnProgressClass } from './message-timeline-jump-preview'
 import type { TurnUsageSummary } from '../../hooks/use-turn-usage'
 import { TurnUsageRow } from './TurnUsageRow'
+import { hasLivePendingUserInput } from '../../store/chat-store-runtime-helpers'
+import { CircleHelp } from 'lucide-react'
 
 export type ConversationTurnProps = {
   turn: Turn
@@ -212,6 +214,9 @@ export function ConversationTurn({
       updatedAt: activity.updatedAt ?? ''
     })
   }, [liveToolBlock])
+  // A live user_input gate means the turn is parked waiting for the user, not
+  // computing. Surface that instead of the generic "thinking" label.
+  const awaitingUserInput = isProcessing && hasLivePendingUserInput(turn.blocks)
   const showLiveThinking = Boolean(liveProcessText.trim()) && !liveChildActivityLabel && !liveToolBlock
   const forkFromTurn = async (): Promise<void> => {
     if (!allowMainThreadActions || !forkTurnId || forking) return
@@ -397,6 +402,7 @@ export function ConversationTurn({
           tool={liveToolBlock}
           thinking={showLiveThinking}
           activityLabel={liveChildActivityLabel}
+          awaitingUserInput={awaitingUserInput}
         />
       ) : null}
     </div>
@@ -406,11 +412,13 @@ export function ConversationTurn({
 function LiveTurnProgressRow({
   tool,
   thinking,
-  activityLabel
+  activityLabel,
+  awaitingUserInput = false
 }: {
   tool?: Extract<ChatBlock, { kind: 'tool' }>
   thinking: boolean
   activityLabel?: string
+  awaitingUserInput?: boolean
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const swimMode = useWorkLogoSwimMode(true)
@@ -427,7 +435,9 @@ function LiveTurnProgressRow({
     swimLabelKey as UiPluginLabelKey,
     i18n.language ?? 'zh'
   )
-  const label = activityLabel
+  const label = awaitingUserInput
+    ? t('awaitingYourInput')
+    : activityLabel
     ? t('workingToolAction', { action: activityLabel })
     : thinking
       ? t('thinkingNow')
@@ -442,6 +452,7 @@ function LiveTurnProgressRow({
       label={label}
       ikunVariant={ikunVariant}
       swimMode={swimMode}
+      awaitingUserInput={awaitingUserInput}
     />
   )
 }
@@ -449,18 +460,31 @@ function LiveTurnProgressRow({
 function LiveTurnActivityRow({
   label,
   ikunVariant,
-  swimMode
+  swimMode,
+  awaitingUserInput = false
 }: {
   label: string
   ikunVariant?: IkunWorkLogoVariant
   swimMode?: WorkLogoSwimMode
+  awaitingUserInput?: boolean
 }): ReactElement {
   return (
     <div className={liveTurnProgressClass()}>
-      <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
-        <AnimatedWorkLogo active ikunVariant={ikunVariant} mode={swimMode} phase="trail" size="sm" />
+      {awaitingUserInput ? (
+        <CircleHelp
+          className="mr-0.5 h-4 w-4 shrink-0 text-amber-500 motion-safe:animate-pulse"
+          strokeWidth={2}
+          role="img"
+          aria-label={label}
+        />
+      ) : (
+        <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
+          <AnimatedWorkLogo active ikunVariant={ikunVariant} mode={swimMode} phase="trail" size="sm" />
+        </span>
+      )}
+      <span className={awaitingUserInput ? 'font-medium text-amber-600 dark:text-amber-300' : 'ds-shiny-text'}>
+        {label}
       </span>
-      <span className="ds-shiny-text">{label}</span>
     </div>
   )
 }

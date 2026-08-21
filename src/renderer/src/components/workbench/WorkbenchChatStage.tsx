@@ -27,7 +27,9 @@ import type { RegisteredContribution } from '../../extensions/contribution-regis
 import { DeclarativeActionBar } from '../../extensions/ControlledContributionSurfaces'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { useChatStore } from '../../store/chat-store'
+import { hasLivePendingUserInput } from '../../store/chat-store-runtime-helpers'
 import { shouldUseEmptyTaskLayout } from './workbench-chat-layout'
+import { CircleHelp } from 'lucide-react'
 
 const TerminalPanel = lazy(() =>
   import('../terminal/TerminalPanel').then((module) => ({ default: module.TerminalPanel }))
@@ -222,9 +224,16 @@ export function WorkbenchChatStage({
                 />
               ) : null}
               {busy ? (
-                <span className="inline-flex shrink-0 rounded-full bg-amber-500/16 px-2.5 py-1 text-[11.5px] font-semibold text-amber-950 dark:text-amber-100">
-                  {t('running')}
-                </span>
+                hasLivePendingUserInput(blocks) ? (
+                  <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-400/50 bg-amber-500/25 px-2.5 py-1 text-[11.5px] font-semibold text-amber-950 motion-safe:animate-pulse dark:text-amber-100">
+                    <CircleHelp className="h-3 w-3" strokeWidth={2.2} aria-hidden="true" />
+                    {t('awaitingYourInput')}
+                  </span>
+                ) : (
+                  <span className="inline-flex shrink-0 rounded-full bg-amber-500/16 px-2.5 py-1 text-[11.5px] font-semibold text-amber-950 dark:text-amber-100">
+                    {t('running')}
+                  </span>
+                )
               ) : null}
               <WorkbenchTopActions
                 terminalOpen={terminalOpen}
