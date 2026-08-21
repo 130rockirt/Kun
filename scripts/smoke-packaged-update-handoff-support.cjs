@@ -7,6 +7,7 @@ const {
   cp,
   mkdir,
   readFile,
+  realpath,
   symlink,
   writeFile
 } = require('node:fs/promises')
@@ -139,8 +140,14 @@ function spawnTracked(command, args, options = {}) {
 }
 
 async function launchPredecessorOwners(input) {
-  const managerEntry = join(input.kunRoot, 'dist', 'manager', 'manager-entry.js')
-  const serveEntry = join(input.kunRoot, 'dist', 'cli', 'serve-entry.js')
+  // macOS exposes its temporary directory through both /var and /private/var.
+  // ESM canonicalizes import.meta.url, while process.argv keeps the spelling
+  // passed to spawn; the entrypoint's direct-execution guard therefore only
+  // matches when the smoke passes the canonical path as well.
+  const [managerEntry, serveEntry] = await Promise.all([
+    realpath(join(input.kunRoot, 'dist', 'manager', 'manager-entry.js')),
+    realpath(join(input.kunRoot, 'dist', 'cli', 'serve-entry.js'))
+  ])
   const managerEnvironment = {
     ...input.environment,
     ELECTRON_RUN_AS_NODE: '1',
@@ -155,6 +162,7 @@ async function launchPredecessorOwners(input) {
     cwd: input.workspaceRoot,
     env: managerEnvironment
   })
+  input.onSpawn?.(manager)
   const managerDiscovery = await waitForJson(
     join(input.controlDir, 'manager.json'),
     (value) => value?.pid === manager.child.pid && value?.buildId === input.buildId,
@@ -193,6 +201,7 @@ async function launchPredecessorOwners(input) {
       cwd: input.workspaceRoot,
       env: environment
     })
+    input.onSpawn?.(process)
     const discoveryPath = flavor === 'production'
       ? join(input.dataDir, 'runtime.json')
       : join(input.controlDir, 'runtime.development.json')

@@ -2,7 +2,7 @@
 
 'use strict'
 
-const { mkdir, mkdtemp, readFile, rm } = require('node:fs/promises')
+const { mkdir, mkdtemp, readFile, realpath, rm } = require('node:fs/promises')
 const { tmpdir } = require('node:os')
 const { join, resolve } = require('node:path')
 const {
@@ -124,9 +124,9 @@ async function runPositiveScenario(input) {
       productionPort: profile.productionPort,
       developmentPort: profile.developmentPort,
       baseUrl: modelFixture.baseUrl,
-      timeoutMs: input.timeoutMs
+      timeoutMs: input.timeoutMs,
+      onSpawn: (process) => tracked.push(process)
     })
-    tracked.push(owners.manager.process, ...owners.runtimes.map((entry) => entry.process))
     const production = owners.runtimes.find((entry) => entry.flavor === 'production').discovery
     const saved = await createSmokeThread(production, profile.workspaceRoot)
     let activeTurn
@@ -288,7 +288,10 @@ async function runNegativeScenario(input) {
 }
 
 async function createProfileRoot(prefix) {
-  const temporaryRoot = await mkdtemp(join(tmpdir(), prefix))
+  // Keep every discovery/settings path on the same spelling. In particular,
+  // macOS may return /var from tmpdir() while Electron reports /private/var;
+  // the handoff intentionally rejects different canonical settings scopes.
+  const temporaryRoot = await realpath(await mkdtemp(join(tmpdir(), prefix)))
   const home = join(temporaryRoot, 'home')
   const explicitUserData = join(temporaryRoot, 'electron-user-data')
   const appData = join(temporaryRoot, 'app-data')
@@ -344,7 +347,10 @@ async function initializeProfile(root, baseUrl, autoStart) {
     productionPort,
     developmentPort,
     environment,
-    settingsPath: join(root.appData, 'Kun', 'kun-settings.json')
+    // The smoke passes --user-data-dir to the packaged desktop so every
+    // platform uses this exact profile as app.getPath('userData'). The
+    // predecessor Manager must advertise the same canonical settings scope.
+    settingsPath: join(root.explicitUserData, 'kun-settings.json')
   }
 }
 

@@ -305,6 +305,7 @@ const DEFAULT_RUNTIME_GET_TIMEOUT_MS = 15_000
 const DEFAULT_RUNTIME_POST_TIMEOUT_MS = 60_000
 const THREAD_TIMELINE_GET_TIMEOUT_MS = 120_000
 const THREAD_SUMMARIZE_POST_TIMEOUT_MS = 120_000
+const PROVIDER_QUOTA_GET_TIMEOUT_MS = 120_000
 const MODEL_CONNECTION_EVENTS_TIMEOUT_MARGIN_MS = 5_000
 const MAX_MODEL_CONNECTION_EVENTS_WAIT_MS = 120_000
 
@@ -320,6 +321,12 @@ function isThreadSummarizePath(pathNorm: string): boolean {
   return /^\/v1\/threads\/[^/]+\/summarize$/u.test(pathname)
 }
 
+function isProviderQuotaPath(pathNorm: string): boolean {
+  const queryIndex = pathNorm.indexOf('?')
+  const pathname = queryIndex >= 0 ? pathNorm.slice(0, queryIndex) : pathNorm
+  return pathname === '/v1/provider-quotas'
+}
+
 export function resolveRuntimeRequestTimeoutMs(
   pathNorm: string,
   method: string,
@@ -331,6 +338,9 @@ export function resolveRuntimeRequestTimeoutMs(
     : DEFAULT_RUNTIME_GET_TIMEOUT_MS
   if (method === 'GET' && isThreadTimelinePath(pathNorm)) {
     return THREAD_TIMELINE_GET_TIMEOUT_MS
+  }
+  if (method === 'GET' && isProviderQuotaPath(pathNorm)) {
+    return PROVIDER_QUOTA_GET_TIMEOUT_MS
   }
   // A whole-session summary is one blocking model call over the full
   // transcript. The generic POST budget cut it off before the runtime could

@@ -139,6 +139,16 @@ describe('runtimeRequestViaHost', () => {
     )).toBe(60_000)
   })
 
+  it('allows the bounded provider quota scan to outlive the generic GET budget', () => {
+    expect(resolveRuntimeRequestTimeoutMs('/v1/provider-quotas', 'GET')).toBe(120_000)
+    expect(resolveRuntimeRequestTimeoutMs(
+      '/v1/provider-quotas?refresh=true',
+      'GET',
+      45_000
+    )).toBe(45_000)
+    expect(resolveRuntimeRequestTimeoutMs('/v1/provider-quotas', 'POST')).toBe(60_000)
+  })
+
   it('lets an on-demand session summary outlive the generic POST budget', () => {
     expect(resolveRuntimeRequestTimeoutMs(
       '/v1/threads/thr_1/summarize',
