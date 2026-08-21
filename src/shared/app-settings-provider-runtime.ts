@@ -72,7 +72,6 @@ import {
   CHATGPT_SUBSCRIPTION_NAME,
   CHATGPT_SUBSCRIPTION_PROVIDER_ID,
   GEMINI_SUBSCRIPTION_MODEL_IDS,
-  OPENCODE_ANONYMOUS_API_KEY,
   OPENCODE_FREE_PROVIDER_ID,
   TOKEN_PLAN_PROVIDER_ID_SUFFIX,
   getModelProviderPreset,
@@ -213,11 +212,12 @@ export function resolveKunRuntimeSettings(settings: AppSettingsV1): KunRuntimeSe
 
   return {
     ...runtime,
-    // OpenCode Zen treats this literal as an anonymous request. It is derived
-    // only for the live transport: never persist it or fall back to a stale
-    // runtime key, which would unexpectedly leave the anonymous free tier.
+    // OpenCode Zen free models authenticate by omitting the credential header
+    // entirely; a placeholder bearer would be treated as a real (unknown) key
+    // and rejected with 401. Never fall back to a stale runtime key here — that
+    // would silently attach an unrelated DeepSeek credential to the free tier.
     apiKey: useOpenCodeAnonymousAccess
-      ? OPENCODE_ANONYMOUS_API_KEY
+      ? ''
       : useProviderCredentials
         ? provider.apiKey.trim() || runtimeApiKey
         : runtimeApiKey || provider.apiKey.trim(),

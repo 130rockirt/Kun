@@ -82,9 +82,6 @@ export const OPENCODE_FREE_PROVIDER_ID = 'opencode-free'
 
 export const OPENCODE_FREE_PROVIDER_NAME = 'OpenCore Free'
 
-/** Transient OpenCode Zen credential for anonymous free-tier requests. */
-export const OPENCODE_ANONYMOUS_API_KEY = 'public'
-
 // Bootstrap snapshot from the OpenCode Zen catalog's zero-cost models. The
 // models.dev catalog remains authoritative and Settings imports newly added
 // free models without admitting paid ones.

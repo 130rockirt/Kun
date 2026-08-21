@@ -28,7 +28,6 @@ import {
   CHATGPT_SUBSCRIPTION_MODEL_IDS,
   GROK_SUBSCRIPTION_PROVIDER_ID,
   OLLAMA_CLOUD_MODEL_IDS,
-  OPENCODE_ANONYMOUS_API_KEY,
   OPENCODE_FREE_PROVIDER_ID,
   listMusicGenerationProviderProfiles,
   listSpeechToTextProviderProfiles,
@@ -58,7 +57,7 @@ import {
 import { settings } from './app-settings-provider.test-support'
 
 describe('model provider settings', () => {
-  it('uses the transient public key for a keyless OpenCore Free provider', () => {
+  it('resolves an empty key so keyless OpenCore Free requests stay anonymous', () => {
     const state = settings()
     const openCodeFree = state.provider.providers.find((provider) => provider.id === OPENCODE_FREE_PROVIDER_ID)!
     state.agents.kun.providerId = OPENCODE_FREE_PROVIDER_ID
@@ -67,10 +66,11 @@ describe('model provider settings', () => {
     const runtime = resolveKunRuntimeSettings(state)
 
     expect(openCodeFree.apiKey).toBe('')
-    expect(runtime.apiKey).toBe(OPENCODE_ANONYMOUS_API_KEY)
+    // A stale runtime key must not leak into the anonymous free tier either.
+    expect(runtime.apiKey).toBe('')
   })
 
-  it('uses a configured OpenCore Free key instead of the anonymous public key', () => {
+  it('uses a configured OpenCore Free key instead of staying anonymous', () => {
     const state = settings()
     state.provider.providers = state.provider.providers.map((provider) =>
       provider.id === OPENCODE_FREE_PROVIDER_ID ? { ...provider, apiKey: 'sk-zen' } : provider

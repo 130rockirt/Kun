@@ -16,10 +16,12 @@ describe('compat HTTP diagnostics', () => {
     })
   })
 
-  it('sends the OpenCode anonymous public credential as a bearer token', () => {
-    expect(buildCompatRequestHeaders({
-      apiKey: 'public', stream: true, endpointFormat: 'chat_completions'
-    })).toMatchObject({ Authorization: 'Bearer public' })
+  it('omits every auth header for an anonymous (empty-key) request', () => {
+    const headers = buildCompatRequestHeaders({
+      apiKey: '', stream: true, endpointFormat: 'chat_completions'
+    })
+    expect(headers).not.toHaveProperty('Authorization')
+    expect(headers).not.toHaveProperty('x-api-key')
   })
 
   it('keeps provider guidance on 404 errors', async () => {
