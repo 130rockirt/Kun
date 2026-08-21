@@ -14,6 +14,7 @@ import {
 } from './main-lifecycle'
 import {
   assertCanonicalRuntimeMigrationReady,
+  createStartupKunHandoffRecovery,
   shutdownActiveServiceManagerForUpdate
 } from './main-migrations'
 import {
@@ -80,18 +81,20 @@ export function startMainApp(): void {
       console.warn('[kun-gui] CLI install prompt failed:', error)
     })
     traceStartup('createWindow:returned')
-    void loadGuiUpdaterModule()
-      .then((module) => module.showPostUpdateReleaseNotes())
-      .catch((error) => {
-        console.warn('[kun-gui updater] failed to show post-update release notes:', error)
-      })
+    const updaterModule = loadGuiUpdaterModule().catch((error) => {
+      console.warn('[kun-gui updater] failed to initialize updater:', error)
+      return null
+    })
 
     void pruneOnStartup().catch((err) => {
       console.warn('[kun-gui] prune logs:', err)
     })
 
-    setTimeout(() => {
-      void reconcileBundledRuntimeAfterInstall(initial)
+    void reconcileBundledRuntimeAfterInstall(initial)
+        .then(async () => {
+          const module = await updaterModule
+          await module?.showPostUpdateReleaseNotes()
+        })
         .then(() => resolveManagedRuntimeStartupTarget(
           initial,
           managedKunHostCanAutoStart(initial),
@@ -120,7 +123,6 @@ export function startMainApp(): void {
         .catch((err) => {
           console.warn('[kun-gui] failed to start, attach, or configure the shared Kun runtime:', err)
         })
-    }, 1500)
 
     app.on('activate', () => {
       if (!mainState.mainWindow || mainState.mainWindow.isDestroyed()) createWindow()
@@ -134,7 +136,12 @@ export function startMainApp(): void {
       packaged: app.isPackaged,
       message
     })
-    const recoveryWindow = showStartupFailureWindow(error, mainState.logDir)
+    const recoverHandoff = createStartupKunHandoffRecovery(error)
+    const recoveryWindow = showStartupFailureWindow(
+      error,
+      mainState.logDir,
+      recoverHandoff ? { recoverHandoff } : {}
+    )
     if (recoveryWindow) {
       mainState.mainWindow = recoveryWindow
       recoveryWindow.on('closed', () => {

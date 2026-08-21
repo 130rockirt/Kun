@@ -30,6 +30,7 @@ import {
 import {
   configureKunManagerDataPlaneForCurrentProcess,
   ensureKunServiceManager,
+  preparePackagedKunBuildHandoff,
   resolveKunManagerDataDirFromSettings,
   setKunUnexpectedExitHandler
 } from './kun-process'
@@ -175,6 +176,13 @@ export async function initializeMainServices(): Promise<MainServices | null> {
       return null
     }
     if (appIdentity.flavor === 'production') {
+      const preMigrationDataDir = await resolveKunManagerDataDirFromSettings(productionSettingsPath)
+      if (await preparePackagedKunBuildHandoff({
+        dataDir: preMigrationDataDir,
+        settingsPath: productionSettingsPath
+      })) {
+        traceStartup('installed Runtime build handoff:done')
+      }
       traceStartup('runtime data migration:start')
       const migrationResult = await runStartupLegacyMigrations()
       traceStartup('runtime data migration:done', {

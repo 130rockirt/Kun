@@ -40,6 +40,12 @@ import {
 import {
   buildServiceManagerRouter
 } from './service-manager-router.js'
+import {
+  forcedOwnerKey,
+  readForcedRuntimeRecovery,
+  removeForcedRuntimeRecovery,
+  type VerifiedForcedRuntimeOwner
+} from './forced-runtime-recovery.js'
 
 export const KUN_MANAGER_CAPABILITIES = [
   'runtime-slots-v1',
@@ -288,6 +294,35 @@ export class ServiceManagerState {
     return expired
   }
 
+  expireVerifiedRuntimeOwners(
+    owners: readonly VerifiedForcedRuntimeOwner[]
+  ): ThreadExecutionLease[] {
+    const ownerKeys = new Set(owners.map(forcedOwnerKey))
+    let changed = false
+    for (const [flavor, slot] of this.slots) {
+      if (!ownerKeys.has(forcedOwnerKey({
+        flavor,
+        instanceId: slot.registration.instanceId
+      }))) continue
+      this.slots.delete(flavor)
+      changed = true
+    }
+    const expired: ThreadExecutionLease[] = []
+    for (const [threadId, lease] of this.leases) {
+      if (!ownerKeys.has(`${lease.ownerFlavor}:${lease.ownerInstanceId}`)) continue
+      this.leases.delete(threadId)
+      expired.push(lease)
+      changed = true
+    }
+    for (const [resource, lease] of this.resourceLeases) {
+      if (!ownerKeys.has(`${lease.ownerFlavor}:${lease.ownerInstanceId}`)) continue
+      this.resourceLeases.delete(resource)
+      changed = true
+    }
+    if (changed) this.changed()
+    return expired
+  }
+
   acquireResource(input: {
     resource: string
     ownerFlavor: RuntimeFlavor
@@ -353,6 +388,20 @@ export type ServiceManagerHandle = NodeHttpServerHandle & {
   shutdownRequested: Promise<void>
 }
 
+export async function reconcileVerifiedForcedRuntimeRecovery(input: {
+  controlDir: string
+  record: NonNullable<Awaited<ReturnType<typeof readForcedRuntimeRecovery>>>
+  state: ServiceManagerState
+  sharedData: Pick<ManagerSharedDataStore, 'reconcileExpiredLease'>
+  flushState: () => Promise<void>
+}): Promise<number> {
+  const expired = input.state.expireVerifiedRuntimeOwners(input.record.owners)
+  for (const lease of expired) await input.sharedData.reconcileExpiredLease(lease)
+  await input.flushState()
+  await removeForcedRuntimeRecovery(input.controlDir, input.record.markerId)
+  return expired.length
+}
+
 export async function startServiceManager(input: {
   controlDir: string
   managerToken: string
@@ -374,8 +423,12 @@ export async function startServiceManager(input: {
   const dataDirLease = await acquireRuntimeDataDirLease(input.dataDir)
   const managerStatePath = join(input.controlDir, 'manager-state.json')
   let state: ServiceManagerState
+  let forcedRecovery: Awaited<ReturnType<typeof readForcedRuntimeRecovery>>
   try {
-    state = input.state ?? await readPersistedManagerState(managerStatePath)
+    ;[state, forcedRecovery] = await Promise.all([
+      input.state ?? readPersistedManagerState(managerStatePath),
+      readForcedRuntimeRecovery(input.controlDir, input.dataDir)
+    ])
   } catch (error) {
     await dataDirLease.release().catch(() => undefined)
     throw error
@@ -402,6 +455,23 @@ export async function startServiceManager(input: {
     state.onMutation(undefined)
     await dataDirLease.release().catch(() => undefined)
     throw error
+  }
+  if (forcedRecovery) {
+    try {
+      await reconcileVerifiedForcedRuntimeRecovery({
+        controlDir: input.controlDir,
+        record: forcedRecovery,
+        state,
+        sharedData,
+        flushState: () => statePersistence
+      })
+    } catch (error) {
+      state.onMutation(undefined)
+      await statePersistence.catch(() => undefined)
+      await sharedData.close().catch(() => undefined)
+      await dataDirLease.release().catch(() => undefined)
+      throw error
+    }
   }
   let requestShutdown!: () => void
   const shutdownRequested = new Promise<void>((resolve) => { requestShutdown = resolve })

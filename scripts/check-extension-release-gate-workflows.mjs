@@ -290,6 +290,15 @@ check(
   prWorkflow.includes('npm run smoke:packaged-extension-desktop'),
   'PR package checks must run the packaged desktop Chromium smoke'
 )
+for (const [label, source] of [
+  ['PR', prWorkflow],
+  ['Release', releaseWorkflow]
+]) {
+  check(
+    (source.match(/npm run smoke:packaged-update-handoff/g) ?? []).length >= 4,
+    `${label} workflow must run packaged update handoff acceptance on macOS, Windows, and both Linux architectures`
+  )
+}
 check(
   releaseWorkflow.includes(appImageDesktopCommand) && prWorkflow.includes(appImageDesktopCommand),
   'Release and PR Linux jobs must directly smoke the final AppImage artifact'
@@ -448,6 +457,10 @@ for (const marker of [
 
 const dailyWorkflow = await text('.github/workflows/daily-dev-prerelease.yml')
 const dailyWorkflowDocument = parseYaml(dailyWorkflow)
+check(
+  (dailyWorkflow.match(/npm run smoke:packaged-update-handoff/g) ?? []).length >= 4,
+  'Daily workflow must run packaged update handoff acceptance on macOS, Windows, and both Linux architectures'
+)
 requirePublishDependencies(dailyWorkflowDocument, 'Daily prerelease workflow')
 requireSharedExtensionReleaseGate(dailyWorkflowDocument, 'Daily prerelease', 'validate', [
   'build-macos',

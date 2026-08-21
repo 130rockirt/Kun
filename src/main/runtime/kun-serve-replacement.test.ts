@@ -136,7 +136,7 @@ describe('stopSharedRuntimeForReplacement', () => {
     }, {
       inspect: vi.fn(async () => current),
       requestShutdown: vi.fn(async () => { throw new Error('shutdown probe timed out') }),
-      waitForExit: vi.fn(async () => false),
+      waitForExit: vi.fn(async (_pid, timeoutMs) => timeoutMs === 0),
       commandLine: vi.fn(async () => 'kun-runtime'),
       listenerPids: vi.fn(async () => [target.discovery.pid]),
       terminate,
@@ -159,7 +159,11 @@ describe('stopSharedRuntimeForReplacement', () => {
     })
   })
 
-  it('does not signal a PID when the discovered process no longer looks like the recorded serve', async () => {
+  it.each([
+    ['command mismatch', 'node unrelated-service.js', [101]],
+    ['listener mismatch', 'node serve-entry.js --runtime-flavor production --data-dir /tmp/kun-replacement-data', [202]],
+    ['process inspection denied', '', []]
+  ])('does not signal a PID on %s', async (_label, command, listeners) => {
     const target = inspection()
     let signalSent = false
     const terminate = vi.fn(async (_pid: number, verify: () => Promise<boolean>) => {
@@ -176,8 +180,8 @@ describe('stopSharedRuntimeForReplacement', () => {
       inspect: vi.fn(async () => target),
       requestShutdown: vi.fn(async () => { throw new Error('shutdown unavailable') }),
       waitForExit: vi.fn(async () => false),
-      commandLine: vi.fn(async () => 'node unrelated-service.js'),
-      listenerPids: vi.fn(async () => [target.discovery.pid]),
+      commandLine: vi.fn(async () => command),
+      listenerPids: vi.fn(async () => listeners),
       terminate,
       removeDiscovery,
       withAncillaryWriter: async (_dataDir, action) => action(),
@@ -209,7 +213,7 @@ describe('stopSharedRuntimeForReplacement', () => {
     }, {
       inspect: vi.fn(async () => ++reads === 1 ? target : replacement),
       requestShutdown,
-      waitForExit: vi.fn(async () => false),
+      waitForExit: vi.fn(async (_pid, timeoutMs) => timeoutMs === 0),
       commandLine: vi.fn(async () => 'kun-runtime'),
       listenerPids: vi.fn(async () => [target.discovery.pid]),
       terminate,

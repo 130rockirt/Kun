@@ -1,10 +1,5 @@
-import { randomBytes, randomUUID } from 'node:crypto'
-import { closeSync, openSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { spawn } from 'node:child_process'
 import { z } from 'zod'
 import {
   RuntimeFlavorSchema,
@@ -39,6 +34,10 @@ import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-le
 import {
   resolveServiceManager
 } from './manager-resolution.js'
+import {
+  launchServiceManagerProcess,
+  type ManagerLaunchOverride
+} from './manager-launch.js'
 export {
   resolveServiceManager,
   resolveServiceManagerForMigration
@@ -175,7 +174,7 @@ export class ManagerResourceLeaseClient {
   }
 }
 
-export async function ensureServiceManager(input: {
+export type EnsureServiceManagerInput = {
   flavor: RuntimeFlavor
   controlDir?: string
   fetch?: typeof fetch
@@ -184,13 +183,12 @@ export async function ensureServiceManager(input: {
   buildId?: string
   dataDir: string
   settingsPath?: string
-  launch?: {
-    command: string
-    args: string[]
-    env?: NodeJS.ProcessEnv
-    runAsNode?: boolean
-  }
-}): Promise<ServiceManagerConnection> {
+  launch?: ManagerLaunchOverride
+}
+
+export async function ensureServiceManager(
+  input: EnsureServiceManagerInput
+): Promise<ServiceManagerConnection> {
   const controlDir = input.controlDir ?? defaultKunControlDir()
   const settingsPath = input.settingsPath ?? defaultProductionSettingsPath()
   const fetchImpl = input.fetch ?? fetch
@@ -203,80 +201,66 @@ export async function ensureServiceManager(input: {
     }
     return existing
   }
+  assertManagerBootstrapAllowed(input)
+  return withManagerStartLock(
+    controlDir,
+    () => ensureServiceManagerWithStartLockHeld(input)
+  )
+}
+
+/** Caller must already hold withManagerStartLock for this control directory. */
+export async function ensureServiceManagerWithStartLockHeld(
+  input: EnsureServiceManagerInput
+): Promise<ServiceManagerConnection> {
+  const controlDir = input.controlDir ?? defaultKunControlDir()
+  const settingsPath = input.settingsPath ?? defaultProductionSettingsPath()
+  const fetchImpl = input.fetch ?? fetch
+  const elected = await resolveServiceManager(controlDir, fetchImpl)
+  if (elected) {
+    if (!managerOwnsPaths(elected.discovery, input.dataDir, settingsPath)) {
+      throw new Error('Kun Service Manager owns a different canonical data or settings path')
+    }
+    return elected
+  }
+  assertManagerBootstrapAllowed(input)
+  const stale = await readManagerDiscovery(controlDir).catch(() => null)
+  if (stale && !processIsAlive(stale.pid)) {
+    await removeManagerDiscovery(controlDir, stale.instanceId).catch(() => undefined)
+  } else if (stale) {
+    throw new Error(`Kun Service Manager process ${stale.pid} is alive but unavailable`)
+  }
+  // The Manager owns the canonical data plane for both flavor slots. Even
+  // an explicitly allowed source-DV bootstrap must drain a pre-manager
+  // production writer before opening shared stores; otherwise the DV
+  // Runtime and legacy production Runtime can concurrently mutate JSONL.
+  await handoverLegacyProductionRuntime({
+    dataDir: input.dataDir,
+    fetch: fetchImpl,
+    timeoutMs: Math.max(input.timeoutMs ?? START_TIMEOUT_MS, LEGACY_HANDOVER_TIMEOUT_MS)
+  })
+  const { child, logPath } = await launchServiceManagerProcess({
+    controlDir,
+    dataDir: input.dataDir,
+    settingsPath,
+    ...(input.buildId ? { buildId: input.buildId } : {}),
+    ...(input.launch ? { launch: input.launch } : {})
+  })
+  const deadline = Date.now() + (input.timeoutMs ?? START_TIMEOUT_MS)
+  while (Date.now() < deadline) {
+    const connection = await resolveServiceManager(controlDir, fetchImpl)
+    if (connection) return connection
+    if (child.exitCode !== null) break
+    await delay(POLL_MS)
+  }
+  throw new Error(`Kun Service Manager did not become ready; inspect ${logPath}`)
+}
+
+function assertManagerBootstrapAllowed(input: EnsureServiceManagerInput): void {
   if (input.flavor === 'development' && !input.allowDevelopmentBootstrap) {
     throw new Error(
       'kun-dv requires the compatible Kun Service Manager installed by the production application; start or update Kun first'
     )
   }
-  return withManagerStartLock(controlDir, async () => {
-    const elected = await resolveServiceManager(controlDir, fetchImpl)
-    if (elected) {
-      if (!managerOwnsPaths(elected.discovery, input.dataDir, settingsPath)) {
-        throw new Error('Kun Service Manager owns a different canonical data or settings path')
-      }
-      return elected
-    }
-    const stale = await readManagerDiscovery(controlDir).catch(() => null)
-    if (stale && !processIsAlive(stale.pid)) {
-      await removeManagerDiscovery(controlDir, stale.instanceId).catch(() => undefined)
-    } else if (stale) {
-      throw new Error(`Kun Service Manager process ${stale.pid} is alive but unavailable`)
-    }
-    // The Manager owns the canonical data plane for both flavor slots. Even
-    // an explicitly allowed source-DV bootstrap must drain a pre-manager
-    // production writer before opening shared stores; otherwise the DV
-    // Runtime and legacy production Runtime can concurrently mutate JSONL.
-    await handoverLegacyProductionRuntime({
-      dataDir: input.dataDir,
-      fetch: fetchImpl,
-      timeoutMs: Math.max(input.timeoutMs ?? START_TIMEOUT_MS, LEGACY_HANDOVER_TIMEOUT_MS)
-    })
-    await mkdir(controlDir, { recursive: true, mode: 0o700 })
-    const logPath = join(controlDir, 'manager.log')
-    const logFd = openSync(logPath, 'a', 0o600)
-    const managerToken = randomBytes(32).toString('base64url')
-    const instanceId = randomUUID()
-    const entry = fileURLToPath(new URL('./manager-entry.js', import.meta.url))
-    const command = input.launch?.command ?? process.execPath
-    const args = input.launch?.args ?? [entry]
-    const runAsNode = input.launch?.runAsNode ?? Boolean(process.versions.electron)
-    let child
-    try {
-      child = spawn(command, args, {
-        detached: true,
-        windowsHide: true,
-        stdio: ['ignore', logFd, logFd],
-        env: {
-          ...process.env,
-          ...(input.launch?.env ?? {}),
-          ...(runAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
-          // The spawning runtime may be recovering from a dead manager and
-          // therefore still carry its old client endpoint. A manager is the
-          // physical writer and must not proxy AtomicJsonFile operations to a
-          // predecessor (or recursively to itself).
-          KUN_MANAGER_BASE_URL: '',
-          KUN_MANAGER_CONTROL_DIR: controlDir,
-          KUN_MANAGER_TOKEN: managerToken,
-          KUN_MANAGER_INSTANCE_ID: instanceId,
-          ...(input.buildId ? { KUN_RUNTIME_BUILD_ID: input.buildId } : {}),
-          KUN_MANAGER_DATA_DIR: input.dataDir,
-          KUN_MANAGER_SETTINGS_PATH: settingsPath,
-          KUN_MANAGER_LOG_PATH: logPath
-        }
-      })
-      child.unref()
-    } finally {
-      closeSync(logFd)
-    }
-    const deadline = Date.now() + (input.timeoutMs ?? START_TIMEOUT_MS)
-    while (Date.now() < deadline) {
-      const connection = await resolveServiceManager(controlDir, fetchImpl)
-      if (connection) return connection
-      if (child.exitCode !== null) break
-      await delay(POLL_MS)
-    }
-    throw new Error(`Kun Service Manager did not become ready; inspect ${logPath}`)
-  })
 }
 
 function managerOwnsPaths(

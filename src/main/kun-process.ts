@@ -113,11 +113,21 @@ import {
 } from '../../kun/src/cli/runtime-flavor.js'
 import {
   ensureServiceManager,
-  resolveServiceManager,
+  ensureServiceManagerWithStartLockHeld,
   type ServiceManagerConnection
 } from '../../kun/src/manager/manager-client.js'
+import {
+  defaultKunControlDir,
+  withManagerStartLock
+} from '../../kun/src/manager/manager-discovery.js'
 import { configureManagerAtomicJsonClient } from '../../kun/src/extensions/atomic-json.js'
 import { handoffExistingKunServiceManagerForDataDir } from './runtime/service-manager-build-handoff'
+import {
+  drainKunOwnersForHandoff,
+  drainKunOwnersForHandoffWithLock,
+  requiresInstalledBuildHandoff
+} from './runtime/kun-installed-build-handoff'
+import { logKunHandoffEvent } from './runtime/kun-handoff-logging'
 
 import {
   appendTail,
@@ -161,18 +171,6 @@ export async function resolveKunManagerDataDirFromSettings(
   }
 }
 
-async function handoffMismatchedKunServiceManager(
-  dataDir: string,
-  settingsPath: string,
-  expectedBuildId: string | undefined
-): Promise<void> {
-  const existing = await resolveServiceManager()
-  if (!existing) return
-  await handoffExistingKunServiceManagerForDataDir(existing, dataDir, settingsPath, {
-    force: Boolean(expectedBuildId) && existing.discovery.buildId !== expectedBuildId
-  })
-}
-
 export async function ensureKunServiceManager(input: {
   dataDir?: string
   settingsPath: string
@@ -187,11 +185,12 @@ export async function ensureKunServiceManager(input: {
     )
   }
   const buildId = await resolveKunRuntimeBuildId(resolution)
-  await handoffMismatchedKunServiceManager(dataDir, input.settingsPath, buildId)
   const managerEntry = join(dirname(serveEntry), '..', 'manager', 'manager-entry.js')
   const flavor = resolveCliRuntimeFlavor({ env: process.env })
-  const manager = await ensureServiceManager({
+  const controlDir = defaultKunControlDir()
+  const managerInput = {
     flavor,
+    controlDir,
     allowDevelopmentBootstrap: allowsDevelopmentManagerBootstrap({
       flavor,
       env: process.env,
@@ -205,8 +204,51 @@ export async function ensureKunServiceManager(input: {
       args: [managerEntry],
       runAsNode: true
     }
-  })
+  }
+  let manager: ServiceManagerConnection
+  const handoffInput = {
+    reason: 'installed-build-change' as const,
+    dataDirs: [dataDir],
+    settingsPath: input.settingsPath,
+    controlDir,
+    onEvent: logKunHandoffEvent,
+    ...(buildId ? { targetBuildId: buildId } : {})
+  }
+  if (app.isPackaged && flavor === 'production' &&
+    await requiresInstalledBuildHandoff(handoffInput)) {
+    manager = await withManagerStartLock(controlDir, async () => {
+      // Recheck after acquiring the election lock so a replacement that won
+      // the race before us is not interrupted unnecessarily.
+      if (await requiresInstalledBuildHandoff(handoffInput)) {
+        await drainKunOwnersForHandoffWithLock(handoffInput)
+      }
+      return ensureServiceManagerWithStartLockHeld(managerInput)
+    })
+  } else {
+    manager = await ensureServiceManager(managerInput)
+  }
   return configureKunManagerDataPlaneForCurrentProcess(manager)
+}
+
+export async function preparePackagedKunBuildHandoff(input: {
+  dataDir: string
+  settingsPath: string
+}): Promise<boolean> {
+  const flavor = resolveCliRuntimeFlavor({ env: process.env })
+  if (!app.isPackaged || flavor !== 'production') return false
+  const buildId = await resolveKunRuntimeBuildId(resolveKunExecutable(appRoot(), ''))
+  if (!buildId) return false
+  const handoffInput = {
+    reason: 'installed-build-change' as const,
+    dataDirs: [input.dataDir],
+    settingsPath: input.settingsPath,
+    controlDir: defaultKunControlDir(),
+    targetBuildId: buildId,
+    onEvent: logKunHandoffEvent
+  }
+  if (!(await requiresInstalledBuildHandoff(handoffInput))) return false
+  await drainKunOwnersForHandoff(handoffInput)
+  return true
 }
 
 /**
@@ -246,6 +288,10 @@ function appRoot(): string {
   return app.isPackaged
     ? app.getAppPath().replace(/app\.asar$/, 'app.asar.unpacked')
     : app.getAppPath()
+}
+
+export function resolveKunExecutableForCurrentApp(): ReturnType<typeof resolveKunExecutable> {
+  return resolveKunExecutable(appRoot(), '')
 }
 
 function resolveNodeScriptCommand(command: string): string {

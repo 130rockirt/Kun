@@ -17,12 +17,25 @@ import {
 } from './main-lifecycle'
 import { stopRuntimeWatchdog } from './main-runtime-health'
 import { startMainApp } from './main-ready'
+import {
+  packagedUpdateHandoffSmokeFailure,
+  packagedUpdateHandoffSmokeRequested,
+  runPackagedUpdateHandoffSmoke
+} from './packaged-update-handoff-smoke'
 
 if (runningClawScheduleMcpServer) {
   void runClawScheduleMcpServerFromArgv(process.argv).catch((error) => {
     console.error('[claw-schedule-mcp] server failed:', error)
     process.exit(1)
   })
+} else if (packagedUpdateHandoffSmokeRequested()) {
+  void runPackagedUpdateHandoffSmoke().then(
+    () => app.exit(0),
+    (error) => {
+      process.stderr.write(`${packagedUpdateHandoffSmokeFailure(error)}\n`)
+      app.exit(70)
+    }
+  )
 } else {
   startMainApp()
 }

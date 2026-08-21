@@ -359,6 +359,53 @@ describe('service manager control plane', () => {
     expect(state.lease('thread-orphan', new Date('2026-08-01T00:00:21.000Z'))).toBeNull()
   })
 
+  it('expires only the exact Runtime owner recorded by verified forced handoff', () => {
+    const state = new ServiceManagerState()
+    const now = new Date('2026-08-01T00:00:00.000Z')
+    state.register(registration('production', 'production-forced'), now)
+    state.register(registration('development', 'development-live'), now)
+    state.acquireLease({
+      threadId: 'thread-forced',
+      turnId: 'turn-forced',
+      ownerFlavor: 'production',
+      ownerInstanceId: 'production-forced'
+    }, now)
+    state.acquireLease({
+      threadId: 'thread-live',
+      turnId: 'turn-live',
+      ownerFlavor: 'development',
+      ownerInstanceId: 'development-live'
+    }, now)
+    state.acquireResource({
+      resource: 'forced-resource',
+      ownerFlavor: 'production',
+      ownerInstanceId: 'production-forced'
+    }, now)
+
+    const expired = state.expireVerifiedRuntimeOwners([{
+      flavor: 'production',
+      instanceId: 'production-forced',
+      pid: 4101,
+      startedAt: now.toISOString()
+    }])
+
+    expect(expired).toMatchObject([{
+      threadId: 'thread-forced',
+      turnId: 'turn-forced'
+    }])
+    expect(state.registration('production')).toBeNull()
+    expect(state.registration('development')).toMatchObject({
+      instanceId: 'development-live'
+    })
+    expect(state.lease('thread-forced', now)).toBeNull()
+    expect(state.lease('thread-live', now)).toMatchObject({ turnId: 'turn-live' })
+    expect(state.acquireResource({
+      resource: 'forced-resource',
+      ownerFlavor: 'development',
+      ownerInstanceId: 'development-live'
+    }, now).acquired).toBe(true)
+  })
+
   it('gives production preference for singleton desktop resources', () => {
     const state = new ServiceManagerState()
     const now = new Date('2026-08-01T00:00:00.000Z')

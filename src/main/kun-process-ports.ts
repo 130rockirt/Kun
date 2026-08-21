@@ -94,6 +94,7 @@ export async function killStaleKunOnPort(port: number): Promise<boolean> {
  * macOS/Linux and `netstat -ano` on Windows.
  */
 export async function listListeningPidsOnPort(port: number): Promise<number[]> {
+  if (packagedUpdateHandoffInspectionDenied()) return []
   if (process.platform === 'win32') {
     try {
       const { stdout } = await execFileAsync('netstat', ['-ano'], {
@@ -138,6 +139,9 @@ export function parseListeningPidsFromNetstat(stdout: string, port: number): num
 
 /** Read a process's full command line (best effort, platform-specific). */
 export async function processCommandLine(pid: number): Promise<string> {
+  if (packagedUpdateHandoffInspectionDenied()) {
+    throw Object.assign(new Error('packaged smoke denied process inspection'), { code: 'EPERM' })
+  }
   if (process.platform === 'win32') {
     const { stdout } = await execFileAsync(
       'powershell',
@@ -153,6 +157,14 @@ export async function processCommandLine(pid: number): Promise<string> {
   }
   const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'command='])
   return stdout.trim()
+}
+
+export function packagedUpdateHandoffInspectionDenied(
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  return env.KUN_PACKAGED_EXTENSION_DESKTOP_SMOKE === '1' &&
+    env.KUN_PACKAGED_UPDATE_HANDOFF_SMOKE === '1' &&
+    env.KUN_PACKAGED_UPDATE_HANDOFF_DENY_INSPECTION === '1'
 }
 
 /** Terminate a positively-identified stale kun process. */
@@ -196,12 +208,20 @@ export async function terminateStalePid(pid: number): Promise<boolean> {
 export async function terminateVerifiedPid(
   pid: number,
   verifyTarget: () => Promise<boolean>,
-  waitForExit: (pid: number, timeoutMs: number) => Promise<boolean> = waitForPidExit
+  waitForExit: (pid: number, timeoutMs: number) => Promise<boolean> = waitForPidExit,
+  system: {
+    platform?: NodeJS.Platform
+    kill?: typeof process.kill
+    execFile?: typeof execFileAsync
+  } = {}
 ): Promise<boolean> {
+  const platform = system.platform ?? process.platform
+  const kill = system.kill ?? process.kill.bind(process)
+  const execFile = system.execFile ?? execFileAsync
   if (!(await verifyTarget())) return false
-  if (process.platform === 'win32') {
+  if (platform === 'win32') {
     try {
-      await execFileAsync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      await execFile('taskkill', ['/PID', String(pid), '/T', '/F'], {
         windowsHide: true,
         timeout: 5_000
       })
@@ -212,7 +232,7 @@ export async function terminateVerifiedPid(
   }
 
   try {
-    process.kill(pid, 'SIGTERM')
+    kill(pid, 'SIGTERM')
   } catch {
     return waitForExit(pid, 0)
   }
@@ -220,7 +240,7 @@ export async function terminateVerifiedPid(
   // Do not escalate after PID reuse or an identity change.
   if (!(await verifyTarget())) return false
   try {
-    process.kill(pid, 'SIGKILL')
+    kill(pid, 'SIGKILL')
   } catch {
     return waitForExit(pid, 0)
   }
