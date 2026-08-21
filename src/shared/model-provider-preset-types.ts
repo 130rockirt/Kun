@@ -31,6 +31,7 @@ export type ModelProviderPresetId =
   | 'volcengine-agent-plan'
   | 'volcengine-coding-plan'
   | 'opencode-go'
+  | 'opencode-free'
   | 'zenmux'
   | 'codex'
   | 'claude-subscription'
@@ -76,6 +77,45 @@ export const CURSOR_SUBSCRIPTION_MODEL_IDS = ['auto'] as const
 export const OLLAMA_CLOUD_PROVIDER_ID = 'ollama'
 
 export const OLLAMA_CLOUD_PROVIDER_NAME = 'Ollama Cloud'
+
+export const OPENCODE_FREE_PROVIDER_ID = 'opencode-free'
+
+export const OPENCODE_FREE_PROVIDER_NAME = 'OpenCore Free'
+
+// Bootstrap snapshot from the OpenCode Zen catalog's zero-cost models. The
+// models.dev catalog remains authoritative and Settings imports newly added
+// free models without admitting paid ones.
+export const OPENCODE_FREE_MODEL_IDS = [
+  'ling-3.0-flash-free',
+  'laguna-s-2.1-free',
+  'nemotron-3.5-lightning-free',
+  'ring-2.6-1t-free',
+  'nemotron-3-super-free',
+  'kimi-k2.5-free',
+  'north-mini-code-free',
+  'deepseek-v4-flash-free',
+  'minimax-m3-free',
+  'nemotron-3-ultra-free',
+  'glm-4.7-free',
+  'trinity-large-preview-free',
+  'grok-code',
+  'hy3-preview-free',
+  'hy3-free',
+  'muse-spark-1.2-contributor-free',
+  'x-preview-f-free',
+  'ling-2.6-flash-free',
+  'mimo-v2-pro-free',
+  'mimo-v2-flash-free',
+  'minimax-m2.5-free',
+  'glm-5-free',
+  'qwen3.6-plus-free',
+  'mimo-v2.5-free',
+  'minimax-m2.1-free',
+  'ling-3.0-tiny-free',
+  'big-pickle',
+  'mimo-v2-omni-free',
+  'longcat-2.0-free'
+] as const
 
 // Bootstrap snapshot from Ollama Cloud's official GET /v1/models response.
 // The live endpoint remains authoritative and Settings can import additions.
@@ -221,6 +261,8 @@ export type ModelProviderPreset = {
    * 使用 Cursor API Key 把整轮委托给官方 Cursor SDK;缺省按 HTTP 模型客户端走 baseUrl。
    */
   kind?: 'agent-sdk' | 'antigravity-cli' | 'gemini-cli-api' | 'cursor-sdk'
+  /** Overrides the default retry count for this preset's API profile. */
+  defaultRetryMaxAttempts?: number
   baseUrl: string
   endpointFormat: ModelEndpointFormat
   models: string[]

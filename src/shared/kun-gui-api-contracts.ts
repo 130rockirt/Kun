@@ -448,6 +448,8 @@ export type ModelsDevCatalogModel = {
   outputModalities: ModelsDevCatalogModality[]
   reasoning?: boolean
   toolCalling?: boolean
+  /** True only when models.dev reports both input and output cost as zero. */
+  free?: boolean
   contextWindowTokens?: number
   maxOutputTokens?: number
   /** Import-only diagnostics for catalog fields omitted by the sanitizer. */

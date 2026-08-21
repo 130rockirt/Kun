@@ -81,6 +81,7 @@ const PROFILE_MATCHES: Record<string, ModelsDevProviderMatch> = {
   'zai-coding-plan': catalogMatch('zai-coding-plan'),
   'kimi-code': catalogMatch('kimi-for-coding'),
   'opencode-go': catalogMatch('opencode-go'),
+  'opencode-free': catalogMatch('opencode'),
   'moonshot-cn': catalogMatch('moonshotai-cn'),
   'moonshot-global': catalogMatch('moonshotai'),
   xiaomi: catalogMatch('xiaomi'),
@@ -160,6 +161,7 @@ const UNAMBIGUOUS_URL_MATCHES = urlMatchMap({
   'https://api.z.ai/api/coding/paas/v4/chat/completions': 'zai-coding-plan',
   'https://api.kimi.com/coding/v1': 'kimi-for-coding',
   'https://opencode.ai/zen/go/v1': 'opencode-go',
+  'https://opencode.ai/zen/v1': 'opencode',
   'https://api.moonshot.cn/v1': 'moonshotai-cn',
   'https://api.moonshot.ai/v1': 'moonshotai',
   'https://api.xiaomimimo.com/v1': 'xiaomi',
@@ -518,6 +520,8 @@ function sanitizeModel(fallbackId: string, value: unknown): ModelsDevCatalogMode
   const description = boundedString(value.description, MAX_MODEL_DESCRIPTION_LENGTH)
   const modalities = isRecord(value.modalities) ? value.modalities : {}
   const limit = isRecord(value.limit) ? value.limit : {}
+  const cost = isRecord(value.cost) ? value.cost : {}
+  const free = cost.input === 0 && cost.output === 0
   const reasoning = typeof value.reasoning === 'boolean' ? value.reasoning : undefined
   const toolCalling = typeof value.tool_call === 'boolean' ? value.tool_call : undefined
   const metadataIssues: ModelsDevCatalogMetadataIssue[] = []
@@ -541,6 +545,7 @@ function sanitizeModel(fallbackId: string, value: unknown): ModelsDevCatalogMode
     outputModalities: sanitizeModalities(modalities.output),
     ...(reasoning !== undefined ? { reasoning } : {}),
     ...(toolCalling !== undefined ? { toolCalling } : {}),
+    ...(free ? { free } : {}),
     ...(contextWindowTokens ? { contextWindowTokens } : {}),
     ...(maxOutputTokens ? { maxOutputTokens } : {}),
     ...(metadataIssues.length ? { metadataIssues } : {})

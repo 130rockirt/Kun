@@ -1,5 +1,6 @@
 import {
   DEFAULT_MODEL_PROVIDER_ID,
+  OPENCODE_FREE_PROVIDER_ID,
   isLocalModelProxyPort,
   localModelProxyPort,
   localModelProxyUrl,
@@ -290,7 +291,8 @@ export function ProvidersSettingsView({ view }: { view: Record<string, any> }): 
                 <ProviderModelsCapabilitiesPanels view={view} />
                 {!isDraftActive &&
                 activeTab === 'advanced' &&
-                activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID ? (
+                activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID &&
+                activeProvider.id !== OPENCODE_FREE_PROVIDER_ID ? (
                   <DetailSection title={t('modelProviderSectionDanger')}>
                     <div className="flex flex-wrap items-center gap-3">
                       <button

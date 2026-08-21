@@ -28,6 +28,8 @@ import {
   CHATGPT_SUBSCRIPTION_MODEL_IDS,
   GROK_SUBSCRIPTION_PROVIDER_ID,
   OLLAMA_CLOUD_MODEL_IDS,
+  OPENCODE_FREE_MODEL_IDS,
+  OPENCODE_FREE_PROVIDER_ID,
   listMusicGenerationProviderProfiles,
   listSpeechToTextProviderProfiles,
   listTextToSpeechProviderProfiles,
@@ -251,6 +253,47 @@ describe('provider presets', () => {
         supportsToolCalling: true
       }))
     }
+  })
+
+  it('ships OpenCore Free as a no-key built-in provider with ten retries', () => {
+    const preset = getModelProviderPreset(OPENCODE_FREE_PROVIDER_ID)
+    expect(preset).toMatchObject({
+      id: OPENCODE_FREE_PROVIDER_ID,
+      name: 'OpenCore Free',
+      baseUrl: 'https://opencode.ai/zen/v1',
+      endpointFormat: 'chat_completions',
+      defaultRetryMaxAttempts: 10,
+      models: [...OPENCODE_FREE_MODEL_IDS]
+    })
+
+    const profile = modelProviderPresetProfile(preset!)
+    expect(profile.retry?.maxAttempts).toBe(10)
+    expect(profile.modelProfiles['kimi-k2.5-free']).toMatchObject({
+      contextWindowTokens: 262_144,
+      maxOutputTokens: 262_144,
+      inputModalities: ['text', 'image']
+    })
+    expect(modelProviderRequiresApiKey(profile)).toBe(false)
+
+    const defaults = defaultModelProviderSettings()
+    expect(defaults.providers.find((provider) => provider.id === OPENCODE_FREE_PROVIDER_ID))
+      .toMatchObject({ retry: { maxAttempts: 10 } })
+
+    const normalized = normalizeModelProviderSettings({ providers: [] })
+    expect(normalized.providers.find((provider) => provider.id === OPENCODE_FREE_PROVIDER_ID))
+      .toMatchObject({ retry: { maxAttempts: 10 } })
+  })
+
+  it('preserves explicit OpenCore Free retry settings during normalization', () => {
+    const profile = modelProviderPresetProfile(getModelProviderPreset(OPENCODE_FREE_PROVIDER_ID)!)
+    const normalized = normalizeModelProviderSettings({
+      providers: [{
+        ...profile,
+        retry: { maxAttempts: 2, initialDelayMs: 3_000, httpStatusCodes: [429, 500, 502, 503, 504], defaultsVersion: 1 }
+      }]
+    }).providers.find((provider) => provider.id === OPENCODE_FREE_PROVIDER_ID)
+
+    expect(normalized?.retry?.maxAttempts).toBe(2)
   })
 
   it('keeps per-model endpointFormat overrides on the OpenCode Go preset', () => {

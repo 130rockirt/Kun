@@ -186,7 +186,12 @@ export function normalizeModelProviderProfile(
           : '',
     baseUrl,
     endpointFormat,
-    retry: normalizeModelRequestRetrySettings(input?.retry),
+    retry: normalizeModelRequestRetrySettings(
+      input?.retry,
+      resolvedPresetSource?.mode === 'api'
+        ? resolvedPresetSource.preset.defaultRetryMaxAttempts
+        : undefined
+    ),
     ...(kind ? { kind } : {}),
     models,
     modelProfiles,
@@ -276,9 +281,15 @@ export function defaultModelRequestRetrySettings(): ModelRequestRetrySettingsV1 
 }
 
 export function normalizeModelRequestRetrySettings(
-  input: Partial<ModelRequestRetrySettingsV1> | undefined
+  input: Partial<ModelRequestRetrySettingsV1> | undefined,
+  defaultMaxAttempts?: number
 ): ModelRequestRetrySettingsV1 {
-  const defaults = defaultModelRequestRetrySettings()
+  const defaults = {
+    ...defaultModelRequestRetrySettings(),
+    ...(defaultMaxAttempts === undefined
+      ? {}
+      : { maxAttempts: boundedNonNegativeInteger(defaultMaxAttempts, DEFAULT_MODEL_REQUEST_RETRY_MAX_ATTEMPTS, 10) })
+  }
   const httpStatusCodes = normalizeRetryHttpStatusCodes(input?.httpStatusCodes, defaults.httpStatusCodes)
   const defaultsVersion = boundedNonNegativeInteger(input?.defaultsVersion, 0, 1_000)
   const inheritedLegacyStatusList =

@@ -55,6 +55,9 @@ import {
   OLLAMA_CLOUD_MODEL_IDS,
   OLLAMA_CLOUD_PROVIDER_ID,
   OLLAMA_CLOUD_PROVIDER_NAME,
+  OPENCODE_FREE_MODEL_IDS,
+  OPENCODE_FREE_PROVIDER_ID,
+  OPENCODE_FREE_PROVIDER_NAME,
   VOLCENGINE_AGENT_PLAN_CHAT_MODELS,
   VOLCENGINE_CHAT_MODELS,
   VOLCENGINE_IMAGE_MODELS,
@@ -62,6 +65,12 @@ import {
   ZAI_CODING_PLAN_MODELS,
   ZHIPU_CODING_PLAN_MODELS
 } from './model-provider-preset-types'
+
+const OPENCODE_FREE_REASONING: ModelProviderReasoningCapabilityV1 = {
+  supportedEfforts: ['auto'],
+  defaultEffort: 'auto',
+  requestProtocol: 'none'
+}
 
 export const MODEL_PROVIDER_PRESETS_CORE: ModelProviderPreset[] = [
 {
@@ -317,6 +326,49 @@ export const MODEL_PROVIDER_PRESETS_CORE: ModelProviderPreset[] = [
     apiKeyUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey'
   },
 {
+    id: OPENCODE_FREE_PROVIDER_ID,
+    name: OPENCODE_FREE_PROVIDER_NAME,
+    // OpenCode Zen's public free tier is OpenAI-compatible and intentionally
+    // accepts requests without an Authorization header.
+    baseUrl: 'https://opencode.ai/zen/v1',
+    endpointFormat: 'chat_completions',
+    defaultRetryMaxAttempts: 10,
+    models: [...OPENCODE_FREE_MODEL_IDS],
+    modelProfiles: {
+      'ling-3.0-flash-free': openCodeFreeProfile(262_144, 32_768),
+      'laguna-s-2.1-free': openCodeFreeProfile(256_000, 32_000),
+      'nemotron-3.5-lightning-free': openCodeFreeProfile(262_144, 262_144),
+      'ring-2.6-1t-free': openCodeFreeProfile(262_000, 66_000),
+      'nemotron-3-super-free': openCodeFreeProfile(204_800, 128_000),
+      'kimi-k2.5-free': openCodeFreeProfile(262_144, 262_144, true),
+      'north-mini-code-free': openCodeFreeProfile(256_000, 64_000),
+      'deepseek-v4-flash-free': openCodeFreeProfile(200_000, 128_000),
+      'minimax-m3-free': openCodeFreeProfile(200_000, 32_000, true),
+      'nemotron-3-ultra-free': openCodeFreeProfile(1_000_000, 128_000),
+      'glm-4.7-free': openCodeFreeProfile(204_800, 131_072),
+      'trinity-large-preview-free': openCodeFreeProfile(131_072, 131_072, false, false),
+      'grok-code': openCodeFreeProfile(256_000, 256_000),
+      'hy3-preview-free': openCodeFreeProfile(256_000, 64_000),
+      'hy3-free': openCodeFreeProfile(190_000, 64_000),
+      'muse-spark-1.2-contributor-free': openCodeFreeProfile(1_048_576, 131_072, true),
+      'x-preview-f-free': openCodeFreeProfile(1_000_000, 131_072, true),
+      'ling-2.6-flash-free': openCodeFreeProfile(262_100, 32_800, false, false),
+      'mimo-v2-pro-free': openCodeFreeProfile(1_048_576, 64_000),
+      'mimo-v2-flash-free': openCodeFreeProfile(262_144, 65_536),
+      'minimax-m2.5-free': openCodeFreeProfile(204_800, 131_072),
+      'glm-5-free': openCodeFreeProfile(204_800, 131_072),
+      'qwen3.6-plus-free': openCodeFreeProfile(262_144, 65_536, true),
+      'mimo-v2.5-free': openCodeFreeProfile(200_000, 32_000, true),
+      'minimax-m2.1-free': openCodeFreeProfile(204_800, 131_072),
+      'ling-3.0-tiny-free': openCodeFreeProfile(262_144, 32_768),
+      'big-pickle': openCodeFreeProfile(200_000, 32_000),
+      'mimo-v2-omni-free': openCodeFreeProfile(262_144, 64_000, true),
+      'longcat-2.0-free': openCodeFreeProfile(1_000_000, 131_072)
+    },
+    docsUrl: 'https://opencode.ai/docs/zen/',
+    apiKeyUrl: 'https://opencode.ai/docs/zen/'
+  },
+{
     id: 'opencode-go',
     name: 'OpenCode Go',
     category: 'subscription',
@@ -430,3 +482,17 @@ export const MODEL_PROVIDER_PRESETS_CORE: ModelProviderPreset[] = [
     apiKeyUrl: 'https://platform.moonshot.ai/console/api-keys'
   }
 ]
+
+function openCodeFreeProfile(
+  contextWindowTokens: number,
+  maxOutputTokens: number,
+  supportsImageInput = false,
+  supportsReasoning = true
+): ModelProviderModelProfileV1 {
+  return {
+    ...(supportsImageInput
+      ? visionChatProfile(contextWindowTokens, supportsReasoning ? OPENCODE_FREE_REASONING : undefined)
+      : textChatProfile(contextWindowTokens, supportsReasoning ? OPENCODE_FREE_REASONING : undefined)),
+    maxOutputTokens
+  }
+}
