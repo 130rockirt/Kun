@@ -284,6 +284,27 @@ describe('provider presets', () => {
       .toMatchObject({ retry: { maxAttempts: 10 } })
   })
 
+  it('repairs a stored OpenCore Free profile to the built-in free preset', () => {
+    const normalized = normalizeModelProviderSettings({
+      providers: [{
+        id: OPENCODE_FREE_PROVIDER_ID,
+        name: 'opencode-free',
+        apiKey: '',
+        baseUrl: 'https://opencode.ai/zen/v1',
+        endpointFormat: 'chat_completions',
+        models: ['gpt-5-nano'],
+        modelProfiles: {}
+      }]
+    }).providers.find((provider) => provider.id === OPENCODE_FREE_PROVIDER_ID)
+
+    expect(normalized).toMatchObject({
+      presetSource: { presetId: OPENCODE_FREE_PROVIDER_ID, mode: 'api' },
+      name: 'opencode-free',
+      retry: { maxAttempts: 10 }
+    })
+    expect(normalized && modelProviderRequiresApiKey(normalized)).toBe(false)
+  })
+
   it('preserves explicit OpenCore Free retry settings during normalization', () => {
     const profile = modelProviderPresetProfile(getModelProviderPreset(OPENCODE_FREE_PROVIDER_ID)!)
     const normalized = normalizeModelProviderSettings({

@@ -205,7 +205,10 @@ export function resolveKunRuntimeSettings(settings: AppSettingsV1): KunRuntimeSe
   const providerBaseUrl = provider.baseUrl.trim() || DEFAULT_DEEPSEEK_BASE_URL
   const useProviderCredentials = Boolean(providerId)
   const useOpenCodeAnonymousAccess =
-    resolveModelProviderPresetSource(provider)?.preset.id === OPENCODE_FREE_PROVIDER_ID &&
+    (
+      provider.id === OPENCODE_FREE_PROVIDER_ID ||
+      resolveModelProviderPresetSource(provider)?.preset.id === OPENCODE_FREE_PROVIDER_ID
+    ) &&
     !provider.apiKey.trim()
 
   return {

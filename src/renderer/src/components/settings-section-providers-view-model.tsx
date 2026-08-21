@@ -57,7 +57,8 @@ export { sharedModelConnectionHasUsableCredential } from '../lib/provider-creden
 
 
 export function isOpenCodeFreeProvider(provider: Pick<ModelProviderProfileV1, 'id' | 'presetSource'>): boolean {
-  return resolveModelProviderPresetSource(provider)?.preset.id === OPENCODE_FREE_PROVIDER_ID
+  return provider.id === OPENCODE_FREE_PROVIDER_ID ||
+    resolveModelProviderPresetSource(provider)?.preset.id === OPENCODE_FREE_PROVIDER_ID
 }
 
 export function buildProvidersViewModel(scope: Record<string, any>): Record<string, any> {

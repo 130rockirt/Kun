@@ -381,7 +381,11 @@ export function modelProviderRequiresApiKey(
   }
 
   const source = resolveModelProviderPresetSource(provider)
-  if (source?.preset.id === 'litellm' || source?.preset.id === OPENCODE_FREE_PROVIDER_ID) return false
+  if (
+    provider.id === OPENCODE_FREE_PROVIDER_ID ||
+    source?.preset.id === 'litellm' ||
+    source?.preset.id === OPENCODE_FREE_PROVIDER_ID
+  ) return false
   if (provider.id === DEFAULT_MODEL_PROVIDER_ID) return true
   return Boolean(source)
 }

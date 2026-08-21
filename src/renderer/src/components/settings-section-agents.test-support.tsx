@@ -116,6 +116,7 @@ const labels: Record<string, string> = {
   modelProviderSearchPlaceholder: 'Search configured providers…',
   modelProviderSearchEmpty: 'No providers match "{{query}}".',
   modelProviderGroupPlans: 'Subscription plans',
+  modelProviderGroupFree: 'Free',
   modelProviderSubscriptionRegions: 'Subscription plan regions',
   modelProviderSubscriptionRegionAll: 'All',
   modelProviderSubscriptionRegionChina: 'China',
