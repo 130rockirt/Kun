@@ -394,6 +394,7 @@ describe('ModelsDevCatalogService', () => {
         toolCalling: true,
         inputModalities: ['text', 'image'],
         outputModalities: ['text'],
+        pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2 },
         contextWindowTokens: 128_000,
         maxOutputTokens: 16_000
       }]

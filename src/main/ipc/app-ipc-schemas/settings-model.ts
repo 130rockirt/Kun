@@ -128,6 +128,12 @@ const modelProfilePatchShape = {
     defaultEffort: modelReasoningEffortSchema,
     requestProtocol: modelReasoningRequestProtocolSchema
   }).strict().optional(),
+  pricing: z.object({
+    inputUsdPerMillion: z.number().nonnegative().max(1_000_000),
+    outputUsdPerMillion: z.number().nonnegative().max(1_000_000),
+    cacheReadUsdPerMillion: z.number().nonnegative().max(1_000_000).optional(),
+    cacheWriteUsdPerMillion: z.number().nonnegative().max(1_000_000).optional()
+  }).strict().optional(),
   serviceTiers: z.array(modelServiceTierSchema).min(1).max(MODEL_SERVICE_TIERS.length).optional(),
   endpointFormat: modelEndpointFormatSchema.optional(),
   responsesMode: z.literal('lite').optional()

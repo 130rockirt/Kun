@@ -9,6 +9,7 @@ import type {
   ModelsDevCatalogMetadataIssue,
   ModelsDevCatalogModel,
   ModelsDevCatalogModality,
+  ModelsDevCatalogPricing,
   ModelsDevCatalogRequest,
   ModelsDevCatalogResult,
   ModelsDevCatalogSource
@@ -522,6 +523,7 @@ function sanitizeModel(fallbackId: string, value: unknown): ModelsDevCatalogMode
   const limit = isRecord(value.limit) ? value.limit : {}
   const cost = isRecord(value.cost) ? value.cost : {}
   const free = cost.input === 0 && cost.output === 0
+  const pricing = sanitizeCatalogPricing(cost)
   const reasoning = typeof value.reasoning === 'boolean' ? value.reasoning : undefined
   const toolCalling = typeof value.tool_call === 'boolean' ? value.tool_call : undefined
   const metadataIssues: ModelsDevCatalogMetadataIssue[] = []
@@ -546,10 +548,35 @@ function sanitizeModel(fallbackId: string, value: unknown): ModelsDevCatalogMode
     ...(reasoning !== undefined ? { reasoning } : {}),
     ...(toolCalling !== undefined ? { toolCalling } : {}),
     ...(free ? { free } : {}),
+    ...(pricing ? { pricing } : {}),
     ...(contextWindowTokens ? { contextWindowTokens } : {}),
     ...(maxOutputTokens ? { maxOutputTokens } : {}),
     ...(metadataIssues.length ? { metadataIssues } : {})
   }
+}
+
+/**
+ * Parses models.dev cost fields (USD per million tokens). Pricing requires a
+ * finite non-negative input and output price; cache prices stay optional.
+ */
+function sanitizeCatalogPricing(
+  cost: Record<string, unknown>
+): ModelsDevCatalogPricing | undefined {
+  const input = nonNegativeFiniteCost(cost.input)
+  const output = nonNegativeFiniteCost(cost.output)
+  if (input == null || output == null) return undefined
+  const cacheRead = nonNegativeFiniteCost(cost.cache_read)
+  const cacheWrite = nonNegativeFiniteCost(cost.cache_write)
+  return {
+    inputUsdPerMillion: input,
+    outputUsdPerMillion: output,
+    ...(cacheRead != null ? { cacheReadUsdPerMillion: cacheRead } : {}),
+    ...(cacheWrite != null ? { cacheWriteUsdPerMillion: cacheWrite } : {})
+  }
+}
+
+function nonNegativeFiniteCost(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
 }
 
 function sanitizeModalities(value: unknown): ModelsDevCatalogModality[] {
