@@ -35,7 +35,11 @@ import type {
   UserInputRequest,
   UserInputResolution
 } from '../../ports/user-input-gate.js'
-import { armUserInputTimeout, awaitAbortableGate } from '../../services/interactive-gate.js'
+import {
+  armUserInputTimeout,
+  awaitAbortableGate,
+  userInputRequestWithDeadline
+} from '../../services/interactive-gate.js'
 import { sessionEventExists } from '../../adapters/session-event-query.js'
 import type { SkillRuntime } from '../../skills/skill-runtime.js'
 import {
@@ -156,7 +160,7 @@ export function createCursorSdkRuntime(
         questions: input.questions,
         ...(input.timeoutSeconds !== undefined ? { timeoutSeconds: input.timeoutSeconds } : {})
       }
-      const pending = userInputGate.request(request)
+      const pending = userInputGate.request(userInputRequestWithDeadline(request))
       const item = makeUserInputItem({
         id: input.itemId,
         threadId,

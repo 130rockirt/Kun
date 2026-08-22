@@ -16,12 +16,15 @@ import {
 export const ThreadStatus = z.enum(['idle', 'running', 'archived', 'deleted'])
 export type ThreadStatus = z.infer<typeof ThreadStatus>
 
+export const THREAD_RUNTIME_STATE_SCHEMA_VERSION = 1
+
 /**
  * Small runtime-facing projection for background status checks.  Unlike the
  * full thread document this deliberately excludes turn items/history, making
  * it safe to poll while another conversation is selected.
  */
 export const ThreadRuntimeStateSchema = z.object({
+  schemaVersion: z.literal(THREAD_RUNTIME_STATE_SCHEMA_VERSION),
   id: z.string().min(1),
   status: ThreadStatus,
   updatedAt: z.string(),
@@ -35,6 +38,25 @@ export const ThreadRuntimeStateSchema = z.object({
   }).nullable()
 })
 export type ThreadRuntimeState = z.infer<typeof ThreadRuntimeStateSchema>
+
+/**
+ * Wire reader for state forwarded by another execution owner. Older runtimes
+ * predate both the version marker and live user-input projection; accept only
+ * those two omissions, then normalize the result through the strict schema.
+ */
+export const CompatibleThreadRuntimeStateSchema = ThreadRuntimeStateSchema.extend({
+  schemaVersion: z.literal(THREAD_RUNTIME_STATE_SCHEMA_VERSION).optional(),
+  pendingUserInputIds: z.array(z.string().min(1)).optional().default([])
+})
+
+export function normalizeThreadRuntimeStateWire(
+  value: unknown
+): ThreadRuntimeState {
+  return ThreadRuntimeStateSchema.parse({
+    schemaVersion: THREAD_RUNTIME_STATE_SCHEMA_VERSION,
+    ...CompatibleThreadRuntimeStateSchema.parse(value)
+  })
+}
 
 export const THREAD_RUNTIME_STATE_BATCH_MAX_IDS = 200
 export const THREAD_RUNTIME_STATE_BATCH_CONCURRENCY = 4

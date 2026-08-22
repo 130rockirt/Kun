@@ -47,11 +47,7 @@ const SLOW_LOAD_ITEMS_LOG_MS = 1_000
 const ITEMS_CACHE_MAX_THREADS = 4
 const DEFAULT_ITEMS_CACHE_MAX_BYTES = 16 * 1024 * 1024
 const DEFAULT_ITEM_HISTORY_COMPACTION_MIN_BYTES = 4 * 1024 * 1024
-/**
- * Tail window a lock-free content search reads per thread. Kept well under
- * the compaction threshold so search stays cheap on logs large enough that
- * `loadItems` would rewrite them.
- */
+// Keep lock-free content-search reads well below the compaction threshold.
 const DEFAULT_ITEM_TEXT_SEARCH_MAX_BYTES = 512 * 1024
 const HIGHEST_SEQ_CACHE_MAX_THREADS = 256
 const ITEM_HISTORY_REVISION_MAX_THREADS = 512
@@ -62,9 +58,8 @@ const EVENT_HISTORY_REVISION_MAX_THREADS = 512
 export const DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES = 4 * 1024 * 1024
 
 /**
- * File-backed session store. Appends events and items to per-thread
- * JSONL files and keeps the canonical session snapshot in a small
- * JSON file. Replay reads the JSONL files end-to-end.
+ * File-backed session store for per-thread append-only JSONL logs and the
+ * canonical small session snapshot.
  */
 export class FileSessionStore implements SessionStore {
   private readonly dataDir: string
@@ -344,8 +339,10 @@ export class FileSessionStore implements SessionStore {
           throw new Error(`event replay record exceeds ${maxRecordBytes} bytes`)
         }
       }
-      const trailing = parseReplayEventRecord(remainder, maxRecordBytes)
-      if (trailing && trailing.seq > sinceSeq) yield trailing
+      // Bytes after the final newline belong to an in-flight append.
+      if (remainder.trim() && Buffer.byteLength(remainder, 'utf-8') > maxRecordBytes) {
+        throw new Error(`event replay record exceeds ${maxRecordBytes} bytes`)
+      }
     } catch (error) {
       if ((error as { code?: string }).code === 'ENOENT') return
       throw error

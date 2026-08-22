@@ -1,5 +1,8 @@
 import type { Router } from '../router.js'
-import { ThreadRuntimeStateSchema, type ThreadRuntimeState } from '../../contracts/threads.js'
+import {
+  normalizeThreadRuntimeStateWire,
+  type ThreadRuntimeState
+} from '../../contracts/threads.js'
 import { ThreadStateLoadError } from './thread-state-error.js'
 import {
   createThread,
@@ -50,6 +53,8 @@ import {
   getThreadKnowledgeBases,
   reindexThreadKnowledgeBase
 } from './knowledge-bases.js'
+
+export const THREAD_RUNTIME_STATE_OWNER_TIMEOUT_MS = 3_000
 
 export function registerThreadRoutes(
   router: Router,
@@ -358,9 +363,14 @@ async function loadOwnerAwareThreadState(
   const headers = new Headers(batchRequest.headers)
   headers.delete('content-length')
   headers.delete('content-type')
+  const signal = AbortSignal.any([
+    batchRequest.signal,
+    AbortSignal.timeout(THREAD_RUNTIME_STATE_OWNER_TIMEOUT_MS)
+  ])
   const stateRequest = new Request(stateUrl, {
     method: 'GET',
-    headers
+    headers,
+    signal
   })
   let forwarded: Response | null | undefined
   try {
@@ -376,7 +386,7 @@ async function loadOwnerAwareThreadState(
       })
     }
     try {
-      return ThreadRuntimeStateSchema.parse(await forwarded.json())
+      return normalizeThreadRuntimeStateWire(await forwarded.json())
     } catch (error) {
       throw new ThreadStateLoadError('schema_incompatible', 'schema_parse', { cause: error })
     }

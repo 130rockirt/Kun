@@ -90,11 +90,13 @@ export type CoreThreadTimelineJson = CoreThreadJson & {
 }
 
 export type CoreThreadRuntimeStateJson = {
+  schemaVersion?: number
   id: string
   status: string
   updatedAt: string
   latestSeq: number
-  pendingUserInputIds: string[]
+  /** Omitted by legacy owners; do not confuse omission with a live empty gate. */
+  pendingUserInputIds?: string[]
   latestTurn: {
     id: string
     status: string

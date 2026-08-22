@@ -21,6 +21,7 @@ import {
   THREAD_TIMELINE_MAX_ITEM_BYTES,
   THREAD_TIMELINE_MAX_ITEMS,
   THREAD_RUNTIME_STATE_BATCH_CONCURRENCY,
+  THREAD_RUNTIME_STATE_SCHEMA_VERSION,
   UpdateThreadRequest,
   type ThreadRecord
 } from '../../contracts/threads.js'
@@ -227,6 +228,7 @@ export async function loadThreadRuntimeState(
   }
   const latestTurn = thread.turns.at(-1)
   return ThreadRuntimeStateSchema.parse({
+    schemaVersion: THREAD_RUNTIME_STATE_SCHEMA_VERSION,
     id: thread.id,
     status: thread.status,
     updatedAt: thread.updatedAt,

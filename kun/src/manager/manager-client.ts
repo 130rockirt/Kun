@@ -31,6 +31,7 @@ import {
 } from './manager-discovery.js'
 import { sameCanonicalPath } from './canonical-path.js'
 import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-lease.js'
+import type { ManagerRequestOptions } from './manager-client-support.js'
 import {
   resolveServiceManager
 } from './manager-resolution.js'
@@ -457,10 +458,14 @@ export async function unregisterRuntimeWithManager(input: {
 export async function readManagerRuntime(
   manager: ServiceManagerConnection,
   flavor: RuntimeFlavor,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<RuntimeRegistration | null> {
   const parsedFlavor = RuntimeFlavorSchema.parse(flavor)
-  const response = await requestManagerJson(manager, `/v1/runtimes/${parsedFlavor}`, { fetch: fetchImpl })
+  const response = await requestManagerJson(manager, `/v1/runtimes/${parsedFlavor}`, {
+    fetch: fetchImpl,
+    ...(signal ? { signal } : {})
+  })
   return z.object({ registration: RuntimeRegistrationSchema.nullable() }).parse(response).registration
 }
 
@@ -583,10 +588,17 @@ export async function forwardRequestToExecutionOwner(input: {
     const owner = await requestManagerJson(
       input.manager,
       `/v1/leases/threads/${encodeURIComponent(input.threadId)}`,
-      {}
+      { signal: input.request.signal }
     )
     lease = z.object({ lease: ThreadExecutionLeaseSchema.nullable() }).parse(owner).lease
-    if (lease) registration = await readManagerRuntime(input.manager, lease.ownerFlavor)
+    if (lease) {
+      registration = await readManagerRuntime(
+        input.manager,
+        lease.ownerFlavor,
+        fetch,
+        input.request.signal
+      )
+    }
   } else if (input.control) {
     const owner = await requestManagerJson(
       input.manager,
@@ -638,7 +650,7 @@ export {
 export async function requestManagerJson(
   manager: ServiceManagerConnection,
   path: string,
-  options: { method?: string; body?: unknown; fetch?: typeof fetch; timeoutMs?: number }
+  options: ManagerRequestOptions
 ): Promise<unknown> {
   const response = await requestManagerResponse(manager, path, options)
   if (response.status === 409) {

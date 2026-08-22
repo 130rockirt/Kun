@@ -204,7 +204,7 @@ describe('InteractiveToolBridge', () => {
       record: vi.fn(async (event: { kind: string; inputId?: string }) => {
         order.push(event.kind)
         if (event.kind === 'user_input_requested' && event.inputId) {
-          expect(userInputGate.resolve(event.inputId, { status: 'submitted', answers: [] })).toBe(true)
+          expect(userInputGate.resolve(event.inputId, { status: 'submitted', answers: [] })).toBe('settled')
         }
       })
     } as unknown as RuntimeEventRecorder
@@ -283,7 +283,7 @@ describe('InteractiveToolBridge', () => {
       )
 
       // A late user submission cannot revive the settled gate.
-      expect(userInputGate.resolve('input_timeout', { status: 'submitted', answers: [] })).toBe(false)
+      expect(userInputGate.resolve('input_timeout', { status: 'submitted', answers: [] })).toBe('missing')
     } finally {
       vi.useRealTimers()
     }

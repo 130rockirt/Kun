@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { ZodError } from 'zod'
 import { getThreadStates } from './threads.js'
+import { THREAD_RUNTIME_STATE_OWNER_TIMEOUT_MS } from './register-thread-routes.js'
 import { ThreadStateLoadError } from './thread-state-error.js'
 import { buildRouter } from './index.js'
 import type { ServerRuntime } from './server-runtime.js'
@@ -8,6 +9,7 @@ import type { JsonResponse } from '../response.js'
 
 function runtimeState(id: string) {
   return {
+    schemaVersion: 1 as const,
     id,
     status: 'running' as const,
     updatedAt: '2026-08-22T00:00:00.000Z',
@@ -19,6 +21,7 @@ function runtimeState(id: string) {
 
 describe('getThreadStates', () => {
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
   it('deduplicates ids, bounds concurrency at four, and preserves request order', async () => {
@@ -190,5 +193,147 @@ describe('getThreadStates', () => {
     ])
     expect(forwardThreadControl.mock.calls[0][0]).toMatchObject({ method: 'GET' })
     expect(forwardThreadControl.mock.calls[0][0].headers.get('content-type')).toBeNull()
+  })
+
+  it('accepts a legacy owner state without pending user input ids', async () => {
+    const legacyState = {
+      id: 'thr_legacy',
+      status: 'running',
+      updatedAt: '2026-08-22T00:00:00.000Z',
+      latestSeq: 8,
+      latestTurn: null
+    }
+    const forwardThreadControl = vi.fn(async () =>
+      new Response(JSON.stringify(legacyState), { status: 200 }))
+    const router = buildRouter({
+      runtimeToken: 'thread-route-token', insecure: false, forwardThreadControl
+    } as unknown as ServerRuntime)
+    const request = new Request('http://127.0.0.1/v1/threads/states', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer thread-route-token',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ threadIds: ['thr_legacy'] })
+    })
+    const match = router.match('POST', new URL(request.url).pathname)
+    if (!match) throw new Error('thread states route not found')
+
+    const result = await match.handler(request, { params: match.params }) as JsonResponse
+    expect(JSON.parse(result.body).results).toEqual([{
+      id: 'thr_legacy',
+      ok: true,
+      state: { ...legacyState, schemaVersion: 1, pendingUserInputIds: [] }
+    }])
+  })
+
+  it('times out one unreachable owner while returning the other 19 states', async () => {
+    vi.useFakeTimers()
+    const threadIds = Array.from({ length: 20 }, (_, index) => `thr_${index}`)
+    const forwardThreadControl = vi.fn((request: Request, threadId: string) => {
+      if (threadId === 'thr_0') {
+        return new Promise<Response>((_resolve, reject) => {
+          request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true })
+        })
+      }
+      return Promise.resolve(new Response(JSON.stringify(runtimeState(threadId)), { status: 200 }))
+    })
+    const router = buildRouter({
+      runtimeToken: 'thread-route-token', insecure: false, forwardThreadControl
+    } as unknown as ServerRuntime)
+    const request = new Request('http://127.0.0.1/v1/threads/states', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer thread-route-token',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ threadIds })
+    })
+    const match = router.match('POST', new URL(request.url).pathname)
+    if (!match) throw new Error('thread states route not found')
+
+    let settled = false
+    const responsePromise = Promise.resolve(match.handler(request, { params: match.params })).then((value) => {
+      settled = true
+      return value as JsonResponse
+    })
+    await vi.advanceTimersByTimeAsync(THREAD_RUNTIME_STATE_OWNER_TIMEOUT_MS - 1)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    const result = await responsePromise
+
+    const body = JSON.parse(result.body)
+    expect(body.results.map((entry: { id: string }) => entry.id)).toEqual(threadIds)
+    expect(body.results[0]).toMatchObject({
+      id: 'thr_0', ok: false, error: { code: 'owner_unreachable' }
+    })
+    expect(body.results.slice(1).every((entry: { ok: boolean }) => entry.ok)).toBe(true)
+  })
+
+  it('aborts forwarded owner state requests when the batch request is cancelled', async () => {
+    const controller = new AbortController()
+    const seenSignals: AbortSignal[] = []
+    const forwardThreadControl = vi.fn((request: Request) => {
+      seenSignals.push(request.signal)
+      return new Promise<Response>((_resolve, reject) => {
+        request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true })
+      })
+    })
+    const router = buildRouter({
+      runtimeToken: 'thread-route-token', insecure: false, forwardThreadControl
+    } as unknown as ServerRuntime)
+    const request = new Request('http://127.0.0.1/v1/threads/states', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        authorization: 'Bearer thread-route-token',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ threadIds: ['thr_cancel'] })
+    })
+    const match = router.match('POST', new URL(request.url).pathname)
+    if (!match) throw new Error('thread states route not found')
+
+    const responsePromise = match.handler(request, { params: match.params })
+    await vi.waitFor(() => expect(seenSignals).toHaveLength(1))
+    controller.abort()
+    const result = await responsePromise as JsonResponse
+
+    expect(seenSignals[0]?.aborted).toBe(true)
+    expect(JSON.parse(result.body).results).toEqual([expect.objectContaining({
+      id: 'thr_cancel', ok: false, error: expect.objectContaining({ code: 'owner_unreachable' })
+    })])
+  })
+
+  it('marks a malformed owner state unavailable without affecting others', async () => {
+    const forwardThreadControl = vi.fn(async (_request: Request, threadId: string) => {
+      if (threadId === 'thr_bad') {
+        return new Response(JSON.stringify({ id: 'thr_bad' }), { status: 200 })
+      }
+      return new Response(JSON.stringify(runtimeState(threadId)), { status: 200 })
+    })
+    const router = buildRouter({
+      runtimeToken: 'thread-route-token', insecure: false, forwardThreadControl
+    } as unknown as ServerRuntime)
+    const request = new Request('http://127.0.0.1/v1/threads/states', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer thread-route-token',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ threadIds: ['thr_ok', 'thr_bad'] })
+    })
+    const match = router.match('POST', new URL(request.url).pathname)
+    if (!match) throw new Error('thread states route not found')
+
+    const result = await match.handler(request, { params: match.params }) as JsonResponse
+    expect(JSON.parse(result.body).results).toEqual([
+      { id: 'thr_ok', ok: true, state: runtimeState('thr_ok') },
+      expect.objectContaining({
+        id: 'thr_bad',
+        ok: false,
+        error: expect.objectContaining({ code: 'schema_incompatible' })
+      })
+    ])
   })
 })

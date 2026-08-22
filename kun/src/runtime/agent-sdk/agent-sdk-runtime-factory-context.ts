@@ -77,7 +77,11 @@ import {
 import type { ApprovalReviewPort } from '../../ports/approval-review.js'
 import type { ActingTurnModelRoute } from '../../contracts/turns.js'
 import { makeUserInputItem } from '../../domain/item.js'
-import { armUserInputTimeout, awaitAbortableGate } from '../../services/interactive-gate.js'
+import {
+  armUserInputTimeout,
+  awaitAbortableGate,
+  userInputRequestWithDeadline
+} from '../../services/interactive-gate.js'
 import {
   buildHistoryTranscript,
   DEFAULT_SDK_HISTORY_TRANSCRIPT_MAX_BYTES
@@ -192,7 +196,7 @@ export function createAgentSdkFactoryContext(deps: AgentSdkRuntimeFactoryDeps) {
           ...(input.timeoutSeconds !== undefined ? { timeoutSeconds: input.timeoutSeconds } : {})
         }
         // Arm first so an event subscriber can immediately submit a response.
-        const pending = gate.request(request)
+        const pending = gate.request(userInputRequestWithDeadline(request))
         const item = makeUserInputItem({
           id: input.itemId,
           threadId,

@@ -14,8 +14,13 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
-function eventLine(seq: number, kind = 'item_created'): string {
-  return JSON.stringify({ kind, threadId: 'thr_test', seq, timestamp: '2026-01-01T00:00:00Z' })
+function eventLine(seq: number): string {
+  return JSON.stringify({
+    kind: 'heartbeat',
+    threadId: 'thr_test',
+    seq,
+    timestamp: '2026-01-01T00:00:00Z'
+  })
 }
 
 describe('scanHighestSeqFromTail', () => {
@@ -44,13 +49,13 @@ describe('scanHighestSeqFromTail', () => {
   it('ignores a trailing partial line from a concurrent append', async () => {
     const path = join(dir, 'events.jsonl')
     const complete = [eventLine(10), eventLine(11)].join('\n') + '\n'
-    const torn = '{"kind":"item_created","threadId":"thr_test","seq":12'
+    const torn = '{"kind":"heartbeat","threadId":"thr_test","seq":12'
     await writeFile(path, complete + torn)
     const result = await scanHighestSeqFromTail({
       path,
       fileSize: Buffer.byteLength(complete + torn)
     })
-    expect(result).toEqual({ ok: true, highestSeq: 12 })
+    expect(result).toEqual({ ok: true, highestSeq: 11 })
   })
 
   it('degrades to malformed-tail for corrupt lines', async () => {
@@ -66,12 +71,28 @@ describe('scanHighestSeqFromTail', () => {
     expect(result).toEqual({ ok: true, highestSeq: 0 })
   })
 
-  it('handles a file whose first line lacks a trailing newline', async () => {
+  it('does not commit a complete JSON record before its trailing newline', async () => {
     const path = join(dir, 'events.jsonl')
-    const contents = [eventLine(1), eventLine(2)].join('\n')
+    const contents = eventLine(1) + '\n' + eventLine(2)
     await writeFile(path, contents)
     const result = await scanHighestSeqFromTail({ path, fileSize: Buffer.byteLength(contents) })
-    expect(result).toEqual({ ok: true, highestSeq: 2 })
+    expect(result).toEqual({ ok: true, highestSeq: 1 })
+  })
+
+  it('treats the only unterminated record as uncommitted', async () => {
+    const path = join(dir, 'events.jsonl')
+    const contents = eventLine(2)
+    await writeFile(path, contents)
+    const result = await scanHighestSeqFromTail({ path, fileSize: Buffer.byteLength(contents) })
+    expect(result).toEqual({ ok: true, highestSeq: 0 })
+  })
+
+  it('does not count a complete JSON object that fails event schema validation', async () => {
+    const path = join(dir, 'events.jsonl')
+    const contents = `${eventLine(1)}\n${JSON.stringify({ kind: 'item_created', seq: 9 })}\n`
+    await writeFile(path, contents)
+    const result = await scanHighestSeqFromTail({ path, fileSize: Buffer.byteLength(contents) })
+    expect(result).toEqual({ ok: false, reason: 'malformed-tail' })
   })
 
   it('stops early once the line budget is reached', async () => {

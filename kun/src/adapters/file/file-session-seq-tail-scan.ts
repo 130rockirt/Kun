@@ -1,19 +1,17 @@
 import { open, type FileHandle } from 'node:fs/promises'
+import { parseReplayEventRecord } from './file-session-jsonl.js'
 
 /**
- * Fast tail scan for the highest persisted event seq.
+ * Fast tail scan for the highest committed event seq.
  *
- * `FileSessionStore.highestSeq()` used to stream-parse the whole
- * `events.jsonl` whenever its size/mtime cache missed — which happens on
- * every concurrent append — stalling the single-threaded runtime for large
- * logs (#621 family). Events are appended in seq order, so scanning the
- * file tail backwards and taking the max seq of complete lines near the end
- * is equivalent for healthy logs.
+ * A JSONL record becomes durable only once its trailing newline is written.
+ * Any bytes after the final newline are an in-flight append, even when they
+ * already contain a readable complete JSON value. The durable high-water
+ * mark must therefore stay on the last complete newline-terminated event.
  *
- * A complete interior line without a readable seq degrades to
- * `{ ok: false }` so the caller falls back to a full forward scan; a torn
- * unterminated file-end fragment is parsed best-effort and otherwise
- * ignored, mirroring the forward parser's silent remainder skip.
+ * Complete interior records are schema-validated. A corrupt interior record
+ * degrades to `{ ok: false }` so the caller falls back to the same bounded
+ * forward scan semantics instead of trusting bytes from a torn write.
  */
 const DEFAULT_TAIL_SCAN_CHUNK_BYTES = 64 * 1024
 const DEFAULT_TAIL_SCAN_MAX_CHUNK_BYTES = 1024 * 1024
@@ -62,9 +60,9 @@ export async function scanHighestSeqFromTail(options: {
     }
     const parseStrict = (line: string): boolean => {
       if (!line.trim()) return true
-      const seq = trySeq(line)
-      if (seq === null) return false
-      observe(seq)
+      const event = parseReplayEventRecord(line, options.maxChunkBytes ?? DEFAULT_TAIL_SCAN_MAX_CHUNK_BYTES)
+      if (!event) return false
+      observe(event.seq)
       return true
     }
     let carry = ''
@@ -79,16 +77,11 @@ export async function scanHighestSeqFromTail(options: {
       const combined = buffer.toString('utf-8') + carry
       if (start === 0) {
         const parts = combined.split('\n')
-        const lastIndex = parts.length - 1
-        for (let i = 0; i <= lastIndex; i++) {
-          const line = parts[i]
-          if (i === lastIndex && newest && carry === '' && line.trim()) {
-            // The file's true end without a terminating newline.
-            const seq = trySeq(line)
-            if (seq !== null) observe(seq)
-            continue
-          }
-          if (!parseStrict(line)) return { ok: false, reason: 'malformed-tail' }
+        // The final split part is an unterminated append fragment. Ignore it
+        // even if JSON.parse would accept it; no commit marker has arrived.
+        const lastIndex = newest ? parts.length - 1 : parts.length
+        for (let i = 0; i < lastIndex; i++) {
+          if (!parseStrict(parts[i])) return { ok: false, reason: 'malformed-tail' }
         }
         return { ok: true, highestSeq: highest }
       }
@@ -101,13 +94,7 @@ export async function scanHighestSeqFromTail(options: {
       }
       carry = combined.slice(0, firstNewline)
       const lastNewline = combined.lastIndexOf('\n')
-      if (newest) {
-        const tornTail = combined.slice(lastNewline + 1)
-        if (tornTail.trim()) {
-          const seq = trySeq(tornTail)
-          if (seq !== null) observe(seq)
-        }
-      }
+      // On the newest window, bytes after the last newline are uncommitted.
       const body = newest
         ? (lastNewline > firstNewline ? combined.slice(firstNewline + 1, lastNewline) : '')
         : combined.slice(firstNewline + 1)
@@ -122,11 +109,4 @@ export async function scanHighestSeqFromTail(options: {
   } finally {
     await handle.close().catch(() => undefined)
   }
-}
-
-function trySeq(line: string): number | null {
-  const match = /"seq"\s*:\s*(\d+)/.exec(line.trim())
-  if (!match) return null
-  const value = Number(match[1])
-  return Number.isSafeInteger(value) && value >= 0 ? value : null
 }

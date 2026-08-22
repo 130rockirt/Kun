@@ -148,6 +148,7 @@ describe('getThreadState', () => {
 
     expect(response.status).toBe(200)
     expect(JSON.parse(response.body)).toEqual({
+      schemaVersion: 1,
       id: record.id,
       status: 'running',
       updatedAt: record.updatedAt,

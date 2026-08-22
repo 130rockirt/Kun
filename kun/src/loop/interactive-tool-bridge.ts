@@ -12,7 +12,11 @@ import type {
 } from '../ports/user-input-gate.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { TurnService } from '../services/turn-service.js'
-import { armUserInputTimeout, awaitAbortableGate } from '../services/interactive-gate.js'
+import {
+  armUserInputTimeout,
+  awaitAbortableGate,
+  userInputRequestWithDeadline
+} from '../services/interactive-gate.js'
 import { sessionEventExists } from '../adapters/session-event-query.js'
 
 export type InteractiveToolBridgeDeps = {
@@ -175,7 +179,7 @@ export class InteractiveToolBridge {
       threadId: input.threadId,
       turnId: input.turnId
     }
-    const pending = this.deps.userInputGate.request(request)
+    const pending = this.deps.userInputGate.request(userInputRequestWithDeadline(request))
     const item = makeUserInputItem({
       id: input.input.itemId,
       threadId: input.threadId,

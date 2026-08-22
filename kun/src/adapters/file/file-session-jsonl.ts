@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { rm, type FileHandle } from 'node:fs/promises'
-import type { RuntimeEvent } from '../../contracts/events.js'
+import { RuntimeEvent as RuntimeEventSchema, type RuntimeEvent } from '../../contracts/events.js'
 import { isPublicTurnItem, type TurnItem } from '../../contracts/items.js'
 import type { ItemHistoryPage, ItemHistoryPageOptions } from '../../ports/session-store.js'
 import { buildPublicItemHistoryPage, timelineSafeItem } from '../../services/item-history-page.js'
@@ -216,9 +216,10 @@ export function parseReplayEventRecord(line: string, maxRecordBytes: number): Ru
   }
   try {
     const value = JSON.parse(line) as unknown
-    if (!value || typeof value !== 'object') return null
-    const event = value as RuntimeEvent
-    return typeof event.seq === 'number' && Number.isFinite(event.seq) ? event : null
+    const parsed = RuntimeEventSchema.safeParse(value)
+    // Keep the existing JSONL tolerance: one corrupt historical record must
+    // not poison replay of the rest of the thread.
+    return parsed.success ? parsed.data : null
   } catch {
     // Keep the existing JSONL tolerance: one corrupt historical record must
     // not poison replay of the rest of the thread.
