@@ -1,5 +1,5 @@
-import type { ChatState, QueuedUserMessage } from './chat-store-types'
 import type { ChatBlock, ThreadGoal, ThreadTodoList } from '../agent/types'
+import type { ChatState, QueuedUserMessage } from './chat-store-types'
 
 export const THREAD_SNAPSHOT_CACHE_MAX_ENTRIES = 6
 export const THREAD_SNAPSHOT_CACHE_MAX_BYTES = 32 * 1024 * 1024
@@ -31,10 +31,6 @@ export type ThreadSnapshot = {
   activeThreadGoal: ThreadGoal | null
   activeThreadTodos: ThreadTodoList | null
   queuedMessages: QueuedUserMessage[]
-  composerMode: 'plan' | 'agent'
-  composerModel: string
-  composerProviderId: string
-  composerReasoningEffort: ChatState['composerReasoningEffort']
   payloadBytes: number
 }
 
@@ -96,10 +92,6 @@ export function snapshotThreadProjection(state: ChatState, payloadBytes?: number
     activeThreadGoal: state.activeThreadGoal,
     activeThreadTodos: state.activeThreadTodos,
     queuedMessages: state.queuedMessages,
-    composerMode: state.composerMode,
-    composerModel: state.composerModel,
-    composerProviderId: state.composerProviderId,
-    composerReasoningEffort: state.composerReasoningEffort,
     payloadBytes: bytes
   })
   totalBytes += bytes

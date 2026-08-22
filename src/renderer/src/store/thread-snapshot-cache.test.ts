@@ -30,10 +30,6 @@ function stateFor(threadId: string): ChatState {
     activeThreadGoal: null,
     activeThreadTodos: null,
     queuedMessages: [],
-    composerMode: 'agent',
-    composerModel: '',
-    composerProviderId: '',
-    composerReasoningEffort: 'max'
   } as unknown as ChatState
 }
 

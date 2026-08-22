@@ -1,11 +1,6 @@
-import type { AgentProvider, NormalizedThread, ThreadEventSink } from '../agent/types'
+import type { AgentProvider, ThreadEventSink } from '../agent/types'
 import type { ChatState, ChatStoreGet } from './chat-store-types'
-import {
-  composerModelSelectable,
-  providerIdForComposerModel,
-  providerIdMatchesComposerModel,
-  readThreadComposerSelection
-} from './chat-store-helpers'
+export { composerSelectionForThread } from './chat-store-thread-composer-state'
 
 const SSE_RECOVERY_INITIAL_DELAY_MS = 250
 const SSE_RECOVERY_AUTH_DELAY_MS = 2_000
@@ -29,57 +24,6 @@ export async function ensureRuntimeProviderForSend(input: {
   const providerId = input.providerId?.trim()
   const model = input.model?.trim()
   if (!providerId || !model || model.toLowerCase() === 'auto') return
-}
-
-export function composerSelectionForThread(
-  state: ChatState,
-  thread: Pick<NormalizedThread, 'id' | 'model'> | null | undefined,
-  options: {
-    hasUserMessages?: boolean
-    runtimeModel?: string
-  } = {}
-): { model: string; providerId: string } | null {
-  if (!thread) return null
-  const pickList = state.composerPickList
-  const stored = readThreadComposerSelection(thread.id)
-  const storedModel = stored?.model.trim() ?? ''
-  const threadModel = options.runtimeModel?.trim() || thread.model.trim()
-  const storedSelectable = composerModelSelectable(pickList, state.composerModelGroups, storedModel)
-  const storedShouldWin = storedSelectable && (
-    options.hasUserMessages !== false ||
-    stored?.source === 'user' ||
-    stored?.source === 'default'
-  )
-  // Before the catalog has loaded (empty pick list/groups), an explicit user
-  // selection is still trustworthy: returning it keeps the composer from
-  // flashing back to the first-sent thread model on every switch. Once the
-  // catalog is ready and really excludes the model, fall back as before.
-  const catalogLoaded =
-    pickList.length > 0 || state.composerModelGroups.length > 0
-  const model = storedShouldWin
-    ? storedModel
-    : storedModel && stored?.source === 'user' && !catalogLoaded
-      ? storedModel
-      : composerModelSelectable(pickList, state.composerModelGroups, threadModel)
-        ? threadModel
-        : storedSelectable
-          ? storedModel
-          : ''
-  if (!model) return null
-  const usesStoredModel = storedModel.toLowerCase() === model.toLowerCase()
-  // With an unloaded catalog there is no group data to validate the stored
-  // providerId against; trusting it keeps the selection stable across the
-  // catalog load instead of clearing it to ''.
-  const storedProviderId =
-    stored && usesStoredModel &&
-      (!catalogLoaded ||
-        providerIdMatchesComposerModel(state.composerModelGroups, stored.providerId, model))
-      ? stored.providerId
-      : ''
-  return {
-    model,
-    providerId: storedProviderId || providerIdForComposerModel(state.composerModelGroups, model)
-  }
 }
 
 export function subscribeThreadEventsWithRecovery(

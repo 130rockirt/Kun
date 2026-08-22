@@ -59,14 +59,11 @@ import {
   accountIdForComposerSelection,
   activeClawChannel,
   compactCodeWorkspaceRoots,
-  composerReasoningEffortForSelection,
   forgetCodeWorkspaceRoot,
   hydrateBlockModelLabels,
   isClawThread,
   optimisticUserModelLabel,
   readCodeWorkspaceRoots,
-  composerModeForThread,
-  readThreadComposerMode,
   rememberCodeWorkspaceRoots,
   rememberThreadComposerSelection,
   rememberTurnModel
@@ -133,11 +130,11 @@ import {
   snapshotThreadProjection
 } from './thread-snapshot-cache'
 import {
-  composerSelectionForThread,
   ensureRuntimeProviderForSend,
   fallbackComposerProviderIdForSend,
   subscribeThreadEventsWithRecovery
 } from './chat-store-thread-action-helpers'
+import { resolveThreadComposerState } from './chat-store-thread-composer-state'
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
 import { readDesignThreadRegistry } from '../design/design-thread-registry'
 import { readSddThreadRegistry } from '../sdd/sdd-thread-registry'
@@ -230,6 +227,9 @@ export function createThreadSelectionActions(
           readDesignThreadRegistry(),
           readSddThreadRegistry()
         )
+      const composerState = resolveThreadComposerState(get(), targetThread, {
+        hasUserMessages: cached.blocks.some((block) => block.kind === 'user')
+      })
       set((state) => ({
         watchTurnCompletion: nextWatch,
         unreadThreadIds: nextUnread,
@@ -261,10 +261,7 @@ export function createThreadSelectionActions(
         turnReasoningLastAtByUserId: cached.turnReasoningLastAtByUserId,
         inspectorSelectedId: null,
         queuedMessages,
-        composerMode: cached.composerMode,
-        composerModel: cached.composerModel,
-        composerProviderId: cached.composerProviderId,
-        composerReasoningEffort: cached.composerReasoningEffort,
+        ...composerState,
         threads: state.threads.map((thread) => thread.id === id
           ? { ...thread, status: cached.busy ? 'running' : 'idle' }
           : thread),
@@ -283,6 +280,7 @@ export function createThreadSelectionActions(
     // Give the sidebar its selected state in this render frame. The timeline
     // shows a skeleton and the composer is disabled until detail hydration
     // commits, preventing sends against an unhydrated thread.
+    const initialComposerState = resolveThreadComposerState(get(), targetThread)
     set({
       watchTurnCompletion: nextWatch,
       unreadThreadIds: nextUnread,
@@ -311,7 +309,8 @@ export function createThreadSelectionActions(
       turnReasoningLastAtByUserId: {},
       inspectorSelectedId: null,
       queuedMessages: [],
-      error: null
+      error: null,
+      ...initialComposerState
     })
     try {
       const {
@@ -368,11 +367,10 @@ export function createThreadSelectionActions(
           readDesignThreadRegistry(),
           readSddThreadRegistry()
         )
-      const composerSelection = composerSelectionForThread(get(), threadSnap, {
+      const composerState = resolveThreadComposerState(get(), threadSnap, {
         hasUserMessages: rawBlocks.some((block) => block.kind === 'user'),
         runtimeModel: threadModel
       })
-      const composerMode = composerModeForThread(threadSnap, readThreadComposerMode(id))
       const queuedMessages = reconcileQueuedMessages(durableQueuedMessages, {
         busy,
         turnId: latestTurnId,
@@ -421,7 +419,7 @@ export function createThreadSelectionActions(
         turnReasoningLastAtByUserId: {},
         inspectorSelectedId: null,
         queuedMessages,
-        composerMode,
+        ...composerState,
         threads: get().threads.map((thread) => thread.id === id
           ? {
               ...thread,
@@ -432,17 +430,6 @@ export function createThreadSelectionActions(
             }
           : thread),
         ...(remembersCodeThread ? { lastCodeThreadId: id } : {}),
-        ...(composerSelection
-          ? {
-              composerModel: composerSelection.model,
-              composerProviderId: composerSelection.providerId,
-              composerReasoningEffort: composerReasoningEffortForSelection(
-                get().composerModelGroups,
-                composerSelection.model,
-                composerSelection.providerId
-              )
-            }
-          : {})
       })
       snapshotThreadProjection(get(), payloadBytes)
       saveQueuedMessagesForThread(id, queuedMessages)
