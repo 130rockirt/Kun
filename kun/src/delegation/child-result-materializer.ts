@@ -116,7 +116,12 @@ export function childResultSource(
   // without breaking the parent-context budget.
   if (toolResult) {
     const preview = stringifyResult(toolResult.output)
-    if (preview) return preview.slice(0, CHILD_RESULT_PREVIEW_CHARS)
+    // Truncating mid-string would produce invalid JSON; mark the omission so
+    // downstream JSON.parse never sees a seemingly complete payload.
+    if (preview.length > CHILD_RESULT_PREVIEW_CHARS) {
+      return `${preview.slice(0, CHILD_RESULT_PREVIEW_CHARS - 1)}…`
+    }
+    if (preview) return preview
   }
   return status === 'completed'
     ? 'Child agent completed without a text response.'

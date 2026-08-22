@@ -32,6 +32,7 @@ describe('child result materialization', () => {
     })]
     const summary = childResultSource(items, 'turn', 'completed')
     expect(summary.length).toBeLessThanOrEqual(CHILD_RESULT_PREVIEW_CHARS)
+    expect(summary.endsWith('…')).toBe(true)
     expect(summary.startsWith('{"status":"completed"')).toBe(true)
   })
 

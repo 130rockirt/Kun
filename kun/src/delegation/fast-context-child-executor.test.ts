@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
 import { LocalToolHost, type LocalTool } from '../adapters/tool/local-tool-host.js'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../ports/model-client.js'
@@ -118,6 +119,31 @@ class ReadThenSilentFinishModel implements ModelClient {
   }
 }
 
+class ConcludeThenInjectErrorModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'conclude-then-inject-error-model'
+  requests = 0
+
+  constructor(
+    private readonly inject: () => Promise<void>
+  ) {}
+
+  async *stream(): AsyncIterable<ModelStreamChunk> {
+    this.requests += 1
+    if (this.requests === 1) {
+      yield { kind: 'tool_call_complete', callId: 'read_once', toolName: 'read', arguments: { path: 'src/target.ts', task_indexes: [1] } }
+      yield { kind: 'completed', stopReason: 'tool_calls' }
+      return
+    }
+    // The turn settles completed normally; the injected error event lands in
+    // the shared session store after the loop finished but before the executor
+    // settles the child run.
+    await this.inject()
+    yield { kind: 'assistant_text_delta', text: 'Task 1: source found.' }
+    yield { kind: 'completed', stopReason: 'stop' }
+  }
+}
+
 describe('Fast Context child executor', () => {
   it('bypasses provider-native SDK composition and exposes only grep, glob, and read', async () => {
     const model = new CatalogModel()
@@ -172,12 +198,74 @@ describe('Fast Context child executor', () => {
     await expect(executor(fastContextInput(model.model))).rejects.toMatchObject({
       name: 'ChildResultExecutionError',
       result: {
-        summary: 'Fast Context retrieval completed; see evidence pack.',
+        summary: 'Fast Context retrieval incomplete; see evidence pack.',
         evidencePack: {
           version: 1,
           tasks: [{ evidence: [{ path: 'src/target.ts', ranges: [[10, 12]] }] }]
         }
       }
+    })
+  })
+
+  it.each([
+    ['tool_loop_suppressed'],
+    ['model_empty_response'],
+    ['empty_post_tool_continuation']
+  ] as const)('lets a completed Fast Context child outrank whitelisted loop error %s', async (code) => {
+    const sessionStore = new InMemorySessionStore()
+    const model = new ConcludeThenInjectErrorModel(async () => {
+      const started = (await sessionStore.loadEventsSince('child_fast_context', 0))
+        .find((event) => event.kind === 'turn_started')
+      await sessionStore.appendEvent('child_fast_context', {
+        seq: 100,
+        kind: 'error',
+        threadId: 'child_fast_context',
+        ...(started?.turnId ? { turnId: started.turnId } : {}),
+        message: 'loop bookkeeping error',
+        code,
+        severity: 'error',
+        timestamp: new Date().toISOString()
+      })
+    })
+    const executor = createChildAgentExecutor({
+      model,
+      sessionStore,
+      toolHost: new LocalToolHost({ tools: [sourceTool('grep'), sourceTool('glob'), sourceTool('read')] }),
+      prefix: createImmutablePrefix({ systemPrompt: 'test' }), defaultModel: model.model
+    })
+
+    await expect(executor(fastContextInput(model.model))).resolves.toMatchObject({
+      summary: 'Task 1: source found.',
+      evidencePack: { version: 1 }
+    })
+  })
+
+  it('still fails a completed Fast Context child for a non-whitelisted fatal error', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const model = new ConcludeThenInjectErrorModel(async () => {
+      const started = (await sessionStore.loadEventsSince('child_fast_context', 0))
+        .find((event) => event.kind === 'turn_started')
+      await sessionStore.appendEvent('child_fast_context', {
+        seq: 100,
+        kind: 'error',
+        threadId: 'child_fast_context',
+        ...(started?.turnId ? { turnId: started.turnId } : {}),
+        message: 'provider returned HTTP 520',
+        code: 'upstream',
+        severity: 'error',
+        timestamp: new Date().toISOString()
+      })
+    })
+    const executor = createChildAgentExecutor({
+      model,
+      sessionStore,
+      toolHost: new LocalToolHost({ tools: [sourceTool('grep'), sourceTool('glob'), sourceTool('read')] }),
+      prefix: createImmutablePrefix({ systemPrompt: 'test' }), defaultModel: model.model
+    })
+
+    await expect(executor(fastContextInput(model.model))).rejects.toMatchObject({
+      name: 'ChildResultExecutionError',
+      message: 'provider returned HTTP 520'
     })
   })
 

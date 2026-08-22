@@ -484,9 +484,11 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     // text, the pack still carries every task conclusion, so never let a
     // stringified tool_result or duplicated loop error text impersonate the
     // summary (that produced self-contradictory "failed + status: completed"
-    // cards).
+    // cards). The placeholder text tracks the settled terminal status.
     if (input.fastContext && evidencePack && childResultUsedNoTextSummary(items, started.turnId)) {
-      result.summary = 'Fast Context retrieval completed; see evidence pack.'
+      result.summary = status === 'completed'
+        ? 'Fast Context retrieval completed; see evidence pack.'
+        : 'Fast Context retrieval incomplete; see evidence pack.'
       result.summaryTruncated = undefined
     }
     const structuredResult = {
@@ -513,13 +515,17 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
         event.severity !== 'info'
     )
     if (runtimeError?.kind === 'error') {
-      // A Fast Context child that exhausted its step budget on retrieval can
-      // still settle `completed` with a fatal-looking loop error such as the
-      // repeat-tool-call suppression notice. The evidence pack is the contract
-      // product, so it outranks that loop bookkeeping error; flipping the run
-      // to failed produced self-contradictory "failed + status: completed"
-      // cards while the parent had usable evidence.
-      const fastContextRecovered = input.fastContext === true && status === 'completed' && evidencePack !== undefined
+      // A Fast Context child that exhausted its retrieval budget can still
+      // settle `completed` with a fatal-looking loop bookkeeping error (empty
+      // final answer / suppressed repeat tool calls). Only those whitelisted
+      // loop-cleanup codes are outranked by the evidence pack; any other fatal
+      // error (provider crash, sandbox failure, unknown) still fails the run.
+      const fastContextRecovered =
+        input.fastContext === true &&
+        status === 'completed' &&
+        evidencePack !== undefined &&
+        runtimeError.code !== undefined &&
+        FAST_CONTEXT_RECOVERABLE_LOOP_ERROR_CODES.has(runtimeError.code)
       if (!fastContextRecovered) {
         throw new ChildResultExecutionError(runtimeError.message, structuredResult, {
           ...settlement,
@@ -558,6 +564,15 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     }
   }
 }
+
+/** Loop bookkeeping error codes that a completed Fast Context child may
+ * outrank with its evidence pack (kun/src/loop/round-outcome-recovery-phase.ts).
+ * Anything outside this set remains fatal and fails the run as before. */
+const FAST_CONTEXT_RECOVERABLE_LOOP_ERROR_CODES = new Set([
+  'model_empty_response',
+  'empty_post_tool_continuation',
+  'tool_loop_suppressed'
+])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

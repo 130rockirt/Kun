@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from 'react'
 import type { TFunction } from 'i18next'
-import type { ChatBlock } from '../../agent/types'
+import type { ChatBlock, ToolBlock } from '../../agent/types'
 import {
   isTerminalSubagentStatus,
   type SubagentLivenessStatus
@@ -463,8 +463,14 @@ export function resolveStatus(block: ChatBlock, child: ChildMeta, detail?: Deleg
   if (detail?.status === 'aborted') return userStopped ? 'stopped' : 'failed'
   // Legacy bad records: a failed detail whose error text self-describes a
   // completed child (stringified tool_result used as a fake summary) must not
-  // render a misleading red "failed" card; treat it as done instead.
-  if (detail?.status === 'failed' && errorSelfDescribesCompletion(detail.error)) return 'done'
+  // render a misleading red "failed" card. Requiring an evidence pack keeps
+  // this downgrade pinned to the Fast Context bad-record shape instead of any
+  // failure whose error text happens to mention "status: completed".
+  if (
+    detail?.status === 'failed' &&
+    errorSelfDescribesCompletion(detail.error) &&
+    parseFastContextEvidencePack(block.kind === 'tool' ? (block as ToolBlock).detail : undefined) !== undefined
+  ) return 'done'
   if (detail?.status === 'failed') return 'failed'
 
   // Detaching settles the wrapper tool call, not the child run. Keep live
