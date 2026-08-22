@@ -7,6 +7,8 @@ let startupRuntimeProbeInFlight = false
 let busyWatchdogTimer: ReturnType<typeof setTimeout> | null = null
 let busyRecoveryAttempts = 0
 let turnCompletionPollTimer: ReturnType<typeof setInterval> | null = null
+let turnCompletionPollInFlight = false
+export const TURN_COMPLETION_POLL_CONCURRENCY = 4
 
 type BusyWatchdogOptions = {
   timeoutMs: number
@@ -28,6 +30,13 @@ type TurnCompletionPollOptions = {
     state: ChatState,
     threadId: string
   ) => Promise<ThreadCompletionState>
+  loadThreadStates?: (
+    state: ChatState,
+    threadIds: string[]
+  ) => Promise<Array<
+    | { id: string; ok: true; state: ThreadCompletionState }
+    | { id: string; ok: false; missing: boolean }
+  >>
   threadLooksRunning: (thread: ThreadCompletionState) => boolean
   onCompletedThreads: (
     done: Array<{
@@ -156,7 +165,11 @@ export function syncTurnCompletionPoll(
   if (turnCompletionPollTimer != null) return
 
   const tick = (): void => {
-    void pollTurnCompletionWatch(set, get, options)
+    if (turnCompletionPollInFlight) return
+    turnCompletionPollInFlight = true
+    void pollTurnCompletionWatch(set, get, options).finally(() => {
+      turnCompletionPollInFlight = false
+    })
   }
 
   turnCompletionPollTimer = setInterval(tick, 2500)
@@ -180,22 +193,40 @@ async function pollTurnCompletionWatch(
     return
   }
 
-  const outcomes: CompletionPollOutcome[] = await Promise.all(ids.map(async (threadId) => {
+  const loadOne = async (threadId: string): Promise<CompletionPollOutcome> => {
     try {
       const thread = await options.loadThreadState(state, threadId)
-      return options.threadLooksRunning(thread)
-        ? null
-        : {
-            kind: 'completed' as const,
-            id: threadId,
-            latestTurnId: thread.latestTurnId,
-            latestTurnStatus: thread.latestTurnStatus,
-            completionWatchKey: thread.completionWatchKey
-          }
+      return completionOutcome(threadId, thread, options.threadLooksRunning)
     } catch (error) {
       return options.isMissingThreadError?.(error) ? { kind: 'missing' as const, id: threadId } : null
     }
-  }))
+  }
+  let outcomes: CompletionPollOutcome[]
+  if (options.loadThreadStates) {
+    try {
+      const results = await options.loadThreadStates(state, ids)
+      outcomes = results.map((result) => result.ok
+        ? completionOutcome(result.id, result.state, options.threadLooksRunning)
+        : result.missing ? { kind: 'missing' as const, id: result.id } : null)
+    } catch {
+      outcomes = ids.map(() => null)
+    }
+  } else {
+    outcomes = new Array(ids.length)
+    let cursor = 0
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const index = cursor
+        cursor += 1
+        if (index >= ids.length) return
+        outcomes[index] = await loadOne(ids[index])
+      }
+    }
+    await Promise.all(Array.from(
+      { length: Math.min(TURN_COMPLETION_POLL_CONCURRENCY, ids.length) },
+      worker
+    ))
+  }
   const completed = outcomes.filter((outcome): outcome is Extract<CompletionPollOutcome, { kind: 'completed' }> =>
     outcome?.kind === 'completed'
   )
@@ -224,4 +255,20 @@ async function pollTurnCompletionWatch(
   if (Object.keys(get().watchTurnCompletion).filter((id) => get().watchTurnCompletion[id]).length === 0) {
     stopTurnCompletionPoll()
   }
+}
+
+function completionOutcome(
+  threadId: string,
+  thread: ThreadCompletionState,
+  threadLooksRunning: (thread: ThreadCompletionState) => boolean
+): CompletionPollOutcome {
+  return threadLooksRunning(thread)
+    ? null
+    : {
+        kind: 'completed',
+        id: threadId,
+        latestTurnId: thread.latestTurnId,
+        latestTurnStatus: thread.latestTurnStatus,
+        completionWatchKey: thread.completionWatchKey
+      }
 }

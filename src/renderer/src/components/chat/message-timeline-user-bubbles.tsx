@@ -391,11 +391,8 @@ export function UserMessageBubble({
         data-user-message-actions="inline"
         className="invisible absolute right-0 top-full z-20 flex translate-y-0.5 items-center pt-1 text-ds-faint opacity-0 transition-[opacity,transform,visibility] duration-150 motion-reduce:transition-none group-hover:visible group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:visible group-focus-within:translate-y-0 group-focus-within:opacity-100"
       >
-        <div className="flex items-center gap-0.5 rounded-full border border-ds-border/80 bg-ds-card px-1.5 py-1 shadow-[0_8px_20px_rgba(42,52,72,0.12)]">
-          <ModelMetaTag label={block.modelLabel} className="px-1 text-left" />
-          {block.modelLabel ? (
-            <span aria-hidden="true" className="h-3.5 w-px bg-ds-border/80" />
-          ) : null}
+        <div className="flex items-center gap-4">
+          <ModelMetaTag label={block.modelLabel} className="text-left" />
           <CopyFeedbackButton text={displayText} iconOnly />
           {canEdit ? (
             <button
@@ -404,7 +401,7 @@ export function UserMessageBubble({
               disabled={busy}
               title={t('rewindEditMessage')}
               aria-label={t('rewindEditMessage')}
-              className="rounded-md p-1 transition hover:bg-ds-hover hover:text-ds-muted disabled:cursor-not-allowed disabled:hover:text-ds-faint"
+              className="rounded-full p-1.5 transition hover:bg-ds-hover hover:text-ds-muted disabled:cursor-not-allowed disabled:hover:text-ds-faint"
             >
               <PencilLine className="h-4 w-4" strokeWidth={1.8} />
             </button>

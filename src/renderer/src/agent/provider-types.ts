@@ -77,6 +77,25 @@ export type ThreadListPage = {
   total?: number
 }
 
+export type ThreadRuntimeState = {
+  status: string
+  updatedAt: string
+  latestSeq: number
+  latestTurnId?: string
+  latestTurnStatus?: string
+  latestTurnOrchestration?: 'direct' | 'graph'
+  /** Undefined means an older provider did not expose live input state. */
+  pendingUserInputIds?: string[]
+}
+
+export type ThreadRuntimeStateBatchResult =
+  | { id: string; ok: true; state: ThreadRuntimeState }
+  | {
+      id: string
+      ok: false
+      error: { code: 'not_found' | 'unavailable'; message: string }
+    }
+
 export type ThreadEventSink = {
   /** The HTTP/SSE stream is established, even when no replay or live event is pending. */
   onConnected?(): void
@@ -156,14 +175,9 @@ export interface AgentProvider {
     hasMoreHistory?: boolean
     designProfile?: DesignTaskProfile
   }>
-  getThreadState(threadId: string): Promise<{
-    status: string
-    updatedAt: string
-    latestSeq: number
-    latestTurnId?: string
-    latestTurnStatus?: string
-    latestTurnOrchestration?: 'direct' | 'graph'
-  }>
+  getThreadState(threadId: string): Promise<ThreadRuntimeState>
+  /** Optional bounded bulk capability for background observers. */
+  getThreadStates?(threadIds: string[]): Promise<ThreadRuntimeStateBatchResult[]>
   sendUserMessage(
     threadId: string,
     text: string,

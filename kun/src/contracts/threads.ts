@@ -26,6 +26,8 @@ export const ThreadRuntimeStateSchema = z.object({
   status: ThreadStatus,
   updatedAt: z.string(),
   latestSeq: z.number().int().nonnegative(),
+  /** Live request ids that still require a user response. */
+  pendingUserInputIds: z.array(z.string().min(1)),
   latestTurn: z.object({
     id: z.string().min(1),
     status: TurnStatus,
@@ -33,6 +35,38 @@ export const ThreadRuntimeStateSchema = z.object({
   }).nullable()
 })
 export type ThreadRuntimeState = z.infer<typeof ThreadRuntimeStateSchema>
+
+export const THREAD_RUNTIME_STATE_BATCH_MAX_IDS = 200
+export const THREAD_RUNTIME_STATE_BATCH_CONCURRENCY = 4
+
+export const ThreadRuntimeStateBatchRequestSchema = z.object({
+  threadIds: z.array(z.string().trim().min(1))
+    .min(1)
+    .max(THREAD_RUNTIME_STATE_BATCH_MAX_IDS)
+}).strict()
+export type ThreadRuntimeStateBatchRequest = z.infer<typeof ThreadRuntimeStateBatchRequestSchema>
+
+export const ThreadRuntimeStateBatchResultSchema = z.discriminatedUnion('ok', [
+  z.object({
+    id: z.string().min(1),
+    ok: z.literal(true),
+    state: ThreadRuntimeStateSchema
+  }),
+  z.object({
+    id: z.string().min(1),
+    ok: z.literal(false),
+    error: z.object({
+      code: z.enum(['not_found', 'unavailable']),
+      message: z.string().min(1)
+    })
+  })
+])
+export type ThreadRuntimeStateBatchResult = z.infer<typeof ThreadRuntimeStateBatchResultSchema>
+
+export const ThreadRuntimeStateBatchResponseSchema = z.object({
+  results: z.array(ThreadRuntimeStateBatchResultSchema).max(THREAD_RUNTIME_STATE_BATCH_MAX_IDS)
+})
+export type ThreadRuntimeStateBatchResponse = z.infer<typeof ThreadRuntimeStateBatchResponseSchema>
 
 export const THREAD_TIMELINE_MAX_ITEMS = 300
 export const THREAD_TIMELINE_MAX_ITEM_BYTES = 4 * 1024 * 1024

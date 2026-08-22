@@ -11,6 +11,8 @@ import {
   SetThreadGoalRequest,
   SetThreadTodosRequest,
   ThreadGoalResponse,
+  ThreadRuntimeStateBatchRequestSchema,
+  ThreadRuntimeStateBatchResponseSchema,
   ThreadRuntimeStateSchema,
   ThreadSchema,
   ThreadSchemaReadable,
@@ -18,6 +20,7 @@ import {
   ThreadTodosResponse,
   THREAD_TIMELINE_MAX_ITEM_BYTES,
   THREAD_TIMELINE_MAX_ITEMS,
+  THREAD_RUNTIME_STATE_BATCH_CONCURRENCY,
   UpdateThreadRequest,
   type ThreadRecord
 } from '../../contracts/threads.js'
@@ -194,22 +197,40 @@ export async function getThread(
 export async function getThreadState(
   service: ThreadService,
   threadId: string,
-  sessionStore?: SessionStore
+  sessionStore?: SessionStore,
+  userInputGate?: UserInputGate
 ): Promise<JsonResponse> {
-  const latestSeq = sessionStore ? await sessionStore.highestSeq(threadId) : 0
-  const thread = await loadThreadMetadata(service, threadId)
-  if (!thread) {
+  const state = await loadThreadRuntimeState(service, threadId, sessionStore, userInputGate)
+  if (!state) {
     return jsonResponse(
       { code: 'not_found', message: `thread not found: ${threadId}` },
       404
     )
   }
+  return jsonResponse(state)
+}
+
+/** Build the lightweight state projection without materializing item history. */
+export async function loadThreadRuntimeState(
+  service: ThreadService,
+  threadId: string,
+  sessionStore?: SessionStore,
+  userInputGate?: UserInputGate
+): Promise<z.infer<typeof ThreadRuntimeStateSchema> | null> {
+  const [latestSeq, thread] = await Promise.all([
+    sessionStore ? sessionStore.highestSeq(threadId) : Promise.resolve(0),
+    loadThreadMetadata(service, threadId)
+  ])
+  if (!thread) {
+    return null
+  }
   const latestTurn = thread.turns.at(-1)
-  return jsonResponse(ThreadRuntimeStateSchema.parse({
+  return ThreadRuntimeStateSchema.parse({
     id: thread.id,
     status: thread.status,
     updatedAt: thread.updatedAt,
     latestSeq,
+    pendingUserInputIds: userInputGate?.pending(threadId).map((request) => request.id) ?? [],
     latestTurn: latestTurn
       ? {
           id: latestTurn.id,
@@ -217,7 +238,52 @@ export async function getThreadState(
           orchestration: latestTurn.orchestration === 'graph' ? 'graph' : 'direct'
         }
       : null
-  }))
+  })
+}
+
+/**
+ * Resolve a bounded set of lightweight states. Failures stay scoped to their
+ * thread so one unavailable execution owner cannot block the rest of the list.
+ */
+export async function getThreadStates(
+  request: Request,
+  loadState: (threadId: string) => Promise<z.infer<typeof ThreadRuntimeStateSchema> | null>
+): Promise<JsonResponse> {
+  const body = await readJsonBody(request)
+  if (!body.ok) return body.response
+  const parsed = ThreadRuntimeStateBatchRequestSchema.safeParse(body.value)
+  if (!parsed.success) {
+    return validationError('invalid thread states body', parsed.error.issues)
+  }
+  const threadIds = [...new Set(parsed.data.threadIds)]
+  const results: z.infer<typeof ThreadRuntimeStateBatchResponseSchema>['results'] =
+    new Array(threadIds.length)
+  let cursor = 0
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = cursor
+      cursor += 1
+      if (index >= threadIds.length) return
+      const id = threadIds[index]
+      try {
+        const state = await loadState(id)
+        results[index] = state
+          ? { id, ok: true, state }
+          : { id, ok: false, error: { code: 'not_found', message: `thread not found: ${id}` } }
+      } catch {
+        results[index] = {
+          id,
+          ok: false,
+          error: { code: 'unavailable', message: `thread state unavailable: ${id}` }
+        }
+      }
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(THREAD_RUNTIME_STATE_BATCH_CONCURRENCY, threadIds.length) },
+    worker
+  ))
+  return jsonResponse(ThreadRuntimeStateBatchResponseSchema.parse({ results }))
 }
 
 /**

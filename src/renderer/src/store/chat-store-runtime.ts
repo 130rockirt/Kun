@@ -115,6 +115,7 @@ import {
   runtimeStatusText,
   upsertRuntimeErrorBlock
 } from './chat-store-runtime-projection-support'
+import { loadThreadStates as loadProviderThreadStates } from '../agent/thread-state-loader'
 
 export {
   MAX_WATCHED_COMPLETION_NOTIFICATIONS,
@@ -184,6 +185,26 @@ export function syncTurnCompletionPoll(
         ...(await provider.getThreadState(threadId)),
         ...(completionWatchKey ? { completionWatchKey } : {})
       }
+    },
+    loadThreadStates: async (_state, threadIds) => {
+      const provider = getProvider()
+      const results = await loadProviderThreadStates(provider, threadIds)
+      return results.map((result) => result.ok
+        ? {
+            id: result.id,
+            ok: true as const,
+            state: {
+              ...result.state,
+              ...(watchCompletionNotificationKeys.get(result.id)
+                ? { completionWatchKey: watchCompletionNotificationKeys.get(result.id) }
+                : {})
+            }
+          }
+        : {
+            id: result.id,
+            ok: false as const,
+            missing: result.error.code === 'not_found'
+          })
     },
     threadLooksRunning,
     onCompletedThreads: async (done, _state, setState, getState) => {

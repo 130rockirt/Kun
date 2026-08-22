@@ -189,6 +189,35 @@ export function sddDraftHistorySavedRevision(
   return draft ? `${draft.id}\n${draft.updatedAt}` : ''
 }
 
+/** Stable across title, status, sequence, and other activity-only updates. */
+export function sidebarThreadWorkspaceIdentityKey(threads: NormalizedThread[]): string {
+  return threads
+    .map((thread) => `${thread.id}\u0000${normalizeWorkspaceRoot(thread.workspace ?? '')}`)
+    .sort()
+    .join('\n')
+}
+
+export function sidebarWorktreeDiscoveryKey(
+  threads: NormalizedThread[],
+  workspaceRoot: string,
+  workspaceRoots: string[]
+): string {
+  const pathsByIdentity = new Map<string, string>()
+  for (const path of [
+    workspaceRoot,
+    ...workspaceRoots,
+    ...threads.map((thread) => thread.workspace ?? '')
+  ]) {
+    const key = workspaceRootIdentityKey(path)
+    if (key && !pathsByIdentity.has(key)) pathsByIdentity.set(key, path)
+  }
+  return JSON.stringify(
+    [...pathsByIdentity.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, path]) => path)
+  )
+}
+
 export function SidebarProjectsSection({
   threads,
   activeView,
@@ -247,27 +276,18 @@ export function SidebarProjectsSection({
     () => readThreadWorktreeRegistry().worktrees
   )
   const [discoveredThreadWorktrees, setDiscoveredThreadWorktrees] = useState<SidebarThreadWorktrees>({})
+  const threadWorkspaceIdentityKey = sidebarThreadWorkspaceIdentityKey(threads)
+  const workspaceRootsIdentityKey = workspaceRoots.map(normalizeWorkspaceRoot).sort().join('\n')
 
   useEffect(() => {
     setRegisteredThreadWorktrees(readThreadWorktreeRegistry().worktrees)
-  }, [activeThreadId, threads, workspaceRoots])
+  }, [activeThreadId, threadWorkspaceIdentityKey, workspaceRootsIdentityKey])
 
-  const worktreeDiscoveryKey = useMemo(() => {
-    const pathsByIdentity = new Map<string, string>()
-    for (const path of [
-      workspaceRoot,
-      ...workspaceRoots,
-      ...threads.map((thread) => thread.workspace ?? '')
-    ]) {
-      const key = workspaceRootIdentityKey(path)
-      if (key && !pathsByIdentity.has(key)) pathsByIdentity.set(key, path)
-    }
-    return JSON.stringify(
-      [...pathsByIdentity.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([, path]) => path)
-    )
-  }, [threads, workspaceRoot, workspaceRoots])
+  const worktreeDiscoveryKey = sidebarWorktreeDiscoveryKey(
+    threads,
+    workspaceRoot,
+    workspaceRoots
+  )
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.kunGui?.getGitBranches !== 'function') return

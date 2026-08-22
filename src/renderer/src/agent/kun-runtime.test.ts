@@ -372,6 +372,7 @@ describe('KunRuntimeProvider', () => {
         status: 'running',
         updatedAt: '2026-08-07T00:00:00.000Z',
         latestSeq: 91,
+        pendingUserInputIds: ['input-state'],
         latestTurn: { id: 'turn_state', status: 'running', orchestration: 'direct' }
       })
     }))
@@ -381,11 +382,66 @@ describe('KunRuntimeProvider', () => {
       status: 'running',
       updatedAt: '2026-08-07T00:00:00.000Z',
       latestSeq: 91,
+      pendingUserInputIds: ['input-state'],
       latestTurnId: 'turn_state',
       latestTurnStatus: 'running',
       latestTurnOrchestration: 'direct'
     })
     expect(runtimeRequest).toHaveBeenCalledWith('/v1/threads/thr_state/state', 'GET')
+  })
+
+  it('maps batch thread states and keeps per-thread failures', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({
+        results: [
+          {
+            id: 'thr_waiting',
+            ok: true,
+            state: {
+              id: 'thr_waiting',
+              status: 'running',
+              updatedAt: '2026-08-07T00:00:00.000Z',
+              latestSeq: 92,
+              pendingUserInputIds: ['input-waiting'],
+              latestTurn: null
+            }
+          },
+          {
+            id: 'thr_missing',
+            ok: false,
+            error: { code: 'not_found', message: 'thread not found: thr_missing' }
+          }
+        ]
+      })
+    }))
+    installDsGui({ runtimeRequest })
+
+    await expect(new KunRuntimeProvider().getThreadStates([
+      'thr_waiting', 'thr_missing'
+    ])).resolves.toEqual([
+      {
+        id: 'thr_waiting',
+        ok: true,
+        state: {
+          status: 'running',
+          updatedAt: '2026-08-07T00:00:00.000Z',
+          latestSeq: 92,
+          pendingUserInputIds: ['input-waiting']
+        }
+      },
+      {
+        id: 'thr_missing',
+        ok: false,
+        error: { code: 'not_found', message: 'thread not found: thr_missing' }
+      }
+    ])
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads/states',
+      'POST',
+      JSON.stringify({ threadIds: ['thr_waiting', 'thr_missing'] })
+    )
   })
 
   it('falls back to legacy full detail only when the timeline route is unavailable', async () => {

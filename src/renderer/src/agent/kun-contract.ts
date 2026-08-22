@@ -94,11 +94,23 @@ export type CoreThreadRuntimeStateJson = {
   status: string
   updatedAt: string
   latestSeq: number
+  pendingUserInputIds: string[]
   latestTurn: {
     id: string
     status: string
     orchestration: 'direct' | 'graph'
   } | null
+}
+
+export type CoreThreadRuntimeStateBatchResponseJson = {
+  results: Array<
+    | { id: string; ok: true; state: CoreThreadRuntimeStateJson }
+    | {
+        id: string
+        ok: false
+        error: { code: 'not_found' | 'unavailable'; message: string }
+      }
+  >
 }
 
 export type CoreAttachmentMetadataJson = {

@@ -238,4 +238,58 @@ describe('syncTurnCompletionPoll', () => {
     expect(loadThreadState).toHaveBeenCalledWith(expect.anything(), 'thr_background')
     expect(onCompletedThreads).toHaveBeenCalledOnce()
   })
+
+  it('prefers one batch read for 20 watched conversations', async () => {
+    const ids = Array.from({ length: 20 }, (_, index) => `thr_${index}`)
+    const h = makeHarness({
+      runtimeConnection: 'ready',
+      watchTurnCompletion: Object.fromEntries(ids.map((id) => [id, true]))
+    })
+    const loadThreadState = vi.fn()
+    const loadThreadStates = vi.fn(async (_state: ChatState, threadIds: string[]) =>
+      threadIds.map((id) => ({
+        id,
+        ok: true as const,
+        state: { status: 'running', latestTurnStatus: 'running' }
+      })))
+
+    syncTurnCompletionPoll(h.set, h.get, {
+      loadThreadState,
+      loadThreadStates,
+      threadLooksRunning: (thread) => thread.status === 'running',
+      onCompletedThreads: vi.fn()
+    })
+    await vi.advanceTimersByTimeAsync(1)
+
+    expect(loadThreadStates).toHaveBeenCalledOnce()
+    expect(loadThreadStates).toHaveBeenCalledWith(expect.anything(), ids)
+    expect(loadThreadState).not.toHaveBeenCalled()
+  })
+
+  it('caps legacy completion-state reads at four concurrent requests', async () => {
+    const ids = Array.from({ length: 20 }, (_, index) => `legacy_${index}`)
+    const h = makeHarness({
+      runtimeConnection: 'ready',
+      watchTurnCompletion: Object.fromEntries(ids.map((id) => [id, true]))
+    })
+    let active = 0
+    let maxActive = 0
+    const loadThreadState = vi.fn(async () => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await Promise.resolve()
+      active -= 1
+      return { status: 'running', latestTurnStatus: 'running' }
+    })
+
+    syncTurnCompletionPoll(h.set, h.get, {
+      loadThreadState,
+      threadLooksRunning: (thread) => thread.status === 'running',
+      onCompletedThreads: vi.fn()
+    })
+    await vi.advanceTimersByTimeAsync(1)
+
+    expect(loadThreadState).toHaveBeenCalledTimes(20)
+    expect(maxActive).toBe(4)
+  })
 })

@@ -29,7 +29,6 @@ import {
   kunThreadInterruptPath,
   kunThreadToolCancelPath,
   kunThreadPath,
-  kunThreadStatePath,
   kunThreadTimelinePath,
   kunThreadSteerPath,
   kunThreadTurnsPath,
@@ -72,7 +71,6 @@ import type {
   CoreStartTurnResponseJson,
   CoreThreadGoalResponseJson,
   CoreThreadJson,
-  CoreThreadRuntimeStateJson,
   CoreThreadTimelineJson,
   CoreThreadSummaryJson,
   CoreThreadTodosResponseJson
@@ -473,36 +471,6 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       ...(thread.timeline?.nextCursor ? { historyCursor: thread.timeline.nextCursor } : {}),
       hasMoreHistory: thread.timeline?.hasMore === true,
       ...(thread.designProfile ? { designProfile: thread.designProfile } : {})
-    }
-  }
-
-  async getThreadState(threadId: string): Promise<{
-    status: string
-    updatedAt: string
-    latestSeq: number
-    latestTurnId?: string
-    latestTurnStatus?: string
-    latestTurnOrchestration?: 'direct' | 'graph'
-  }> {
-    const response = await rendererRuntimeClient.runtimeRequest(kunThreadStatePath(threadId), 'GET')
-    if (!response.ok) {
-      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to load thread state'))
-    }
-    const state = readRuntimeJson<CoreThreadRuntimeStateJson>(
-      response.body,
-      'runtime returned an invalid thread state response'
-    )
-    return {
-      status: state.status,
-      updatedAt: state.updatedAt,
-      latestSeq: state.latestSeq,
-      ...(state.latestTurn
-        ? {
-            latestTurnId: state.latestTurn.id,
-            latestTurnStatus: state.latestTurn.status,
-            latestTurnOrchestration: state.latestTurn.orchestration
-          }
-        : {})
     }
   }
 

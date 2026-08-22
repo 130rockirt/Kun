@@ -1,4 +1,5 @@
 import type { Router } from '../router.js'
+import { ThreadRuntimeStateSchema, type ThreadRuntimeState } from '../../contracts/threads.js'
 import {
   createThread,
   clearThreadGoal,
@@ -9,7 +10,9 @@ import {
   getThreadTodos,
   getThread,
   getThreadState,
+  getThreadStates,
   getThreadTimeline,
+  loadThreadRuntimeState,
   listThreads,
   setThreadGoal,
   setThreadTodos,
@@ -65,13 +68,24 @@ export function registerThreadRoutes(
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return contentSearchThreads(runtime.threadService, runtime.sessionStore, request)
   })
+  // Static batch suffix must stay before the generic `/:id` detail route.
+  router.add('POST', '/v1/threads/states', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getThreadStates(request, (threadId) =>
+      loadOwnerAwareThreadState(runtime, request, threadId))
+  })
   // This static suffix must be registered before `/:id`, because Router uses
   // first-match ordering for parameterized paths.
   router.add('GET', '/v1/threads/:id/state', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
     if (forwarded) return forwarded
-    return getThreadState(runtime.threadService, ctx.params.id, runtime.sessionStore)
+    return getThreadState(
+      runtime.threadService,
+      ctx.params.id,
+      runtime.sessionStore,
+      runtime.userInputGate
+    )
   })
   router.add('GET', '/v1/threads/:id/timeline', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
@@ -329,4 +343,34 @@ export function registerThreadRoutes(
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return llmDebugRoundsResponse(runtime)
   })
+}
+
+async function loadOwnerAwareThreadState(
+  runtime: ServerRuntime,
+  batchRequest: Request,
+  threadId: string
+): Promise<ThreadRuntimeState | null> {
+  const stateUrl = new URL(
+    `/v1/threads/${encodeURIComponent(threadId)}/state`,
+    batchRequest.url
+  )
+  const headers = new Headers(batchRequest.headers)
+  headers.delete('content-length')
+  headers.delete('content-type')
+  const stateRequest = new Request(stateUrl, {
+    method: 'GET',
+    headers
+  })
+  const forwarded = await runtime.forwardThreadControl?.(stateRequest, threadId)
+  if (forwarded) {
+    if (forwarded.status === 404) return null
+    if (!forwarded.ok) throw new Error(`owner state request failed: ${forwarded.status}`)
+    return ThreadRuntimeStateSchema.parse(await forwarded.json())
+  }
+  return loadThreadRuntimeState(
+    runtime.threadService,
+    threadId,
+    runtime.sessionStore,
+    runtime.userInputGate
+  )
 }
