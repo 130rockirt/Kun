@@ -244,6 +244,7 @@ export function createThreadReviewActions(
       clearBusyWatchdog()
       set({
         busy: true,
+        busyUnconfirmed: false,
         liveReasoning: '',
         liveAssistant: '',
         error: null,
@@ -292,6 +293,7 @@ export function createThreadReviewActions(
       set({
         error: formatRuntimeError(e),
         busy: false,
+        busyUnconfirmed: false,
         currentTurnId: null,
         currentTurnOrchestration: null,
         currentTurnUserId: null,

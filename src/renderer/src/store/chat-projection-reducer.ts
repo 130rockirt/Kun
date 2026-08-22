@@ -106,6 +106,9 @@ export function reduceChatProjection(
         ...flushed,
         blocks: upsertUserBlock(reconciledBlocks, event),
         busy: true,
+        // A live user_message event is direct runtime evidence; any pending
+        // unconfirmed flag from hydration is now resolved.
+        busyUnconfirmed: false,
         currentTurnId: event.turnId ?? state.currentTurnId,
         currentTurnUserId,
         turnStartedAtByUserId: backgroundNotice
@@ -281,7 +284,7 @@ export function reduceChatProjection(
       const event = action.payload
       const base: Partial<ChatState> =
         !state.busy && !event.updateOnly && !isDetachedSubagentToolEvent(event)
-          ? { busy: true }
+          ? { busy: true, busyUnconfirmed: false }
           : {}
       const childId = toolEventChildId(event)
       const index = state.blocks.findIndex((block) =>

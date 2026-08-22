@@ -124,6 +124,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
     runtime.threadSelectionGeneration += 1
     set((s) => ({
       busy: true,
+      busyUnconfirmed: false,
       blocks: [
         ...s.blocks,
         {
@@ -174,6 +175,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
           set({
             blocks: previousBlocks,
             busy: false,
+            busyUnconfirmed: false,
             currentTurnId: previousCurrentTurnId,
             currentTurnOrchestration: previousCurrentTurnOrchestration,
             currentTurnUserId: previousCurrentTurnUserId,
@@ -252,6 +254,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
           blocks: previousBlocks,
           lastSeq: previousLastSeq,
           busy: false,
+          busyUnconfirmed: false,
           currentTurnId: previousCurrentTurnId,
           currentTurnOrchestration: previousCurrentTurnOrchestration,
           currentTurnUserId: previousCurrentTurnUserId,
@@ -309,6 +312,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
             blocks: previousBlocks,
             lastSeq: previousLastSeq,
             busy: false,
+            busyUnconfirmed: false,
             liveReasoning: previousLiveReasoning,
             liveAssistant: previousLiveAssistant,
             currentTurnId: previousCurrentTurnId,
@@ -556,6 +560,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         set((state) => ({
           blocks: previousBlocks,
           busy: true,
+          busyUnconfirmed: false,
           currentTurnId: previousCurrentTurnId,
           currentTurnOrchestration: previousCurrentTurnOrchestration,
           currentTurnUserId: previousCurrentTurnUserId,
@@ -598,6 +603,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         set((state) => ({
           blocks: previousBlocks,
           busy: false,
+          busyUnconfirmed: false,
           currentTurnId: previousCurrentTurnId,
           currentTurnOrchestration: previousCurrentTurnOrchestration,
           currentTurnUserId: previousCurrentTurnUserId,
@@ -654,6 +660,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
           : [...state.blocks, localConversationErrorBlock(e, `local_error_${userBlockId}`)],
         error: view.summary,
         busy: false,
+        busyUnconfirmed: false,
         currentTurnId: null,
         currentTurnOrchestration: null,
         queuedMessages: failQueuedSubmission(

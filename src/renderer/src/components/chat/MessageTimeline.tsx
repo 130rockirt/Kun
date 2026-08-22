@@ -69,6 +69,7 @@ export { summarizeToolBlock } from './message-timeline-process'
 
 export function timelineTurnIsProcessing(input: {
   busy: boolean
+  busyUnconfirmed?: boolean
   isLatestTurn: boolean
   isActiveTurn?: boolean
   turnPending: boolean
@@ -82,6 +83,10 @@ export function timelineTurnIsProcessing(input: {
   ) {
     return false
   }
+  // An unconfirmed busy flag comes from a persisted snapshot that claims a
+  // running turn; until live events confirm it, render the history settled
+  // instead of replaying live-progress UI over a finished conversation.
+  if (input.busyUnconfirmed && input.busy) return input.turnPending || input.hasLiveStream
   return (input.busy && (input.isActiveTurn ?? input.isLatestTurn)) ||
     input.turnPending ||
     input.hasLiveStream
@@ -136,6 +141,7 @@ export function MessageTimeline({
     chooseWorkspace,
     activeClawChannel,
     busy,
+    busyUnconfirmed,
     threadHasMoreHistory,
     threadHistoryLoading,
     loadEarlierThreadHistory,
@@ -509,6 +515,7 @@ export function MessageTimeline({
           const hasLiveStream = isActiveTurn && !!(liveReasoning.trim() || live.trim())
           const turnIsProcessing = timelineTurnIsProcessing({
             busy,
+            busyUnconfirmed,
             isLatestTurn,
             isActiveTurn,
             turnPending,

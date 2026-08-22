@@ -386,6 +386,13 @@ export type ChatState = {
    */
   turnTimingMetrics: Map<string, TurnTimingMetrics>
   busy: boolean
+  /**
+   * True right after a thread switch/recovery hydrated a snapshot that claims
+   * a running turn, before that claim is re-confirmed by the runtime. The
+   * timeline must render history as settled (no live-progress UI, no
+   * typewriter replay) while input/disabling decisions still follow `busy`.
+   */
+  busyUnconfirmed: boolean
   error: string | null
   runtimeErrorDetail: string | null
   currentTurnId: string | null

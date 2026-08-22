@@ -473,6 +473,9 @@ export function createThreadCreationActions(
           liveAssistant: '',
           error: busy ? runtimeStreamRecoveringMessage() : null,
           busy,
+          // Recovery re-read a persisted snapshot; its running claim stays
+          // unconfirmed until the live stream proves the turn is alive.
+          busyUnconfirmed: busy,
           currentTurnId,
           currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
           currentTurnUserId,

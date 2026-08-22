@@ -306,6 +306,13 @@ export function buildThreadEventSink(
 ): ThreadEventSink {
   const boundThreadId = binding.threadId?.trim() ?? ''
   let appliedDeltaSeqFloor = binding.sinceSeq ?? 0
+  // Hydrated threads subscribe exactly at their snapshot's high-water mark, so
+  // the first accepted event on a stream is live runtime evidence: any pending
+  // unconfirmed busy flag from snapshot hydration is resolved as soon as one
+  // arrives. Heartbeats alone do not confirm a running turn.
+  const confirmBusyOnce = (): void => {
+    if (get().busyUnconfirmed) set({ busyUnconfirmed: false })
+  }
   // Update-only child lifecycle events can race their parent tool card. Keep
   // that short-lived repair state inside this one stream so reconnects and
   // other threads cannot consume each other's child ids.
@@ -404,6 +411,7 @@ export function buildThreadEventSink(
       if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
       armBusyWatchdog(set, get)
+      confirmBusyOnce()
       set((state) => reduce(state, { type: 'user_message_received', payload: event }))
     },
     onDeltas: (rawDeltas) => {
@@ -419,6 +427,7 @@ export function buildThreadEventSink(
       if (deltas.length === 0) return
       resetBusyRecoveryAttempts()
       if (!get().busy) armBusyWatchdog(set, get)
+      confirmBusyOnce()
       set((state) => reduce(state, { type: 'deltas_received', deltas }))
     },
     onAssistantItem: (item) => {
@@ -431,6 +440,7 @@ export function buildThreadEventSink(
       publishLiveOfficePreviewForToolEvent(get(), event, boundThreadId || undefined)
       runEffects([{ type: 'refresh_write_workspace', event }])
       resetBusyRecoveryAttempts()
+      confirmBusyOnce()
       if (!get().busy && !event.updateOnly && !isDetachedSubagentToolEvent(event)) {
         armBusyWatchdog(set, get)
       }
@@ -468,6 +478,7 @@ export function buildThreadEventSink(
     onCompaction: (event) => {
       if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
+      confirmBusyOnce()
       if (!get().busy && event.status === 'running') armBusyWatchdog(set, get)
       if (get().busy && event.status !== 'running' && !get().currentTurnId) clearBusyWatchdog()
       set((state) => reduce(state, { type: 'compaction_updated', payload: event }))

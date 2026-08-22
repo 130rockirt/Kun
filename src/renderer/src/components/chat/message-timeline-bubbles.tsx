@@ -23,6 +23,7 @@ import {
   formatMessageDateTime
 } from './message-timeline-bubble-support'
 import { ToolAttachmentPreviews } from './message-timeline-media-views'
+import { LiveAssistantStreamingProvider } from './live-assistant-streaming'
 import { metaString } from './message-timeline-bubble-meta'
 
 export { GeneratedFilesPanel } from './message-timeline-media-views'
@@ -83,6 +84,10 @@ function MessageBubbleImpl({
   }
   if (block.kind === 'assistant') {
     const streaming = block.id === 'live-assistant'
+    // Gate the typewriter on busy confirmation: catch-up replay after
+    // reselecting a thread must render whole, not re-type.
+    const busyUnconfirmed = useChatStore((s) => s.busyUnconfirmed)
+    const effectiveStreaming = streaming && !busyUnconfirmed
     const createdAtLabel = block.createdAt
       ? formatMessageDateTime(block.createdAt, i18n.language)
       : null
@@ -91,10 +96,11 @@ function MessageBubbleImpl({
         ? turnTimingMetrics.get(block.turnId)
         : undefined
     return (
-      <div className="group/message flex min-w-0 max-w-full flex-col">
-        <div className="ds-markdown ds-chat-answer min-w-0 max-w-full text-ds-ink">
-          <AssistantMarkdown text={block.text} streaming={streaming} />
-        </div>
+      <LiveAssistantStreamingProvider streaming={effectiveStreaming}>
+        <div className="group/message flex min-w-0 max-w-full flex-col">
+          <div className="ds-markdown ds-chat-answer min-w-0 max-w-full text-ds-ink">
+            <AssistantMarkdown text={block.text} streaming={effectiveStreaming} />
+          </div>
         {!streaming ? (
           <div className="mt-1 flex min-h-5 min-w-0 items-center justify-between gap-3 text-[11.5px] text-ds-faint opacity-0 transition duration-150 group-hover/message:opacity-100">
             <span className="flex min-w-0 items-center gap-2">
@@ -140,7 +146,8 @@ function MessageBubbleImpl({
             </div>
           </div>
         ) : null}
-      </div>
+        </div>
+      </LiveAssistantStreamingProvider>
     )
   }
   if (block.kind === 'reasoning') {

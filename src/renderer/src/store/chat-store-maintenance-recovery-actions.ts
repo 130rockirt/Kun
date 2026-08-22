@@ -197,6 +197,7 @@ function settleInterruptedTurn(set: ChatStoreSet, get: ChatStoreGet): void {
     const out = flushLiveBlocks(s, {
       ...finalizeTurnTiming(s),
       busy: false,
+      busyUnconfirmed: false,
       currentTurnId: null,
       currentTurnOrchestration: null,
       currentTurnUserId: null,

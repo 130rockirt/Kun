@@ -18,6 +18,7 @@ export type ThreadSnapshot = {
   liveReasoning: string
   liveAssistant: string
   busy: boolean
+  busyUnconfirmed: boolean
   currentTurnId: string | null
   currentTurnOrchestration: 'direct' | 'graph' | null
   currentTurnUserId: string | null
@@ -82,6 +83,7 @@ export function snapshotThreadProjection(state: ChatState, payloadBytes?: number
     liveReasoning: state.liveReasoning,
     liveAssistant: state.liveAssistant,
     busy: state.busy,
+    busyUnconfirmed: state.busyUnconfirmed,
     currentTurnId: state.currentTurnId,
     currentTurnOrchestration: state.currentTurnOrchestration,
     currentTurnUserId: state.currentTurnUserId,

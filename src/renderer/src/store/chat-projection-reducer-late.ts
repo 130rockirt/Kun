@@ -19,7 +19,7 @@ export function reduceLateChatProjection(
   switch (action.type) {
     case 'runtime_status_received': {
       const event = action.payload
-      const base: Partial<ChatState> = state.busy ? {} : { busy: true }
+      const base: Partial<ChatState> = state.busy ? {} : { busy: true, busyUnconfirmed: false }
       const block: ChatBlock = {
         kind: 'system',
         id: event.itemId,
@@ -107,7 +107,7 @@ export function reduceLateChatProjection(
     }
     case 'review_updated': {
       const event = action.payload
-      const base: Partial<ChatState> = !state.busy && event.status === 'running' ? { busy: true } : {}
+      const base: Partial<ChatState> = !state.busy && event.status === 'running' ? { busy: true, busyUnconfirmed: false } : {}
       const index = state.blocks.findIndex(
         (block) => block.kind === 'review' && block.id === event.itemId
       )
@@ -327,7 +327,7 @@ export function reduceLateChatProjection(
           currentTurnUserId: null,
           blocks: context.settlePendingRuntimeWork(state.blocks)
         } : {}),
-        ...(state.busy ? { busy: false } : {}),
+        ...(state.busy ? { busy: false, busyUnconfirmed: false } : {}),
         ...(threads !== state.threads ? { threads } : {})
       })
       if (!threadId) return patch
@@ -351,6 +351,7 @@ export function reduceLateChatProjection(
       })
       if (!shouldSettle) return patch
       patch.busy = false
+      patch.busyUnconfirmed = false
       patch.currentTurnId = null
       patch.currentTurnOrchestration = null
       patch.currentTurnUserId = null

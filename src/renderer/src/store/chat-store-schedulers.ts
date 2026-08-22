@@ -122,6 +122,7 @@ export function armBusyWatchdog(
       const base: Partial<ChatState> = {
         ...options.finalizeBusyState(snapshot),
         busy: false,
+        busyUnconfirmed: false,
         currentTurnId: null,
         currentTurnOrchestration: null,
         error: options.busyTimeoutMessage()

@@ -249,6 +249,9 @@ export function createThreadSelectionActions(
         liveAssistant: cached.liveAssistant,
         error: null,
         busy: cached.busy,
+        // A cached snapshot's running claim is stale until the runtime stream
+        // proves the turn is still live. Render history settled meanwhile.
+        busyUnconfirmed: cached.busy,
         currentTurnId: cached.currentTurnId,
         currentTurnOrchestration: cached.currentTurnOrchestration,
         currentTurnUserId: cached.currentTurnUserId,
@@ -298,6 +301,7 @@ export function createThreadSelectionActions(
       liveReasoning: '',
       liveAssistant: '',
       busy: false,
+      busyUnconfirmed: false,
       currentTurnId: null,
       currentTurnOrchestration: null,
       currentTurnUserId: null,
@@ -405,6 +409,9 @@ export function createThreadSelectionActions(
         liveAssistant: '',
         error: null,
         busy,
+        // The persisted snapshot's running claim may be stale (interrupted
+        // runtime); keep the timeline settled until live events confirm it.
+        busyUnconfirmed: busy,
         currentTurnId: busy ? latestTurnId ?? null : null,
         currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
         currentTurnUserId,
@@ -608,6 +615,8 @@ export function createThreadSelectionActions(
         lastSeq: latestSeq,
         liveDeltaSeqFloor: latestSeq,
         busy,
+        // Persisted running claim is unconfirmed until live events arrive.
+        busyUnconfirmed: busy,
         currentTurnId: busy ? latestTurnId ?? null : null,
         currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
         currentTurnUserId,

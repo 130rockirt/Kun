@@ -299,6 +299,7 @@ export function clearedThreadSelection(): Pick<
   | 'liveReasoning'
   | 'liveAssistant'
   | 'busy'
+  | 'busyUnconfirmed'
   | 'currentTurnId'
   | 'currentTurnOrchestration'
   | 'currentTurnUserId'
@@ -325,6 +326,7 @@ export function clearedThreadSelection(): Pick<
     liveReasoning: '',
     liveAssistant: '',
     busy: false,
+    busyUnconfirmed: false,
     currentTurnId: null,
     currentTurnOrchestration: null,
     currentTurnUserId: null,

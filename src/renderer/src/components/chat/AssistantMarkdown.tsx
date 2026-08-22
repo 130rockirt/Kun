@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react'
 import { lazy, Suspense } from 'react'
+import { useLiveAssistantStreaming } from './live-assistant-streaming'
 
 const LazyStreamdownAssistant = lazy(() =>
   import('./StreamdownAssistant').then((module) => ({ default: module.StreamdownAssistant }))
@@ -16,6 +17,10 @@ export function AssistantMarkdown({
   className?: string
   hideHtmlComments?: boolean
 }): ReactElement {
+  // An unconfirmed busy flag gates the typewriter off so catch-up replay
+  // (returning to a thread that ran while away) renders whole instead of
+  // re-typing text the user already watched settle.
+  const effectiveStreaming = streaming && useLiveAssistantStreaming()
   const fallbackText = hideHtmlComments
     ? text.replace(/<!--[\s\S]*?(?:-->|$)/g, '')
     : text
@@ -30,7 +35,7 @@ export function AssistantMarkdown({
     >
       <LazyStreamdownAssistant
         text={text}
-        streaming={streaming}
+        streaming={effectiveStreaming}
         className={className}
         hideHtmlComments={hideHtmlComments}
       />
