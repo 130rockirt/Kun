@@ -1,9 +1,17 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { RuntimeHandoffDiscoveryRecord } from '../../../kun/src/server/runtime-discovery.js'
 import type { ManagerHandoffDiscoveryRecord } from '../../../kun/src/manager/manager-discovery.js'
 import {
+  readForcedRuntimeRecovery,
+  recordVerifiedForcedRuntimeOwner
+} from '../../../kun/src/manager/forced-runtime-recovery.js'
+import {
   drainKunOwnersForHandoff,
   KunHandoffError,
+  requiresInstalledBuildHandoff,
   withDrainedKunOwners
 } from './kun-installed-build-handoff'
 
@@ -49,10 +57,10 @@ function runtime(
   }
 }
 
-function input() {
+function input(overrides: { dataDirs?: string[] } = {}) {
   return {
     reason: 'installed-build-change' as const,
-    dataDirs: [dataDir],
+    dataDirs: overrides.dataDirs ?? [dataDir],
     settingsPath,
     controlDir,
     targetBuildId: 'b'.repeat(64)
@@ -179,6 +187,122 @@ describe('installed build handoff coordinator', () => {
     })
 
     expect(stopped).toEqual([first.instanceId, second.instanceId])
+  })
+
+  it('records forced owners from legacy and current data directories without failing handoff', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-installed-build-handoff-'))
+    try {
+      const temporaryControlDir = join(root, 'control')
+      const legacyDataDir = join(root, 'legacy-data')
+      const currentDataDir = join(root, 'current-data')
+      const legacy = runtime('production', {
+        instanceId: 'production-legacy',
+        pid: 911
+      })
+      const current = runtime('production', {
+        instanceId: 'production-current',
+        pid: 912
+      })
+      const runtimes = new Map([
+        [legacyDataDir, legacy],
+        [currentDataDir, current]
+      ] as const)
+      const stopped: Array<[string, string]> = []
+
+      const report = await drainKunOwnersForHandoff({
+        ...input({ dataDirs: [legacyDataDir, currentDataDir] }),
+        controlDir: temporaryControlDir
+      }, {
+        withManagerLock: async <T>(_dir: string, action: () => Promise<T>) => action(),
+        readManager: async () => null,
+        readRuntime: async (dir, flavor) =>
+          flavor === 'production' ? runtimes.get(dir) ?? null : null,
+        processAlive: (pid) => [...runtimes.values()].some((entry) => entry.pid === pid),
+        recordForcedOwner: recordVerifiedForcedRuntimeOwner,
+        stopRuntime: (async (dir: string, target: { discovery: RuntimeHandoffDiscoveryRecord }) => {
+          stopped.push([dir, target.discovery.instanceId])
+          runtimes.delete(dir)
+          return { stopped: true, forced: true }
+        }) as never,
+        stopManager: vi.fn() as never
+      })
+
+      expect(stopped).toEqual([
+        [legacyDataDir, legacy.instanceId],
+        [currentDataDir, current.instanceId]
+      ])
+      expect(report.owners).toEqual(expect.arrayContaining([
+        expect.objectContaining({ flavor: 'production', result: 'forced' })
+      ]))
+      const marker = await readForcedRuntimeRecovery(temporaryControlDir)
+      expect(marker?.owners.map((owner) => [owner.dataDir, owner.instanceId])).toEqual([
+        [legacyDataDir, legacy.instanceId],
+        [currentDataDir, current.instanceId]
+      ])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('requires handoff when an old Runtime exists only in a Manager status slot', async () => {
+    const currentManager = manager({ buildId: 'b'.repeat(64) })
+    const slot = runtime('production', { buildId: 'a'.repeat(64) })
+    let runtimeAlive = true
+    let managerAlive = true
+    const fetchMock = vi.fn(async () => Response.json({
+      instanceId: currentManager.instanceId,
+      pid: currentManager.pid,
+      startedAt: currentManager.startedAt,
+      slots: [{ registration: { ...slot, flavor: 'production' } }]
+    }))
+    const stopRuntime = vi.fn(async () => {
+      runtimeAlive = false
+      return { stopped: true, forced: false }
+    })
+    const overrides = {
+      withManagerLock: async <T>(_dir: string, action: () => Promise<T>) => action(),
+      readManager: async () => managerAlive ? currentManager : null,
+      readRuntime: async () => null,
+      processAlive: (pid: number) =>
+        pid === slot.pid ? runtimeAlive : pid === currentManager.pid && managerAlive,
+      stopRuntime: stopRuntime as never,
+      stopManager: vi.fn(async () => {
+        managerAlive = false
+        return { stopped: true, forced: false }
+      }) as never
+    }
+
+    await expect(requiresInstalledBuildHandoff({
+      ...input(),
+      fetch: fetchMock as unknown as typeof fetch
+    }, overrides)).resolves.toBe(true)
+    await drainKunOwnersForHandoff({
+      ...input(),
+      fetch: fetchMock as unknown as typeof fetch
+    }, overrides)
+    expect(stopRuntime).toHaveBeenCalledOnce()
+  })
+
+  it('does not hand off when the Manager and status Runtime already match the target build', async () => {
+    const currentManager = manager({ buildId: 'b'.repeat(64) })
+    const slot = runtime('production', { buildId: 'b'.repeat(64) })
+    const fetchMock = vi.fn(async () => Response.json({
+      instanceId: currentManager.instanceId,
+      pid: currentManager.pid,
+      startedAt: currentManager.startedAt,
+      slots: [{ registration: { ...slot, flavor: 'production' } }]
+    }))
+
+    await expect(requiresInstalledBuildHandoff({
+      ...input(),
+      fetch: fetchMock as unknown as typeof fetch
+    }, {
+      readManager: async () => currentManager,
+      readRuntime: async () => null,
+      processAlive: (pid) => pid === currentManager.pid || pid === slot.pid,
+      stopRuntime: vi.fn() as never,
+      stopManager: vi.fn() as never
+    })).resolves.toBe(false)
   })
 
   it('fails closed before stopping anything when Manager settings scope differs', async () => {

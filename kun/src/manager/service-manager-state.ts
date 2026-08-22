@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto'
-import { chmod, readFile } from 'node:fs/promises'
+import { chmod, readFile, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
@@ -41,11 +41,13 @@ import {
   buildServiceManagerRouter
 } from './service-manager-router.js'
 import {
+  consumeForcedRuntimeRecoveryOwners,
   forcedOwnerKey,
   readForcedRuntimeRecovery,
-  removeForcedRuntimeRecovery,
+  type ForcedRuntimeRecoveryOwner,
   type VerifiedForcedRuntimeOwner
 } from './forced-runtime-recovery.js'
+import { sameCanonicalPath } from './canonical-path.js'
 
 export const KUN_MANAGER_CAPABILITIES = [
   'runtime-slots-v1',
@@ -390,16 +392,53 @@ export type ServiceManagerHandle = NodeHttpServerHandle & {
 
 export async function reconcileVerifiedForcedRuntimeRecovery(input: {
   controlDir: string
+  dataDir: string
   record: NonNullable<Awaited<ReturnType<typeof readForcedRuntimeRecovery>>>
   state: ServiceManagerState
   sharedData: Pick<ManagerSharedDataStore, 'reconcileExpiredLease'>
   flushState: () => Promise<void>
 }): Promise<number> {
-  const expired = input.state.expireVerifiedRuntimeOwners(input.record.owners)
+  const owners = await forcedRecoveryOwnersForDataDir(input.record.owners, input.dataDir)
+  if (owners.length === 0) return 0
+  const expired = input.state.expireVerifiedRuntimeOwners(owners)
   for (const lease of expired) await input.sharedData.reconcileExpiredLease(lease)
   await input.flushState()
-  await removeForcedRuntimeRecovery(input.controlDir, input.record.markerId)
+  const consumed = await consumeForcedRuntimeRecoveryOwners({
+    controlDir: input.controlDir,
+    markerId: input.record.markerId,
+    owners
+  })
+  if (!consumed) {
+    throw new Error('Kun forced-runtime recovery marker changed during reconciliation')
+  }
   return expired.length
+}
+
+async function forcedRecoveryOwnersForDataDir(
+  owners: readonly ForcedRuntimeRecoveryOwner[],
+  dataDir: string
+): Promise<ForcedRuntimeRecoveryOwner[]> {
+  const activeRealPath = await canonicalRealPath(dataDir)
+  const matched: ForcedRuntimeRecoveryOwner[] = []
+  for (const owner of owners) {
+    if (sameCanonicalPath(owner.dataDir, dataDir)) {
+      matched.push(owner)
+      continue
+    }
+    const ownerRealPath = await canonicalRealPath(owner.dataDir)
+    if (activeRealPath && ownerRealPath && sameCanonicalPath(ownerRealPath, activeRealPath)) {
+      matched.push(owner)
+    }
+  }
+  return matched
+}
+
+async function canonicalRealPath(path: string): Promise<string | null> {
+  try {
+    return await realpath(path)
+  } catch {
+    return null
+  }
 }
 
 export async function startServiceManager(input: {
@@ -427,7 +466,7 @@ export async function startServiceManager(input: {
   try {
     ;[state, forcedRecovery] = await Promise.all([
       input.state ?? readPersistedManagerState(managerStatePath),
-      readForcedRuntimeRecovery(input.controlDir, input.dataDir)
+      readForcedRuntimeRecovery(input.controlDir)
     ])
   } catch (error) {
     await dataDirLease.release().catch(() => undefined)
@@ -460,6 +499,7 @@ export async function startServiceManager(input: {
     try {
       await reconcileVerifiedForcedRuntimeRecovery({
         controlDir: input.controlDir,
+        dataDir: input.dataDir,
         record: forcedRecovery,
         state,
         sharedData,

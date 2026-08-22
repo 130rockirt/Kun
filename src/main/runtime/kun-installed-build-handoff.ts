@@ -153,25 +153,13 @@ export async function requiresInstalledBuildHandoff(
 ): Promise<boolean> {
   if (!input.targetBuildId) return false
   const deps = { ...defaultDependencies, ...overrides }
-  const controlDir = input.controlDir ?? defaultKunControlDir()
-  const manager = await deps.readManager(controlDir)
-  if (manager && deps.processAlive(manager.pid) && manager.buildId !== input.targetBuildId) {
-    return true
-  }
-  const dataDirs = canonicalDataDirs([
-    ...input.dataDirs,
-    ...(manager ? [manager.dataDir] : [])
-  ])
-  for (const dataDir of dataDirs) {
-    const runtime = await deps.readRuntime(dataDir, 'production')
-    if (runtime && deps.processAlive(runtime.pid) &&
-      runtime.buildId !== runtimeBuildIdForFlavor(input.targetBuildId, 'production')) {
-      return true
-    }
-  }
-  const development = await deps.readRuntime(controlDir, 'development')
-  return Boolean(development && deps.processAlive(development.pid) &&
-    development.buildId !== runtimeBuildIdForFlavor(input.targetBuildId, 'development'))
+  const discovered = await discoverHandoffOwners(input, deps)
+  if (discovered.manager && discovered.manager.buildId !== input.targetBuildId) return true
+  const targetBuildId = input.targetBuildId
+  return discovered.runtimes.some((runtime) =>
+    runtime.inspection.discovery.buildId !==
+      runtimeBuildIdForFlavor(targetBuildId, runtime.flavor)
+  )
 }
 
 export async function withDrainedKunOwners<T>(

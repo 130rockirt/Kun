@@ -128,6 +128,7 @@ describe('update handoff data continuity', () => {
     let stateFlushed = false
     await expect(reconcileVerifiedForcedRuntimeRecovery({
       controlDir,
+      dataDir,
       record: marker,
       state,
       sharedData: store,
