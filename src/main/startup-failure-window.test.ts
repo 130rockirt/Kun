@@ -30,7 +30,7 @@ const electron = vi.hoisted(() => {
       relaunch: vi.fn(),
       quit: vi.fn()
     },
-    BrowserWindow: vi.fn(function MockBrowserWindow() {
+    BrowserWindow: vi.fn(function MockBrowserWindow(_options?: unknown) {
       return window
     }),
     dialog: { showErrorBox: vi.fn() },
@@ -239,6 +239,17 @@ describe('showStartupFailureWindow', () => {
     finishRecovery()
     await vi.waitFor(() => expect(electron.app.relaunch).toHaveBeenCalledOnce())
     expect(electron.app.quit).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the recovery page without any privileged preload', () => {
+    showStartupFailureWindow(new Error('failed'), '/tmp/kun-logs')
+
+    const constructorOptions = electron.BrowserWindow.mock.calls[0]?.[0] as {
+      webPreferences?: { preload?: string; contextIsolation?: boolean; sandbox?: boolean }
+    }
+    expect(constructorOptions.webPreferences?.preload).toBeUndefined()
+    expect(constructorOptions.webPreferences?.contextIsolation).toBe(true)
+    expect(constructorOptions.webPreferences?.sandbox).toBe(true)
   })
 
   it('ignores a forged retry navigation when owner verification failed', () => {

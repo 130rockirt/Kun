@@ -45,6 +45,8 @@ import {
   expandHomePath,
   resolveOpenTargetPath
 } from '../services/workspace-service'
+import { trustedRendererSenderIsCurrent } from '../renderer-trust-policy'
+import { trustedWorkbenchRendererUrl } from '../main-window'
 
 type DialogParentState = {
   destroyed: boolean
@@ -125,19 +127,10 @@ export function trustedWorkbenchSenderIsCurrent(
   event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>,
   window: BrowserWindow | null
 ): boolean {
-  const senderFrame = event.senderFrame
-  const mainFrame = window?.webContents.mainFrame
-  return Boolean(
-    window &&
-    !window.isDestroyed() &&
-    event.sender.id === window.webContents.id &&
-    senderFrame &&
-    senderFrame.detached !== true &&
-    mainFrame &&
-    mainFrame.detached !== true &&
-    senderFrame.processId === mainFrame.processId &&
-    senderFrame.routingId === mainFrame.routingId
-  )
+  return trustedRendererSenderIsCurrent(event, window, {
+    trustedRendererUrl: trustedWorkbenchRendererUrl(),
+    surface: 'workbench'
+  })
 }
 
 export function assertTrustedWorkbenchSender(

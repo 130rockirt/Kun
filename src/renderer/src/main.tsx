@@ -20,6 +20,8 @@ import { installCursorSpotlightTracking } from './lib/cursor-spotlight'
 import { installDataMigrationRendererRpc } from './data-migration/renderer-state-rpc'
 import { installSharedBusinessStorage } from './lib/shared-business-storage'
 import { resolveDesktopTitleBarMode } from '@shared/desktop-title-bar'
+import type { DesktopStartupPhase } from '@shared/desktop-startup-state'
+import { startupPhaseLabel, startupShellAllowsWorkbench } from './startup-shell'
 
 document.documentElement.dataset.platform = window.kunGui?.platform ?? 'unknown'
 document.documentElement.dataset.desktopTitleBar = window.kunGui?.desktopTitleBarMode
@@ -31,6 +33,22 @@ const runtimeMigrationRecoveryMode = new URLSearchParams(window.location.search)
 if (!storageRelocationMode && !runtimeMigrationRecoveryMode) installDataMigrationRendererRpc()
 
 void bootstrap()
+
+function renderStartupShell(phase: DesktopStartupPhase): void {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <main className="flex min-h-screen items-center justify-center bg-ds-canvas p-8 text-ds-ink">
+        <section className="flex items-center gap-3 rounded-full border border-ds-border bg-ds-surface px-5 py-3 shadow-sm">
+          <span
+            className={`h-2.5 w-2.5 rounded-full ${phase === 'recovery_required' ? 'bg-red-500' : 'animate-pulse bg-blue-500'}`}
+            aria-hidden="true"
+          />
+          <span className="text-sm font-medium">{startupPhaseLabel(phase)}</span>
+        </section>
+      </main>
+    </React.StrictMode>
+  )
+}
 
 async function bootstrap(): Promise<void> {
   await import('./i18n')
@@ -52,11 +70,28 @@ async function bootstrap(): Promise<void> {
     )
     return
   }
-  await installSharedBusinessStorage()
-  const { default: App } = await import('./App')
-  ReactDOM.createRoot(document.getElementById('root')!).render(
-    <React.StrictMode>
-      <App />
-    </React.StrictMode>
-  )
+
+  let workbenchStarted = false
+  let unsubscribe = (): void => undefined
+  const startWorkbench = async (): Promise<void> => {
+    if (workbenchStarted) return
+    workbenchStarted = true
+    unsubscribe()
+    await installSharedBusinessStorage()
+    const { default: App } = await import('./App')
+    ReactDOM.createRoot(document.getElementById('root')!).render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>
+    )
+  }
+  const applyPhase = (next: DesktopStartupPhase): void => {
+    if (startupShellAllowsWorkbench(next)) {
+      void startWorkbench()
+      return
+    }
+    if (!workbenchStarted) renderStartupShell(next)
+  }
+  unsubscribe = window.kunGui.startup.onState(applyPhase)
+  applyPhase(await window.kunGui.startup.getState())
 }

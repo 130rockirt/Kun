@@ -131,6 +131,7 @@ export function registerMainIpc(services: MainServices): void {
         })
       })
     }
+    ipcMain.handle('startup:state:get', () => mainState.startupState.phase)
     const applySettingsPatch = async (partial: AppSettingsPatch): Promise<AppSettingsV1> => {
       const { previous, saved } = await runtimeSettingsIntents.serializePersistence(async () => {
         let committedPrevious: AppSettingsV1 | undefined
@@ -289,6 +290,7 @@ export function registerMainIpc(services: MainServices): void {
       store: mainState.store,
       withRegistryCredentials,
       getMainWindow: () => mainState.mainWindow,
+      assertRendererRuntimeReady: () => mainState.startupState.assertReady(),
       applySettingsPatch,
       saveSettingsPatch,
       resetUnreadableCredentials: async () => {
@@ -508,7 +510,13 @@ export function registerMainIpc(services: MainServices): void {
       console.warn('[kun-gui updater] failed to initialize on startup:', error)
     })
 
-    registerRuntimeSseIpc({ ipcMain, store: mainState.store, ensureRuntime, logError })
+    registerRuntimeSseIpc({
+      ipcMain,
+      store: mainState.store,
+      ensureRuntime,
+      assertRendererRuntimeReady: () => mainState.startupState.assertReady(),
+      logError
+    })
     registerCliInstallIpc(ipcMain)
 
     mainState.terminalPtyController = registerTerminalPtyIpc({

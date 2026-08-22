@@ -18,7 +18,7 @@ export function showStartupFailureWindow(
   const canRecoverHandoff = presentation.handoff &&
     presentation.retryable &&
     Boolean(options.recoverHandoff)
-  logError('startup', 'Kun failed before main-window creation.', {
+  logError('startup', 'Kun failed before the desktop became ready.', {
     platform: process.platform,
     packaged: app.isPackaged,
     message

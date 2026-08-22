@@ -267,6 +267,7 @@ export function registerOptions(overrides: Partial<Parameters<typeof import('./r
   return {
     store: { load: vi.fn(async () => settings()) } as never,
     getMainWindow: () => null,
+    assertRendererRuntimeReady: () => undefined,
     applySettingsPatch,
     saveSettingsPatch,
     resetUnreadableCredentials: vi.fn(async () => ({

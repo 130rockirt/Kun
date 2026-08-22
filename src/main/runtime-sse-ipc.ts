@@ -187,10 +187,13 @@ export function registerRuntimeSseIpc(options: {
   ipcMain: IpcMain
   store: JsonSettingsStore
   ensureRuntime: (settings: AppSettingsV1) => Promise<AppSettingsV1 | void>
+  assertRendererRuntimeReady: () => void
   logError: (category: string, message: string, detail?: unknown) => void
 }): void {
-  const { ipcMain, store, ensureRuntime, logError } = options
+  const { ipcMain, store, ensureRuntime, assertRendererRuntimeReady, logError } = options
   ipcMain.handle('runtime:sse:start', async (event, args: unknown) => {
+    void event
+    assertRendererRuntimeReady()
     const request = sseStartPayloadSchema.parse(args)
     const loadedSettings = await store.load()
     const ensuredSettings = await ensureRuntime(loadedSettings)

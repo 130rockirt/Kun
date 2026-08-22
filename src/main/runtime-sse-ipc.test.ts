@@ -1,4 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('electron', () => ({ app: { getPath: () => '/tmp/kun-test' } }))
+vi.mock('./runtime/kun-adapter', () => ({
+  getRuntimeBaseUrlForSettings: (settings: {
+    agents: { kun: { baseUrl?: string; port?: number } }
+  }) => settings.agents.kun.baseUrl ?? `http://127.0.0.1:${settings.agents.kun.port}`,
+  runtimeAuthHeaders: (settings: { agents: { kun: { runtimeToken: string } } }) =>
+    new Map([['authorization', `Bearer ${settings.agents.kun.runtimeToken}`]])
+}))
+
 import { registerRuntimeSseIpc } from './runtime-sse-ipc'
 import type { IpcMain } from 'electron'
 
@@ -79,6 +89,7 @@ describe('runtime-sse-ipc', () => {
       ipcMain: mockIpcMain,
       store: mockStore,
       ensureRuntime: mockEnsureRuntime,
+      assertRendererRuntimeReady: () => undefined,
       logError: mockLogError
     })
 
@@ -176,6 +187,7 @@ describe('runtime-sse-ipc', () => {
       ipcMain: mockIpcMain,
       store: mockStore,
       ensureRuntime: mockEnsureRuntime,
+      assertRendererRuntimeReady: () => undefined,
       logError: mockLogError
     })
     const startHandler = handlers.get('runtime:sse:start')
@@ -214,6 +226,7 @@ describe('runtime-sse-ipc', () => {
       ipcMain: mockIpcMain,
       store: mockStore,
       ensureRuntime: mockEnsureRuntime,
+      assertRendererRuntimeReady: () => undefined,
       logError: mockLogError
     })
     const startHandler = handlers.get('runtime:sse:start')
@@ -245,6 +258,7 @@ describe('runtime-sse-ipc', () => {
       ipcMain: mockIpcMain,
       store: mockStore,
       ensureRuntime: mockEnsureRuntime,
+      assertRendererRuntimeReady: () => undefined,
       logError: mockLogError
     })
 
@@ -304,6 +318,7 @@ describe('runtime-sse-ipc', () => {
       ipcMain: mockIpcMain,
       store: mockStore,
       ensureRuntime: mockEnsureRuntime,
+      assertRendererRuntimeReady: () => undefined,
       logError: mockLogError
     })
     const startHandler = handlers.get('runtime:sse:start')
@@ -358,6 +373,7 @@ describe('runtime-sse-ipc', () => {
       ipcMain: mockIpcMain,
       store: mockStore,
       ensureRuntime: mockEnsureRuntime,
+      assertRendererRuntimeReady: () => undefined,
       logError: mockLogError
     })
     const startHandler = handlers.get('runtime:sse:start')
@@ -403,6 +419,7 @@ describe('runtime-sse-ipc', () => {
       ipcMain: mockIpcMain,
       store: mockStore,
       ensureRuntime: mockEnsureRuntime,
+      assertRendererRuntimeReady: () => undefined,
       logError: mockLogError
     })
     const startHandler = handlers.get('runtime:sse:start')
@@ -421,5 +438,25 @@ describe('runtime-sse-ipc', () => {
       'runtime:sse-error',
       expect.objectContaining({ streamId: started.streamId, message: 'oversized replay record' })
     )
+  })
+
+  it('rejects SSE attach while the desktop startup gate is not ready', async () => {
+    registerRuntimeSseIpc({
+      ipcMain: mockIpcMain,
+      store: mockStore,
+      ensureRuntime: mockEnsureRuntime,
+      assertRendererRuntimeReady: () => {
+        throw new Error('Kun desktop startup is not ready (phase: runtime_starting).')
+      },
+      logError: mockLogError
+    })
+
+    await expect(handlers.get('runtime:sse:start')!(mockEvent, {
+      threadId: 'thread-startup-gated',
+      sinceSeq: 0
+    })).rejects.toThrow(/startup is not ready/)
+    expect(mockStore.load).not.toHaveBeenCalled()
+    expect(mockEnsureRuntime).not.toHaveBeenCalled()
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 })

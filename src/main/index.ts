@@ -37,7 +37,7 @@ if (runningClawScheduleMcpServer) {
     }
   )
 } else {
-  startMainApp()
+  void startMainApp()
 }
 
 app.on('window-all-closed', () => {

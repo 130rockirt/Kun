@@ -3,6 +3,8 @@ import type { KunGuiApi } from '../shared/kun-gui-api'
 import { normalizeDesktopTitleBarMode } from '../shared/desktop-title-bar'
 import { registerExtensionContentScriptPreload } from './extension-content-script'
 import { parseAppEnvironment } from './app-environment'
+import { createDesktopStartupPreloadApi } from './startup-state'
+import { createStorageRelocationWorkbenchApi } from './storage-relocation-workbench'
 
 registerExtensionContentScriptPreload({ contextBridge, ipcRenderer, webFrame })
 
@@ -34,31 +36,12 @@ const api = {
   desktopTitleBarMode,
   homeDir: homeDirFromArgs,
   appEnvironment,
+  startup: createDesktopStartupPreloadApi(),
+  storageRelocation: createStorageRelocationWorkbenchApi(),
   sharedClientState: {
     read: () => ipcRenderer.invoke('shared-client-state:get'),
     write: (expectedRevision, entries) =>
       ipcRenderer.invoke('shared-client-state:put', { expectedRevision, entries })
-  },
-  storageRelocation: {
-    getStatus: () => ipcRenderer.invoke('storage-relocation:status'),
-    pickDestination: (defaultPath) =>
-      ipcRenderer.invoke('storage-relocation:pick-destination', { defaultPath }),
-    preflight: (destinationRoot) =>
-      ipcRenderer.invoke('storage-relocation:preflight', { destinationRoot }),
-    schedule: (input) => ipcRenderer.invoke('storage-relocation:schedule', input),
-    restoreDefault: (interruptActiveWork) =>
-      ipcRenderer.invoke('storage-relocation:restore-default', { interruptActiveWork }),
-    cancel: (operationId) => ipcRenderer.invoke('storage-relocation:cancel', { operationId }),
-    retry: (operationId) => ipcRenderer.invoke('storage-relocation:retry', { operationId }),
-    rollback: (operationId) => ipcRenderer.invoke('storage-relocation:rollback', { operationId }),
-    onProgress: (handler) => {
-      const wrapped = (
-        _: Electron.IpcRendererEvent,
-        payload: Parameters<typeof handler>[0]
-      ) => handler(payload)
-      ipcRenderer.on('storage-relocation:progress', wrapped)
-      return () => ipcRenderer.removeListener('storage-relocation:progress', wrapped)
-    }
   },
   uninstall: {
     getStatus: () => ipcRenderer.invoke('uninstall:status'),
