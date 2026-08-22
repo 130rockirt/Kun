@@ -100,6 +100,24 @@ class ReadThenConcludeModel implements ModelClient {
   }
 }
 
+class ReadThenSilentFinishModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'read-then-silent-finish-model'
+  requests = 0
+
+  async *stream(): AsyncIterable<ModelStreamChunk> {
+    this.requests += 1
+    if (this.requests <= 3) {
+      yield { kind: 'tool_call_complete', callId: `read_${this.requests}`, toolName: 'read', arguments: { path: 'src/target.ts', task_indexes: [1] } }
+      yield { kind: 'completed', stopReason: 'tool_calls' }
+      return
+    }
+    // Final round: no synthesis text at all — the turn settles completed with
+    // tool_results only (the regression scenario).
+    yield { kind: 'completed', stopReason: 'stop' }
+  }
+}
+
 describe('Fast Context child executor', () => {
   it('bypasses provider-native SDK composition and exposes only grep, glob, and read', async () => {
     const model = new CatalogModel()
@@ -140,6 +158,27 @@ describe('Fast Context child executor', () => {
     })
     expect(model.requests).toBe(4)
     expect(reads).toBe(3)
+  })
+
+  it('replaces the fake tool_result summary with the evidence-pack placeholder', async () => {
+    const model = new ReadThenSilentFinishModel()
+    const executor = createChildAgentExecutor({
+      model, toolHost: new LocalToolHost({ tools: [sourceTool('grep'), sourceTool('glob'), sourceTool('read')] }),
+      prefix: createImmutablePrefix({ systemPrompt: 'test' }), defaultModel: model.model
+    })
+
+    // The empty final round legitimately fails the loop turn, but the child
+    // result must not carry a stringified tool_result as its summary.
+    await expect(executor(fastContextInput(model.model))).rejects.toMatchObject({
+      name: 'ChildResultExecutionError',
+      result: {
+        summary: 'Fast Context retrieval completed; see evidence pack.',
+        evidencePack: {
+          version: 1,
+          tasks: [{ evidence: [{ path: 'src/target.ts', ranges: [[10, 12]] }] }]
+        }
+      }
+    })
   })
 
   it('truncates tool-call overflow and continues with the accepted batch', async () => {

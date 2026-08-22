@@ -479,6 +479,16 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
           ...(status === 'completed' ? {} : { failure: `Retrieval child ${status}.` })
         })
       : undefined
+    // For a Fast Context child the evidence pack is the contract product.
+    // When the model spent its whole budget on retrieval and wrote no final
+    // text, the pack still carries every task conclusion, so never let a
+    // stringified tool_result or duplicated loop error text impersonate the
+    // summary (that produced self-contradictory "failed + status: completed"
+    // cards).
+    if (input.fastContext && evidencePack && childResultUsedNoTextSummary(items, started.turnId)) {
+      result.summary = 'Fast Context retrieval completed; see evidence pack.'
+      result.summaryTruncated = undefined
+    }
     const structuredResult = {
       ...result,
       ...(directionBundle !== undefined ? { directionBundle } : {}),
@@ -503,10 +513,19 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
         event.severity !== 'info'
     )
     if (runtimeError?.kind === 'error') {
-      throw new ChildResultExecutionError(runtimeError.message, structuredResult, {
-        ...settlement,
-        failure: childFailureFromRuntimeError(runtimeError)
-      })
+      // A Fast Context child that exhausted its step budget on retrieval can
+      // still settle `completed` with a fatal-looking loop error such as the
+      // repeat-tool-call suppression notice. The evidence pack is the contract
+      // product, so it outranks that loop bookkeeping error; flipping the run
+      // to failed produced self-contradictory "failed + status: completed"
+      // cards while the parent had usable evidence.
+      const fastContextRecovered = input.fastContext === true && status === 'completed' && evidencePack !== undefined
+      if (!fastContextRecovered) {
+        throw new ChildResultExecutionError(runtimeError.message, structuredResult, {
+          ...settlement,
+          failure: childFailureFromRuntimeError(runtimeError)
+        })
+      }
     }
     if (executionError !== undefined) {
       throw new ChildResultExecutionError(childExecutionErrorMessage(executionError), structuredResult, {
@@ -542,6 +561,19 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** True when childResultSource had no assistant text and fell back to a
+ * tool_result stringification or loop error text — the fake-summary cases. */
+function childResultUsedNoTextSummary(items: readonly TurnItem[], turnId: string): boolean {
+  const turnItems = items.filter((item) => item.turnId === turnId)
+  const hasAssistantText = turnItems.some(
+    (item) => item.kind === 'assistant_text' && item.text.trim().length > 0
+  )
+  if (hasAssistantText) return false
+  return turnItems.some(
+    (item) => item.kind === 'tool_result' || item.kind === 'error'
+  )
 }
 
 function childToolEvidence(items: readonly TurnItem[], turnId: string): string[] {

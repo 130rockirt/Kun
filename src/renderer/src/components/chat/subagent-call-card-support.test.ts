@@ -139,6 +139,24 @@ describe('resolveStatus', () => {
     expect(resolveStatus(toolBlock('success'), {})).toBe('done')
     expect(resolveStatus(toolBlock('error'), {})).toBe('failed')
   })
+
+  it('treats a failed detail whose error self-describes completion as done', () => {
+    const block = toolBlock('error', {
+      childId: 'child_bad_record',
+      status: 'failed',
+      error: 'status: completed childId: child_bad_record toolInvocations: 6 resumabl...'
+    })
+    expect(resolveStatus(block, {}, parseDelegateDetail(block.detail))).toBe('done')
+  })
+
+  it('keeps genuine failed details failed', () => {
+    const block = toolBlock('error', {
+      childId: 'child_genuine',
+      status: 'failed',
+      error: 'model provider returned HTTP 520'
+    })
+    expect(resolveStatus(block, {}, parseDelegateDetail(block.detail))).toBe('failed')
+  })
 })
 
 function toolBlock(status: ToolBlock['status'], detail?: Record<string, unknown>): ToolBlock {
