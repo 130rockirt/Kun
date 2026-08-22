@@ -73,6 +73,7 @@ function MessageBubbleImpl({
   const { t, i18n } = useTranslation('common')
   const resolveApproval = useChatStore((s) => s.resolveApproval)
   const turnTimingMetrics = useChatStore((s) => s.turnTimingMetrics)
+  const busyUnconfirmed = useChatStore((s) => s.busyUnconfirmed)
   if (block.kind === 'user' && isBackgroundShellNoticeBlock(block)) {
     return <BackgroundShellNoticeBubble block={block} nested={nested} />
   }
@@ -86,7 +87,6 @@ function MessageBubbleImpl({
     const streaming = block.id === 'live-assistant'
     // Gate the typewriter on busy confirmation: catch-up replay after
     // reselecting a thread must render whole, not re-type.
-    const busyUnconfirmed = useChatStore((s) => s.busyUnconfirmed)
     const effectiveStreaming = streaming && !busyUnconfirmed
     const createdAtLabel = block.createdAt
       ? formatMessageDateTime(block.createdAt, i18n.language)

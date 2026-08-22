@@ -20,7 +20,8 @@ export function AssistantMarkdown({
   // An unconfirmed busy flag gates the typewriter off so catch-up replay
   // (returning to a thread that ran while away) renders whole instead of
   // re-typing text the user already watched settle.
-  const effectiveStreaming = streaming && useLiveAssistantStreaming()
+  const liveStreaming = useLiveAssistantStreaming()
+  const effectiveStreaming = streaming && liveStreaming
   const fallbackText = hideHtmlComments
     ? text.replace(/<!--[\s\S]*?(?:-->|$)/g, '')
     : text
