@@ -4,6 +4,13 @@ let startupRuntimeProbeTimer: ReturnType<typeof setTimeout> | null = null
 // Guards against duplicate startup probes: the immediate probe runs first and
 // the 900ms fallback must not race it while it is still in flight.
 let startupRuntimeProbeInFlight = false
+// Bumped on every scheduleStartupRuntimeProbe call so stale timers/probes from
+// an earlier scheduling round can never fire a probe for the current round.
+let startupProbeGeneration = 0
+// Bounds how many times a fallback may reschedule itself while the runtime
+// stays unready; afterwards Runtime status events or user actions take over.
+const STARTUP_PROBE_MAX_FALLBACKS = 5
+const STARTUP_PROBE_FALLBACK_MS = 900
 let busyWatchdogTimer: ReturnType<typeof setTimeout> | null = null
 let busyRecoveryAttempts = 0
 let turnCompletionPollTimer: ReturnType<typeof setInterval> | null = null
@@ -72,8 +79,16 @@ type CompletionPollOutcome =
 export function scheduleStartupRuntimeProbe(get: ChatStoreGet): void {
   if (startupRuntimeProbeTimer) {
     clearTimeout(startupRuntimeProbeTimer)
+    startupRuntimeProbeTimer = null
   }
+  startupProbeGeneration += 1
+  const generation = startupProbeGeneration
   if (startupRuntimeProbeInFlight) return
+  runStartupProbe(get, generation)
+  armStartupProbeFallback(get, generation, 0)
+}
+
+function runStartupProbe(get: ChatStoreGet, generation: number): void {
   // Probe immediately when the runtime is already up so the sidebar gets its
   // thread inventory as fast as possible instead of waiting a fixed 900ms.
   startupRuntimeProbeInFlight = true
@@ -82,24 +97,37 @@ export function scheduleStartupRuntimeProbe(get: ChatStoreGet): void {
       await get().probeRuntime('user')
     } finally {
       startupRuntimeProbeInFlight = false
+      // A slow first probe (settings + provider connect + thread list refresh)
+      // can outlive the 900ms fallback armed below. If the connection still is
+      // not ready by now, re-arm the fallback from this point so the earlier
+      // timer firing during the probe does not consume the only retry.
+      if (generation !== startupProbeGeneration) return
+      if (startupRuntimeProbeTimer || startupRuntimeProbeInFlight) return
+      if (get().runtimeConnection === 'ready') return
+      armStartupProbeFallback(get, generation, 0)
     }
   })()
+}
+
+function armStartupProbeFallback(get: ChatStoreGet, generation: number, attempt: number): void {
   // Keep a fallback probe for the case where the runtime is still cold-starting
   // (e.g. `kun serve` booting) and the immediate probe raced it. It only fires
   // when the runtime did not reach `ready` yet and no other probe is running.
   startupRuntimeProbeTimer = setTimeout(() => {
     startupRuntimeProbeTimer = null
-    if (startupRuntimeProbeInFlight) return
+    if (generation !== startupProbeGeneration) return
     if (get().runtimeConnection === 'ready') return
-    startupRuntimeProbeInFlight = true
-    void (async () => {
-      try {
-        await get().probeRuntime('user')
-      } finally {
-        startupRuntimeProbeInFlight = false
+    if (startupRuntimeProbeInFlight) {
+      // The previous probe is still running past the fallback window. Do not
+      // swallow this fallback: reschedule it so one eventually fires after the
+      // in-flight probe settles, until the retry budget is exhausted.
+      if (attempt < STARTUP_PROBE_MAX_FALLBACKS) {
+        armStartupProbeFallback(get, generation, attempt + 1)
       }
-    })()
-  }, 900)
+      return
+    }
+    runStartupProbe(get, generation)
+  }, STARTUP_PROBE_FALLBACK_MS)
 }
 
 export function clearBusyWatchdog(): void {

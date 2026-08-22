@@ -26,6 +26,7 @@ import {
 } from '../../contracts/threads.js'
 import { jsonResponse, type JsonResponse } from '../response.js'
 import { readJsonBody } from '../read-json-body.js'
+import { threadStateLoadFailure } from './thread-state-error.js'
 import type { ForkThreadOptions, ListThreadsOptions, ThreadService } from '../../services/thread-service.js'
 import type { RuntimeError } from './runtime-error.js'
 import type { SessionStore } from '../../ports/session-store.js'
@@ -265,16 +266,28 @@ export async function getThreadStates(
       cursor += 1
       if (index >= threadIds.length) return
       const id = threadIds[index]
+      const startedAt = Date.now()
       try {
         const state = await loadState(id)
         results[index] = state
           ? { id, ok: true, state }
           : { id, ok: false, error: { code: 'not_found', message: `thread not found: ${id}` } }
-      } catch {
+      } catch (error) {
+        const failure = threadStateLoadFailure(error)
+        // Diagnostics live in the log only; the public message stays generic
+        // and never carries owner instance identifiers or internal details.
+        console.warn(`[kun] thread state batch load failed: ${JSON.stringify({
+          threadId: id,
+          stage: failure.stage ?? 'load',
+          durationMs: Date.now() - startedAt,
+          httpStatus: failure.httpStatus,
+          errorName: failure.errorName,
+          code: failure.code
+        })}`)
         results[index] = {
           id,
           ok: false,
-          error: { code: 'unavailable', message: `thread state unavailable: ${id}` }
+          error: { code: failure.code, message: `thread state unavailable: ${id}` }
         }
       }
     }

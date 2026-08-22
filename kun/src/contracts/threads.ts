@@ -56,7 +56,17 @@ export const ThreadRuntimeStateBatchResultSchema = z.discriminatedUnion('ok', [
     id: z.string().min(1),
     ok: z.literal(false),
     error: z.object({
-      code: z.enum(['not_found', 'unavailable']),
+      // `unavailable` stays the generic bucket; the finer codes exist so logs
+      // and operators can tell owner/schema/storage failures apart. Renderers
+      // should keep showing a single "state unavailable" affordance.
+      code: z.enum([
+        'not_found',
+        'unavailable',
+        'owner_unreachable',
+        'owner_error',
+        'schema_incompatible',
+        'storage_error'
+      ]),
       message: z.string().min(1)
     })
   })

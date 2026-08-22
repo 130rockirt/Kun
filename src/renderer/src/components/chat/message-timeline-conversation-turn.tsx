@@ -24,7 +24,7 @@ import {
 import type { UiPluginLabelKey } from '@shared/ui-plugin'
 import { useUiPluginWorkLabel } from '../../store/ui-plugin-store'
 import { sameTurnContent, splitThink, type Turn } from './message-timeline-turns'
-import { extractPlanMetadataFromBlock } from '../../plan/plan-tool'
+import { extractPlanMetadataFromBlock, type GuiPlanToolMeta } from '../../plan/plan-tool'
 import { planDisplayNameFromRelativePath } from '../../plan/plan-path'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { TimelineRuntimeError, liveTurnProgressClass } from './message-timeline-jump-preview'
@@ -43,8 +43,8 @@ export type ConversationTurnProps = {
   devPreviewCard?: ReactElement | null
   planActionsBusy?: boolean
   graphEnabled?: boolean
-  onBuildPlan?: (orchestration: PlanBuildOrchestration) => void
-  onOpenPlan?: () => void
+  onBuildPlan?: (orchestration: PlanBuildOrchestration, meta?: GuiPlanToolMeta) => void
+  onOpenPlan?: (meta?: GuiPlanToolMeta) => void
   onOpenChanges?: () => void
   onReviewChanges?: () => void
   reviewChangesDisabled?: boolean
@@ -381,8 +381,9 @@ export function ConversationTurn({
           relativePath={planResult.relativePath}
           busy={planActionsBusy === true}
           graphEnabled={graphEnabled}
-          onOpen={onOpenPlan}
-          onBuild={onBuildPlan}
+          planMeta={planResult}
+          onOpen={onOpenPlan ? () => onOpenPlan(planResult) : undefined}
+          onBuild={onBuildPlan ? (orchestration) => onBuildPlan(orchestration, planResult) : undefined}
         />
       ) : null}
 

@@ -26,6 +26,7 @@ import type { JsonValue } from '@kun/extension-api'
 import type { RegisteredContribution } from '../../extensions/contribution-registry'
 import { DeclarativeActionBar } from '../../extensions/ControlledContributionSurfaces'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
+import type { GuiPlanToolMeta } from '../../plan/plan-tool'
 import { useChatStore } from '../../store/chat-store'
 import { hasLivePendingUserInput } from '../../store/chat-store-runtime-helpers'
 import { shouldUseEmptyTaskLayout } from './workbench-chat-layout'
@@ -68,8 +69,8 @@ export type WorkbenchChatStageProps = {
   onRetryConnection: () => void
   onOpenSettings: () => void
   onSelectSuggestion: (text: string) => void
-  onBuildPlan: (orchestration: PlanBuildOrchestration) => void
-  onOpenPlan: () => void
+  onBuildPlan: (orchestration: PlanBuildOrchestration, meta?: GuiPlanToolMeta) => void
+  onOpenPlan: (meta?: GuiPlanToolMeta) => void
   onOpenChanges: () => void
   onReviewChanges: () => void
   reviewChangesDisabled: boolean

@@ -3,6 +3,7 @@ import {
   armBusyWatchdog,
   clearBusyWatchdog,
   resetBusyRecoveryAttempts,
+  scheduleStartupRuntimeProbe,
   stopTurnCompletionPoll,
   syncTurnCompletionPoll
 } from './chat-store-schedulers'
@@ -138,6 +139,90 @@ describe('busyTimeout minutes interpolation (#131)', () => {
     vi.advanceTimersByTime(10)
     expect(typeof h.getState().error).toBe('string')
     expect(h.getState().error as string).toMatch(/已等待 9 分钟/)
+  })
+})
+
+describe('scheduleStartupRuntimeProbe', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function makeProbeHarness(options: {
+    connection: 'ready' | 'offline'
+    probeDurationMs?: number
+  }) {
+    const h = makeHarness({ runtimeConnection: options.connection })
+    const probeRuntime = vi.fn(() => {
+      if (!options.probeDurationMs) return Promise.resolve()
+      return new Promise<void>((resolve) => setTimeout(resolve, options.probeDurationMs))
+    })
+    h.set({ probeRuntime } as Partial<ChatState>)
+    return { h, probeRuntime }
+  }
+
+  it('runs an immediate probe and does not probe again when the runtime is ready', async () => {
+    const { h, probeRuntime } = makeProbeHarness({ connection: 'ready' })
+    scheduleStartupRuntimeProbe(h.get)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(probeRuntime).toHaveBeenCalledTimes(1)
+  })
+
+  it('fires the fallback probe when the immediate probe finished but the runtime stays unready', async () => {
+    const { h, probeRuntime } = makeProbeHarness({ connection: 'offline' })
+    scheduleStartupRuntimeProbe(h.get)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(probeRuntime).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(900)
+    expect(probeRuntime).toHaveBeenCalledTimes(2)
+    // Drain the remaining retry budget so no probe/timer leaks into later tests.
+    await vi.advanceTimersByTimeAsync(10_000)
+  })
+
+  it('reschedules the fallback instead of consuming it while the first probe is still in flight', async () => {
+    // First probe takes 2000ms, long past the 900ms fallback window.
+    const { h, probeRuntime } = makeProbeHarness({ connection: 'offline', probeDurationMs: 2_000 })
+    scheduleStartupRuntimeProbe(h.get)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(probeRuntime).toHaveBeenCalledTimes(1)
+    // 900ms fallback fires while the first probe is in flight; it must not
+    // start a second probe and must not be lost.
+    await vi.advanceTimersByTimeAsync(900)
+    expect(probeRuntime).toHaveBeenCalledTimes(1)
+    // First probe settles at t=2000; the rescheduled fallback fires one
+    // fallback window after the in-flight probe finished.
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(probeRuntime).toHaveBeenCalledTimes(2)
+    // Let the runtime become ready and settle pending probes so no probe or
+    // fallback timer leaks into later tests.
+    h.set({ runtimeConnection: 'ready' })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(probeRuntime).toHaveBeenCalledTimes(2)
+  })
+
+  it('stops probing once the runtime becomes ready', async () => {
+    const { h, probeRuntime } = makeProbeHarness({ connection: 'offline' })
+    scheduleStartupRuntimeProbe(h.get)
+    await vi.advanceTimersByTimeAsync(1)
+    h.set({ runtimeConnection: 'ready' })
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(probeRuntime).toHaveBeenCalledTimes(1)
+  })
+
+  it('a newer schedule supersedes a pending fallback from an older round', async () => {
+    const { h, probeRuntime } = makeProbeHarness({ connection: 'offline' })
+    scheduleStartupRuntimeProbe(h.get)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(probeRuntime).toHaveBeenCalledTimes(1)
+    // Second schedule at t=1: the first round finished, so a new immediate
+    // probe runs and the old fallback timer is cancelled.
+    scheduleStartupRuntimeProbe(h.get)
+    await vi.advanceTimersByTimeAsync(899)
+    expect(probeRuntime).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(probeRuntime).toHaveBeenCalledTimes(3)
+    // Drain the remaining retry budget so no probe/timer leaks into later tests.
+    await vi.advanceTimersByTimeAsync(10_000)
   })
 })
 

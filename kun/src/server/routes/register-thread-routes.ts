@@ -1,5 +1,6 @@
 import type { Router } from '../router.js'
 import { ThreadRuntimeStateSchema, type ThreadRuntimeState } from '../../contracts/threads.js'
+import { ThreadStateLoadError } from './thread-state-error.js'
 import {
   createThread,
   clearThreadGoal,
@@ -361,16 +362,33 @@ async function loadOwnerAwareThreadState(
     method: 'GET',
     headers
   })
-  const forwarded = await runtime.forwardThreadControl?.(stateRequest, threadId)
+  let forwarded: Response | null | undefined
+  try {
+    forwarded = await runtime.forwardThreadControl?.(stateRequest, threadId)
+  } catch (error) {
+    throw new ThreadStateLoadError('owner_unreachable', 'owner_forward', { cause: error })
+  }
   if (forwarded) {
     if (forwarded.status === 404) return null
-    if (!forwarded.ok) throw new Error(`owner state request failed: ${forwarded.status}`)
-    return ThreadRuntimeStateSchema.parse(await forwarded.json())
+    if (!forwarded.ok) {
+      throw new ThreadStateLoadError('owner_error', 'owner_response', {
+        httpStatus: forwarded.status
+      })
+    }
+    try {
+      return ThreadRuntimeStateSchema.parse(await forwarded.json())
+    } catch (error) {
+      throw new ThreadStateLoadError('schema_incompatible', 'schema_parse', { cause: error })
+    }
   }
-  return loadThreadRuntimeState(
-    runtime.threadService,
-    threadId,
-    runtime.sessionStore,
-    runtime.userInputGate
-  )
+  try {
+    return await loadThreadRuntimeState(
+      runtime.threadService,
+      threadId,
+      runtime.sessionStore,
+      runtime.userInputGate
+    )
+  } catch (error) {
+    throw new ThreadStateLoadError('storage_error', 'metadata', { cause: error })
+  }
 }

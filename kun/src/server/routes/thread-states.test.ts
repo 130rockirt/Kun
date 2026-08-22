@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, afterEach } from 'vitest'
+import { ZodError } from 'zod'
 import { getThreadStates } from './threads.js'
+import { ThreadStateLoadError } from './thread-state-error.js'
 import { buildRouter } from './index.js'
 import type { ServerRuntime } from './server-runtime.js'
 import type { JsonResponse } from '../response.js'
@@ -16,6 +18,9 @@ function runtimeState(id: string) {
 }
 
 describe('getThreadStates', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
   it('deduplicates ids, bounds concurrency at four, and preserves request order', async () => {
     let active = 0
     let maxActive = 0
@@ -58,6 +63,81 @@ describe('getThreadStates', () => {
       {
         id: 'thr_error', ok: false,
         error: { code: 'unavailable', message: 'thread state unavailable: thr_error' }
+      }
+    ])
+  })
+
+  it('maps owner errors to fine-grained codes and logs structured diagnostics', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const response = await getThreadStates(new Request('http://kun.local/v1/threads/states', {
+      method: 'POST',
+      body: JSON.stringify({ threadIds: ['thr_owner_500', 'thr_owner_down'] })
+    }), async (id) => {
+      if (id === 'thr_owner_500') {
+        throw new ThreadStateLoadError('owner_error', 'owner_response', { httpStatus: 500 })
+      }
+      throw new ThreadStateLoadError('owner_unreachable', 'owner_forward', {
+        cause: new Error('socket hang up')
+      })
+    })
+
+    expect(JSON.parse(response.body).results).toEqual([
+      {
+        id: 'thr_owner_500', ok: false,
+        error: { code: 'owner_error', message: 'thread state unavailable: thr_owner_500' }
+      },
+      {
+        id: 'thr_owner_down', ok: false,
+        error: { code: 'owner_unreachable', message: 'thread state unavailable: thr_owner_down' }
+      }
+    ])
+    const logged = warn.mock.calls.map((call) => JSON.parse(String(call[0]).replace(/^\[kun\] thread state batch load failed: /, '')))
+    expect(logged).toHaveLength(2)
+    expect(logged[0]).toMatchObject({
+      threadId: 'thr_owner_500',
+      stage: 'owner_response',
+      httpStatus: 500,
+      errorName: 'ThreadStateLoadError',
+      code: 'owner_error'
+    })
+    expect(typeof logged[0].durationMs).toBe('number')
+    expect(logged[1]).toMatchObject({
+      threadId: 'thr_owner_down',
+      stage: 'owner_forward',
+      code: 'owner_unreachable'
+    })
+  })
+
+  it('maps schema failures to schema_incompatible', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const response = await getThreadStates(new Request('http://kun.local/v1/threads/states', {
+      method: 'POST',
+      body: JSON.stringify({ threadIds: ['thr_bad_schema'] })
+    }), async () => {
+      throw new ZodError([])
+    })
+
+    expect(JSON.parse(response.body).results).toEqual([
+      {
+        id: 'thr_bad_schema', ok: false,
+        error: { code: 'schema_incompatible', message: 'thread state unavailable: thr_bad_schema' }
+      }
+    ])
+  })
+
+  it('maps storage failures to storage_error', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const response = await getThreadStates(new Request('http://kun.local/v1/threads/states', {
+      method: 'POST',
+      body: JSON.stringify({ threadIds: ['thr_disk'] })
+    }), async () => {
+      throw new ThreadStateLoadError('storage_error', 'metadata', { cause: new Error('EIO') })
+    })
+
+    expect(JSON.parse(response.body).results).toEqual([
+      {
+        id: 'thr_disk', ok: false,
+        error: { code: 'storage_error', message: 'thread state unavailable: thr_disk' }
       }
     ])
   })
