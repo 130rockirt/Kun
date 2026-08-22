@@ -36,7 +36,7 @@ describe('awaiting-input sidebar activity', () => {
     expect(sidebarThreadActivity(thread('thr_unread'), context)).toBe('unread')
   })
 
-  it('sorts awaiting-input threads before running and read threads', () => {
+  it('keeps the caller order for awaiting-input threads instead of reordering rows', () => {
     const context: SidebarThreadActivityContext = {
       ...baseContext,
       awaitingUserInputThreadIds: { thr_waiting: true },
@@ -46,7 +46,7 @@ describe('awaiting-input sidebar activity', () => {
       [thread('thr_read'), thread('thr_running'), thread('thr_waiting')],
       context
     )
-    expect(ordered.map((item) => item.id)).toEqual(['thr_waiting', 'thr_running', 'thr_read'])
+    expect(ordered.map((item) => item.id)).toEqual(['thr_read', 'thr_running', 'thr_waiting'])
   })
 
   it('falls back to running when the thread is not awaiting input', () => {

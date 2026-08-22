@@ -72,26 +72,17 @@ export function sidebarThreadActivity(
   return 'read'
 }
 
-/** Keeps the caller's existing chronological/manual order within each state. */
+/**
+ * Deprecated: activity state (running, awaiting-input, unread, ...) drives row
+ * indicators only and must not reorder rows. Poll/SSE refreshes flip activity
+ * state every few seconds, so bucketing rows by activity made the sidebar list
+ * jump under the user's pointer. This now returns the caller's order unchanged.
+ */
 export function prioritizeSidebarThreadActivity(
   threads: readonly NormalizedThread[],
-  context: SidebarThreadActivityContext
+  _context: SidebarThreadActivityContext
 ): NormalizedThread[] {
-  const awaitingInput: NormalizedThread[] = []
-  const running: NormalizedThread[] = []
-  const failed: NormalizedThread[] = []
-  const unread: NormalizedThread[] = []
-  const read: NormalizedThread[] = []
-  for (const thread of threads) {
-    switch (sidebarThreadActivity(thread, context)) {
-      case 'awaiting-input': awaitingInput.push(thread); break
-      case 'running': running.push(thread); break
-      case 'failed': failed.push(thread); break
-      case 'unread': unread.push(thread); break
-      default: read.push(thread)
-    }
-  }
-  return [...awaitingInput, ...running, ...failed, ...unread, ...read]
+  return [...threads]
 }
 
 export function sidebarThreadsHaveRunningActivity(
@@ -463,11 +454,40 @@ export function filterEmptySddAssistantThreadsFromSidebar(
   )
 }
 
-export function sortSidebarThreads(threads: NormalizedThread[]): NormalizedThread[] {
+// Sort anchors freeze a thread's position key while its turn is in flight.
+// A running turn bumps `updatedAt` on every event, which would otherwise bubble
+// the row upward on each poll; the anchor holds the pre-turn timestamp so the
+// row stays put until the turn settles, then lands once on its final time.
+const sidebarSortAnchorUpdatedAt = new Map<string, string>()
+
+function sidebarActivityFreezesSort(activity: SidebarThreadActivity): boolean {
+  return activity === 'running' || activity === 'awaiting-input'
+}
+
+function sidebarSortTimestamp(
+  thread: NormalizedThread,
+  context?: SidebarThreadActivityContext
+): number {
+  const id = thread.id.trim()
+  const frozen = context && sidebarActivityFreezesSort(sidebarThreadActivity(thread, context))
+  if (frozen) {
+    if (!sidebarSortAnchorUpdatedAt.has(id)) {
+      sidebarSortAnchorUpdatedAt.set(id, thread.updatedAt)
+    }
+    return Date.parse(sidebarSortAnchorUpdatedAt.get(id) ?? thread.updatedAt)
+  }
+  sidebarSortAnchorUpdatedAt.delete(id)
+  return Date.parse(thread.updatedAt)
+}
+
+export function sortSidebarThreads(
+  threads: NormalizedThread[],
+  context?: SidebarThreadActivityContext
+): NormalizedThread[] {
   return [...threads].sort((a, b) => {
     if (a.pinned === true && b.pinned !== true) return -1
     if (b.pinned === true && a.pinned !== true) return 1
-    return Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
+    return sidebarSortTimestamp(b, context) - sidebarSortTimestamp(a, context)
   })
 }
 

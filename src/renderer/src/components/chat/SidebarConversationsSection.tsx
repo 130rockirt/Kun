@@ -99,9 +99,12 @@ export function SidebarConversationsSection({
     awaitingUserInputThreadIds
   }), [activeThreadId, awaitingUserInputThreadIds, busy, scheduledThreadActivities, unreadThreadIds, watchTurnCompletion])
 
-  const allConversationThreads = useMemo(() => sortSidebarThreads(threads.filter((thread) =>
-    isConversationWorkspacePath(thread.workspace, conversationRoot) && thread.archived !== true
-  )), [conversationRoot, threads])
+  const allConversationThreads = useMemo(() => sortSidebarThreads(
+    threads.filter((thread) =>
+      isConversationWorkspacePath(thread.workspace, conversationRoot) && thread.archived !== true
+    ),
+    sidebarThreadActivityContext
+  ), [conversationRoot, sidebarThreadActivityContext, threads])
 
   const conversationThreads = useMemo(() => {
     const query = search.trim().toLowerCase()

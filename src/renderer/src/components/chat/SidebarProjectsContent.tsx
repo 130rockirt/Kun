@@ -292,7 +292,7 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
           const threadOrderScope = sidebarThreadOrderScope(workspacePath)
           const sortedThreads = prioritizeSidebarThreadActivity(
             reconcileSidebarThreadOrder(
-              sortSidebarThreads(list),
+              sortSidebarThreads(list, sidebarThreadActivityContext),
               sidebarOrder.threadIdsByScope[threadOrderScope] ?? []
             ),
             sidebarThreadActivityContext
