@@ -69,15 +69,23 @@ async function loadUsageRecords(
         options.threadId ? [options.threadId] : threadSummaries.map((thread) => thread.id)
       )
       const indexedRaw = await source.sessionStore.loadUsageRecords({ threadId: options.threadId })
+      const summariesById = new Map(threadSummaries.map((thread) => [thread.id, thread]))
       const records: ThreadUsageRecord[] = indexedRaw
         .filter((record) => allowedThreadIds.has(record.threadId))
-        .map((record) => ({
-          threadId: record.threadId,
-          ...(record.turnId ? { turnId: record.turnId } : {}),
-          ...(record.model ? { model: record.model } : {}),
-          completedAt: record.completedAt,
-          usage: record.usage
-        }))
+        .map((record) => {
+          const thread = explicitThread?.id === record.threadId
+            ? explicitThread
+            : summariesById.get(record.threadId)
+          const providerId = usageRecordProvider(thread, { turnId: record.turnId })
+          return {
+            threadId: record.threadId,
+            ...(record.turnId ? { turnId: record.turnId } : {}),
+            ...(record.model ? { model: record.model } : {}),
+            ...(providerId ? { providerId } : {}),
+            completedAt: record.completedAt,
+            usage: record.usage
+          }
+        })
       const latest = typeof source.sessionStore.loadLatestUsageSnapshots === 'function' &&
         allowedThreadIds.size > 0
         ? await source.sessionStore.loadLatestUsageSnapshots({ threadIds: [...allowedThreadIds] })
@@ -86,7 +94,6 @@ async function loadUsageRecords(
       const liveThreadIds = options.threadId
         ? [options.threadId]
         : threadSummaries.map((thread) => thread.id)
-      const summariesById = new Map(threadSummaries.map((thread) => [thread.id, thread]))
       for (const threadId of liveThreadIds) {
         const liveRemainder = diffUsage(
           source.usageService.forThread(threadId),
@@ -102,6 +109,9 @@ async function loadUsageRecords(
           threadId,
           ...(turnId ? { turnId } : {}),
           model: usageRecordModel(thread, { turnId }),
+          ...(usageRecordProvider(thread, { turnId })
+            ? { providerId: usageRecordProvider(thread, { turnId }) }
+            : {}),
           completedAt: thread.updatedAt || source.nowIso(),
           usage: liveRemainder
         })
@@ -157,6 +167,9 @@ async function loadUsageRecordsForSource(
       threadId: thread.id,
       ...(event.turnId ? { turnId: event.turnId } : {}),
       model: usageRecordModel(thread, event),
+      ...(usageRecordProvider(thread, event)
+        ? { providerId: usageRecordProvider(thread, event) }
+        : {}),
       completedAt: event.timestamp,
       usage: delta
     })
@@ -169,6 +182,9 @@ async function loadUsageRecordsForSource(
       threadId: thread.id,
       ...(turnId ? { turnId } : {}),
       model: usageRecordModel(thread, { turnId }),
+      ...(usageRecordProvider(thread, { turnId })
+        ? { providerId: usageRecordProvider(thread, { turnId }) }
+        : {}),
       completedAt: thread.updatedAt || source.nowIso(),
       usage: liveRemainder
     })
@@ -182,6 +198,19 @@ function latestTurnId(thread: unknown): string | undefined {
   if (!Array.isArray(turns)) return undefined
   const latest = turns.at(-1) as { id?: unknown } | undefined
   return typeof latest?.id === 'string' ? latest.id : undefined
+}
+
+function usageRecordProvider(
+  thread: { providerId?: string; turns?: Array<{ id: string; providerId?: string }> } | undefined,
+  event?: Pick<UsageEvent, 'turnId'>
+): string | undefined {
+  if (!thread) return undefined
+  const turnId = event?.turnId?.trim()
+  if (turnId) {
+    const turnProvider = thread.turns?.find((turn) => turn.id === turnId)?.providerId?.trim()
+    if (turnProvider) return turnProvider
+  }
+  return thread.providerId?.trim() || undefined
 }
 
 function usageRecordModel(

@@ -200,6 +200,54 @@ describe('usage cache diagnostics', () => {
     })
   })
 
+  it('repairs legacy zero-price GLM subscription records at query time', () => {
+    const response = buildThreadUsageResponse([{
+      threadId: 'thread-glm',
+      model: 'glm-5.3',
+      providerId: 'zhipu-coding-plan',
+      completedAt: '2026-08-22T00:00:00.000Z',
+      usage: {
+        promptTokens: 81_639,
+        completionTokens: 919,
+        totalTokens: 82_558,
+        cacheHitRate: 0.894,
+        turns: 1
+      }
+    }])
+
+    expect(response.buckets[0]).toMatchObject({
+      thread_id: 'thread-glm',
+      cost_usd: 0,
+      cost_cny: 0,
+      value_estimate_usd: 0,
+      value_estimate_cny: 0,
+      value_estimate_priced_requests: 1,
+      value_estimate_unpriced_requests: 0,
+      value_estimate_coverage: 'complete'
+    })
+  })
+
+  it('does not mark a legacy GLM API record as zero-price without Coding Plan attribution', () => {
+    const response = buildThreadUsageResponse([{
+      threadId: 'thread-glm-api',
+      model: 'glm-5.3',
+      providerId: 'zhipuai',
+      completedAt: '2026-08-22T00:00:00.000Z',
+      usage: {
+        promptTokens: 1_000,
+        completionTokens: 100,
+        totalTokens: 1_100,
+        cacheHitRate: null,
+        turns: 1
+      }
+    }])
+    expect(response.buckets[0]).toMatchObject({
+      value_estimate_priced_requests: 0,
+      value_estimate_unpriced_requests: 0,
+      value_estimate_coverage: 'unavailable'
+    })
+  })
+
   it('keeps Codex estimate priority when both Codex and catalog estimates exist', () => {
     const response = buildThreadUsageResponse([{
       threadId: 'thread-both',

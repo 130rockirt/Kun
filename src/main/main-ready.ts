@@ -91,18 +91,21 @@ export function startMainApp(): void {
       console.warn('[kun-gui] prune logs:', err)
     })
 
-    void prefetchCatalogPricing(mainState.store).catch((err) => {
-      console.warn('[kun-gui] catalog pricing prefetch failed:', err)
-    })
+    const startupSettings = await prefetchCatalogPricing(mainState.store)
+      .then(() => mainState.store.load())
+      .catch((err) => {
+        console.warn('[kun-gui] catalog pricing prefetch failed:', err)
+        return initial
+      })
 
-    void reconcileBundledRuntimeAfterInstall(initial)
+    void reconcileBundledRuntimeAfterInstall(startupSettings)
         .then(async () => {
           const module = await updaterModule
           await module?.showPostUpdateReleaseNotes()
         })
         .then(() => resolveManagedRuntimeStartupTarget(
-          initial,
-          managedKunHostCanAutoStart(initial),
+          startupSettings,
+          managedKunHostCanAutoStart(startupSettings),
           {
             ensure: ensureKunServeFreshOnStartup,
             resolveExisting: (settings) => kunRuntimeAdapter.resolveConnection(settings)

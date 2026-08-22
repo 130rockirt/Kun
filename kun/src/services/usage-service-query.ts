@@ -52,6 +52,7 @@ export type ThreadUsageRecord = {
   threadId: string
   turnId?: string
   model?: string
+  providerId?: string
   completedAt: string
   usage: UsageSnapshot
 }

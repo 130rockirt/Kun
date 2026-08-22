@@ -72,6 +72,19 @@ const OPENCODE_FREE_REASONING: ModelProviderReasoningCapabilityV1 = {
   requestProtocol: 'none'
 }
 
+/** models.dev/kun-agent explicitly publish Coding Plan models as zero-cost. */
+function codingPlanProfile(contextWindowTokens: number): ModelProviderModelProfileV1 {
+  return {
+    ...textChatProfile(contextWindowTokens, GLM_REASONING),
+    pricing: {
+      inputUsdPerMillion: 0,
+      outputUsdPerMillion: 0,
+      cacheReadUsdPerMillion: 0,
+      cacheWriteUsdPerMillion: 0
+    }
+  }
+}
+
 export const MODEL_PROVIDER_PRESETS_CORE: ModelProviderPreset[] = [
 {
     id: 'litellm',
@@ -209,11 +222,12 @@ export const MODEL_PROVIDER_PRESETS_CORE: ModelProviderPreset[] = [
     endpointFormat: 'custom_endpoint',
     models: [...ZHIPU_CODING_PLAN_MODELS],
     modelProfiles: {
-      'glm-5.2': textChatProfile(1_000_000, GLM_REASONING),
-      'glm-5.1': textChatProfile(200_000, GLM_REASONING),
-      'glm-5-turbo': textChatProfile(200_000, GLM_REASONING),
-      'glm-4.7': textChatProfile(200_000, GLM_REASONING),
-      'glm-4.5-air': textChatProfile(200_000, GLM_REASONING)
+      'glm-5.3': codingPlanProfile(1_000_000),
+      'glm-5.2': codingPlanProfile(1_000_000),
+      'glm-5.1': codingPlanProfile(200_000),
+      'glm-5-turbo': codingPlanProfile(200_000),
+      'glm-4.7': codingPlanProfile(200_000),
+      'glm-4.5-air': codingPlanProfile(200_000)
     },
     docsUrl: 'https://docs.bigmodel.cn/cn/coding-plan/overview',
     apiKeyUrl: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys'
@@ -227,12 +241,13 @@ export const MODEL_PROVIDER_PRESETS_CORE: ModelProviderPreset[] = [
     endpointFormat: 'custom_endpoint',
     models: [...ZAI_CODING_PLAN_MODELS],
     modelProfiles: {
-      'glm-5.2': textChatProfile(1_000_000, GLM_REASONING),
-      'glm-5.1': textChatProfile(200_000, GLM_REASONING),
-      'glm-5': textChatProfile(200_000, GLM_REASONING),
-      'glm-5-turbo': textChatProfile(200_000, GLM_REASONING),
-      'glm-4.7': textChatProfile(200_000, GLM_REASONING),
-      'glm-4.5-air': textChatProfile(200_000, GLM_REASONING)
+      'glm-5.3': codingPlanProfile(1_000_000),
+      'glm-5.2': codingPlanProfile(1_000_000),
+      'glm-5.1': codingPlanProfile(200_000),
+      'glm-5': codingPlanProfile(200_000),
+      'glm-5-turbo': codingPlanProfile(200_000),
+      'glm-4.7': codingPlanProfile(200_000),
+      'glm-4.5-air': codingPlanProfile(200_000)
     },
     docsUrl: 'https://docs.z.ai/devpack/tool/others',
     apiKeyUrl: 'https://z.ai/subscribe'

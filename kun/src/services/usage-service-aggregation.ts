@@ -53,7 +53,8 @@ export function addUsageCounters(
   target: UsageCountersTarget,
   usage: UsageSnapshot,
   recordModel?: string,
-  completedAt?: string
+  completedAt?: string,
+  recordProviderId?: string
 ): { hasCacheTelemetry: boolean } {
   const cached = typeof usage.cacheHitTokens === 'number' ? usage.cacheHitTokens : 0
   const miss = typeof usage.cacheMissTokens === 'number' ? usage.cacheMissTokens : 0
@@ -66,7 +67,11 @@ export function addUsageCounters(
   target.total_tokens += usage.totalTokens
   const model = usage.actualModelId ?? usage.requestedModelId ?? recordModel ?? ''
   const legacyCodexRecord = usage.billingKind == null && isLegacyCodexModel(model)
-  const referenceValue = usage.billingKind === 'subscription' || legacyCodexRecord
+  const historicalZeroPrice = isCatalogZeroPriceSubscriptionModel(
+    model, usage, recordProviderId
+  )
+  const referenceValue = usage.billingKind === 'subscription' ||
+    legacyCodexRecord || historicalZeroPrice
   if (!referenceValue) {
     target.cost_usd += usage.costUsd ?? 0
     target.cost_cny += usage.costCny ?? 0
@@ -88,10 +93,10 @@ export function addUsageCounters(
   // not know (Kimi, MiniMax plans, etc.). Codex estimates keep priority so
   // long-context and fast-tier pricing stay intact.
   const catalogEstimateUsd = codexEstimate == null && referenceValue
-    ? usage.valueEstimateUsd
+    ? usage.valueEstimateUsd ?? (historicalZeroPrice ? 0 : undefined)
     : undefined
   const catalogEstimateCny = codexEstimate == null && referenceValue
-    ? usage.valueEstimateCny
+    ? usage.valueEstimateCny ?? (historicalZeroPrice ? 0 : undefined)
     : undefined
   target.value_estimate_usd += codexEstimate?.valueEstimateUsd ?? catalogEstimateUsd ?? 0
   target.value_estimate_cny += codexEstimate?.valueEstimateCny ?? catalogEstimateCny ?? 0
@@ -108,6 +113,21 @@ export function addUsageCounters(
   target.token_economy_savings_cny += usage.tokenEconomySavingsCny ?? 0
   target.turns += usage.turns
   return { hasCacheTelemetry: hasCacheTelemetry(usage) }
+}
+
+function isCatalogZeroPriceSubscriptionModel(
+  model: string,
+  usage: UsageSnapshot,
+  providerId?: string
+): boolean {
+  const normalizedModel = model.trim().toLowerCase().split('/').at(-1) ?? ''
+  const normalizedProvider = (usage.actualProviderId ?? providerId ?? '').trim().toLowerCase()
+  const codingPlan = normalizedProvider === 'zhipu-coding-plan' ||
+    normalizedProvider === 'zai-coding-plan'
+  // models.dev and kun-agent publish these Coding Plan models as explicit
+  // zero-price subscription entries. Provider attribution from the matching
+  // turn repairs legacy usage records written before billingKind/valueEstimate.
+  return codingPlan && /^glm-(?:4|5)(?:[.-]|$)/u.test(normalizedModel)
 }
 
 export function finalizeCacheRate<T extends DailyUsageCounters>(
