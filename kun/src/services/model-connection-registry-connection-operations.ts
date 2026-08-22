@@ -85,6 +85,9 @@ async initialize(this: ModelConnectionRegistry,
               )
               const profile = requireProfile(document, existing.id)
               const nextProfile = reconcileSeedProfile(profile, request)
+              const retiredCredentialRef = profile.credentialRef !== nextProfile.credentialRef
+                ? profile.credentialRef
+                : undefined
               return {
                 ...document,
                 revision: document.revision + 1,
@@ -92,12 +95,20 @@ async initialize(this: ModelConnectionRegistry,
                   ...document.profiles,
                   [existing.id]: nextProfile
                 },
+                credentialRefCleanup: appendCredentialRefs(
+                  document.credentialRefCleanup,
+                  this['nowMs'](),
+                  retiredCredentialRef,
+                  this['registryInstanceId'],
+                  process.pid
+                ),
                 ...(document.defaultProviderId === existing.id && nextProfile.selectedModel
                   ? { defaultModel: nextProfile.selectedModel }
                   : {})
               }
             })
             await this['changed'](current)
+            await this['drainCredentialRefCleanup']()
           }
           current = await this['file'].read(emptyDocument)
           if (!current.profiles[existing.id]?.configured && request.credential?.trim()) {

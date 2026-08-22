@@ -32,6 +32,8 @@ import { modelConnectionRegistryMaterializationOperations } from './model-connec
 import { modelConnectionRegistryCredentialRecoveryOperations } from './model-connection-registry-credential-recovery-operations.js'
 import { reconciledSeedIdentity } from './model-connection-registry-seed-support.js'
 import type { ModelConnectionRegistryOperations } from './model-connection-registry-operations-contract.js'
+import { isAnonymousHttpProfile, isProfileUsable } from './model-connection-registry-usability.js'
+export { configuredFallback, isAnonymousHttpProfile, isProfileUsable } from './model-connection-registry-usability.js'
 
 export const StoredProfileSchema = ModelConnectionSnapshotSchema.shape.providers.element.omit({
   credentialStatus: true,
@@ -358,17 +360,6 @@ export function emptyDocument(): RegistryDocument {
   }
 }
 
-export function configuredFallback(
-  profiles: readonly StoredProfile[],
-  credentialHealth: ReadonlyMap<string, ProjectedCredentialHealth> = new Map()
-): { profile: StoredProfile; model: string } | undefined {
-  for (const profile of profiles) {
-    if (!isProfileUsable(profile, credentialHealth.get(profile.id))) continue
-    const model = profile.selectedModel ?? profile.models[0]
-    if (model) return { profile, model }
-  }
-  return undefined
-}
 
 export function reconcileSeedProfile(
   existing: StoredProfile,
@@ -394,20 +385,37 @@ export function reconcileSeedProfile(
     ? capabilitiesForModels(request.modelCapabilities, models)
     : existing.modelCapabilities
 
+  const anonymousCredentiallessSeed = request.kind === 'http' &&
+    isAnonymousHttpProfile(request) &&
+    !request.credential?.trim()
+  const profileBase = anonymousCredentiallessSeed
+    ? (() => {
+        const {
+          credentialRef: _credentialRef,
+          credentialSourceId: _credentialSourceId,
+          legacyCredentialSourceToRetire: _legacyCredentialSourceToRetire,
+          ...withoutCredential
+        } = existing
+        return withoutCredential
+      })()
+    : existing
+
   return StoredProfileSchema.parse({
-    ...existing,
+    ...profileBase,
     // Credential ownership is imported only when a profile is first created.
     // Re-applying GUI/settings seeds must never replace a Registry-owned
     // credentialRef, resurrect a cleared credential, or switch an existing
     // profile back to a legacy settings:provider:* source.
     ...seedIdentity,
-    ...(migrateTransport
-      ? {
-          baseUrl: request.baseUrl,
-          endpointFormat: request.endpointFormat,
-          configured: true
-        }
-      : {}),
+    ...(anonymousCredentiallessSeed
+      ? { configured: true }
+      : migrateTransport
+        ? {
+            baseUrl: request.baseUrl,
+            endpointFormat: request.endpointFormat,
+            configured: true
+          }
+        : {}),
     models,
     ...(modelCapabilities ? { modelCapabilities } : {}),
     ...(selectedModel ? { selectedModel } : {})
@@ -489,32 +497,6 @@ export function project(
   })
 }
 
-/**
- * OpenCode Zen authenticates its zero-cost models by omitting the credential
- * header entirely, so these HTTP providers are usable without any stored
- * credential. The id mirrors src/shared OPENCODE_FREE_PROVIDER_ID, which the
- * kun package cannot import.
- */
-const ANONYMOUS_HTTP_PROVIDER_ID = 'opencode-free'
-
-export function isAnonymousHttpProfile(
-  profile: { id?: string | undefined; presetSource?: string | undefined }
-): boolean {
-  return profile.id === ANONYMOUS_HTTP_PROVIDER_ID ||
-    profile.presetSource === ANONYMOUS_HTTP_PROVIDER_ID
-}
-
-export function isProfileUsable(
-  profile: Pick<StoredProfile, 'id' | 'presetSource' | 'configured' | 'kind' | 'credentialRef' | 'credentialSourceId'>,
-  health?: ProjectedCredentialHealth
-): boolean {
-  if (!profile.configured) return false
-  const requiresCredential = (profile.kind === 'http' &&
-      !isAnonymousHttpProfile(profile)) ||
-    profile.kind === 'gemini-code-assist' ||
-    Boolean(profile.credentialRef || profile.credentialSourceId)
-  return !requiresCredential || health?.credentialStatus === 'ready'
-}
 
 export function mergeProjectedCapability(
   stored: ModelCapabilityMetadata | undefined,
