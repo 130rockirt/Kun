@@ -489,12 +489,28 @@ export function project(
   })
 }
 
+/**
+ * OpenCode Zen authenticates its zero-cost models by omitting the credential
+ * header entirely, so these HTTP providers are usable without any stored
+ * credential. The id mirrors src/shared OPENCODE_FREE_PROVIDER_ID, which the
+ * kun package cannot import.
+ */
+const ANONYMOUS_HTTP_PROVIDER_ID = 'opencode-free'
+
+export function isAnonymousHttpProfile(
+  profile: { id?: string | undefined; presetSource?: string | undefined }
+): boolean {
+  return profile.id === ANONYMOUS_HTTP_PROVIDER_ID ||
+    profile.presetSource === ANONYMOUS_HTTP_PROVIDER_ID
+}
+
 export function isProfileUsable(
-  profile: Pick<StoredProfile, 'configured' | 'kind' | 'credentialRef' | 'credentialSourceId'>,
+  profile: Pick<StoredProfile, 'id' | 'presetSource' | 'configured' | 'kind' | 'credentialRef' | 'credentialSourceId'>,
   health?: ProjectedCredentialHealth
 ): boolean {
   if (!profile.configured) return false
-  const requiresCredential = profile.kind === 'http' ||
+  const requiresCredential = (profile.kind === 'http' &&
+      !isAnonymousHttpProfile(profile)) ||
     profile.kind === 'gemini-code-assist' ||
     Boolean(profile.credentialRef || profile.credentialSourceId)
   return !requiresCredential || health?.credentialStatus === 'ready'

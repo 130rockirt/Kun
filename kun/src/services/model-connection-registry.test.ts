@@ -482,6 +482,42 @@ describe('ModelConnectionRegistry', () => {
       })
     })
 
+    it('keeps a credential-less OpenCore Free provider usable and anonymous', async () => {
+      const { dataDir, value } = await registry()
+      const snapshot = await value.connect({
+        expectedRevision: 0,
+        id: 'opencode-free',
+        name: 'OpenCore Free',
+        presetSource: 'opencode-free',
+        presetMode: 'api',
+        kind: 'http',
+        authType: 'api-key',
+        baseUrl: 'https://opencode.ai/zen/v1',
+        endpointFormat: 'chat_completions',
+        credential: '',
+        models: ['big-pickle'],
+        selectedModel: 'big-pickle',
+        probe: false,
+        select: true
+      })
+
+      expect(snapshot.providers[0]).toMatchObject({
+        id: 'opencode-free',
+        configured: true,
+        credentialStatus: 'ready'
+      })
+      const stored = JSON.parse(await readFile(join(dataDir, 'model-connections.v1.json'), 'utf8')) as {
+        profiles: Record<string, { credentialRef?: string; credentialSourceId?: string }>
+      }
+      expect(stored.profiles['opencode-free']).not.toHaveProperty('credentialRef')
+      expect(stored.profiles['opencode-free']).not.toHaveProperty('credentialSourceId')
+
+      const materialized = await value.materialize()
+      expect(materialized.providers.has('opencode-free')).toBe(true)
+      expect(materialized.providers.get('opencode-free')).toMatchObject({ apiKey: '' })
+      expect(materialized.selected?.profile.id).toBe('opencode-free')
+    })
+
   it('backfills an OpenCode Go numbered account without changing its credential binding', async () => {
     const { dataDir, value } = await registry()
     const connected = await value.connect({
