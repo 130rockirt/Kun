@@ -304,12 +304,18 @@ describe('runtime projection action normalization', () => {
       kind: 'turn_completed',
       threadId: 'thread_1',
       turnId: 'turn_1'
-    })).toEqual([{ type: 'turn_completed' }])
+    })).toEqual([{
+      type: 'turn_completed',
+      payload: { status: 'completed', threadId: 'thread_1', turnId: 'turn_1' }
+    }])
     expect(runtimeProjectionActionsFromEvent({
       kind: 'turn_aborted',
       threadId: 'thread_1',
       turnId: 'turn_1'
-    })).toEqual([{ type: 'turn_aborted' }])
+    })).toEqual([{
+      type: 'turn_aborted',
+      payload: { status: 'aborted', threadId: 'thread_1', turnId: 'turn_1' }
+    }])
   })
 
   it('normalizes the same goal event to a stable action transcript', () => {

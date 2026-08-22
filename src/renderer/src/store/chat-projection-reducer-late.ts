@@ -8,7 +8,8 @@ import {
   reconcileSnapshotBlocks,
   reconcileSnapshotTurn,
   settleProjectedThreadStatus,
-  updateProjectedThreadStatus
+  updateProjectedThreadStatus,
+  upsertProjectedTimelineBlock
 } from './chat-projection-reducer-support'
 
 export function reduceLateChatProjection(
@@ -35,9 +36,9 @@ export function reduceLateChatProjection(
       const index = state.blocks.findIndex(
         (candidate) => candidate.kind === 'system' && candidate.id === event.itemId
       )
-      const blocks = [...state.blocks]
-      if (index >= 0) blocks[index] = block
-      else blocks.push(block)
+      const blocks = index >= 0
+        ? state.blocks.map((candidate, blockIndex) => blockIndex === index ? block : candidate)
+        : upsertProjectedTimelineBlock(state, block)
       return {
         ...base,
         blocks,
@@ -88,20 +89,23 @@ export function reduceLateChatProjection(
         }
         return { ...base, blocks, error: context.clearRecoveringError(state.error) }
       }
+      const block: Extract<ChatBlock, { kind: 'compaction' }> = {
+        kind: 'compaction',
+        id: event.itemId,
+        turnId: event.turnId,
+        createdAt: event.createdAt ?? new Date(context.now).toISOString(),
+        summary: event.summary,
+        status: event.status,
+        detail: event.detail,
+        auto: event.auto,
+        messagesBefore: event.messagesBefore,
+        messagesAfter: event.messagesAfter
+      }
+      const blocks = upsertProjectedTimelineBlock(state, block)
+      if (blocks === state.blocks) return base
       return {
         ...base,
-        blocks: [...state.blocks, {
-          kind: 'compaction',
-          id: event.itemId,
-          turnId: event.turnId,
-          createdAt: event.createdAt ?? new Date(context.now).toISOString(),
-          summary: event.summary,
-          status: event.status,
-          detail: event.detail,
-          auto: event.auto,
-          messagesBefore: event.messagesBefore,
-          messagesAfter: event.messagesAfter
-        }],
+        blocks,
         error: context.clearRecoveringError(state.error)
       }
     }
@@ -127,19 +131,22 @@ export function reduceLateChatProjection(
         }
         return { ...base, blocks, error: context.clearRecoveringError(state.error) }
       }
+      const block: Extract<ChatBlock, { kind: 'review' }> = {
+        kind: 'review',
+        id: event.itemId,
+        turnId: event.turnId,
+        createdAt: event.createdAt ?? new Date(context.now).toISOString(),
+        title: event.title,
+        status: event.status,
+        target: event.target,
+        reviewText: event.reviewText,
+        output: event.output
+      }
+      const blocks = upsertProjectedTimelineBlock(state, block)
+      if (blocks === state.blocks) return base
       return {
         ...base,
-        blocks: [...state.blocks, {
-          kind: 'review',
-          id: event.itemId,
-          turnId: event.turnId,
-          createdAt: event.createdAt ?? new Date(context.now).toISOString(),
-          title: event.title,
-          status: event.status,
-          target: event.target,
-          reviewText: event.reviewText,
-          output: event.output
-        }],
+        blocks,
         error: context.clearRecoveringError(state.error)
       }
     }
@@ -310,14 +317,6 @@ export function reduceLateChatProjection(
       const threads = threadId
         ? settleProjectedThreadStatus(state.threads, threadId, aborted ? 'aborted' : 'completed')
         : state.threads
-      if (!state.busy && !state.currentTurnId) {
-        if (!aborted) return threads === state.threads ? {} : { threads }
-        const blocks = context.settlePendingRuntimeWork(state.blocks)
-        return {
-          ...(threads !== state.threads ? { threads } : {}),
-          ...(blocks !== state.blocks ? { blocks } : {})
-        }
-      }
       const patch = flushLiveProjection(state, context.now, {
         ...finalizeTurnTimingAt(state, context.now),
         error: null,

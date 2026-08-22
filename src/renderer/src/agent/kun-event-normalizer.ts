@@ -12,7 +12,8 @@ import type {
   ToolEventPayload,
   UserInputAnswer,
   UserInputRequestPayload,
-  UserMessageEventPayload
+  UserMessageEventPayload,
+  TurnTerminalEvent
 } from './types'
 import type { RuntimeProjectionAction } from './runtime-projection-actions'
 
@@ -227,13 +228,13 @@ function normalizeKunRuntimeEventPayload(
         const tool = deps.childTool(event)
         return tool ? [{ type: 'tool_updated', payload: tool }] : []
       }
-      return [{ type: 'turn_completed' }]
+      return [{ type: 'turn_completed', payload: turnTerminalPayload(event, 'completed') }]
     case 'turn_aborted':
       if (event.child) {
         const tool = deps.childTool(event)
         return tool ? [{ type: 'tool_updated', payload: tool }] : []
       }
-      return [{ type: 'turn_aborted' }]
+      return [{ type: 'turn_aborted', payload: turnTerminalPayload(event, 'aborted') }]
     case 'turn_failed': {
       if (event.child) {
         const tool = deps.childTool(event)
@@ -260,6 +261,18 @@ function normalizeKunRuntimeEventPayload(
       return [{ type: 'runtime_error_received', payload: deps.runtimeError(event, 'Runtime error') }]
     default:
       return []
+  }
+}
+
+function turnTerminalPayload(
+  event: CoreRuntimeEventJson,
+  status: TurnTerminalEvent['status']
+): TurnTerminalEvent {
+  return {
+    status,
+    ...(event.threadId ? { threadId: event.threadId } : {}),
+    ...(event.turnId ? { turnId: event.turnId } : {}),
+    ...(typeof event.seq === 'number' ? { seq: event.seq } : {})
   }
 }
 

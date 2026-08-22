@@ -42,6 +42,7 @@ export type ChatProjectionReducerContext = {
   ) => boolean
 }
 import { reduceLateChatProjection } from './chat-projection-reducer-late'
+import { reduceEarlyChatProjection } from './chat-projection-reducer-early'
 import {
   flushLiveProjection,
   isDetachedSubagentToolEvent,
@@ -51,6 +52,7 @@ import {
   toolBlockChildId,
   toolEventChildId,
   unseenDeltaText,
+  upsertProjectedTimelineBlock,
   upsertTimelineBlock
 } from './chat-projection-reducer-support'
 
@@ -68,6 +70,8 @@ export function reduceChatProjection(
   action: RuntimeProjectionAction,
   context: ChatProjectionReducerContext
 ): Partial<ChatState> {
+  const rejected = reduceEarlyChatProjection(state, action)
+  if (rejected) return rejected
   switch (action.type) {
     case 'user_message_received': {
       const event = action.payload
@@ -251,7 +255,7 @@ export function reduceChatProjection(
             text: item.text
           }
       const patch: Partial<ChatState> = {
-        blocks: upsertTimelineBlock(state.blocks, block),
+        blocks: upsertProjectedTimelineBlock(state, block),
         error: context.clearRecoveringError(state.error)
       }
       if (
@@ -333,9 +337,11 @@ export function reduceChatProjection(
         filePath: event.filePath,
         meta: event.meta
       }
+      const blocks = upsertProjectedTimelineBlock(state, block)
+      if (blocks === state.blocks) return base
       return {
         ...base,
-        blocks: [...state.blocks, block],
+        blocks,
         error: context.clearRecoveringError(state.error)
       }
     }
@@ -344,18 +350,21 @@ export function reduceChatProjection(
       if (state.blocks.some(
         (block) => block.kind === 'approval' && block.approvalId === request.approvalId
       )) return {}
+      const block: Extract<ChatBlock, { kind: 'approval' }> = {
+        kind: 'approval',
+        id: `approval-${request.approvalId}`,
+        turnId: request.turnId,
+        createdAt: request.createdAt ?? new Date(context.now).toISOString(),
+        approvalId: request.approvalId,
+        summary: request.summary,
+        toolName: request.toolName,
+        status: 'pending',
+        ...(request.meta ? { meta: request.meta } : {})
+      }
+      const blocks = upsertProjectedTimelineBlock(state, block)
+      if (blocks === state.blocks) return {}
       return {
-        blocks: [...state.blocks, {
-          kind: 'approval',
-          id: `approval-${request.approvalId}`,
-          turnId: request.turnId,
-          createdAt: request.createdAt ?? new Date(context.now).toISOString(),
-          approvalId: request.approvalId,
-          summary: request.summary,
-          toolName: request.toolName,
-          status: 'pending',
-          ...(request.meta ? { meta: request.meta } : {})
-        }],
+        blocks,
         error: context.clearRecoveringError(state.error)
       }
     }
@@ -398,7 +407,7 @@ export function reduceChatProjection(
         rationale: event.rationale ?? current?.rationale
       }
       return {
-        blocks: upsertTimelineBlock(state.blocks, block),
+        blocks: upsertProjectedTimelineBlock(state, block),
         error: context.clearRecoveringError(state.error)
       }
     }
@@ -418,18 +427,21 @@ export function reduceChatProjection(
           )
         }
       }
+      const block: Extract<ChatBlock, { kind: 'user_input' }> = {
+        kind: 'user_input',
+        id: req.itemId,
+        turnId: req.turnId,
+        createdAt: req.createdAt ?? new Date(context.now).toISOString(),
+        requestId: req.requestId,
+        questions: req.questions,
+        ...(req.timeoutSeconds !== undefined ? { timeoutSeconds: req.timeoutSeconds } : {}),
+        status: 'pending',
+        live: true
+      }
+      const blocks = upsertProjectedTimelineBlock(state, block)
+      if (blocks === state.blocks) return {}
       return {
-        blocks: [...state.blocks, {
-          kind: 'user_input',
-          id: req.itemId,
-          turnId: req.turnId,
-          createdAt: req.createdAt ?? new Date(context.now).toISOString(),
-          requestId: req.requestId,
-          questions: req.questions,
-          ...(req.timeoutSeconds !== undefined ? { timeoutSeconds: req.timeoutSeconds } : {}),
-          status: 'pending',
-          live: true
-        }],
+        blocks,
         error: context.clearRecoveringError(state.error)
       }
     }

@@ -50,6 +50,7 @@ import type {
   ThreadTodoStatus,
   ThreadUsageSnapshot,
   ToolEventPayload,
+  TurnTerminalEvent,
   UserFileReference,
   UserInputAnswer,
   UserInputRequestPayload,
@@ -124,7 +125,8 @@ export type ThreadEventSink = {
     agentSurface?: 'code' | 'write' | 'design'
     designProfile?: DesignTaskProfile
   }): void
-  onTurnComplete(status?: 'completed' | 'aborted'): void
+  /** Parent turn reached a terminal state. Identity fields let the store reject stale or child-scoped completion. */
+  onTurnComplete(event?: TurnTerminalEvent): void
   onError(err: Error, options?: ThreadErrorOptions): void
   /** Optional: cumulative usage update for the thread. */
   onUsage?(usage: ThreadUsageSnapshot): void

@@ -17,6 +17,7 @@ import type {
   ThreadUsageSnapshot,
   DelegatedRuntimeState,
   ToolEventPayload,
+  TurnTerminalEvent,
   UserInputRequestPayload,
   UserInputStatusPayload,
   UserMessageEventPayload
@@ -68,8 +69,8 @@ type RuntimeProjectionActionPayload =
         userBlockId?: string | null
       }
     }
-  | { type: 'turn_completed' }
-  | { type: 'turn_aborted' }
+  | { type: 'turn_completed'; payload: TurnTerminalEvent }
+  | { type: 'turn_aborted'; payload: TurnTerminalEvent }
   | { type: 'turn_failed'; error: Error; options?: ThreadErrorOptions }
 
 /**

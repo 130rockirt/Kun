@@ -9,6 +9,7 @@ import type {
   ThreadEventSink,
   ToolBlock,
   ToolEventPayload,
+  TurnTerminalEvent,
   UserInputQuestion
 } from '../agent/types'
 import { getProvider } from '../agent/registry'
@@ -117,39 +118,7 @@ import {
 } from './chat-store-runtime-projection-support'
 import { loadThreadStates as loadProviderThreadStates } from '../agent/thread-state-loader'
 
-export {
-  MAX_WATCHED_COMPLETION_NOTIFICATIONS,
-  MAX_PENDING_CLAW_FEISHU_MIRRORS,
-  MAX_PENDING_CHILD_TOOL_UPDATES,
-  type PendingClawFeishuMirror,
-  watchTurnCompletionNotification,
-  completionNotificationDedupeKeyForWatchedThread,
-  currentCompletionWatchToken,
-  clearWatchedCompletionNotifications,
-  rememberPendingClawFeishuMirror,
-  takePendingClawFeishuMirror,
-  clearPendingClawFeishuMirrors,
-  buildFollowupMessageFromUserInput,
-  readActiveWriteWorkspace,
-  readWriteWorkspaceRoots,
-  runtimeErrorDetail,
-  runtimeStreamRecoveringMessage,
-  forkedMessageCount,
-  forkedTurnCount,
-  clearWatchedCompletionNotification,
-  turnCompleteNotificationSource,
-  notifyTurnComplete
-} from './chat-store-runtime-notifications'
-export {
-  finalizeTurnTiming,
-  flushLiveBlocks,
-  shouldOpenSettingsForError,
-  looksLikeActiveTurnError,
-  isCodeThread,
-  isCodeSidebarThread,
-  latestThread,
-  runtimeStatusText
-} from './chat-store-runtime-projection-support'
+export * from './chat-store-runtime-reexports'
 
 export function armBusyWatchdog(
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
@@ -216,11 +185,20 @@ export function syncTurnCompletionPoll(
       // claim so they never fire for a watch that was not actually removed.
       let claimed: typeof done = []
       setState((snapshot) => {
-        const accepted = done.filter(({ id, completionWatchKey }) => {
+        const accepted = done.filter(({ id, completionWatchKey, latestTurnId }) => {
           if (!snapshot.watchTurnCompletion[id]) return false
           if (
             completionWatchKey &&
             watchCompletionNotificationKeys.get(id) !== completionWatchKey
+          ) return false
+          // A slow poll can answer for an already-replaced turn. Never claim
+          // the newer watch with terminal evidence whose turn identity no
+          // longer matches the thread's current turn.
+          if (
+            latestTurnId &&
+            snapshot.activeThreadId === id &&
+            snapshot.currentTurnId &&
+            latestTurnId !== snapshot.currentTurnId
           ) return false
           return true
         })
@@ -339,10 +317,6 @@ export function buildThreadEventSink(
   // other threads cannot consume each other's child ids.
   const pendingChildToolUpdates = new Map<string, ToolEventPayload>()
   const loadThreadDetail = binding.getThreadDetail ?? ((threadId: string) => getProvider().getThreadDetail(threadId))
-  const isCurrentStream = (): boolean => {
-    if (binding.signal?.aborted) return false
-    return !boundThreadId || get().activeThreadId === boundThreadId
-  }
   const reduce = (state: ChatState, action: Parameters<typeof reduceChatProjection>[1]): Partial<ChatState> =>
     reduceChatProjection(state, action, {
       now: Date.now(),
@@ -357,6 +331,10 @@ export function buildThreadEventSink(
       settlePendingRuntimeWork: settlePendingRuntimeWorkAfterInterrupt,
       threadSnapshotLooksRunning
     })
+  const isCurrentStream = (): boolean => {
+    if (binding.signal?.aborted) return false
+    return !boundThreadId || get().activeThreadId === boundThreadId
+  }
   const runEffects = (effects: readonly ChatProjectionEffect[]): void => {
     for (const effect of effects) {
       switch (effect.type) {
@@ -571,22 +549,36 @@ export function buildThreadEventSink(
       if (!isCurrentStream()) return
       set((state) => reduce(state, { type: 'thread_metadata_changed', payload: event }))
     },
-    onTurnComplete: (status = 'completed') => {
+    onTurnComplete: (event: TurnTerminalEvent = { status: 'completed' }) => {
       if (!isCurrentStream()) return
+      // The mapper now preserves terminal identity. A child lifecycle event or
+      // a replay for an older turn must never settle this stream's active turn.
+      if (event.child) return
+      const activeState = get()
+      if (event.threadId && event.threadId !== (boundThreadId || activeState.activeThreadId)) return
+      if (!event.turnId) {
+        // Older producers dropped terminal identity. Do not settle the active
+        // turn from that weak signal; wake the state poll so the durable
+        // thread state can confirm it instead.
+        syncTurnCompletionPoll(set, get)
+        return
+      }
+      if (event.turnId !== activeState.currentTurnId) return
       // Reconnect/replay can deliver the same terminal event after the first
       // projection already cleared the active turn. Treat it as a no-op so
       // notifications, mirrors, workspace refreshes and queue drains remain
       // once-only for one completion identity.
-      if (!get().busy && !get().currentTurnId) return
+      if (!activeState.busy && !activeState.currentTurnId) return
+      const status = event.status
       resetBusyRecoveryAttempts()
       clearBusyWatchdog()
       const completedState = get()
       const completedThreadId = completedState.activeThreadId
-      const completedTurnId = completedState.currentTurnId
+      const completedTurnId = event.turnId ?? completedState.currentTurnId
       const completedUserBlockId = completedState.currentTurnUserId
       const completedKey = completedState.currentTurnId
         ? `turn:${completedState.currentTurnId}`
-        : `active:${completedThreadId ?? 'unknown'}:${completedState.lastSeq}`
+        : `active:${completedThreadId ?? 'unknown'}:${event.seq ?? completedState.lastSeq}`
       const pendingMirror = takePendingClawFeishuMirror(completedTurnId)
       const assistantMirrorText =
         pendingMirror
@@ -598,7 +590,13 @@ export function buildThreadEventSink(
           : ''
       set((state) => {
         const patch = reduce(state, {
-          type: status === 'aborted' ? 'turn_aborted' : 'turn_completed'
+          type: status === 'aborted' ? 'turn_aborted' : 'turn_completed',
+          payload: {
+            status,
+            ...(event.threadId ? { threadId: event.threadId } : {}),
+            ...(event.turnId ? { turnId: event.turnId } : {}),
+            ...(typeof event.seq === 'number' ? { seq: event.seq } : {})
+          }
         })
         if (!completedThreadId) return patch
         return {
