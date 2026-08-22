@@ -71,7 +71,7 @@ export function addUsageCounters(
     target.cost_usd += usage.costUsd ?? 0
     target.cost_cny += usage.costCny ?? 0
   }
-  const estimate = referenceValue
+  const codexEstimate = referenceValue
     ? estimateCodexSubscriptionValue({
         model,
         promptTokens: usage.promptTokens,
@@ -83,11 +83,21 @@ export function addUsageCounters(
         serviceTier: usage.serviceTier
       })
     : null
-  target.value_estimate_usd += estimate?.valueEstimateUsd ?? 0
-  target.value_estimate_cny += estimate?.valueEstimateCny ?? 0
+  // Catalog-pricing fallback: the normalizer already computed a reference
+  // estimate for subscription-billed models that the Codex price table does
+  // not know (Kimi, MiniMax plans, etc.). Codex estimates keep priority so
+  // long-context and fast-tier pricing stay intact.
+  const catalogEstimateUsd = codexEstimate == null && referenceValue
+    ? usage.valueEstimateUsd
+    : undefined
+  const catalogEstimateCny = codexEstimate == null && referenceValue
+    ? usage.valueEstimateCny
+    : undefined
+  target.value_estimate_usd += codexEstimate?.valueEstimateUsd ?? catalogEstimateUsd ?? 0
+  target.value_estimate_cny += codexEstimate?.valueEstimateCny ?? catalogEstimateCny ?? 0
   if (referenceValue) {
     const requests = usage.turns > 0 ? usage.turns : hasRequestUsage(usage) ? 1 : 0
-    if (estimate) target.value_estimate_priced_requests += requests
+    if (codexEstimate || catalogEstimateUsd != null) target.value_estimate_priced_requests += requests
     else target.value_estimate_unpriced_requests += requests
     target.value_estimate_coverage = referenceCoverage(target)
   }

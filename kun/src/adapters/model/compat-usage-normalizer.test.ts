@@ -130,4 +130,29 @@ describe('normalizeCompatUsage', () => {
     expect(result.costUsd).toBeDefined()
     expect(result.costUsd).not.toBe(99 + 99 * 0.5)
   })
+
+  it('writes catalog pricing as a value estimate for subscription billing', () => {
+    const result = normalizeCompatUsage({
+      usage: { input_tokens: 1_000_000, output_tokens: 500_000 },
+      model: 'k3',
+      providerBaseUrl: 'https://api.kimi.com/coding/v1',
+      billingKind: 'subscription',
+      catalogPricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 4 }
+    })
+    expect(result.billingKind).toBe('subscription')
+    expect(result.valueEstimateUsd).toBeCloseTo(1 + 2)
+    expect(result.valueEstimateCny).toBeCloseTo((1 + 2) * 7.2)
+  })
+
+  it('does not write a value estimate for non-subscription billing', () => {
+    const result = normalizeCompatUsage({
+      usage: { input_tokens: 1_000_000, output_tokens: 500_000 },
+      model: 'custom-model',
+      providerBaseUrl: 'https://gateway.example/v1',
+      catalogPricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 4 }
+    })
+    expect(result.billingKind).toBe('api')
+    expect(result.valueEstimateUsd).toBeUndefined()
+    expect(result.valueEstimateCny).toBeUndefined()
+  })
 })

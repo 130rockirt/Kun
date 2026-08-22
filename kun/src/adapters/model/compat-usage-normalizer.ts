@@ -72,6 +72,15 @@ export function normalizeCompatUsage(input: {
   })
   const reportedCostUsd = Number(usage.cost_usd ?? usage.costUsd)
   const reportedCostCny = Number(usage.cost_cny ?? usage.costCny)
+  const subscriptionEstimate = subscription
+    ? estimateCatalogCost({
+        pricing: catalogPricing,
+        inputTokens: pricingInputTokens,
+        cacheReadTokens: pricingCacheRead,
+        cacheWriteTokens: pricingCacheWrite,
+        outputTokens: completionTokens
+      })
+    : null
   return {
     ...emptyUsageSnapshot(),
     promptTokens,
@@ -86,7 +95,13 @@ export function normalizeCompatUsage(input: {
     actualModelId: model,
     billingKind: subscription ? 'subscription' : 'api',
     costUsd: Number.isFinite(reportedCostUsd) ? reportedCostUsd : estimatedCost?.costUsd,
-    costCny: Number.isFinite(reportedCostCny) ? reportedCostCny : estimatedCost?.costCny
+    costCny: Number.isFinite(reportedCostCny) ? reportedCostCny : estimatedCost?.costCny,
+    ...(subscriptionEstimate
+      ? {
+          valueEstimateUsd: subscriptionEstimate.costUsd,
+          valueEstimateCny: subscriptionEstimate.costCny
+        }
+      : {})
   }
 }
 

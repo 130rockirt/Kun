@@ -38,6 +38,7 @@ import { resolveLogDirectory } from './main-paths'
 import { showStartupFailureWindow } from './startup-failure-window'
 import { sanitizeStartupFailureMessage } from './startup-failure-content'
 import { resolveManagedRuntimeStartupTarget } from './runtime/managed-runtime-startup-attach'
+import { prefetchCatalogPricing } from './catalog-prefetch'
 
 export function startMainApp(): void {
   mainState.createWindow = createWindow
@@ -88,6 +89,10 @@ export function startMainApp(): void {
 
     void pruneOnStartup().catch((err) => {
       console.warn('[kun-gui] prune logs:', err)
+    })
+
+    void prefetchCatalogPricing(mainState.store).catch((err) => {
+      console.warn('[kun-gui] catalog pricing prefetch failed:', err)
     })
 
     void reconcileBundledRuntimeAfterInstall(initial)

@@ -389,6 +389,9 @@ export function withPresetModelProfiles(
       ...(presetProfile.serviceTiers?.length
         ? { serviceTiers: [...presetProfile.serviceTiers] }
         : {}),
+      // Catalog reference pricing is upstream metadata, not a user-editable
+      // profile choice; stored profiles inherit it from the preset catalog.
+      ...(presetProfile.pricing ? { pricing: { ...presetProfile.pricing } } : {}),
       // Responses Lite is a required transport contract for its matching
       // Codex models, not a user-editable profile choice. Older manually
       // added profiles should inherit it from the preset.

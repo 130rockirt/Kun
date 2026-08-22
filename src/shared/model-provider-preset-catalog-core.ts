@@ -246,9 +246,21 @@ export const MODEL_PROVIDER_PRESETS_CORE: ModelProviderPreset[] = [
     endpointFormat: 'chat_completions',
     models: ['k3', 'kimi-for-coding', 'kimi-for-coding-highspeed'],
     modelProfiles: {
-      k3: visionChatProfile(1_000_000, KIMI_K3_REASONING),
-      'kimi-for-coding': textChatProfile(262_144),
-      'kimi-for-coding-highspeed': textChatProfile(262_144)
+      // Reference prices mirror the public Moonshot API (moonshotai-cn on
+      // models.dev, fetched 2026-08-22). Kimi Code is a subscription plan, so
+      // these are reference estimates, not actual charges.
+      k3: {
+        ...visionChatProfile(1_000_000, KIMI_K3_REASONING),
+        pricing: { inputUsdPerMillion: 3, outputUsdPerMillion: 15, cacheReadUsdPerMillion: 0.3 }
+      },
+      'kimi-for-coding': {
+        ...textChatProfile(262_144),
+        pricing: { inputUsdPerMillion: 0.95, outputUsdPerMillion: 4, cacheReadUsdPerMillion: 0.19 }
+      },
+      'kimi-for-coding-highspeed': {
+        ...textChatProfile(262_144),
+        pricing: { inputUsdPerMillion: 1.9, outputUsdPerMillion: 8, cacheReadUsdPerMillion: 0.38 }
+      }
     },
     docsUrl: 'https://www.kimi.com/code/docs/en/',
     apiKeyUrl: 'https://www.kimi.com/code'

@@ -171,6 +171,57 @@ describe('usage cache diagnostics', () => {
     })
   })
 
+  it('aggregates a non-Codex subscription estimate from catalog pricing', () => {
+    const response = buildThreadUsageResponse([{
+      threadId: 'thread-k3',
+      model: 'k3',
+      completedAt: '2026-08-18T00:00:00.000Z',
+      usage: {
+        promptTokens: 1_000_000,
+        completionTokens: 500_000,
+        totalTokens: 1_500_000,
+        cacheHitRate: null,
+        billingKind: 'subscription',
+        valueEstimateUsd: 3,
+        valueEstimateCny: 21.6,
+        turns: 1
+      }
+    }])
+
+    expect(response.buckets[0]).toMatchObject({
+      thread_id: 'thread-k3',
+      cost_usd: 0,
+      cost_cny: 0,
+      value_estimate_usd: 3,
+      value_estimate_cny: 21.6,
+      value_estimate_priced_requests: 1,
+      value_estimate_unpriced_requests: 0,
+      value_estimate_coverage: 'complete'
+    })
+  })
+
+  it('keeps Codex estimate priority when both Codex and catalog estimates exist', () => {
+    const response = buildThreadUsageResponse([{
+      threadId: 'thread-both',
+      model: 'gpt-5.6-luna',
+      completedAt: '2026-08-18T00:00:00.000Z',
+      usage: {
+        promptTokens: 25_300,
+        completionTokens: 700,
+        totalTokens: 26_000,
+        cacheHitRate: 0,
+        billingKind: 'subscription',
+        valueEstimateUsd: 99,
+        valueEstimateCny: 712.8,
+        turns: 1
+      }
+    }])
+
+    const bucket = response.buckets[0]
+    expect(bucket?.value_estimate_usd).toBeGreaterThan(0)
+    expect(bucket?.value_estimate_usd).not.toBe(99)
+  })
+
   it('surfaces the latest-turn cache diagnostic fields in thread usage', () => {
     const records: ThreadUsageRecord[] = [
       {
