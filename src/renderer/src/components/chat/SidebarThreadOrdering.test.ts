@@ -110,7 +110,9 @@ describe('sidebar thread ordering integration', () => {
         'background', 'thread-1', 'thread-2', 'thread-3', 'thread-4'
       ])
     } finally {
-      renderer?.unmount()
+      // The renderer is assigned inside the act() closure; keep the union
+      // explicit so control-flow analysis cannot narrow it to `never`.
+      ;(renderer as ReactTestRenderer | null)?.unmount()
       vi.unstubAllGlobals()
     }
   })
@@ -145,7 +147,7 @@ describe('sidebar thread ordering integration', () => {
       expect(visibleThreadTitles(renderer!, ['newer', 'waiting'])).toEqual(['waiting', 'newer'])
       expect(renderer!.root.findAll((node) => node.props.title === 'Folder').length).toBeGreaterThan(0)
     } finally {
-      renderer?.unmount()
+      ;(renderer as ReactTestRenderer | null)?.unmount()
       vi.unstubAllGlobals()
     }
   })
@@ -201,7 +203,7 @@ describe('sidebar thread ordering integration', () => {
         'waiting-conversation', 'newer-conversation'
       ])
     } finally {
-      renderer?.unmount()
+      ;(renderer as ReactTestRenderer | null)?.unmount()
       useChatStore.setState(originalState, true)
       vi.unstubAllGlobals()
     }
