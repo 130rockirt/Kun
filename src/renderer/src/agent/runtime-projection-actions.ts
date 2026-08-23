@@ -71,7 +71,16 @@ type RuntimeProjectionActionPayload =
     }
   | { type: 'turn_completed'; payload: TurnTerminalEvent }
   | { type: 'turn_aborted'; payload: TurnTerminalEvent }
-  | { type: 'turn_failed'; error: Error; options?: ThreadErrorOptions }
+  | {
+      type: 'turn_failed'
+      payload: {
+        threadId?: string
+        turnId?: string
+        seq?: number
+        error: Error
+        options?: ThreadErrorOptions
+      }
+    }
 
 /**
  * Every action produced from a persisted runtime event keeps that event's

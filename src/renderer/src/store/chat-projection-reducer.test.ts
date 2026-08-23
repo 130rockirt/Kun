@@ -376,8 +376,7 @@ describe('chat projection reducer', () => {
       composerOrchestration: 'graph'
     }, [{
       type: 'turn_failed',
-      error: new Error('stopped'),
-      options: { terminal: true }
+      payload: { turnId: 'turn_graph', error: new Error('stopped'), options: { terminal: true } }
     }])
 
     expect(projected.busy).toBe(false)

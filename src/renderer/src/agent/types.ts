@@ -636,6 +636,15 @@ export type ThreadErrorOptions = {
    * the owning thread. Runtime-scoped failures use the global recovery banner.
    */
   scope?: 'conversation' | 'runtime'
+  /**
+   * Terminal identity of the failed turn, when known. Lets the store reject a
+   * replayed/out-of-order failure from an older turn before it can clear a
+   * newer active turn, mirroring the onTurnComplete stale guard. Transport
+   * errors and legacy events omit these and keep their existing semantics.
+   */
+  threadId?: string
+  turnId?: string
+  seq?: number
 }
 
 export type { AgentProvider, ThreadDetail, ThreadEventSink } from './provider-types'

@@ -337,11 +337,16 @@ export function reduceLateChatProjection(
       return { ...patch, watchTurnCompletion, unreadThreadIds }
     }
     case 'turn_failed': {
-      const message = context.formatRuntimeError(action.error)
-      const detail = context.runtimeErrorDetail(action.error)
-      const terminal = action.options?.terminal === true
-      const conversationScoped = action.options?.scope === 'conversation'
-      const interrupted = context.isInterruptSettledError(action.error, message)
+      const { error, options, threadId, turnId } = action.payload
+      // Replay paths can feed the reducer directly without the store's sink
+      // guard. A failure carrying another turn's identity must never settle
+      // the currently active turn.
+      if (turnId && state.currentTurnId && turnId !== state.currentTurnId) return undefined
+      const message = context.formatRuntimeError(error)
+      const detail = context.runtimeErrorDetail(error)
+      const terminal = options?.terminal === true
+      const conversationScoped = options?.scope === 'conversation'
+      const interrupted = context.isInterruptSettledError(error, message)
       const shouldSettle = terminal || !state.busy || interrupted
       const patch = flushLiveProjection(state, context.now, {
         ...finalizeTurnTimingAt(state, context.now),
@@ -355,19 +360,20 @@ export function reduceLateChatProjection(
       patch.currentTurnOrchestration = null
       patch.currentTurnUserId = null
       patch.blocks = context.settlePendingRuntimeWork(patch.blocks ?? state.blocks)
-      if (state.activeThreadId) {
+      const settleThreadId = threadId ?? state.activeThreadId
+      if (settleThreadId) {
         const threads = settleProjectedThreadStatus(
           state.threads,
-          state.activeThreadId,
+          settleThreadId,
           interrupted ? 'aborted' : 'failed'
         )
         if (threads !== state.threads) patch.threads = threads
       }
-      if (terminal && state.activeThreadId) {
+      if (terminal && settleThreadId) {
         const watchTurnCompletion = { ...state.watchTurnCompletion }
         const unreadThreadIds = { ...state.unreadThreadIds }
-        delete watchTurnCompletion[state.activeThreadId]
-        delete unreadThreadIds[state.activeThreadId]
+        delete watchTurnCompletion[settleThreadId]
+        delete unreadThreadIds[settleThreadId]
         patch.watchTurnCompletion = watchTurnCompletion
         patch.unreadThreadIds = unreadThreadIds
       }

@@ -243,8 +243,13 @@ function normalizeKunRuntimeEventPayload(
       const payload = deps.runtimeError(event, 'Kun turn failed')
       const terminal: RuntimeProjectionAction = {
         type: 'turn_failed',
-        error: deps.errorFromRuntime(payload),
-        options: { terminal: true, scope: 'conversation' }
+        payload: {
+          ...(event.threadId ? { threadId: event.threadId } : {}),
+          ...(event.turnId ? { turnId: event.turnId } : {}),
+          ...(typeof event.seq === 'number' ? { seq: event.seq } : {}),
+          error: deps.errorFromRuntime(payload),
+          options: { terminal: true, scope: 'conversation' }
+        }
       }
       // A message-less terminal event normally follows a more useful
       // structured `error` event. Settle the turn without adding a generic

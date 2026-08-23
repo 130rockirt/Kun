@@ -625,12 +625,23 @@ export function buildThreadEventSink(
     },
     onError: (err, options) => {
       if (!isCurrentStream()) return
+      // Stale-terminal guard mirroring onTurnComplete: a replayed or out-of-order
+      // failure for another thread/turn must never clear the newer active turn.
+      const active = get()
+      if (options?.threadId && options.threadId !== (boundThreadId || active.activeThreadId)) return
+      if (options?.turnId && active.currentTurnId && options.turnId !== active.currentTurnId) return
       resetBusyRecoveryAttempts()
       clearBusyWatchdog()
       const state = get()
       const terminal = options?.terminal === true
       takePendingClawFeishuMirror(state.currentTurnId)
-      set((current) => reduce(current, { type: 'turn_failed', error: err, options }))
+      const payload = {
+        ...(options?.threadId ? { threadId: options.threadId } : {}),
+        ...(options?.turnId ? { turnId: options.turnId } : {}),
+        ...(typeof options?.seq === 'number' ? { seq: options.seq } : {}),
+        error: err, options
+      }
+      set((current) => reduce(current, { type: 'turn_failed', payload }))
       if (terminal && state.activeThreadId) {
         set((current) => ({
           unreadThreadIds: completionIsCurrentlyVisible(current, state.activeThreadId!)
