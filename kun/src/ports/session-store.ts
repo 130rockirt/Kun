@@ -7,6 +7,7 @@ export type SessionUsageRecord = {
   threadId: string
   turnId?: string
   model?: string
+  providerId?: string
   completedAt: string
   usage: UsageSnapshot
 }

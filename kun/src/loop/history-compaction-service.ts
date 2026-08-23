@@ -277,6 +277,8 @@ export class HistoryCompactionService {
                       threadId: input.threadId,
                       turnId: input.turnId,
                       model: compactionModel.model,
+                      ...(compactionModel.providerId ? { providerId: compactionModel.providerId } : {}),
+                      ...(compactionModel.accountId ? { accountId: compactionModel.accountId } : {}),
                       usage
                     })
                   },

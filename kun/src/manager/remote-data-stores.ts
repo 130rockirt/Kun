@@ -102,6 +102,7 @@ const UsageRecordSchema = z.object({
   threadId: z.string(),
   turnId: z.string().optional(),
   model: z.string().optional(),
+  providerId: z.string().optional(),
   completedAt: z.string(),
   usage: z.record(z.string(), z.unknown())
 })

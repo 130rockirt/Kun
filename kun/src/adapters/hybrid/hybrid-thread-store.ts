@@ -208,15 +208,15 @@ export class HybridThreadStore implements ThreadStore {
     try {
       this.cachedStatement(`
         INSERT INTO usage_events (
-          thread_id, seq, timestamp, turn_id, model, usage_json
+          thread_id, seq, timestamp, turn_id, model, provider_id, usage_json
         )
         VALUES (
-          @thread_id, @seq, @timestamp, @turn_id, @model, @usage_json
+          @thread_id, @seq, @timestamp, @turn_id, @model, @provider_id, @usage_json
         )
         ON CONFLICT(thread_id, seq) DO UPDATE SET
           timestamp = excluded.timestamp,
           turn_id = excluded.turn_id,
-          model = excluded.model,
+          model = excluded.model, provider_id = excluded.provider_id,
           usage_json = excluded.usage_json
       `).run(usageRowFromEvent(event))
     } catch (error) {
@@ -402,8 +402,7 @@ export class HybridThreadStore implements ThreadStore {
         thread_id TEXT NOT NULL,
         seq INTEGER NOT NULL,
         timestamp TEXT NOT NULL,
-        turn_id TEXT,
-        model TEXT,
+        turn_id TEXT, model TEXT, provider_id TEXT,
         usage_json TEXT NOT NULL,
         PRIMARY KEY(thread_id, seq)
       );
@@ -418,6 +417,7 @@ export class HybridThreadStore implements ThreadStore {
     addColumnIfMissing(this.db, 'threads', "approval_reviewer TEXT NOT NULL DEFAULT 'user'")
     addColumnIfMissing(this.db, 'threads', 'usage_backfilled INTEGER NOT NULL DEFAULT 0')
     addColumnIfMissing(this.db, 'threads', 'agent_surface TEXT')
+    addColumnIfMissing(this.db, 'usage_events', 'provider_id TEXT')
   }
 
   private cachedStatement(sql: string): Statement {
@@ -457,10 +457,10 @@ export class HybridThreadStore implements ThreadStore {
     if (!this.db || events.length === 0) return
     const insert = this.cachedStatement(`
       INSERT OR REPLACE INTO usage_events (
-        thread_id, seq, timestamp, turn_id, model, usage_json
+        thread_id, seq, timestamp, turn_id, model, provider_id, usage_json
       )
       VALUES (
-        @thread_id, @seq, @timestamp, @turn_id, @model, @usage_json
+        @thread_id, @seq, @timestamp, @turn_id, @model, @provider_id, @usage_json
       )
     `)
     const insertChunk = this.db.transaction((chunk: UsageRow[]) => {

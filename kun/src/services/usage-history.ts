@@ -23,6 +23,8 @@ export type UsageHistorySource = {
   nowIso: () => string
 }
 
+type ThreadHydrator = (threadId: string) => Promise<ThreadRecord | null>
+
 const usageRecordLoads = new WeakMap<object, Map<string, Promise<ThreadUsageRecord[]>>>()
 const USAGE_FALLBACK_READ_CONCURRENCY = 4
 
@@ -63,6 +65,18 @@ async function loadUsageRecords(
     : (await source.threadService.list({ includeArchived: true, includeSide: true }))
         .filter((thread) => thread.status !== 'deleted')
 
+  // Summaries omit `turns`, so per-turn provider/model attribution needs the
+  // full ThreadRecord. The cache deduplicates hydrations within one load and
+  // is shared with the JSONL fallback path.
+  const threadCache = new Map<string, Promise<ThreadRecord | null>>()
+  const hydrateThread: ThreadHydrator = (threadId) => {
+    const cached = threadCache.get(threadId)
+    if (cached) return cached
+    const load = source.threadService.get(threadId)
+    threadCache.set(threadId, load)
+    return load
+  }
+
   if (typeof source.sessionStore.loadUsageRecords === 'function') {
     try {
       const allowedThreadIds = new Set(
@@ -70,13 +84,26 @@ async function loadUsageRecords(
       )
       const indexedRaw = await source.sessionStore.loadUsageRecords({ threadId: options.threadId })
       const summariesById = new Map(threadSummaries.map((thread) => [thread.id, thread]))
+      // Legacy indexed rows carry no persisted providerId; without a hydrate
+      // they would be attributed to the thread's *current* provider.
+      const hydrationIds: string[] = []
+      for (const record of indexedRaw) {
+        if (!allowedThreadIds.has(record.threadId)) continue
+        if (record.providerId) continue
+        if (explicitThread?.id === record.threadId) continue
+        hydrationIds.push(record.threadId)
+      }
+      const hydrated = await hydrateThreadsWithBounds(hydrationIds, hydrateThread)
       const records: ThreadUsageRecord[] = indexedRaw
         .filter((record) => allowedThreadIds.has(record.threadId))
         .map((record) => {
           const thread = explicitThread?.id === record.threadId
             ? explicitThread
-            : summariesById.get(record.threadId)
-          const providerId = usageRecordProvider(thread, { turnId: record.turnId })
+            : hydrated.get(record.threadId) ?? summariesById.get(record.threadId)
+          const providerId = usageRecordProvider(thread, {
+            turnId: record.turnId,
+            providerId: record.providerId
+          })
           return {
             threadId: record.threadId,
             ...(record.turnId ? { turnId: record.turnId } : {}),
@@ -102,7 +129,7 @@ async function loadUsageRecords(
         if (!hasUsage(liveRemainder)) continue
         const thread = explicitThread?.id === threadId
           ? explicitThread
-          : summariesById.get(threadId) ?? await source.threadService.get(threadId)
+          : await hydrateThread(threadId) ?? summariesById.get(threadId)
         if (!thread) continue
         const turnId = latestTurnId(thread)
         records.push({
@@ -125,12 +152,31 @@ async function loadUsageRecords(
   const sources: UsageThreadSource[] = explicitThread
     ? [{ id: explicitThread.id, thread: explicitThread }]
     : threadSummaries.map((thread) => ({ id: thread.id, summary: thread }))
-  return loadUsageRecordsFromSources(source, sources)
+  return loadUsageRecordsFromSources(source, sources, hydrateThread)
+}
+
+async function hydrateThreadsWithBounds(
+  threadIds: readonly string[],
+  hydrateThread: ThreadHydrator
+): Promise<Map<string, ThreadRecord | null>> {
+  const unique = [...new Set(threadIds)]
+  const hydrated = new Map<string, ThreadRecord | null>()
+  let nextIndex = 0
+  const workerCount = Math.min(USAGE_FALLBACK_READ_CONCURRENCY, unique.length)
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < unique.length) {
+      const threadId = unique[nextIndex]
+      nextIndex += 1
+      hydrated.set(threadId, await hydrateThread(threadId))
+    }
+  }))
+  return hydrated
 }
 
 async function loadUsageRecordsFromSources(
   source: UsageHistorySource,
-  sources: UsageThreadSource[]
+  sources: UsageThreadSource[],
+  hydrateThread: ThreadHydrator
 ): Promise<ThreadUsageRecord[]> {
   const recordsBySource: ThreadUsageRecord[][] = Array.from({ length: sources.length })
   let nextIndex = 0
@@ -139,7 +185,7 @@ async function loadUsageRecordsFromSources(
     while (nextIndex < sources.length) {
       const index = nextIndex
       nextIndex += 1
-      recordsBySource[index] = await loadUsageRecordsForSource(source, sources[index])
+      recordsBySource[index] = await loadUsageRecordsForSource(source, sources[index], hydrateThread)
     }
   }))
   return recordsBySource.flat()
@@ -147,9 +193,13 @@ async function loadUsageRecordsFromSources(
 
 async function loadUsageRecordsForSource(
   source: UsageHistorySource,
-  item: UsageThreadSource
+  item: UsageThreadSource,
+  hydrateThread: ThreadHydrator
 ): Promise<ThreadUsageRecord[]> {
-  const thread = item.thread ?? item.summary ?? await source.threadService.get(item.id)
+  // Hydrate the full record before falling back to the summary: the summary
+  // lacks `turns`, so provider attribution on it would use the thread's
+  // current provider instead of the turn's own route.
+  const thread = item.thread ?? await hydrateThread(item.id) ?? item.summary
   if (!thread) return []
   const records: ThreadUsageRecord[] = []
   let latestPersisted = emptyUsageSnapshot()
@@ -202,8 +252,12 @@ function latestTurnId(thread: unknown): string | undefined {
 
 function usageRecordProvider(
   thread: { providerId?: string; turns?: Array<{ id: string; providerId?: string }> } | undefined,
-  event?: Pick<UsageEvent, 'turnId'>
+  event?: Pick<UsageEvent, 'turnId' | 'providerId'>
 ): string | undefined {
+  // Persisted providerId wins: it is the provider that actually served the
+  // request even when the thread has since switched providers.
+  const persistedProvider = event?.providerId?.trim()
+  if (persistedProvider) return persistedProvider
   if (!thread) return undefined
   const turnId = event?.turnId?.trim()
   if (turnId) {

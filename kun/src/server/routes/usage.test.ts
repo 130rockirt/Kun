@@ -164,7 +164,7 @@ describe('usageJsonResponse', () => {
     expect(body.buckets.map((bucket) => bucket.model)).not.toContain('deleted-model')
   })
 
-  it('reuses thread summaries when the optional usage index is unavailable', async () => {
+  it('hydrates full threads for per-turn attribution when the usage index is unavailable', async () => {
     const get = vi.fn(async () => null)
     const list = vi.fn(async () => [{
       id: 'thread-1',
@@ -185,7 +185,10 @@ describe('usageJsonResponse', () => {
 
     expect(response.status).toBe(200)
     expect(list).toHaveBeenCalledTimes(1)
-    expect(get).not.toHaveBeenCalled()
+    // Summaries carry no turns, so the JSONL fallback hydrates each thread
+    // once to attribute usage to the provider that served each turn.
+    expect(get).toHaveBeenCalledTimes(1)
+    expect(get).toHaveBeenCalledWith('thread-1')
   })
 
   it('bounds parallel JSONL reads when rebuilding usage without an index', async () => {

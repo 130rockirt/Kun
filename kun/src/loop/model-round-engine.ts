@@ -390,6 +390,8 @@ export class ModelRoundEngine {
                 threadId: input.threadId,
                 turnId: input.turnId,
                 model: input.request.model,
+                ...(input.request.providerId ? { providerId: input.request.providerId } : {}),
+                ...(input.request.accountId ? { accountId: input.request.accountId } : {}),
                 usage
               })
               break

@@ -302,6 +302,8 @@ async compact(this: TurnService, input: {
                       threadId: input.threadId,
                       turnId,
                       model,
+                      ...(compactionModel.providerId ? { providerId: compactionModel.providerId } : {}),
+                      ...(compactionModel.accountId ? { accountId: compactionModel.accountId } : {}),
                       usage
                     })
                   },
