@@ -14,6 +14,7 @@ import {
 import { GraphOrchestrationStrategySchema } from './graph.js'
 import { GraphPlanningDraftStatusSchema } from './graph-planning.js'
 import { TurnReasoningEffortSchema } from './turn-reasoning.js'
+import { ThreadRetentionPolicySchema } from './thread-retention.js'
 import {
   DesignDocumentTargetSchema,
   DesignImagePlacementTargetSchema,
@@ -487,7 +488,9 @@ export const CompactRequest = z.object({
   /** Optional explicit token budget. */
   budgetTokens: z.number().int().positive().optional(),
   /** Archive history through this completed turn, preserving the later tail verbatim. */
-  cutoffTurnId: z.string().trim().min(1).optional()
+  cutoffTurnId: z.string().trim().min(1).optional(),
+  /** Internal prune path may explicitly skip the archive hook. */
+  archiveBeforePrune: z.boolean().optional()
 })
 export type CompactRequest = z.infer<typeof CompactRequest>
 
@@ -505,6 +508,20 @@ export const CompactResponse = z.object({
   contextEstimate: z.number().int().nonnegative().optional()
 })
 export type CompactResponse = z.infer<typeof CompactResponse>
+
+export const PruneThreadRequest = ThreadRetentionPolicySchema
+export type PruneThreadRequest = z.infer<typeof PruneThreadRequest>
+
+export const PruneThreadResponse = z.object({
+  threadId: z.string().min(1),
+  policy: ThreadRetentionPolicySchema,
+  pruned: z.boolean(),
+  cutoffTurnId: z.string().min(1).optional(),
+  archivedItems: z.number().int().nonnegative(),
+  retainedItems: z.number().int().nonnegative(),
+  archivePath: z.string().min(1).optional()
+}).strict()
+export type PruneThreadResponse = z.infer<typeof PruneThreadResponse>
 
 export const RewindThreadRequest = z.object({
   turnId: z.string().min(1)

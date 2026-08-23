@@ -128,6 +128,13 @@ export type TurnServiceDeps = {
 
 export class TurnConflictError extends Error {}
 
+export class ThreadClosingError extends TurnConflictError {
+  constructor(readonly threadId: string) {
+    super(`thread is closing: ${threadId}`)
+    this.name = 'ThreadClosingError'
+  }
+}
+
 export class TaskSurfaceLockedError extends TurnConflictError {
   constructor(
     readonly lockedSurface: ThreadAgentSurface,

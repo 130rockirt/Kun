@@ -17,6 +17,7 @@ import {
   KUN_MODEL_CONNECTIONS_PATH,
   KUN_RUNTIME_INFO_PATH,
   KUN_RUNTIME_TOOLS_PATH,
+  KUN_THREAD_GUARDIAN_PATH,
   KUN_SKILLS_PATH,
   kunThreadCompactPath,
   kunThreadEventsPath,
@@ -117,6 +118,14 @@ export function readRuntimeJson<T>(body: string, fallback: string): T {
   }
 }
 
+export type CoreThreadGuardianResultJson = {
+  checkedAt: string
+  scannedThreads: number
+  inconsistentThreads: number
+  repairedThreads: number
+  remainingIssues: Array<{ code: string; message: string; severity: 'warning' | 'error' }>
+}
+
 export class KunRuntimeProviderServices {
   async getRuntimeInfo(): Promise<CoreRuntimeInfoJson> {
     const response = await rendererRuntimeClient.runtimeRequest(KUN_RUNTIME_INFO_PATH, 'GET')
@@ -137,6 +146,17 @@ export class KunRuntimeProviderServices {
     return readRuntimeJson<CoreRuntimeToolDiagnosticsJson>(
       response.body,
       'runtime returned an invalid runtime diagnostics response'
+    )
+  }
+
+  async runThreadGuardian(): Promise<CoreThreadGuardianResultJson> {
+    const response = await rendererRuntimeClient.runtimeRequest(KUN_THREAD_GUARDIAN_PATH, 'POST')
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to run thread guardian'))
+    }
+    return readRuntimeJson<CoreThreadGuardianResultJson>(
+      response.body,
+      'runtime returned an invalid thread guardian response'
     )
   }
 

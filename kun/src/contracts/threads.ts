@@ -12,6 +12,7 @@ import {
   DesignDocumentTargetSchema,
   DesignTaskProfileSchema
 } from './design-task-profile.js'
+import { ThreadRetentionPolicySchema } from './thread-retention.js'
 
 export const ThreadStatus = z.enum(['idle', 'running', 'archived', 'deleted'])
 export type ThreadStatus = z.infer<typeof ThreadStatus>
@@ -426,6 +427,7 @@ export const ThreadSchemaBase = z.object({
   forkedFromTurnCount: z.number().int().nonnegative().optional(),
   goal: ThreadGoalSchema.optional(),
   todos: ThreadTodoListSchema.optional(),
+  retentionPolicy: ThreadRetentionPolicySchema.optional(),
   /**
    * ISO timestamp of the last time this thread was auto-resumed after a
    * runtime restart. Used as a cooldown gate so a crash loop cannot burn

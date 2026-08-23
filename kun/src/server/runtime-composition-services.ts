@@ -59,6 +59,7 @@ import {
   seedUsageCarryover
 } from './runtime-factory-storage.js'
 import { createRuntimeBackgroundMaintenance } from './runtime-background-maintenance.js'
+import { ThreadStoreGuardian } from '../services/thread-store-guardian.js'
 
 export async function createRuntimeServices(
   model: Awaited<ReturnType<typeof createRuntimeModelComposition>>
@@ -243,9 +244,23 @@ export async function createRuntimeServices(
 	      new Date(now - 24 * 60 * 60 * 1_000).toISOString()
 	    )
 	  }
+	  const threadStoreGuardian = new ThreadStoreGuardian({
+	    dataDir: core.activeOptions.dataDir,
+	    threadStore: rawThreadStore,
+	    nowIso
+	  })
   const backgroundMaintenance = createRuntimeBackgroundMaintenance({
     seedUsage: () => seedUsageCarryover({ threadStore, sessionStore, usageService }),
     pruneAttachments: () => pruneUnsentAttachments(attachmentStore),
+    inspectThreads: async () => {
+      const result = await threadStoreGuardian.run()
+      if (result.remainingIssues.length > 0) {
+        console.warn('[kun] thread guardian found unresolved storage issues', {
+          issueCount: result.remainingIssues.length,
+          repairedThreads: result.repairedThreads
+        })
+      }
+    },
     onError: (task, error) => {
       console.warn(`[kun] background ${task} failed:`, error)
     }
@@ -431,6 +446,7 @@ export async function createRuntimeServices(
     reviewService,
     pruneUnsentAttachments,
     backgroundMaintenance,
+    threadStoreGuardian,
     migrationService,
     migrationImportService,
     knowledgeBaseService,

@@ -130,7 +130,7 @@ export type SidebarProjectsContentProps = {
   openMoveThreadDialog: (thread: NormalizedThread, record?: SidebarThreadWorktreeRecord) => void
   handlePinThread: (thread: NormalizedThread, pinned: boolean) => Promise<void>
   openRenameThreadDialog: (thread: NormalizedThread) => void
-  handleSummarizeThread: (thread: NormalizedThread) => Promise<void>
+  handleSummarizeThread: (thread: NormalizedThread) => Promise<void>; handlePruneThread: (thread: NormalizedThread) => Promise<void>
   handleCopyThreadId: (thread: NormalizedThread) => Promise<void>
   handleArchiveThread: (thread: NormalizedThread) => Promise<void>
   handleDeleteThread: (thread: NormalizedThread) => Promise<void>
@@ -165,7 +165,7 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
     handleWorkspaceDragLeave, handleWorkspaceDrop, handleThreadDragStart, handleThreadDragEnd,
     handleThreadDragOver, handleThreadDragLeave, handleThreadDrop, handleFolderDragOver,
     handleFolderDragLeave, handleFolderDrop, threadMoveDisabledReason, openMoveThreadDialog,
-    handlePinThread, openRenameThreadDialog, handleSummarizeThread, handleCopyThreadId,
+    handlePinThread, openRenameThreadDialog, handleSummarizeThread, handlePruneThread, handleCopyThreadId,
     handleArchiveThread,
     handleDeleteThread, handleRestoreThread, openWorkspaceInSystem, handleArchiveWorkspaceThreads,
     handleRemoveWorkspace, archivableWorkspaceThreads, closeRenameThreadDialog,
@@ -597,7 +597,7 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
           onMove={() => openMoveThreadDialog(threadContextMenu.thread, threadContextMenu.worktreeRecord)}
           onPin={() => void handlePinThread(threadContextMenu.thread, threadContextMenu.thread.pinned !== true)}
           onRename={() => openRenameThreadDialog(threadContextMenu.thread)}
-          onSummarize={() => void handleSummarizeThread(threadContextMenu.thread)}
+          onSummarize={() => void handleSummarizeThread(threadContextMenu.thread)} onPrune={() => void handlePruneThread(threadContextMenu.thread)}
           onCopyId={() => void handleCopyThreadId(threadContextMenu.thread)}
           onArchive={() => void handleArchiveThread(threadContextMenu.thread)}
           onDelete={() => void handleDeleteThread(threadContextMenu.thread)}

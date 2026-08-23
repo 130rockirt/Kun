@@ -4,6 +4,8 @@ import { StartTurnRequest as StartTurnRequestSchema } from '../contracts/turns.j
 import type {
   CompactRequest,
   CompactResponse,
+  PruneThreadRequest,
+  PruneThreadResponse,
   RewindThreadResponse,
   StartTurnRequest,
   StartTurnResponse,
@@ -106,6 +108,10 @@ export interface TurnServiceOperations {
     /** Marks this compaction as automatic (memory-pressure sweep), not user-requested. */
     auto?: boolean
   }): Promise<CompactResponse>;
+  pruneThread(input: {
+    threadId: string
+    request: PruneThreadRequest
+  }): Promise<PruneThreadResponse>;
   finishTurn(input: {
     threadId: string
     turnId: string

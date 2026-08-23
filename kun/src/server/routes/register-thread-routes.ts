@@ -26,6 +26,7 @@ import { contentSearchThreads } from './thread-content-search.js'
 import { summarizeThread } from './threads-summarize.js'
 import {
   compactTurn,
+  pruneThread,
   cancelToolCall,
   getSteeringQueue,
   getTurn,
@@ -262,6 +263,10 @@ export function registerThreadRoutes(
       ctx.params.turnId,
       ctx.params.callId
     )
+  })
+  router.add('POST', '/v1/threads/:id/prune', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return pruneThread(runtime.turnService, ctx.params.id, request)
   })
   router.add('POST', '/v1/threads/:id/compact', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

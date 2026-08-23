@@ -1,5 +1,7 @@
 import {
   CompactRequest,
+  PruneThreadRequest,
+  PruneThreadResponse,
   CancelToolCallResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
@@ -19,6 +21,7 @@ import { ERRORS } from './runtime-error.js'
 import {
   DesignProfileLockedError,
   TaskSurfaceLockedError,
+  ThreadClosingError,
   TurnCapacityError,
   TurnConflictError,
   type TurnService
@@ -84,6 +87,7 @@ export async function startTurn(
         ...(error.details.mismatch ? { mismatch: error.details.mismatch } : {})
       })
     }
+    if (error instanceof ThreadClosingError) return ERRORS.threadClosing(error.message)
     if (error instanceof TurnConflictError) return ERRORS.conflict(error.message)
     if (error instanceof Error && /not found/i.test(error.message)) {
       return ERRORS.notFound(error.message)
@@ -207,6 +211,27 @@ export async function cancelToolCall(
     if (error instanceof Error && /no longer active|not currently executing|already being interrupted/i.test(error.message)) {
       return ERRORS.conflict(error.message)
     }
+    throw error
+  }
+}
+
+export async function pruneThread(
+  turns: TurnService,
+  threadId: string,
+  request: Request
+): Promise<JsonResponse | Response> {
+  const body = await readJsonBody(request)
+  if (!body.ok) return body.response
+  const parsed = PruneThreadRequest.safeParse(body.value ?? {})
+  if (!parsed.success) return ERRORS.validation('invalid prune body', parsed.error.issues)
+  try {
+    return jsonResponse(PruneThreadResponse.parse(await turns.pruneThread({
+      threadId,
+      request: parsed.data
+    })))
+  } catch (error) {
+    if (error instanceof TurnConflictError) return ERRORS.conflict(error.message)
+    if (error instanceof Error && /not found/i.test(error.message)) return ERRORS.notFound(error.message)
     throw error
   }
 }

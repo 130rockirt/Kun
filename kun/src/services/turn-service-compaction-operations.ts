@@ -4,6 +4,8 @@ import { StartTurnRequest as StartTurnRequestSchema } from '../contracts/turns.j
 import type {
   CompactRequest,
   CompactResponse,
+  PruneThreadRequest,
+  PruneThreadResponse,
   RewindThreadResponse,
   StartTurnRequest,
   StartTurnResponse,
@@ -58,6 +60,7 @@ import {
 import { type TurnService, type TurnServiceDeps, TurnConflictError, TurnCapacityError, type TerminalTurnStatus, type TurnSettlement, type GraphLeadSuspensionResult, type GraphLeadResumeResult, HOST_SHUTDOWN_TURN_SUSPENSION_CODE, hostShutdownTurnSuspensionReason, isHostShutdownTurnSuspension, DEFAULT_MAX_CONCURRENT_TURNS, fingerprintStartTurnRequest, canonicalizeFingerprintValue, isActiveTurn, terminalStatus, threadStatusFromTurns, threadStatusAfterTurnTransition, normalizeMaxConcurrentTurns, firstNonBlank, modelForManualCompaction } from './turn-service-core.js'
 
 import { buildArchivedActiveHistory } from './archive-history-commit.js'
+import { selectRetentionCutoff } from './thread-retention-service.js'
 
 export const turnServiceCompactionOperations = {
 async compact(this: TurnService, input: {
@@ -82,7 +85,9 @@ async compact(this: TurnService, input: {
           throw new TurnConflictError('cutoffTurnId must identify a completed turn')
         }
         const archiveItems = this['deps'].sessionStore.archiveItems
-        if (!archiveItems) throw new Error('session archive is unavailable for this store')
+        if (input.request.archiveBeforePrune !== false && !archiveItems) {
+          throw new Error('session archive is unavailable for this store')
+        }
         const snapshot = await this['deps'].sessionStore.loadItemSnapshot(input.threadId)
         const cutoffIndex = snapshot.items.reduce(
           (last, item, index) => item.turnId === cutoffTurn.id ? index : last,
@@ -121,21 +126,23 @@ async compact(this: TurnService, input: {
           throw new TurnConflictError('cutoff does not contain compactable history')
         }
         const nextItems = buildArchivedActiveHistory(result.next, result.summaryItem, retainedTail)
-        const staged = await archiveItems.call(this['deps'].sessionStore, {
-          threadId: input.threadId,
-          cutoffTurnId: cutoffTurn.id,
-          createdAt: this['deps'].nowIso(),
-          items: archivedHead,
-          retainedItems: retainedTail.length,
-          replacedTokens: result.replacedTokens
-        })
+        const staged = input.request.archiveBeforePrune === false
+          ? undefined
+          : await archiveItems!.call(this['deps'].sessionStore, {
+              threadId: input.threadId,
+              cutoffTurnId: cutoffTurn.id,
+              createdAt: this['deps'].nowIso(),
+              items: archivedHead,
+              retainedItems: retainedTail.length,
+              replacedTokens: result.replacedTokens
+            })
         const commit = await this['deps'].sessionStore.rewriteItemsIfRevision(
           input.threadId,
           snapshot.revision,
           nextItems
         )
         if (!commit.applied) {
-          await staged.cleanup()
+          await staged?.cleanup()
           throw new TurnConflictError('history changed while archive was being committed')
         }
         await this['threadItems'].syncFromSession(input.threadId)
@@ -158,7 +165,7 @@ async compact(this: TurnService, input: {
           replacedTokens: result.replacedTokens,
           summary: result.summaryItem.kind === 'compaction' ? result.summaryItem.summary : '',
           pinnedConstraints: prefix.pinnedConstraints,
-          archivePath: staged.path,
+          ...(staged ? { archivePath: staged.path } : {}),
           archivedItems: archivedHead.length,
           retainedItems: retainedTail.length,
           contextEstimate: this['deps'].compactor.estimate(nextItems),
@@ -385,6 +392,43 @@ async compact(this: TurnService, input: {
       ...(result.summaryItem.kind === 'compaction' && result.summaryItem.sourceItemIds
         ? { sourceItemIds: result.summaryItem.sourceItemIds }
         : {})
+    }
+  },
+
+async pruneThread(this: TurnService, input: {
+    threadId: string
+    request: PruneThreadRequest
+  }): Promise<PruneThreadResponse> {
+    const current = await this['deps'].threadStore.get(input.threadId)
+    if (!current) throw new Error(`thread not found: ${input.threadId}`)
+    if (current.turns.some(isActiveTurn)) throw new TurnConflictError('thread has an active turn')
+    const policy = input.request
+    const cutoffTurnId = selectRetentionCutoff(current, policy, this['deps'].nowIso())
+    const compacted = cutoffTurnId
+      ? await this.compact({
+          threadId: input.threadId,
+          request: {
+            cutoffTurnId,
+            reason: 'thread retention policy',
+            archiveBeforePrune: policy.archiveBeforePrune
+          }
+        })
+      : undefined
+    const latest = await this['deps'].threadStore.get(input.threadId)
+    if (!latest) throw new Error(`thread not found: ${input.threadId}`)
+    await this['deps'].threadStore.upsert({
+      ...latest,
+      retentionPolicy: policy,
+      updatedAt: this['deps'].nowIso()
+    })
+    return {
+      threadId: input.threadId,
+      policy,
+      pruned: Boolean(compacted),
+      ...(cutoffTurnId ? { cutoffTurnId } : {}),
+      archivedItems: compacted?.archivedItems ?? 0,
+      retainedItems: compacted?.retainedItems ?? (await this['deps'].sessionStore.loadItems(input.threadId)).length,
+      ...(compacted?.archivePath ? { archivePath: compacted.archivePath } : {})
     }
   },
 
