@@ -339,8 +339,8 @@ export abstract class TuiControllerThreads extends TuiControllerBase {
           ? { approvalReviewer: this.options.approvalReviewer }
           : {})
       })
-      await this.refreshThreads('')
       await this.openThread(thread.id)
+      await this.refreshThreads('')
     } catch (error) {
       this.fail(error)
     }

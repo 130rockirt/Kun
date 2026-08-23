@@ -185,6 +185,7 @@ async function writeFetchResponse(
     return
   }
   const isSse = response.headers.get('content-type')?.toLowerCase().includes('text/event-stream') === true
+  if (isSse) outgoing.flushHeaders()
   const reader = response.body.getReader()
   try {
     while (true) {

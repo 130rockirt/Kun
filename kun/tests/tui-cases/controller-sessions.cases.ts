@@ -454,6 +454,38 @@ describe("TuiController reasoning and session lifecycle", () => {
     await Promise.all([controller.stop(), newController.stop()])
   })
 
+  it('opens a newly created session before refreshing the session list', async () => {
+    const created = detail({ id: 'thr_new', title: 'New session' })
+    const calls: string[] = []
+    const client = {
+      listThreads: vi.fn(async () => {
+        calls.push('list')
+        return [created]
+      }),
+      createThread: vi.fn(async () => {
+        calls.push('create')
+        return created
+      }),
+      getThread: vi.fn(async () => {
+        calls.push('get')
+        return created
+      }),
+      subscribeThreadEvents: vi.fn(async (input: { signal: AbortSignal }) => {
+        calls.push('subscribe')
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      })
+    } as unknown as KunTuiClient
+    const controller = new TuiController(client, { ...options(), continueLatest: false }, runtime)
+    await controller.start()
+    calls.length = 0
+
+    await controller.createThread('New session')
+
+    expect(calls).toEqual(['create', 'get', 'subscribe', 'list'])
+    expect(controller.state.projection?.thread.id).toBe(created.id)
+    await controller.stop()
+  })
+
   it('executes session lifecycle mutations through authoritative runtime routes', async () => {
     let threads = [detail()]
     const compactThread = vi.fn(async () => ({ ok: true }))
