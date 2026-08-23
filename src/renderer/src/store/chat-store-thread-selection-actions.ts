@@ -216,7 +216,12 @@ export function createThreadSelectionActions(
     resetBusyRecoveryAttempts()
     clearBusyWatchdog()
     if (cached) {
-      const queuedMessages = reconcileQueuedMessages(cached.queuedMessages, {
+      // The durable queue is the only authoritative queue source. The parked
+      // snapshot may hold a queue that was already consumed (e.g. guidance
+      // finished while this thread was inactive), so its queuedMessages must
+      // never be restored. durableQueuedMessages was read synchronously above
+      // (before the old snapshot was parked), so it is still fresh here.
+      const queuedMessages = reconcileQueuedMessages(durableQueuedMessages, {
         busy: cached.busy,
         turnId: cached.currentTurnId ?? undefined,
         blocks: cached.blocks
