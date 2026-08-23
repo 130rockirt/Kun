@@ -514,6 +514,55 @@ describe('downloadGuiUpdate recovery', () => {
     })
     expect(updater.downloadUpdate).toHaveBeenCalledTimes(2)
   })
+
+  it('ignores a stale download completion after switching from stable to frontier', async () => {
+    process.env.KUN_UPDATE_URL_STABLE = 'https://updates.example.test/stable/'
+    process.env.KUN_UPDATE_URL_FRONTIER = 'https://updates.example.test/frontier/'
+    process.env.DEEPSEEK_GUI_ALLOW_UNSIGNED_UPDATES = '1'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }))
+    let finishDownload = (): void => undefined
+    updater.downloadUpdate.mockImplementation(() => new Promise<string[]>((resolve) => {
+      finishDownload = () => resolve(['C:\\Temp\\Kun-0.2.0.exe'])
+    }))
+    const module = await import('./gui-updater')
+    module.initializeGuiUpdater(() => null, () => 'stable')
+    updater.emit('update-available', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+
+    const downloading = module.downloadGuiUpdate('stable')
+    for (let index = 0; index < 4; index += 1) await Promise.resolve()
+    expect(updater.downloadUpdate).toHaveBeenCalledOnce()
+    module.setGuiUpdateChannel('frontier')
+    updater.emit('download-progress', { percent: 100 })
+    updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+    finishDownload()
+
+    await expect(downloading).resolves.toMatchObject({ ok: false, code: 'download_failed' })
+    expect(module.getGuiUpdateState()).toEqual({ status: 'idle' })
+    await expect(module.installGuiUpdate()).resolves.toMatchObject({ ok: false, code: 'install_failed' })
+    expect(updater.quitAndInstall).not.toHaveBeenCalled()
+  })
+
+  it('ignores a stale check result after switching from stable to frontier', async () => {
+    process.env.KUN_UPDATE_URL_STABLE = 'https://updates.example.test/stable/'
+    process.env.KUN_UPDATE_URL_FRONTIER = 'https://updates.example.test/frontier/'
+    process.env.DEEPSEEK_GUI_ALLOW_UNSIGNED_UPDATES = '1'
+    let finishCheck = (_value: unknown): void => undefined
+    updater.checkForUpdates.mockImplementation(() => new Promise((resolve) => {
+      finishCheck = resolve
+    }))
+    const module = await import('./gui-updater')
+    module.initializeGuiUpdater(() => null, () => 'stable')
+
+    const checking = module.checkGuiUpdate('stable')
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+    expect(updater.checkForUpdates).toHaveBeenCalledOnce()
+    module.setGuiUpdateChannel('frontier')
+    updater.emit('update-available', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+    finishCheck({ updateInfo: { version: '0.2.0' }, isUpdateAvailable: true })
+
+    await expect(checking).resolves.toMatchObject({ ok: false, channel: 'stable' })
+    expect(module.getGuiUpdateState()).toEqual({ status: 'idle' })
+  })
 })
 
 describe('showPostUpdateReleaseNotes', () => {

@@ -178,7 +178,13 @@ export function registerMainIpc(services: MainServices): void {
       }
       updateComputerUseHostSettings(saved)
       if (previous.guiUpdate.channel !== saved.guiUpdate.channel && mainState.guiUpdaterModulePromise) {
-        void mainState.guiUpdaterModulePromise.then((module) => module.setGuiUpdateChannel(saved.guiUpdate.channel))
+        void mainState.guiUpdaterModulePromise
+          .then((module) => module.setGuiUpdateChannel(saved.guiUpdate.channel))
+          .catch((error) => {
+            logWarn('gui-updater', 'failed to apply the saved GUI update channel', {
+              message: error instanceof Error ? error.message : String(error)
+            })
+          })
       }
       try {
         mainState.scheduleRuntime?.sync(saved)
