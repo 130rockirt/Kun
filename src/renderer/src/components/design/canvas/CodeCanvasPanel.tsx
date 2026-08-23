@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Loader2, Maximize2, Minimize2, PanelRightClose, Shapes } from 'lucide-react'
 import {
@@ -84,6 +84,17 @@ export function codeCanvasPanelShellClass(className?: string, presentation: 'doc
 
 export function codeCanvasPanelTitlebarClass(): string {
   return 'pointer-events-auto flex h-10 max-w-[calc(100%-72px)] min-w-0 items-center gap-1.5 rounded-full border border-ds-border bg-white/82 px-1.5 shadow-[0_16px_42px_rgba(20,47,95,0.13)] backdrop-blur-2xl dark:bg-ds-card/84 dark:shadow-none'
+}
+
+export function codeCanvasPanelTitlebarStyle(
+presentation: 'docked' | 'focused'
+): CSSProperties | undefined {
+return presentation === 'focused'
+? {
+left: 'calc(0.75rem + var(--ds-window-controls-safe-inset))',
+top: 'calc(0.75rem + var(--ds-window-controls-safe-block))'
+}
+: undefined
 }
 
 export function codeCanvasPanelDesignHostClass(): string {
@@ -386,7 +397,13 @@ export function CodeCanvasPanel({
     const onToggleFocus = focusedPresentation && onExitFocus ? onExitFocus : requestCodeCanvasPanelFocus
     return (
       <aside className={codeCanvasPanelShellClass(className, presentation)}>
-        <div className="pointer-events-none absolute left-3 right-3 top-3 z-50 flex min-w-0 items-start">
+        <div
+          className={cx(
+            'pointer-events-none absolute right-3 z-50 flex min-w-0 items-start',
+            focusedPresentation ? '' : 'left-3 top-3'
+          )}
+          style={codeCanvasPanelTitlebarStyle(presentation)}
+        >
           <div className={codeCanvasPanelTitlebarClass()} data-code-canvas-titlebar="true">
             {!focusedPresentation ? (
               <button

@@ -84,7 +84,10 @@ export function DesignCanvasConversationOverlay({
 
   useEffect(() => {
     const next = clampCanvasConversationLayout(layout, hostBounds, mode)
-    if (next.x === layout.x && next.y === layout.y) return
+    if (
+      next.x === layout.x && next.y === layout.y &&
+      next.width === layout.width && next.height === layout.height
+    ) return
     setLayout(next)
     // Intentionally not persisted: a resize clamp is a transient correction.
   }, [hostBounds, layout, mode])
@@ -188,21 +191,45 @@ export function DesignCanvasConversationOverlay({
     persist(next)
   }
 
-  const panelSize = canvasConversationPanelSize(hostBounds, mode)
+  const panelSize = canvasConversationPanelSize(hostBounds, mode, layout)
   const panelStyle =
     mode === 'sheet'
       ? {
           left: CANVAS_CONVERSATION_EDGE_MARGIN,
           right: CANVAS_CONVERSATION_EDGE_MARGIN,
           bottom: CANVAS_CONVERSATION_EDGE_MARGIN,
-          maxHeight: panelSize.height
+          width: panelSize.width,
+          height: panelSize.height
         }
       : {
           left: layout.x,
           top: layout.y,
           width: panelSize.width,
-          maxHeight: panelSize.height
+          height: panelSize.height,
+          resize: 'both' as const
         }
+
+  useEffect(() => {
+    const panel = panelRef.current
+    if (!conversationOpen || mode === 'sheet' || !panel || typeof ResizeObserver !== 'function') return
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return
+      const width = Math.round(entry.contentRect.width)
+      const height = Math.round(entry.contentRect.height)
+      setLayout((current) => {
+        if (current.width === width && current.height === height) return current
+        const next = clampCanvasConversationLayout(
+          { ...current, width, height },
+          hostBounds,
+          mode
+        )
+        writeCanvasConversationLayout(storageKey, next)
+        return next
+      })
+    })
+    observer.observe(panel)
+    return () => observer.disconnect()
+  }, [conversationOpen, hostBounds, mode, storageKey])
 
   return (
     <div className={`pointer-events-none absolute inset-0 z-40 ${className}`} aria-hidden={false}>
@@ -210,12 +237,13 @@ export function DesignCanvasConversationOverlay({
         ref={launcherRef}
         type="button"
         onClick={conversationOpen ? minimizePanel : openPanel}
-        className="pointer-events-auto absolute bottom-6 right-6 flex h-12 w-12 items-center justify-center rounded-full border border-ds-border bg-ds-card/95 text-ds-ink shadow-[0_16px_42px_rgba(20,47,95,0.2)] transition hover:bg-ds-card motion-reduce:transition-none dark:bg-ds-card/95"
-        aria-label={t(conversationOpen ? 'designCanvasConversationCollapse' : 'designCanvasConversationOpen')}
-        title={t(conversationOpen ? 'designCanvasConversationCollapse' : 'designCanvasConversationOpen')}
+        className={`pointer-events-auto absolute left-6 top-[72px] flex h-9 items-center justify-center gap-2 rounded-full border border-ds-border bg-ds-card/95 px-3 text-[12px] font-medium text-ds-ink shadow-[0_12px_32px_rgba(20,47,95,0.14)] transition hover:bg-ds-card motion-reduce:transition-none dark:bg-ds-card/95 ${conversationOpen ? 'invisible' : ''}`}
+        aria-label={t('designCanvasConversationOpen')}
+        title={t('designCanvasConversationOpen')}
         aria-expanded={conversationOpen}
       >
-        <MessageCircleMore className="h-5 w-5" strokeWidth={1.85} />
+        <MessageCircleMore className="h-4 w-4" strokeWidth={1.85} />
+        <span>{t('designCanvasConversationOpen')}</span>
         {running ? (
           <span
             className="absolute -right-0.5 -top-0.5 h-3 w-3 animate-pulse rounded-full border-2 border-ds-card bg-emerald-500 motion-reduce:animate-none"
@@ -233,6 +261,7 @@ export function DesignCanvasConversationOverlay({
           className="pointer-events-auto absolute flex flex-col overflow-hidden rounded-[16px] border border-ds-border bg-ds-card/98 text-ds-ink shadow-[0_22px_64px_rgba(20,47,95,0.24)] transition-opacity motion-reduce:transition-none dark:shadow-[0_24px_72px_rgba(0,0,0,0.5)]"
           style={panelStyle}
           data-design-canvas-conversation-panel
+          data-resizable={mode === 'sheet' ? 'false' : 'true'}
         >
           <div
             className="flex h-11 shrink-0 cursor-grab select-none items-center gap-1.5 border-b border-ds-border-muted bg-ds-surface-subtle/60 px-2 active:cursor-grabbing"

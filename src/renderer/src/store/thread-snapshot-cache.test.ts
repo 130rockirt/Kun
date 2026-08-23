@@ -7,6 +7,7 @@ import {
   captureThreadSnapshotCacheToken,
   clearThreadSnapshotCache,
   getThreadSnapshot,
+  getThreadSnapshotForSelection,
   invalidateThreadSnapshot,
   snapshotThreadProjection,
   THREAD_SNAPSHOT_CACHE_MAX_BYTES,
@@ -37,6 +38,7 @@ function stateFor(threadId: string): ChatState {
     liveReasoning: '',
     liveAssistant: '',
     busy: false,
+    busyUnconfirmed: false,
     currentTurnId: null,
     currentTurnOrchestration: null,
     currentTurnUserId: null,
@@ -82,6 +84,109 @@ describe('thread snapshot cache', () => {
 
     expect(getThreadSnapshot('thr_changed', threadSnapshotFingerprint(changed))).toBeNull()
     expect(threadSnapshotCacheStats()).toEqual({ entries: 0, bytes: 0 })
+  })
+
+  it('resumes a live-confirmed running snapshot when the same turn advances', () => {
+    const initial = thread('thr_running', {
+      status: 'running',
+      latestSeq: 10,
+      latestTurnId: 'turn_running',
+      latestTurnStatus: 'running'
+    })
+    const state = stateFor(initial.id)
+    state.threads = [initial]
+    state.lastSeq = 10
+    state.liveDeltaSeqFloor = 10
+    state.busy = true
+    state.busyUnconfirmed = false
+    state.currentTurnId = 'turn_running'
+    snapshotThreadProjection(state, 10)
+
+    const advanced = {
+      ...initial,
+      updatedAt: '2026-08-23T00:01:00.000Z',
+      latestSeq: 14
+    }
+    const resumed = getThreadSnapshotForSelection(advanced)
+
+    expect(resumed).toMatchObject({
+      threadId: initial.id,
+      lastSeq: 10,
+      busy: true,
+      busyUnconfirmed: false,
+      currentTurnId: 'turn_running',
+      fingerprint: threadSnapshotFingerprint(advanced)
+    })
+  })
+
+  it('rejects drifted running snapshots without matching live evidence', () => {
+    const initial = thread('thr_guarded', {
+      status: 'running',
+      latestSeq: 10,
+      latestTurnId: 'turn_guarded',
+      latestTurnStatus: 'running'
+    })
+    const cases: Array<{
+      name: string
+      state?: Partial<ChatState>
+      target: NormalizedThread
+    }> = [
+      {
+        name: 'unconfirmed',
+        state: { busyUnconfirmed: true },
+        target: { ...initial, updatedAt: '2026-08-23T00:01:00.000Z', latestSeq: 11 }
+      },
+      {
+        name: 'changed turn',
+        target: {
+          ...initial,
+          updatedAt: '2026-08-23T00:01:00.000Z',
+          latestSeq: 11,
+          latestTurnId: 'turn_new'
+        }
+      },
+      {
+        name: 'settled',
+        target: {
+          ...initial,
+          updatedAt: '2026-08-23T00:01:00.000Z',
+          status: 'idle',
+          latestSeq: 11,
+          latestTurnStatus: 'completed'
+        }
+      },
+      {
+        name: 'archived',
+        target: {
+          ...initial,
+          updatedAt: '2026-08-23T00:01:00.000Z',
+          status: 'archived',
+          archived: true,
+          latestSeq: 11
+        }
+      },
+      {
+        name: 'cursor regression',
+        target: { ...initial, updatedAt: '2026-08-23T00:01:00.000Z', latestSeq: 9 }
+      }
+    ]
+
+    for (const scenario of cases) {
+      clearThreadSnapshotCache()
+      const state = stateFor(initial.id)
+      Object.assign(state, {
+        threads: [initial],
+        lastSeq: 10,
+        liveDeltaSeqFloor: 10,
+        busy: true,
+        busyUnconfirmed: false,
+        currentTurnId: 'turn_guarded'
+      }, scenario.state)
+      snapshotThreadProjection(state, 10)
+
+      expect(getThreadSnapshotForSelection(scenario.target), scenario.name).toBeNull()
+      expect(threadSnapshotCacheStats(), scenario.name).toEqual({ entries: 0, bytes: 0 })
+    }
   })
 
   it('fences a late prewarm write after thread invalidation', () => {

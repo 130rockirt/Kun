@@ -9,6 +9,7 @@ import type { ChatState, QueuedUserMessage } from './chat-store-types'
 import { hydrateBlockModelLabels } from './chat-store-helpers'
 import {
   settlePendingRuntimeWorkAfterInterrupt,
+  threadLooksRunning,
   threadSnapshotLooksRunning
 } from './chat-store-runtime-helpers'
 import {
@@ -197,6 +198,41 @@ export function getThreadSnapshot(
   snapshots.delete(threadId)
   snapshots.set(threadId, snapshot)
   return snapshot
+}
+
+/**
+ * Resolve the snapshot used by cross-thread selection. Settled projections
+ * remain fingerprint-strict. A projection that this renderer already observed
+ * running may tolerate the sidebar advancing its sequence for that same turn:
+ * SSE resumes from the parked cursor and durably replays the gap.
+ */
+export function getThreadSnapshotForSelection(thread: NormalizedThread): ThreadSnapshot | null {
+  const snapshot = snapshots.get(thread.id)
+  if (!snapshot) return null
+  const fingerprint = threadSnapshotFingerprint(thread)
+  if (snapshot.fingerprint === fingerprint) {
+    snapshots.delete(thread.id)
+    snapshots.set(thread.id, snapshot)
+    return snapshot
+  }
+  const sameRunningTurn = snapshot.busy &&
+    !snapshot.busyUnconfirmed &&
+    thread.archived !== true &&
+    threadLooksRunning(thread) &&
+    Boolean(snapshot.currentTurnId) &&
+    thread.latestTurnId === snapshot.currentTurnId &&
+    typeof thread.latestSeq === 'number' &&
+    thread.latestSeq >= snapshot.lastSeq &&
+    (thread.relation ?? 'primary') === (snapshot.activeThreadRelation ?? 'primary') &&
+    (thread.parentThreadId ?? null) === (snapshot.activeThreadParentId ?? null)
+  if (!sameRunningTurn) {
+    invalidateThreadSnapshot(thread.id)
+    return null
+  }
+  const refreshed = { ...snapshot, fingerprint }
+  snapshots.delete(thread.id)
+  snapshots.set(thread.id, refreshed)
+  return refreshed
 }
 
 export function buildPrefetchedThreadSnapshot(

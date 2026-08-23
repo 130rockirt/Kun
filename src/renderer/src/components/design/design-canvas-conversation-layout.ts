@@ -6,8 +6,11 @@ const MAX_STORED_TARGETS = 24
 
 export const CANVAS_CONVERSATION_PANEL_WIDTH = 420
 export const CANVAS_CONVERSATION_PANEL_MIN_WIDTH = 320
+export const CANVAS_CONVERSATION_PANEL_MAX_WIDTH = 720
+export const CANVAS_CONVERSATION_PANEL_MIN_HEIGHT = 320
 export const CANVAS_CONVERSATION_PANEL_MAX_HEIGHT = 680
 export const CANVAS_CONVERSATION_EDGE_MARGIN = 24
+export const CANVAS_CONVERSATION_TOP_MARGIN = 72
 export const CANVAS_CONVERSATION_RIGHT_TOOLBAR_WIDTH = 56
 export const CANVAS_CONVERSATION_TOOLBAR_GAP = 16
 export const CANVAS_CONVERSATION_MOBILE_BREAKPOINT = 768
@@ -17,6 +20,8 @@ export type CanvasConversationLayout = {
   minimized: boolean
   x: number
   y: number
+  width: number
+  height: number
 }
 
 export type CanvasConversationLayoutBounds = {
@@ -43,22 +48,25 @@ export function defaultCanvasConversationLayout(
   mode: CanvasConversationResponsiveMode = 'desktop'
 ): CanvasConversationLayout {
   if (mode === 'sheet') {
-    return { open: false, minimized: false, x: 0, y: Math.max(0, bounds.height - 96) }
+    const size = canvasConversationPanelSize(bounds, mode)
+    return {
+      open: false,
+      minimized: false,
+      x: 0,
+      y: Math.max(0, bounds.height - 96),
+      width: size.width,
+      height: size.height
+    }
   }
-  const panelWidth = clampNumber(
-    CANVAS_CONVERSATION_PANEL_WIDTH,
-    CANVAS_CONVERSATION_PANEL_MIN_WIDTH,
-    Math.max(CANVAS_CONVERSATION_PANEL_MIN_WIDTH, bounds.width - CANVAS_CONVERSATION_EDGE_MARGIN * 2)
-  )
-  const rightOffset =
-    CANVAS_CONVERSATION_EDGE_MARGIN +
-    CANVAS_CONVERSATION_RIGHT_TOOLBAR_WIDTH +
-    CANVAS_CONVERSATION_TOOLBAR_GAP
-  const x = Math.max(
-    CANVAS_CONVERSATION_EDGE_MARGIN,
-    bounds.width - panelWidth - rightOffset
-  )
-  return { open: false, minimized: false, x, y: CANVAS_CONVERSATION_EDGE_MARGIN + 8 }
+  const size = canvasConversationPanelSize(bounds, mode)
+  return {
+    open: false,
+    minimized: false,
+    x: CANVAS_CONVERSATION_EDGE_MARGIN,
+    y: CANVAS_CONVERSATION_TOP_MARGIN,
+    width: size.width,
+    height: size.height
+  }
 }
 
 export function canvasConversationResponsiveMode(
@@ -71,7 +79,8 @@ export function canvasConversationResponsiveMode(
 
 export function canvasConversationPanelSize(
   bounds: CanvasConversationLayoutBounds,
-  mode: CanvasConversationResponsiveMode
+  mode: CanvasConversationResponsiveMode,
+  requested?: Pick<CanvasConversationLayout, 'width' | 'height'>
 ): { width: number; height: number } {
   if (mode === 'sheet') {
     return {
@@ -86,19 +95,28 @@ export function canvasConversationPanelSize(
     CANVAS_CONVERSATION_PANEL_MIN_WIDTH,
     mode === 'compact'
       ? Math.min(400, bounds.width - CANVAS_CONVERSATION_EDGE_MARGIN * 2)
-      : bounds.width -
-        CANVAS_CONVERSATION_EDGE_MARGIN * 2 -
-        CANVAS_CONVERSATION_RIGHT_TOOLBAR_WIDTH -
-        CANVAS_CONVERSATION_TOOLBAR_GAP
+      : Math.min(
+          CANVAS_CONVERSATION_PANEL_MAX_WIDTH,
+          bounds.width -
+            CANVAS_CONVERSATION_EDGE_MARGIN * 2 -
+            CANVAS_CONVERSATION_RIGHT_TOOLBAR_WIDTH -
+            CANVAS_CONVERSATION_TOOLBAR_GAP
+        )
   )
   const width = clampNumber(
-    CANVAS_CONVERSATION_PANEL_WIDTH,
-    CANVAS_CONVERSATION_PANEL_MIN_WIDTH,
+    requested?.width ?? CANVAS_CONVERSATION_PANEL_WIDTH,
+    Math.min(CANVAS_CONVERSATION_PANEL_MIN_WIDTH, maxWidth),
     maxWidth
   )
-  const height = Math.min(
+  const maxHeight = Math.min(
     CANVAS_CONVERSATION_PANEL_MAX_HEIGHT,
-    Math.max(0, bounds.height - CANVAS_CONVERSATION_EDGE_MARGIN * 2)
+    Math.max(0, bounds.height - CANVAS_CONVERSATION_TOP_MARGIN - CANVAS_CONVERSATION_EDGE_MARGIN)
+  )
+  const minHeight = Math.min(CANVAS_CONVERSATION_PANEL_MIN_HEIGHT, maxHeight)
+  const height = clampNumber(
+    requested?.height ?? CANVAS_CONVERSATION_PANEL_MAX_HEIGHT,
+    minHeight,
+    maxHeight
   )
   return { width, height }
 }
@@ -109,21 +127,23 @@ export function clampCanvasConversationLayout(
   mode: CanvasConversationResponsiveMode = 'desktop'
 ): CanvasConversationLayout {
   if (mode === 'sheet') {
-    return { ...layout, x: 0, y: 0 }
+    const size = canvasConversationPanelSize(bounds, mode, layout)
+    return { ...layout, x: 0, y: 0, ...size }
   }
-  const { width: panelWidth, height: panelHeight } = canvasConversationPanelSize(bounds, mode)
+  const size = canvasConversationPanelSize(bounds, mode, layout)
   const maxX = Math.max(
     CANVAS_CONVERSATION_EDGE_MARGIN,
-    bounds.width - panelWidth - CANVAS_CONVERSATION_EDGE_MARGIN
+    bounds.width - size.width - CANVAS_CONVERSATION_EDGE_MARGIN
   )
   const maxY = Math.max(
-    CANVAS_CONVERSATION_EDGE_MARGIN,
-    bounds.height - panelHeight - CANVAS_CONVERSATION_EDGE_MARGIN
+    CANVAS_CONVERSATION_TOP_MARGIN,
+    bounds.height - size.height - CANVAS_CONVERSATION_EDGE_MARGIN
   )
   return {
     ...layout,
+    ...size,
     x: clampNumber(layout.x, CANVAS_CONVERSATION_EDGE_MARGIN, maxX),
-    y: clampNumber(layout.y, CANVAS_CONVERSATION_EDGE_MARGIN, maxY)
+    y: clampNumber(layout.y, CANVAS_CONVERSATION_TOP_MARGIN, maxY)
   }
 }
 
@@ -132,11 +152,20 @@ export function normalizeCanvasConversationLayout(value: unknown): CanvasConvers
   const source = value as Partial<CanvasConversationLayout>
   if (typeof source.x !== 'number' || typeof source.y !== 'number') return null
   if (!Number.isFinite(source.x) || !Number.isFinite(source.y)) return null
+  const width = typeof source.width === 'number'
+    ? source.width
+    : CANVAS_CONVERSATION_PANEL_WIDTH
+  const height = typeof source.height === 'number'
+    ? source.height
+    : CANVAS_CONVERSATION_PANEL_MAX_HEIGHT
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null
   return {
     open: source.open === true,
     minimized: source.minimized === true,
     x: Math.round(source.x),
-    y: Math.round(source.y)
+    y: Math.round(source.y),
+    width: Math.round(width),
+    height: Math.round(height)
   }
 }
 
@@ -194,7 +223,9 @@ export function writeCanvasConversationLayout(key: string, layout: CanvasConvers
       open: layout.open,
       minimized: layout.minimized,
       x: Math.round(layout.x),
-      y: Math.round(layout.y)
+      y: Math.round(layout.y),
+      width: Math.round(layout.width),
+      height: Math.round(layout.height)
     }
   }
   const keys = Object.keys(next)

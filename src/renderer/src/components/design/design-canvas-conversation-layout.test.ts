@@ -31,9 +31,10 @@ describe('defaultCanvasConversationLayout', () => {
     const layout = defaultCanvasConversationLayout({ width: 1600, height: 900 }, 'desktop')
     expect(layout.open).toBe(false)
     expect(layout.minimized).toBe(false)
-    // Right-aligned with a 24px edge margin plus toolbar (56px) + 16px gap.
-    expect(layout.x).toBe(1600 - 420 - 24 - 56 - 16)
-    expect(layout.y).toBeGreaterThanOrEqual(CANVAS_CONVERSATION_EDGE_MARGIN)
+    // The assistant launcher/panel is aligned to the left beside canvas properties,
+    // leaving the right toolbar and bottom zoom controls unobstructed.
+    expect(layout.x).toBe(CANVAS_CONVERSATION_EDGE_MARGIN)
+    expect(layout.y).toBeGreaterThan(CANVAS_CONVERSATION_EDGE_MARGIN)
   })
 
   it('pins the sheet to the bottom on mobile', () => {
@@ -46,7 +47,7 @@ describe('defaultCanvasConversationLayout', () => {
 describe('clampCanvasConversationLayout', () => {
   it('keeps the panel inside the viewport with an edge margin', () => {
     const clamped = clampCanvasConversationLayout(
-      { open: true, minimized: false, x: -400, y: 9000 },
+      { open: true, minimized: false, x: -400, y: 9000, width: 420, height: 680 },
       { width: 1200, height: 800 },
       'desktop'
     )
@@ -57,7 +58,7 @@ describe('clampCanvasConversationLayout', () => {
 
   it('forces sheet mode geometry on mobile', () => {
     const clamped = clampCanvasConversationLayout(
-      { open: true, minimized: false, x: 300, y: 120 },
+      { open: true, minimized: false, x: 300, y: 120, width: 420, height: 680 },
       { width: 420, height: 700 },
       'sheet'
     )
@@ -71,6 +72,16 @@ describe('canvasConversationPanelSize', () => {
     const size = canvasConversationPanelSize({ width: 1600, height: 900 }, 'desktop')
     expect(size.width).toBe(420)
     expect(size.height).toBe(680)
+  })
+
+  it('clamps a user-resized panel to supported desktop bounds', () => {
+    const size = canvasConversationPanelSize(
+      { width: 1600, height: 900 },
+      'desktop',
+      { width: 900, height: 240 }
+    )
+    expect(size.width).toBe(720)
+    expect(size.height).toBe(320)
   })
 
   it('narrows the panel in compact mode', () => {
@@ -96,7 +107,7 @@ describe('canvasConversationLayoutKey', () => {
 describe('normalizeCanvasConversationLayout', () => {
   it('accepts finite coordinates and rounds them', () => {
     expect(normalizeCanvasConversationLayout({ open: true, minimized: false, x: 12.6, y: 40.2 }))
-      .toEqual({ open: true, minimized: false, x: 13, y: 40 })
+      .toEqual({ open: true, minimized: false, x: 13, y: 40, width: 420, height: 680 })
   })
 
   it('rejects missing or non-finite geometry', () => {

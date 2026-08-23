@@ -125,10 +125,9 @@ import {
   watchTurnCompletionNotification
 } from './chat-store-runtime'
 import {
-  getThreadSnapshot,
+  getThreadSnapshotForSelection,
   invalidateThreadSnapshot,
-  snapshotThreadProjection,
-  threadSnapshotFingerprint
+  snapshotThreadProjection
 } from './thread-snapshot-cache'
 import { getThreadPrewarmPromise } from './thread-detail-prewarm'
 import {
@@ -211,11 +210,8 @@ export function createThreadSelectionActions(
     // used by recovery paths to pick up durable queues), so only cross-thread
     // navigation may consume an in-memory snapshot.
     const targetThread = get().threads.find((thread) => thread.id === id) ?? null
-    const cached = prevId !== id
-      ? getThreadSnapshot(
-          id,
-          targetThread ? threadSnapshotFingerprint(targetThread) : undefined
-        )
+    const cached = prevId !== id && targetThread
+      ? getThreadSnapshotForSelection(targetThread)
       : null
     resetBusyRecoveryAttempts()
     clearBusyWatchdog()
@@ -256,9 +252,10 @@ export function createThreadSelectionActions(
         liveAssistant: cached.liveAssistant,
         error: null,
         busy: cached.busy,
-        // A cached snapshot's running claim is stale until the runtime stream
-        // proves the turn is still live. Render history settled meanwhile.
-        busyUnconfirmed: cached.busy,
+        // Preserve whether the parked projection already had live evidence.
+        // Confirmed running snapshots resume immediately from their cursor;
+        // unconfirmed persisted claims retain the settled-history safeguard.
+        busyUnconfirmed: cached.busyUnconfirmed,
         currentTurnId: cached.currentTurnId,
         currentTurnOrchestration: cached.currentTurnOrchestration,
         currentTurnUserId: cached.currentTurnUserId,

@@ -63,6 +63,7 @@ function buildHarness(): {
     activeThreadId: 'thr_existing',
     blocks: [],
     busy: true,
+    busyUnconfirmed: false,
     clawChannels: [],
     codeWorkspaceRoots: [],
     composerModel: '',
