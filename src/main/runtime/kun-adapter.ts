@@ -34,6 +34,12 @@ import {
 import { sameCanonicalPath } from '../../../kun/src/manager/canonical-path.js'
 
 const KUN_RUNTIME_ID = 'kun' as const
+
+export type BundledBuildReplacementProbe =
+  | { state: 'matched'; ownership: 'none' | 'current' }
+  | { state: 'mismatched' }
+  | { state: 'unknown'; error: Error }
+
 let resolvedConnection: RuntimeDiscoveryRecord | null = null
 
 function appRoot(): string {
@@ -124,27 +130,37 @@ export const kunRuntimeAdapter = {
    * A packaged production app owns the bundled build after an install/update.
    * Custom binaries and development runtimes retain their normal attach policy.
    */
-  async requiresBundledBuildReplacement(settings: AppSettingsV1): Promise<boolean> {
+  async probeBundledBuildReplacement(settings: AppSettingsV1): Promise<BundledBuildReplacementProbe> {
     const runtime = getKunRuntimeSettings(settings)
-    const dataDir = expandDataDir(runtime.dataDir)
     const runtimeFlavor = resolveCliRuntimeFlavor({ env: process.env })
+    if (!app.isPackaged || runtime.binaryPath.trim() || runtimeFlavor !== 'production') {
+      return { state: 'matched', ownership: 'none' }
+    }
+    const dataDir = expandDataDir(runtime.dataDir)
     const expectedBuildId = expectedKunRuntimeBuildId(
       await resolveKunRuntimeBuildId(resolveKunExecutable(appRoot(), runtime.binaryPath)),
       runtimeFlavor
     )
-    const inspected = await inspectSharedRuntime(
-      dataDir,
-      fetch,
-      sharedRuntimeScope(dataDir, runtimeFlavor)
-    ).catch(() => null)
-    if (!inspected) return false
-    return bundledRuntimeBuildReplacementRequired({
-      isPackaged: app.isPackaged,
-      hasCustomBinary: Boolean(runtime.binaryPath.trim()),
-      runtimeFlavor,
-      expectedBuildId,
-      discoveredBuildId: inspected.discovery.buildId
-    })
+    if (!expectedBuildId) {
+      return { state: 'unknown', error: new Error('The packaged Kun Runtime build identity is missing.') }
+    }
+    let inspected: Awaited<ReturnType<typeof inspectSharedRuntime>>
+    try {
+      inspected = await inspectSharedRuntime(
+        dataDir,
+        fetch,
+        sharedRuntimeScope(dataDir, runtimeFlavor)
+      )
+    } catch (error) {
+      return {
+        state: 'unknown',
+        error: error instanceof Error ? error : new Error(String(error))
+      }
+    }
+    if (!inspected) return { state: 'matched', ownership: 'none' }
+    return inspected.discovery.buildId === expectedBuildId
+      ? { state: 'matched', ownership: 'current' }
+      : { state: 'mismatched' }
   },
 
   reclaimPort(port: number): Promise<{ ok: true } | { ok: false; message: string }> {

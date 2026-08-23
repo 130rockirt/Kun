@@ -6,6 +6,7 @@ import {
   createRuntimeDiscoveryRecord,
   publishRuntimeDiscovery,
   readRuntimeHandoffDiscovery,
+  readRuntimeHandoffDiscoveryStrict,
   readRuntimeDiscovery,
   removeRuntimeDiscovery,
   runtimeDiscoveryPath,
@@ -111,6 +112,17 @@ describe('runtime discovery', () => {
       flavor: 'production'
     }), 'utf8')
     expect(await readRuntimeHandoffDiscovery(root, 'development')).toBeNull()
+  })
+
+  it('fails closed in strict replacement probes when discovery exists but is invalid', async () => {
+    const root = await tempRoot()
+    await writeFile(runtimeDiscoveryPath(root), '{broken', 'utf8')
+
+    await expect(readRuntimeHandoffDiscoveryStrict(root)).rejects.toThrow(
+      /invalid Kun production Runtime discovery/u
+    )
+    await rm(runtimeDiscoveryPath(root))
+    await expect(readRuntimeHandoffDiscoveryStrict(root)).resolves.toBeNull()
   })
 
   it('keeps development discovery separate from the production compatibility record', async () => {

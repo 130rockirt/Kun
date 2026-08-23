@@ -39,7 +39,11 @@ function detail(id: string): ThreadDetail {
   }
 }
 
-function buildHarness(): { actions: ReturnType<typeof createThreadActions>; state: ChatState } {
+function buildHarness(): {
+  actions: ReturnType<typeof createThreadActions>
+  state: ChatState
+  sseAbortRef: { current: AbortController | null }
+} {
   let state: ChatState
   state = {
     activeThreadId: 'thread-a',
@@ -55,7 +59,9 @@ function buildHarness(): { actions: ReturnType<typeof createThreadActions>; stat
     codeWorkspaceRoots: [],
     composerModel: '',
     composerMode: 'agent',
+    composerModelGroups: [],
     composerOrchestration: 'direct',
+    composerPickList: [],
     composerProviderId: '',
     currentTurnId: null,
     currentTurnOrchestration: null,
@@ -87,9 +93,11 @@ function buildHarness(): { actions: ReturnType<typeof createThreadActions>; stat
     Object.assign(state, update)
   }
   const get: ChatStoreGet = () => state
+  const sseAbortRef = { current: null as AbortController | null }
   return {
-    actions: createThreadActions({ set, get, sseAbortRef: { current: null } }),
-    state
+    actions: createThreadActions({ set, get, sseAbortRef }),
+    state,
+    sseAbortRef
   }
 }
 
@@ -105,6 +113,65 @@ describe('live thread hydration loading', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it('refreshes the active thread transactionally without blanking its projection or SSE', async () => {
+    const pending = deferred<ThreadDetail>()
+    const subscribeThreadEvents = vi.fn(async () => undefined)
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(() => pending.promise),
+      subscribeThreadEvents
+    })
+    const { actions, state, sseAbortRef } = buildHarness()
+    const existingBlocks: ChatBlock[] = [...state.blocks]
+    const existingSse = new AbortController()
+    sseAbortRef.current = existingSse
+
+    const refresh = actions.selectThread('thread-a')
+
+    expect(state.threadRefreshingId).toBe('thread-a')
+    expect(state.threadLoadingId).toBeNull()
+    expect(state.blocks).toEqual(existingBlocks)
+    expect(existingSse.signal.aborted).toBe(false)
+    expect(sseAbortRef.current).toBe(existingSse)
+    expect(subscribeThreadEvents).not.toHaveBeenCalled()
+
+    pending.resolve(detail('thread-a'))
+    await refresh
+
+    expect(existingSse.signal.aborted).toBe(true)
+    expect(state.threadRefreshingId).toBeNull()
+    expect(state.blocks).toEqual(detail('thread-a').blocks)
+    expect(subscribeThreadEvents).toHaveBeenCalledWith(
+      'thread-a',
+      detail('thread-a').latestSeq,
+      expect.anything(),
+      expect.anything()
+    )
+  })
+
+  it('preserves the active projection and SSE when a same-thread refresh fails', async () => {
+    const pending = deferred<ThreadDetail>()
+    const subscribeThreadEvents = vi.fn(async () => undefined)
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(() => pending.promise),
+      subscribeThreadEvents
+    })
+    const { actions, state, sseAbortRef } = buildHarness()
+    const existingBlocks: ChatBlock[] = [...state.blocks]
+    const existingSse = new AbortController()
+    sseAbortRef.current = existingSse
+
+    const refresh = actions.selectThread('thread-a')
+    pending.reject(new Error('refresh failed'))
+    await refresh
+
+    expect(state.threadRefreshingId).toBeNull()
+    expect(state.blocks).toEqual(existingBlocks)
+    expect(existingSse.signal.aborted).toBe(false)
+    expect(sseAbortRef.current).toBe(existingSse)
+    expect(subscribeThreadEvents).not.toHaveBeenCalled()
+    expect(state.error).toContain('refresh failed')
   })
 
   it('keeps a cross-thread live target loading until canonical detail commits', async () => {

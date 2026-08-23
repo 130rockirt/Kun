@@ -11,7 +11,7 @@ import {
 import {
   drainKunOwnersForHandoff,
   KunHandoffError,
-  requiresInstalledBuildHandoff,
+  probeInstalledBuildHandoff,
   withDrainedKunOwners
 } from './kun-installed-build-handoff'
 
@@ -272,10 +272,10 @@ describe('installed build handoff coordinator', () => {
       }) as never
     }
 
-    await expect(requiresInstalledBuildHandoff({
+    await expect(probeInstalledBuildHandoff({
       ...input(),
       fetch: fetchMock as unknown as typeof fetch
-    }, overrides)).resolves.toBe(true)
+    }, overrides)).resolves.toBe('mismatched')
     await drainKunOwnersForHandoff({
       ...input(),
       fetch: fetchMock as unknown as typeof fetch
@@ -293,7 +293,7 @@ describe('installed build handoff coordinator', () => {
       slots: [{ registration: { ...slot, flavor: 'production' } }]
     }))
 
-    await expect(requiresInstalledBuildHandoff({
+    await expect(probeInstalledBuildHandoff({
       ...input(),
       fetch: fetchMock as unknown as typeof fetch
     }, {
@@ -302,7 +302,52 @@ describe('installed build handoff coordinator', () => {
       processAlive: (pid) => pid === currentManager.pid || pid === slot.pid,
       stopRuntime: vi.fn() as never,
       stopManager: vi.fn() as never
-    })).resolves.toBe(false)
+    })).resolves.toBe('matched')
+  })
+
+  it('classifies missing build identity and unavailable Manager status as unknown', async () => {
+    const legacyManager = manager()
+    const legacyRuntime = runtime('production')
+    const baseOverrides = {
+      readManager: async () => legacyManager,
+      readRuntime: async (_dir: string, flavor?: 'production' | 'development') =>
+        flavor === 'production' ? legacyRuntime : null,
+      processAlive: (pid: number) => pid === legacyManager.pid || pid === legacyRuntime.pid,
+      stopRuntime: vi.fn() as never,
+      stopManager: vi.fn() as never
+    }
+
+    await expect(probeInstalledBuildHandoff({
+      ...input(),
+      fetch: vi.fn(async () => Response.json({
+        instanceId: legacyManager.instanceId,
+        pid: legacyManager.pid,
+        startedAt: legacyManager.startedAt,
+        slots: []
+      })) as unknown as typeof fetch
+    }, baseOverrides)).resolves.toBe('unknown')
+
+    await expect(probeInstalledBuildHandoff({
+      ...input(),
+      fetch: vi.fn(async () => new Response(null, { status: 503 })) as unknown as typeof fetch
+    }, {
+      ...baseOverrides,
+      readManager: async () => manager({ buildId: 'b'.repeat(64) }),
+      readRuntime: async () => null
+    })).resolves.toBe('unknown')
+  })
+
+  it('fails closed on unreadable discovery instead of treating it as no owner', async () => {
+    const failure = await probeInstalledBuildHandoff(input(), {
+      readManager: async () => { throw new Error('invalid manager discovery') },
+      readRuntime: async () => null,
+      processAlive: () => false,
+      stopRuntime: vi.fn() as never,
+      stopManager: vi.fn() as never
+    }).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(KunHandoffError)
+    expect(failure).toMatchObject({ code: 'unsafe_scope', phase: 'discover', retryable: false })
   })
 
   it('fails closed before stopping anything when Manager settings scope differs', async () => {

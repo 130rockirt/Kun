@@ -33,6 +33,7 @@ export function createInitialChatStoreState(workingDirectoryLabel: string) {
     showArchivedThreads: false,
     activeThreadId: null,
     threadLoadingId: null,
+    threadRefreshingId: null,
     threadHistoryCursor: null,
     threadHasMoreHistory: false,
     threadHistoryLoading: false,

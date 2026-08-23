@@ -125,7 +125,8 @@ import { handoffExistingKunServiceManagerForDataDir } from './runtime/service-ma
 import {
   drainKunOwnersForHandoff,
   drainKunOwnersForHandoffWithLock,
-  requiresInstalledBuildHandoff
+  installedBuildProbeError,
+  probeInstalledBuildHandoff
 } from './runtime/kun-installed-build-handoff'
 import { logKunHandoffEvent } from './runtime/kun-handoff-logging'
 
@@ -214,16 +215,25 @@ export async function ensureKunServiceManager(input: {
     onEvent: logKunHandoffEvent,
     ...(buildId ? { targetBuildId: buildId } : {})
   }
-  if (app.isPackaged && flavor === 'production' &&
-    await requiresInstalledBuildHandoff(handoffInput)) {
-    manager = await withManagerStartLock(controlDir, async () => {
-      // Recheck after acquiring the election lock so a replacement that won
-      // the race before us is not interrupted unnecessarily.
-      if (await requiresInstalledBuildHandoff(handoffInput)) {
-        await drainKunOwnersForHandoffWithLock(handoffInput)
-      }
-      return ensureServiceManagerWithStartLockHeld(managerInput)
-    })
+  if (app.isPackaged && flavor === 'production') {
+    const probe = await probeInstalledBuildHandoff(handoffInput)
+    const probeError = installedBuildProbeError(handoffInput, probe)
+    if (probeError) throw probeError
+    if (probe === 'mismatched') {
+      manager = await withManagerStartLock(controlDir, async () => {
+        // Recheck after acquiring the election lock so a replacement that won
+        // the race before us is not interrupted unnecessarily.
+        const lockedProbe = await probeInstalledBuildHandoff(handoffInput)
+        const lockedProbeError = installedBuildProbeError(handoffInput, lockedProbe)
+        if (lockedProbeError) throw lockedProbeError
+        if (lockedProbe === 'mismatched') {
+          await drainKunOwnersForHandoffWithLock(handoffInput)
+        }
+        return ensureServiceManagerWithStartLockHeld(managerInput)
+      })
+    } else {
+      manager = await ensureServiceManager(managerInput)
+    }
   } else {
     manager = await ensureServiceManager(managerInput)
   }
@@ -237,16 +247,18 @@ export async function preparePackagedKunBuildHandoff(input: {
   const flavor = resolveCliRuntimeFlavor({ env: process.env })
   if (!app.isPackaged || flavor !== 'production') return false
   const buildId = await resolveKunRuntimeBuildId(resolveKunExecutable(appRoot(), ''))
-  if (!buildId) return false
   const handoffInput = {
     reason: 'installed-build-change' as const,
     dataDirs: [input.dataDir],
     settingsPath: input.settingsPath,
     controlDir: defaultKunControlDir(),
-    targetBuildId: buildId,
-    onEvent: logKunHandoffEvent
+    onEvent: logKunHandoffEvent,
+    ...(buildId ? { targetBuildId: buildId } : {})
   }
-  if (!(await requiresInstalledBuildHandoff(handoffInput))) return false
+  const probe = await probeInstalledBuildHandoff(handoffInput)
+  const probeError = installedBuildProbeError(handoffInput, probe)
+  if (probeError) throw probeError
+  if (probe === 'matched') return false
   await drainKunOwnersForHandoff(handoffInput)
   return true
 }

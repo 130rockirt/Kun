@@ -108,6 +108,21 @@ export async function readManagerHandoffDiscovery(
   return safeHandoffManagerUrl(parsed.data) ? parsed.data : null
 }
 
+/** Strict installed-build probe; an existing invalid record is not "no owner". */
+export async function readManagerHandoffDiscoveryStrict(
+  controlDir: string
+): Promise<ManagerHandoffDiscoveryRecord | null> {
+  const record = await readManagerHandoffDiscovery(controlDir)
+  if (record) return record
+  try {
+    await stat(managerDiscoveryPath(controlDir))
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return null
+    throw error
+  }
+  throw new Error('invalid Kun Service Manager discovery record')
+}
+
 export async function publishManagerDiscovery(
   controlDir: string,
   input: PublishManagerDiscoveryInput

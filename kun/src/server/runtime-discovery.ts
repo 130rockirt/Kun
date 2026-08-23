@@ -111,6 +111,26 @@ export async function readRuntimeHandoffDiscovery(
   return isSafeRuntimeHandoffDiscovery(parsed.data) ? parsed.data : null
 }
 
+/**
+ * Replacement probes must distinguish an absent owner from an unreadable or
+ * unsafe discovery record. Normal attachment keeps the compatibility behavior
+ * above, while installed-build handoff fails closed on an existing invalid file.
+ */
+export async function readRuntimeHandoffDiscoveryStrict(
+  dataDir: string,
+  flavor: RuntimeFlavor = 'production'
+): Promise<RuntimeHandoffDiscoveryRecord | null> {
+  const record = await readRuntimeHandoffDiscovery(dataDir, flavor)
+  if (record) return record
+  try {
+    await stat(runtimeDiscoveryPath(dataDir, flavor))
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return null
+    throw error
+  }
+  throw new Error(`invalid Kun ${flavor} Runtime discovery record`)
+}
+
 export async function publishRuntimeDiscovery(
   dataDir: string,
   input: PublishRuntimeDiscoveryInput

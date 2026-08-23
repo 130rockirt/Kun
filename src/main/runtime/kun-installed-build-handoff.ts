@@ -3,12 +3,12 @@ import { z } from 'zod'
 import type { RuntimeFlavor } from '../../../kun/src/contracts/runtime-flavor.js'
 import {
   isSafeRuntimeHandoffDiscovery,
-  readRuntimeHandoffDiscovery,
+  readRuntimeHandoffDiscoveryStrict,
   type RuntimeHandoffDiscoveryRecord
 } from '../../../kun/src/server/runtime-discovery.js'
 import {
   defaultKunControlDir,
-  readManagerHandoffDiscovery,
+  readManagerHandoffDiscoveryStrict,
   withManagerStartLock,
   type ManagerHandoffDiscoveryRecord
 } from '../../../kun/src/manager/manager-discovery.js'
@@ -31,6 +31,8 @@ const MANAGED_RUNTIME_FLAVORS = ['production', 'development'] as const
 const MAX_RUNTIME_DRAIN_PASSES = 3
 const STATUS_TIMEOUT_MS = 2_000
 
+export type KunInstalledBuildProbe = 'matched' | 'mismatched' | 'unknown'
+
 export type KunHandoffReason =
   | 'in-app-update'
   | 'installed-build-change'
@@ -46,6 +48,8 @@ export type KunHandoffPhase =
 
 export type KunHandoffErrorCode =
   | 'unsafe_scope'
+  | 'probe_failed'
+  | 'target_build_id_missing'
   | 'runtime_stop_failed'
   | 'manager_stop_failed'
   | 'postcondition_failed'
@@ -119,8 +123,8 @@ type RuntimeOwner = {
 }
 
 type HandoffDependencies = {
-  readManager: typeof readManagerHandoffDiscovery
-  readRuntime: typeof readRuntimeHandoffDiscovery
+  readManager: typeof readManagerHandoffDiscoveryStrict
+  readRuntime: typeof readRuntimeHandoffDiscoveryStrict
   withManagerLock: <T>(controlDir: string, action: () => Promise<T>) => Promise<T>
   stopRuntime: typeof stopExactSharedRuntimeForReplacement
   stopManager: typeof stopServiceManagerForReplacement
@@ -130,8 +134,8 @@ type HandoffDependencies = {
 }
 
 const defaultDependencies: HandoffDependencies = {
-  readManager: readManagerHandoffDiscovery,
-  readRuntime: readRuntimeHandoffDiscovery,
+  readManager: readManagerHandoffDiscoveryStrict,
+  readRuntime: readRuntimeHandoffDiscoveryStrict,
   withManagerLock: withManagerStartLock,
   stopRuntime: stopExactSharedRuntimeForReplacement,
   stopManager: stopServiceManagerForReplacement,
@@ -147,18 +151,48 @@ export async function drainKunOwnersForHandoff(
   return (await withDrainedKunOwners(input, async () => undefined, overrides)).report
 }
 
-export async function requiresInstalledBuildHandoff(
+export async function probeInstalledBuildHandoff(
   input: KunInstalledBuildHandoffInput,
   overrides: Partial<HandoffDependencies> = {}
-): Promise<boolean> {
-  if (!input.targetBuildId) return false
+): Promise<KunInstalledBuildProbe> {
+  if (!input.targetBuildId) return 'unknown'
   const deps = { ...defaultDependencies, ...overrides }
-  const discovered = await discoverHandoffOwners(input, deps)
-  if (discovered.manager && discovered.manager.buildId !== input.targetBuildId) return true
+  const discovered = await discoverHandoffOwnersSafely(input, deps)
   const targetBuildId = input.targetBuildId
-  return discovered.runtimes.some((runtime) =>
-    runtime.inspection.discovery.buildId !==
-      runtimeBuildIdForFlavor(targetBuildId, runtime.flavor)
+  const identities: Array<{ actual: string | undefined; expected: string }> = [
+    ...(discovered.manager
+      ? [{ actual: discovered.manager.buildId, expected: targetBuildId }]
+      : []),
+    ...discovered.runtimes.map((runtime) => ({
+      actual: runtime.inspection.discovery.buildId,
+      expected: runtimeBuildIdForFlavor(targetBuildId, runtime.flavor) ?? ''
+    }))
+  ]
+  if (identities.some(({ actual, expected }) => actual !== undefined && actual !== expected)) {
+    return 'mismatched'
+  }
+  if (identities.some(({ actual, expected }) => !actual || !expected) ||
+    discovered.probeClassifications.includes('manager-status-unavailable')) {
+    return 'unknown'
+  }
+  return 'matched'
+}
+
+export function installedBuildProbeError(
+  input: KunInstalledBuildHandoffInput,
+  probe: KunInstalledBuildProbe
+): KunHandoffError | null {
+  if (probe !== 'unknown') return null
+  const missingBuild = !input.targetBuildId
+  return new KunHandoffError(
+    missingBuild ? 'target_build_id_missing' : 'probe_failed',
+    'discover',
+    input.reason,
+    !missingBuild,
+    undefined,
+    missingBuild
+      ? 'The packaged Kun Runtime build identity is missing.'
+      : 'Kun could not safely determine the installed Runtime owner build.'
   )
 }
 
@@ -194,7 +228,7 @@ export async function drainKunOwnersForHandoffWithLock(
   emit(input, startedAt, deps, { phase: 'discover' })
   let discovered: Awaited<ReturnType<typeof discoverHandoffOwners>>
   try {
-    discovered = await discoverHandoffOwners(input, deps)
+    discovered = await discoverHandoffOwnersSafely(input, deps)
   } catch (error) {
     if (error instanceof KunHandoffError) {
       emit(input, startedAt, deps, {
@@ -222,7 +256,7 @@ export async function drainKunOwnersForHandoffWithLock(
           { runtimeFlavor: runtime.flavor, controlDir },
           {
             inspect: async () => {
-              const latest = await discoverHandoffOwners(input, deps)
+              const latest = await discoverHandoffOwnersSafely(input, deps)
               return latest.runtimes.find((candidate) =>
                 sameRuntimeIdentity(candidate, runtime)
               )?.inspection ?? null
@@ -264,7 +298,7 @@ export async function drainKunOwnersForHandoffWithLock(
         throw failure
       }
     }
-    discovered = await discoverHandoffOwners(input, deps)
+    discovered = await discoverHandoffOwnersSafely(input, deps)
   }
 
   if (discovered.manager) {
@@ -305,7 +339,7 @@ export async function drainKunOwnersForHandoffWithLock(
   // Once the Manager is down, a Runtime heartbeat cannot elect a replacement
   // while this process holds the same start lock. Drain any owner that raced
   // with the first pass, then prove the scope is stable.
-  discovered = await discoverHandoffOwners(input, deps)
+  discovered = await discoverHandoffOwnersSafely(input, deps)
   for (const runtime of discovered.runtimes) {
     const owner = runtimeOwnerReport(runtime)
     try {
@@ -316,7 +350,7 @@ export async function drainKunOwnersForHandoffWithLock(
         { runtimeFlavor: runtime.flavor, controlDir },
         {
           inspect: async () => {
-            const latest = await discoverHandoffOwners(input, deps)
+            const latest = await discoverHandoffOwnersSafely(input, deps)
             return latest.runtimes.find((candidate) =>
               sameRuntimeIdentity(candidate, runtime)
             )?.inspection ?? null
@@ -354,7 +388,7 @@ export async function drainKunOwnersForHandoffWithLock(
     }
   }
 
-  const remaining = await discoverHandoffOwners(input, deps)
+  const remaining = await discoverHandoffOwnersSafely(input, deps)
   if (remaining.manager || remaining.runtimes.length > 0) {
     const owner = remaining.manager
       ? managerOwnerReport(remaining.manager)
@@ -385,6 +419,26 @@ export async function drainKunOwnersForHandoffWithLock(
     ...(input.targetBuildId ? { targetBuildId: input.targetBuildId } : {}),
     owners,
     elapsedMs: deps.now() - startedAt
+  }
+}
+
+async function discoverHandoffOwnersSafely(
+  input: KunInstalledBuildHandoffInput,
+  deps: HandoffDependencies
+): ReturnType<typeof discoverHandoffOwners> {
+  try {
+    return await discoverHandoffOwners(input, deps)
+  } catch (error) {
+    if (error instanceof KunHandoffError) throw error
+    throw new KunHandoffError(
+      'unsafe_scope',
+      'discover',
+      input.reason,
+      false,
+      undefined,
+      'Kun update handoff could not safely read Runtime or Service Manager discovery',
+      { cause: error }
+    )
   }
 }
 
@@ -493,13 +547,16 @@ async function readCompatibleManagerSlots(
     for (const value of body.data.slots) {
       const envelope = z.object({ registration: z.unknown() }).passthrough().safeParse(value)
       const parsed = RuntimeSlotSchema.safeParse(envelope.success ? envelope.data.registration : value)
-      if (!parsed.success) continue
+      if (!parsed.success) return { records: [], classification: 'manager-status-unavailable' }
       const record: RuntimeHandoffDiscoveryRecord & { flavor: RuntimeFlavor } = {
         version: 1,
         ...parsed.data,
         flavor: parsed.data.flavor
       }
-      if (isSafeRuntimeHandoffDiscovery(record)) records.push(record)
+      if (!isSafeRuntimeHandoffDiscovery(record)) {
+        return { records: [], classification: 'manager-status-unavailable' }
+      }
+      records.push(record)
     }
     return { records, classification: 'manager-status-compatible' }
   } catch {

@@ -7,6 +7,11 @@ import {
   type SharedBusinessStorageCursor
 } from './shared-business-storage'
 
+import {
+  SHARED_BUSINESS_STORAGE_JOURNAL_KEY,
+  writeSharedBusinessStorageJournal
+} from './shared-business-storage-journal'
+
 const DESIGN_REGISTRY_KEY = 'kun.design.threadRegistry.v1'
 
 class MemoryStorage implements Storage {
@@ -154,6 +159,100 @@ describe('shared business storage synchronization', () => {
 
     expect(read).toHaveBeenCalledTimes(1)
     expect(setIntervalSpy).toHaveBeenCalledTimes(1)
+    delete (window as unknown as { kunGui?: unknown }).kunGui
+  })
+
+  it('restores a dirty local update across restart and uploads it over an old remote value', async () => {
+    const storage = new MemoryStorage()
+    const oldRegistry = '{"old":true}'
+    const newRegistry = '{"new":true}'
+    storage.setItem(DESIGN_REGISTRY_KEY, newRegistry)
+    vi.stubGlobal('localStorage', storage)
+    writeSharedBusinessStorageJournal({
+      version: 1,
+      acknowledgedRevision: 4,
+      acknowledgedEntries: { [DESIGN_REGISTRY_KEY]: oldRegistry },
+      dirtyKeys: [DESIGN_REGISTRY_KEY]
+    })
+    const write = vi.fn(async (_revision: number, value: Record<string, string>) => ({
+      revision: 5,
+      value
+    }))
+    ;(window as unknown as { kunGui: unknown }).kunGui = {
+      sharedClientState: {
+        read: vi.fn(async () => ({ revision: 4, value: { [DESIGN_REGISTRY_KEY]: oldRegistry } })),
+        write
+      },
+      appEnvironment: { flavor: 'development' }
+    }
+
+    await installSharedBusinessStorage()
+
+    expect(storage.getItem(DESIGN_REGISTRY_KEY)).toBe(newRegistry)
+    expect(write).toHaveBeenCalledWith(4, { [DESIGN_REGISTRY_KEY]: newRegistry })
+    expect(JSON.parse(storage.getItem(SHARED_BUSINESS_STORAGE_JOURNAL_KEY) ?? '{}')).toMatchObject({
+      acknowledgedRevision: 5,
+      dirtyKeys: []
+    })
+    delete (window as unknown as { kunGui?: unknown }).kunGui
+  })
+
+  it('keeps local data after an initial read failure and uploads it on the next install', async () => {
+    const storage = new MemoryStorage()
+    const oldRegistry = '{"old":true}'
+    const newRegistry = '{"new":true}'
+    storage.setItem(DESIGN_REGISTRY_KEY, newRegistry)
+    vi.stubGlobal('localStorage', storage)
+    writeSharedBusinessStorageJournal({
+      version: 1,
+      acknowledgedRevision: 2,
+      acknowledgedEntries: { [DESIGN_REGISTRY_KEY]: oldRegistry },
+      dirtyKeys: [DESIGN_REGISTRY_KEY]
+    })
+    const read = vi.fn().mockRejectedValue(new Error('manager unavailable'))
+    const write = vi.fn(async (_revision: number, value: Record<string, string>) => ({ revision: 3, value }))
+    ;(window as unknown as { kunGui: unknown }).kunGui = {
+      sharedClientState: { read, write },
+      appEnvironment: { flavor: 'development' }
+    }
+
+    await expect(installSharedBusinessStorage()).rejects.toThrow('manager unavailable')
+    expect(storage.getItem(DESIGN_REGISTRY_KEY)).toBe(newRegistry)
+    resetSharedBusinessStorageInstallForTests()
+    read.mockResolvedValue({ revision: 2, value: { [DESIGN_REGISTRY_KEY]: oldRegistry } })
+    await installSharedBusinessStorage()
+
+    expect(storage.getItem(DESIGN_REGISTRY_KEY)).toBe(newRegistry)
+    expect(write).toHaveBeenCalledWith(2, { [DESIGN_REGISTRY_KEY]: newRegistry })
+    delete (window as unknown as { kunGui?: unknown }).kunGui
+  })
+
+  it('preserves a dirty deletion tombstone instead of resurrecting the remote value', async () => {
+    const storage = new MemoryStorage()
+    const oldRegistry = '{"old":true}'
+    vi.stubGlobal('localStorage', storage)
+    writeSharedBusinessStorageJournal({
+      version: 1,
+      acknowledgedRevision: 8,
+      acknowledgedEntries: { [DESIGN_REGISTRY_KEY]: oldRegistry },
+      dirtyKeys: [DESIGN_REGISTRY_KEY]
+    })
+    const write = vi.fn(async (_revision: number, value: Record<string, string>) => ({
+      revision: 9,
+      value
+    }))
+    ;(window as unknown as { kunGui: unknown }).kunGui = {
+      sharedClientState: {
+        read: vi.fn(async () => ({ revision: 8, value: { [DESIGN_REGISTRY_KEY]: oldRegistry } })),
+        write
+      },
+      appEnvironment: { flavor: 'development' }
+    }
+
+    await installSharedBusinessStorage()
+
+    expect(storage.getItem(DESIGN_REGISTRY_KEY)).toBeNull()
+    expect(write).toHaveBeenCalledWith(8, {})
     delete (window as unknown as { kunGui?: unknown }).kunGui
   })
 

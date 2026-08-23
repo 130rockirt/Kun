@@ -248,6 +248,7 @@ export function createThreadSelectionActions(
         unreadThreadIds: nextUnread,
         activeThreadId: id,
         threadLoadingId: null,
+        threadRefreshingId: null,
         threadHistoryCursor: cached.threadHistoryCursor,
         threadHasMoreHistory: cached.threadHasMoreHistory,
         threadHistoryLoading: false,
@@ -294,49 +295,45 @@ export function createThreadSelectionActions(
     // Give the sidebar its selected state in this render frame. The timeline
     // shows a skeleton and the composer is disabled until detail hydration
     // commits, preventing sends against an unhydrated thread.
-    const initialComposerState = resolveThreadComposerState(get(), targetThread)
-    if (prevId === id) {
-      // A same-thread refresh keeps the current projection mounted beneath the
-      // hydration overlay. The detail response replaces it atomically; failure
-      // removes the overlay while leaving the last usable projection intact.
+    if (refreshingActiveThread) {
       set({
         watchTurnCompletion: nextWatch,
         unreadThreadIds: nextUnread,
-        threadLoadingId: id,
-        threadHistoryLoading: false,
-        error: null,
-        ...initialComposerState
+        threadRefreshingId: id,
+        error: null
       })
     } else {
+      const initialComposerState = resolveThreadComposerState(get(), targetThread)
       set({
-      watchTurnCompletion: nextWatch,
-      unreadThreadIds: nextUnread,
-      activeThreadId: id,
-      threadLoadingId: id,
-      threadHistoryCursor: null,
-      threadHasMoreHistory: false,
-      threadHistoryLoading: false,
-      activeThreadRelation: targetThread?.relation ?? 'primary',
-      activeThreadParentId: targetThread?.parentThreadId ?? null,
-      activeThreadGoal: targetThread?.goal ?? null,
-      activeThreadTodos: targetThread?.todos ?? null,
-      blocks: [],
-      lastSeq: 0,
-      liveDeltaSeqFloor: 0,
-      liveReasoning: '',
-      liveAssistant: '',
-      busy: false,
-      busyUnconfirmed: false,
-      currentTurnId: null,
-      currentTurnOrchestration: null,
-      currentTurnUserId: null,
-      turnStartedAtByUserId: {},
-      turnDurationByUserId: {},
-      turnReasoningFirstAtByUserId: {},
-      turnReasoningLastAtByUserId: {},
-      inspectorSelectedId: null,
-      queuedMessages: [],
-      error: null,
+        watchTurnCompletion: nextWatch,
+        unreadThreadIds: nextUnread,
+        activeThreadId: id,
+        threadLoadingId: id,
+        threadRefreshingId: null,
+        threadHistoryCursor: null,
+        threadHasMoreHistory: false,
+        threadHistoryLoading: false,
+        activeThreadRelation: targetThread?.relation ?? 'primary',
+        activeThreadParentId: targetThread?.parentThreadId ?? null,
+        activeThreadGoal: targetThread?.goal ?? null,
+        activeThreadTodos: targetThread?.todos ?? null,
+        blocks: [],
+        lastSeq: 0,
+        liveDeltaSeqFloor: 0,
+        liveReasoning: '',
+        liveAssistant: '',
+        busy: false,
+        busyUnconfirmed: false,
+        currentTurnId: null,
+        currentTurnOrchestration: null,
+        currentTurnUserId: null,
+        turnStartedAtByUserId: {},
+        turnDurationByUserId: {},
+        turnReasoningFirstAtByUserId: {},
+        turnReasoningLastAtByUserId: {},
+        inspectorSelectedId: null,
+        queuedMessages: [],
+        error: null,
         ...initialComposerState
       })
     }
@@ -439,6 +436,7 @@ export function createThreadSelectionActions(
             })(),
         activeThreadId: id,
         threadLoadingId: null,
+        threadRefreshingId: null,
         threadHistoryCursor: historyCursor ?? null,
         threadHasMoreHistory: hasMoreHistory,
         threadHistoryLoading: false,
@@ -493,6 +491,7 @@ export function createThreadSelectionActions(
       if (!selectionStillCurrent()) return
       set({
         threadLoadingId: null,
+        threadRefreshingId: get().threadRefreshingId === id ? null : get().threadRefreshingId,
         error: formatRuntimeError(e),
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }

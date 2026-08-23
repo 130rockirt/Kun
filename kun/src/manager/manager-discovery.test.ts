@@ -7,6 +7,7 @@ import {
   managerDiscoveryPath,
   publishManagerDiscovery,
   readManagerHandoffDiscovery,
+  readManagerHandoffDiscoveryStrict,
   readManagerDiscovery,
   removeManagerDiscovery,
   withManagerStartLock
@@ -124,6 +125,17 @@ describe('manager discovery', () => {
     await writeFile(managerDiscoveryPath(controlDir), 'x'.repeat(65 * 1024), 'utf8')
     expect(await readManagerDiscovery(controlDir)).toBeNull()
     expect(await readManagerHandoffDiscovery(controlDir)).toBeNull()
+  })
+
+  it('fails closed in strict replacement probes when discovery exists but is invalid', async () => {
+    const controlDir = await root()
+    await writeFile(managerDiscoveryPath(controlDir), '{broken', 'utf8')
+
+    await expect(readManagerHandoffDiscoveryStrict(controlDir)).rejects.toThrow(
+      /invalid Kun Service Manager discovery/u
+    )
+    await rm(managerDiscoveryPath(controlDir))
+    await expect(readManagerHandoffDiscoveryStrict(controlDir)).resolves.toBeNull()
   })
 
   it('does not let an old manager remove a replacement record', async () => {

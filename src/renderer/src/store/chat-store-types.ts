@@ -332,6 +332,8 @@ export type ChatState = {
   activeThreadId: string | null
   /** Thread selected immediately but whose durable snapshot is still loading. */
   threadLoadingId: string | null
+  /** Active-thread durable refresh; unlike initial hydration, its projection stays interactive. */
+  threadRefreshingId: string | null
   /** Opaque cursor for the next older durable timeline page. */
   threadHistoryCursor: string | null
   threadHasMoreHistory: boolean

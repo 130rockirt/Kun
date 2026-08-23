@@ -31,7 +31,7 @@ import type { GuiPlanToolMeta } from '../../plan/plan-tool'
 import { useChatStore } from '../../store/chat-store'
 import { hasLivePendingUserInput } from '../../store/chat-store-runtime-helpers'
 import { shouldUseEmptyTaskLayout } from './workbench-chat-layout'
-import { CircleHelp } from 'lucide-react'
+import { CircleHelp, Loader2 } from 'lucide-react'
 
 const TerminalPanel = lazy(() =>
   import('../terminal/TerminalPanel').then((module) => ({ default: module.TerminalPanel }))
@@ -157,6 +157,7 @@ export function WorkbenchChatStage({
 }: WorkbenchChatStageProps): ReactElement {
   const { t } = useTranslation('common')
   const threadLoadingId = useChatStore((state) => state.threadLoadingId)
+  const threadRefreshingId = useChatStore((state) => state.threadRefreshingId)
   const effectiveConversationDropWorkspaceRoot = normalizeWorkspaceRoot(conversationDropWorkspaceRoot)
   const canComposeForConversationDrop =
     composerProps.fileReferenceEnabled === true &&
@@ -224,6 +225,16 @@ export function WorkbenchChatStage({
                   onCommand={onExtensionCommand}
                   compact
                 />
+              ) : null}
+              {threadRefreshingId === activeThreadId ? (
+                <span
+                  className="inline-flex shrink-0 items-center gap-1.5 text-[11.5px] font-medium text-muted-foreground"
+                  role="status"
+                  aria-label={t('sidebar:threadRefreshing')}
+                >
+                  <Loader2 className="h-3 w-3 motion-safe:animate-spin" aria-hidden="true" />
+                  {t('sidebar:threadRefreshing')}
+                </span>
               ) : null}
               {busy ? (
                 hasLivePendingUserInput(blocks) ? (

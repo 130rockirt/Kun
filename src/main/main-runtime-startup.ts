@@ -244,7 +244,9 @@ export async function reconcileBundledRuntimeAfterInstall(
 ): Promise<void> {
   mainState.assertCanonicalRuntimeMigrationReady()
   const requested = runtimeSupervisor.latestOr(settings)
-  if (!(await kunRuntimeAdapter.requiresBundledBuildReplacement(requested))) return
+  const probe = await kunRuntimeAdapter.probeBundledBuildReplacement(requested)
+  if (probe.state === 'matched') return
+  if (probe.state === 'unknown') throw probe.error
   if (getKunRuntimeSettings(requested).autoStart) {
     await replaceKunServe(requested)
     return
