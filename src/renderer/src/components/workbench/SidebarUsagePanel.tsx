@@ -204,7 +204,15 @@ export function SidebarUsagePanel({
               className="mx-4 mb-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10.5px] leading-4 text-amber-800 dark:border-amber-800/70 dark:bg-amber-950/35 dark:text-amber-200"
             >
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
-              <span>{t('usageHeatmapErrorTitle')}</span>
+              <span>
+                {t('usageHeatmapErrorTitle')}
+                <span
+                  title={dailyState.error}
+                  className="mt-1 block break-all text-[9.5px] text-amber-700/90 dark:text-amber-300/80"
+                >
+                  {dailyState.error}
+                </span>
+              </span>
             </div>
           ) : null}
 
@@ -288,8 +296,15 @@ export function SidebarUsagePanel({
               {t('usageHeatmapLoading')}
             </div>
           ) : modelState.error ? (
-            <p role="alert" className="mt-2 text-[10.5px] leading-4 text-amber-700 dark:text-amber-300">
+            <p
+              role="alert"
+              title={modelState.error}
+              className="mt-2 text-[10.5px] leading-4 text-amber-700 dark:text-amber-300"
+            >
               {t('usageHeatmapErrorTitle')}
+              <span className="mt-0.5 block break-all text-[9.5px] text-amber-700/90 dark:text-amber-300/80">
+                {modelState.error}
+              </span>
             </p>
           ) : visibleModelBuckets.length > 0 ? (
             <>

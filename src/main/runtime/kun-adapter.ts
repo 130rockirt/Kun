@@ -322,6 +322,7 @@ const DEFAULT_RUNTIME_POST_TIMEOUT_MS = 60_000
 const THREAD_TIMELINE_GET_TIMEOUT_MS = 120_000
 const THREAD_SUMMARIZE_POST_TIMEOUT_MS = 120_000
 const PROVIDER_QUOTA_GET_TIMEOUT_MS = 120_000
+const USAGE_HISTORY_GET_TIMEOUT_MS = 120_000
 const MODEL_CONNECTION_EVENTS_TIMEOUT_MARGIN_MS = 5_000
 const MAX_MODEL_CONNECTION_EVENTS_WAIT_MS = 120_000
 
@@ -343,6 +344,21 @@ function isProviderQuotaPath(pathNorm: string): boolean {
   return pathname === '/v1/provider-quotas'
 }
 
+/**
+ * History aggregations replay every thread's usage records and hydrate full
+ * thread records for per-turn attribution, so they are not a cheap status
+ * route. The generic GET budget aborted them mid-aggregation and surfaced as
+ * the sidebar "cannot read usage" banner even though the renderer allowed 65s.
+ */
+function isUsageHistoryPath(pathNorm: string): boolean {
+  const queryIndex = pathNorm.indexOf('?')
+  const pathname = queryIndex >= 0 ? pathNorm.slice(0, queryIndex) : pathNorm
+  if (pathname !== '/v1/usage') return false
+  if (queryIndex < 0) return false
+  const groupBy = new URLSearchParams(pathNorm.slice(queryIndex + 1)).get('group_by')
+  return groupBy === 'day' || groupBy === 'model' || groupBy === 'thread' || groupBy === 'turn'
+}
+
 export function resolveRuntimeRequestTimeoutMs(
   pathNorm: string,
   method: string,
@@ -357,6 +373,9 @@ export function resolveRuntimeRequestTimeoutMs(
   }
   if (method === 'GET' && isProviderQuotaPath(pathNorm)) {
     return PROVIDER_QUOTA_GET_TIMEOUT_MS
+  }
+  if (method === 'GET' && isUsageHistoryPath(pathNorm)) {
+    return USAGE_HISTORY_GET_TIMEOUT_MS
   }
   // A whole-session summary is one blocking model call over the full
   // transcript. The generic POST budget cut it off before the runtime could

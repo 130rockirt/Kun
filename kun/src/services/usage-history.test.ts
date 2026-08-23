@@ -168,6 +168,87 @@ describe('loadUsageHistory provider attribution', () => {
     expect(peakInFlight).toBeLessThanOrEqual(4)
   })
 
+  it('degrades a corrupt thread document to the summary instead of failing aggregation', async () => {
+    const source = {
+      threadService: {
+        list: async () => [
+          { id: 'thread-broken', model: 'glm-5.3', providerId: 'summary-provider', status: 'active', updatedAt: '2026-08-23T00:00:00.000Z' },
+          { id: 'thread-healthy', model: 'glm-5.3', providerId: 'summary-provider', status: 'active', updatedAt: '2026-08-23T00:00:00.000Z' }
+        ],
+        get: async (threadId: string) => {
+          if (threadId === 'thread-broken') throw new Error('corrupt thread document')
+          return {
+            id: threadId,
+            model: 'glm-5.3',
+            providerId: 'thread-provider',
+            updatedAt: '2026-08-23T00:00:00.000Z',
+            turns: [{ id: 'turn-healthy', model: 'glm-5.3', providerId: 'turn-provider' }]
+          }
+        }
+      },
+      sessionStore: {
+        loadUsageRecords: async () => [
+          indexedRecord('turn-broken', undefined, 1_000, 100, 'thread-broken'),
+          indexedRecord('turn-healthy', undefined, 1_000, 100, 'thread-healthy')
+        ],
+        loadLatestUsageSnapshots: async () => []
+      },
+      usageService: { forThread: () => emptyUsageSnapshot() },
+      nowIso: () => '2026-08-23T00:00:03.000Z'
+    }
+
+    const records = await loadUsageHistory(source as never)
+
+    expect(providerByTurn(records)).toEqual({
+      // The corrupt document falls back to thread-current attribution.
+      'turn-broken': 'summary-provider',
+      'turn-healthy': 'turn-provider'
+    })
+  })
+
+  it('reuses hydrated threads across loads keyed by updatedAt', async () => {
+    const source = {
+      threadService: {
+        list: async () => [
+          { id: 'thread-memo', model: 'glm-5.3', providerId: 'provider-b', status: 'active', updatedAt: '2026-08-23T00:00:02.000Z' }
+        ],
+        get: vi.fn(async () => ({
+          id: 'thread-memo',
+          model: 'glm-5.3',
+          providerId: 'provider-b',
+          updatedAt: '2026-08-23T00:00:02.000Z',
+          turns: [
+            { id: 'turn-1', model: 'glm-5.3', providerId: 'provider-a' },
+            { id: 'turn-2', model: 'glm-5.3', providerId: 'provider-b' }
+          ]
+        }))
+      },
+      sessionStore: {
+        loadUsageRecords: vi.fn(async () => [
+          indexedRecord('turn-1', undefined, 1_000, 100, 'thread-memo'),
+          indexedRecord('turn-2', undefined, 2_000, 200, 'thread-memo')
+        ]),
+        loadLatestUsageSnapshots: async () => [{
+          threadId: 'thread-memo',
+          usage: cumulativeUsage(2_000, 200)
+        }]
+      },
+      usageService: { forThread: () => emptyUsageSnapshot() },
+      nowIso: () => '2026-08-23T00:00:03.000Z'
+    }
+
+    const first = await loadUsageHistory(source as never)
+    const second = await loadUsageHistory(source as never)
+
+    expect(providerByTurn(first)).toEqual({
+      'turn-1': 'provider-a',
+      'turn-2': 'provider-b'
+    })
+    expect(providerByTurn(second)).toEqual(providerByTurn(first))
+    // Only the first load pays the full-record read.
+    expect(source.threadService.get).toHaveBeenCalledTimes(1)
+  })
+
   it('feeds per-turn provider attribution into coding-plan zero-price aggregation', async () => {
     const source = {
       threadService: {
