@@ -208,4 +208,122 @@ describe('sidebar thread ordering integration', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  it('demotes a viewed completed project row behind loading rows and keeps it visible past the first batch', async () => {
+    vi.stubGlobal('localStorage', storage())
+    const threads = [
+      thread('load-a', '/project', '2026-08-20T00:00:09.000Z'),
+      thread('load-b', '/project', '2026-08-20T00:00:08.000Z'),
+      thread('load-c', '/project', '2026-08-20T00:00:07.000Z'),
+      thread('load-d', '/project', '2026-08-20T00:00:06.000Z'),
+      thread('load-e', '/project', '2026-08-20T00:00:05.000Z'),
+      thread('done', '/project', '2026-08-20T00:00:01.000Z')
+    ]
+    const ids = threads.map((item) => item.id)
+    const runningWatches = { 'load-a': true, 'load-b': true, 'load-c': true, 'load-d': true, 'load-e': true }
+    let renderer: ReactTestRenderer | null = null
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(SidebarProjectsSection, projectProps(threads, {
+          watchTurnCompletion: { ...runningWatches, done: true }
+        })))
+      })
+      await act(async () => {
+        renderer!.update(createElement(SidebarProjectsSection, projectProps(threads, {
+          unreadThreadIds: { done: 'completed' },
+          watchTurnCompletion: runningWatches
+        })))
+      })
+      expect(visibleThreadTitles(renderer!, ids)).toEqual([
+        'done', 'load-a', 'load-b', 'load-c', 'load-d', 'load-e'
+      ])
+
+      await act(async () => {
+        renderer!.update(createElement(SidebarProjectsSection, projectProps(threads, {
+          activeThreadId: 'done',
+          unreadThreadIds: {},
+          watchTurnCompletion: runningWatches
+        })))
+      })
+      expect(visibleThreadTitles(renderer!, ids)).toEqual([
+        'load-a', 'load-b', 'load-c', 'load-d', 'load-e', 'done'
+      ])
+    } finally {
+      ;(renderer as ReactTestRenderer | null)?.unmount()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('demotes a viewed completed conversation row behind a still-running conversation', async () => {
+    vi.stubGlobal('localStorage', storage())
+    const originalState = useChatStore.getState()
+    const items = [
+      thread('conv-load', '/conversations/load', '2026-08-20T00:00:09.000Z'),
+      thread('conv-done', '/conversations/done', '2026-08-20T00:00:01.000Z')
+    ]
+    const noOp = vi.fn()
+    let renderer: ReactTestRenderer | null = null
+    try {
+      useChatStore.setState({
+        activeThreadId: null,
+        busy: false,
+        watchTurnCompletion: { 'conv-load': true, 'conv-done': true },
+        unreadThreadIds: {},
+        scheduledThreadActivities: {},
+        awaitingUserInputThreadIds: {}
+      })
+      await act(async () => {
+        renderer = createRenderer(createElement(SidebarConversationsSection, {
+          threads: items,
+          activeThreadId: null,
+          runtimeReady: true,
+          conversationRoot: '/conversations',
+          onNewConversation: noOp,
+          onSelectThread: noOp,
+          onRenameThread: vi.fn(async () => undefined),
+          onPinThread: vi.fn(async () => undefined),
+          onArchiveThread: vi.fn(async () => undefined),
+          onDeleteThread: vi.fn(async () => undefined),
+          onRestoreThread: vi.fn(async () => undefined),
+          t: (key: string) => key
+        }))
+      })
+      const toggle = renderer!.root.find((node) => node.type === 'button' && node.props.title === 'sidebarConversations')
+      await act(async () => toggle.props.onClick())
+      await act(async () => useChatStore.setState({
+        watchTurnCompletion: { 'conv-load': true },
+        unreadThreadIds: { 'conv-done': 'completed' }
+      }))
+      expect(visibleThreadTitles(renderer!, items.map((item) => item.id))).toEqual([
+        'conv-done', 'conv-load'
+      ])
+      await act(async () => {
+        useChatStore.setState({
+          activeThreadId: 'conv-done',
+          unreadThreadIds: {}
+        })
+        renderer!.update(createElement(SidebarConversationsSection, {
+          threads: items,
+          activeThreadId: 'conv-done',
+          runtimeReady: true,
+          conversationRoot: '/conversations',
+          onNewConversation: noOp,
+          onSelectThread: noOp,
+          onRenameThread: vi.fn(async () => undefined),
+          onPinThread: vi.fn(async () => undefined),
+          onArchiveThread: vi.fn(async () => undefined),
+          onDeleteThread: vi.fn(async () => undefined),
+          onRestoreThread: vi.fn(async () => undefined),
+          t: (key: string) => key
+        }))
+      })
+      expect(visibleThreadTitles(renderer!, items.map((item) => item.id))).toEqual([
+        'conv-load', 'conv-done'
+      ])
+    } finally {
+      ;(renderer as ReactTestRenderer | null)?.unmount()
+      useChatStore.setState(originalState, true)
+      vi.unstubAllGlobals()
+    }
+  })
 })

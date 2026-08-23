@@ -315,7 +315,8 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
           const visibleSelection = sidebarProjectVisibleItems(
             rootThreads,
             visibleThreadCount,
-            (thread) => sidebarThreadActivity(thread, sidebarThreadActivityContext) === 'running'
+            (thread) => thread.id === activeThreadId
+              || sidebarThreadActivity(thread, sidebarThreadActivityContext) === 'running'
           )
           const visibleThreads = visibleSelection.items
           const hiddenThreadCount = visibleSelection.hiddenCount
