@@ -129,7 +129,7 @@ import {
   invalidateThreadSnapshot,
   snapshotThreadProjection
 } from './thread-snapshot-cache'
-import { getThreadPrewarmPromise } from './thread-detail-prewarm'
+import { getThreadPrewarmHandle, threadPrewarmHandleIsCurrent } from './thread-detail-prewarm'
 import {
   ensureRuntimeProviderForSend,
   fallbackComposerProviderIdForSend,
@@ -322,7 +322,19 @@ export function createThreadSelectionActions(
       ...initialComposerState
     })
     try {
-      const prewarmPromise = targetThread ? getThreadPrewarmPromise(targetThread) : null
+      const prewarmHandle = targetThread ? getThreadPrewarmHandle(targetThread) : null
+      let detail = await (prewarmHandle?.promise ?? p.getThreadDetail(id))
+      if (!selectionStillCurrent()) return
+      if (prewarmHandle) {
+        const currentThread = get().threads.find((thread) => thread.id === id) ?? null
+        // The thread may have advanced while the prewarm request was in
+        // flight; a stale detail would both render outdated blocks and be
+        // re-cached under the new fingerprint by snapshotThreadProjection.
+        if (!threadPrewarmHandleIsCurrent(prewarmHandle, currentThread)) {
+          detail = await p.getThreadDetail(id)
+          if (!selectionStillCurrent()) return
+        }
+      }
       const {
         blocks: rawBlocks,
         latestSeq,
@@ -342,8 +354,7 @@ export function createThreadSelectionActions(
         payloadBytes,
         historyCursor,
         hasMoreHistory = false
-      } = await (prewarmPromise ?? p.getThreadDetail(id))
-      if (!selectionStillCurrent()) return
+      } = detail
       // A subagent's `side` thread has no locally-stored per-turn model labels
       // (it was never sent through the composer). Backfill the user blocks with
       // the child thread's resolved model so the session shows "which model",

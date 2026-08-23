@@ -111,8 +111,37 @@ function matchingInFlight(thread: NormalizedThread): InFlightPrewarm | null {
   return entry
 }
 
-export function getThreadPrewarmPromise(thread: NormalizedThread): Promise<ThreadDetail> | null {
-  return matchingInFlight(thread)?.promise ?? null
+export type ThreadPrewarmHandle = {
+  threadId: string
+  promise: Promise<ThreadDetail>
+  fingerprint: string
+  token: ThreadSnapshotCacheToken
+}
+
+export function getThreadPrewarmHandle(thread: NormalizedThread): ThreadPrewarmHandle | null {
+  const entry = matchingInFlight(thread)
+  if (!entry) return null
+  return {
+    threadId: thread.id,
+    promise: entry.promise,
+    fingerprint: entry.fingerprint,
+    token: entry.token
+  }
+}
+
+/**
+ * Re-validate a prewarm handle after its promise settles. The handle is only
+ * authoritative while the thread's fingerprint is unchanged and its snapshot
+ * cache token is still current; otherwise the caller must refetch the detail.
+ */
+export function threadPrewarmHandleIsCurrent(
+  handle: ThreadPrewarmHandle,
+  thread: NormalizedThread | null
+): boolean {
+  return thread != null &&
+    thread.id === handle.threadId &&
+    threadSnapshotFingerprint(thread) === handle.fingerprint &&
+    threadSnapshotCacheTokenIsCurrent(handle.threadId, handle.token)
 }
 
 function startBackgroundPrewarm(job: PrewarmJob): void {

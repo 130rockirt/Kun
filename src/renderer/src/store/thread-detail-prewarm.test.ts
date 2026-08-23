@@ -1,15 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NormalizedThread, ThreadDetail } from '../agent/types'
 import {
+  getThreadPrewarmHandle,
   recentThreadPrewarmCandidates,
   requestThreadPrewarm,
   resetThreadPrewarmState,
   scheduleRecentThreadPrewarm,
+  threadPrewarmHandleIsCurrent,
   threadPrewarmStats
 } from './thread-detail-prewarm'
 import {
   clearThreadSnapshotCache,
   getThreadSnapshot,
+  invalidateThreadSnapshot,
   threadSnapshotFingerprint
 } from './thread-snapshot-cache'
 
@@ -178,5 +181,50 @@ describe('thread detail prewarm coordinator', () => {
     queued.resolve(detail('queued'))
     await flushAsyncWork()
     expect(getThreadSnapshot('queued')).not.toBeNull()
+  })
+
+  it('exposes an in-flight prewarm as a revalidatable handle', async () => {
+    const pending = deferred<ThreadDetail>()
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(() => pending.promise) })
+    const target = thread('handle')
+
+    expect(getThreadPrewarmHandle(target)).toBeNull()
+
+    requestThreadPrewarm(target)
+    const handle = getThreadPrewarmHandle(target)
+    expect(handle).not.toBeNull()
+    expect(handle?.threadId).toBe('handle')
+    expect(handle?.fingerprint).toBe(threadSnapshotFingerprint(target))
+    expect(threadPrewarmHandleIsCurrent(handle!, target)).toBe(true)
+    expect(threadPrewarmHandleIsCurrent(handle!, thread('other'))).toBe(false)
+    expect(threadPrewarmHandleIsCurrent(handle!, null)).toBe(false)
+
+    pending.resolve(detail('handle'))
+    await flushAsyncWork()
+    expect(getThreadPrewarmHandle(target)).toBeNull()
+  })
+
+  it('invalidates a prewarm handle when the fingerprint advances or the cache token expires', async () => {
+    const pending = deferred<ThreadDetail>()
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(() => pending.promise) })
+    const target = thread('invalidate', { updatedAt: '2026-08-23T00:00:00.000Z' })
+
+    requestThreadPrewarm(target)
+    const handle = getThreadPrewarmHandle(target)!
+
+    const advanced = thread('invalidate', {
+      updatedAt: '2026-08-23T00:01:00.000Z',
+      latestSeq: 2
+    })
+    expect(threadPrewarmHandleIsCurrent(handle, advanced)).toBe(false)
+
+    const unchanged = thread('invalidate', { updatedAt: '2026-08-23T00:00:00.000Z' })
+    invalidateThreadSnapshot('invalidate')
+    expect(threadPrewarmHandleIsCurrent(handle, unchanged)).toBe(false)
+
+    pending.resolve(detail('invalidate'))
+    await flushAsyncWork()
   })
 })

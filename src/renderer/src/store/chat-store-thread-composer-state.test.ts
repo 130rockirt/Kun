@@ -9,6 +9,7 @@ import {
 import {
   clearThreadSnapshotCache,
   getThreadSnapshot,
+  invalidateThreadSnapshot,
   snapshotThreadProjection,
   threadSnapshotFingerprint
 } from './thread-snapshot-cache'
@@ -315,6 +316,94 @@ describe('thread composer state restoration', () => {
     expect(state.threadLoadingId).toBeNull()
     expect(state.blocks).toEqual([
       { kind: 'assistant', id: 'answer-b', text: 'shared request' }
+    ])
+  })
+
+  it('refetches when the thread advances while an awaited prewarm is in flight', async () => {
+    const prewarmPending = deferred<ThreadDetail>()
+    const freshPending = deferred<ThreadDetail>()
+    const getThreadDetail = vi.fn()
+      .mockImplementationOnce(() => prewarmPending.promise)
+      .mockImplementationOnce(() => freshPending.promise)
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail,
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    const target = thread('thread-b')
+    const advanced = thread('thread-b', {
+      updatedAt: '2026-06-09T00:05:00.000Z',
+      latestSeq: 3
+    })
+    state.activeThreadId = 'thread-a'
+    state.threads = [thread('thread-a'), target]
+
+    requestThreadPrewarm(target)
+    const selecting = actions.selectThread(target.id)
+
+    expect(getThreadDetail).toHaveBeenCalledTimes(1)
+
+    // The sidebar refreshed the thread metadata while the prewarm request
+    // was still awaited by selectThread, so its detail is stale on arrival.
+    state.threads = [thread('thread-a'), advanced]
+    prewarmPending.resolve(detail([
+      { kind: 'assistant', id: 'stale-b', text: 'outdated blocks' }
+    ]))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(getThreadDetail).toHaveBeenCalledTimes(2)
+    expect(state.blocks).toEqual([])
+
+    freshPending.resolve(detail([
+      { kind: 'assistant', id: 'answer-b', text: 'fresh blocks' }
+    ]))
+    await selecting
+
+    expect(state.threadLoadingId).toBeNull()
+    expect(state.blocks).toEqual([
+      { kind: 'assistant', id: 'answer-b', text: 'fresh blocks' }
+    ])
+    const cached = getThreadSnapshot(target.id, threadSnapshotFingerprint(advanced))
+    expect(cached?.blocks.map((block) => block.id)).not.toContain('stale-b')
+  })
+
+  it('refetches when the prewarm snapshot cache token is invalidated mid-flight', async () => {
+    const prewarmPending = deferred<ThreadDetail>()
+    const freshPending = deferred<ThreadDetail>()
+    const getThreadDetail = vi.fn()
+      .mockImplementationOnce(() => prewarmPending.promise)
+      .mockImplementationOnce(() => freshPending.promise)
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail,
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    const target = thread('thread-b')
+    state.activeThreadId = 'thread-a'
+    state.threads = [thread('thread-a'), target]
+
+    requestThreadPrewarm(target)
+    const selecting = actions.selectThread(target.id)
+
+    expect(getThreadDetail).toHaveBeenCalledTimes(1)
+
+    invalidateThreadSnapshot(target.id)
+    prewarmPending.resolve(detail([
+      { kind: 'assistant', id: 'stale-b', text: 'outdated blocks' }
+    ]))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(getThreadDetail).toHaveBeenCalledTimes(2)
+
+    freshPending.resolve(detail([
+      { kind: 'assistant', id: 'answer-b', text: 'fresh blocks' }
+    ]))
+    await selecting
+
+    expect(state.blocks).toEqual([
+      { kind: 'assistant', id: 'answer-b', text: 'fresh blocks' }
     ])
   })
 
