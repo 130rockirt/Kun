@@ -301,6 +301,8 @@
   "runtimeModelRequestFailed": "Kun could not reach the model provider. Check your network, proxy settings, and provider configuration (Base URL, Endpoint format).",
   "runtimeModelProviderNoResponse": "The model provider did not return a response. Expand details to see the connection failure.",
   "runtimeModelProviderNoResponseDetail": "The provider did not return a readable error; the request failed in transit. Underlying cause:\n{{cause}}",
+  "runtimeStreamDisconnected": "The model connection ended before the response completed (network or gateway interruption, not a provider error). You can retry.",
+  "runtimeStreamDisconnectedDetail": "The stream closed before the response completed. This is a transport interruption, not a provider rejection. Raw message:\n{{cause}}",
   "runtimeBinaryNotInstalled": "The Kun CLI was not found. Run `npm install` in the project folder to fetch it, or set the binary path in Settings.",
   "runtimeMissingApiKey": "DeepSeek API Key is missing. Open Settings and add it before the GUI can start the local runtime.",
   "runtimeAutoStartDisabled": "Kun is offline. Enable automatic startup in Settings, or start `kun serve` manually.",
