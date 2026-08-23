@@ -39,7 +39,6 @@ let initialized = false
 let getMainWindow: (() => BrowserWindow | null) | null = null
 let lastInfo: Extract<GuiUpdateInfo, { ok: true }> | null = null
 let lastState: GuiUpdateState = { status: 'idle' }
-let downloaded = false
 let downloadPromise: Promise<string[]> | null = null
 const operations = new GuiUpdateOperationCoordinator()
 let eventOperation: GuiUpdateOperation | null = null
@@ -83,8 +82,14 @@ function toGuiInfo(
     manualOnly,
     downloaded: operation
       ? operations.downloadedFor(operation.channel, operation.feedUrl, latestVersion)
-      : downloaded
+      : Boolean(lastInfo && operations.downloadedFor(configuredChannel, configuredFeedUrl, lastInfo.latestVersion))
   }
+}
+function hasCurrentDownloadedUpdate(): boolean {
+  return Boolean(
+    lastInfo?.hasUpdate &&
+    operations.downloadedFor(configuredChannel, configuredFeedUrl, lastInfo.latestVersion)
+  )
 }
 function emitGuiUpdateState(state: GuiUpdateState): void {
   lastState = state
@@ -115,11 +120,9 @@ function markUpdateInstallQuitting(active: boolean): void {
 function clearBeforeInstallUpdatePreparation(): void {
   beforeInstallUpdatePrepared = false
 }
-
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error))
 }
-
 function relaunchAfterFailedUpdateInstall(): void {
   try {
     app.relaunch()
@@ -128,7 +131,6 @@ function relaunchAfterFailedUpdateInstall(): void {
     console.error('[kun-gui updater] failed to relaunch after update install failure:', error)
   }
 }
-
 function resetFailedUpdateInstallState(): void {
   restoreInstallerUpdateSourceAfterFailure?.()
   restoreInstallerUpdateSourceAfterFailure = null
@@ -139,7 +141,6 @@ function resetFailedUpdateInstallState(): void {
   clearBeforeInstallUpdatePreparation()
   markUpdateInstallQuitting(false)
 }
-
 function scheduleFailedUpdateInstallRecovery(): void {
   updateInstallRecoveryNeeded = true
   if (updateInstallRecoveryScheduled) return
@@ -152,14 +153,12 @@ function scheduleFailedUpdateInstallRecovery(): void {
     relaunchAfterFailedUpdateInstall()
   })
 }
-
 function clearBackgroundCheckTimer(): void {
   if (backgroundCheckTimer) {
     clearTimeout(backgroundCheckTimer)
     backgroundCheckTimer = null
   }
 }
-
 function shouldSkipScheduledCheck(): boolean {
   return (
     lastState.status === 'checking' ||
@@ -168,7 +167,6 @@ function shouldSkipScheduledCheck(): boolean {
     lastState.status === 'installing'
   )
 }
-
 async function scheduleNextBackgroundCheck(): Promise<void> {
   clearBackgroundCheckTimer()
   const lastCheckedAtMs = await readLastScheduledCheckAt()
@@ -177,7 +175,6 @@ async function scheduleNextBackgroundCheck(): Promise<void> {
     void runScheduledGuiUpdateCheck()
   }, delay)
 }
-
 async function runScheduledGuiUpdateCheck(): Promise<void> {
   if (backgroundCheckPromise) return backgroundCheckPromise
   backgroundCheckPromise = (async () => {
@@ -195,7 +192,6 @@ async function runScheduledGuiUpdateCheck(): Promise<void> {
   })()
   return backgroundCheckPromise
 }
-
 async function resolveUpdateChannel(requested?: GuiUpdateChannel): Promise<GuiUpdateChannel> {
   if (requested) return normalizeGuiUpdateChannel(requested)
   if (getSelectedChannel) {
@@ -203,7 +199,6 @@ async function resolveUpdateChannel(requested?: GuiUpdateChannel): Promise<GuiUp
   }
   return DEFAULT_GUI_UPDATE_CHANNEL
 }
-
 function configureUpdaterChannel(
   channel: GuiUpdateChannel,
   feedUrl = updateFeedUrl(channel),
@@ -221,11 +216,9 @@ function configureUpdaterChannel(
   }
   if (!changed) return
   operations.invalidate()
-  downloaded = false
   lastInfo = null
   emitGuiUpdateState({ status: 'idle' })
 }
-
 async function resolveConfiguredUpdateChannel(
   channel: GuiUpdateChannel,
   requestGeneration: number
@@ -235,7 +228,6 @@ async function resolveConfiguredUpdateChannel(
   configureUpdaterChannel(channel, feedUrl)
   return true
 }
-
 export function setGuiUpdateChannel(channel: GuiUpdateChannel): void {
   if (DEVELOPMENT_APP_FLAVOR) return
   const nextChannel = normalizeGuiUpdateChannel(channel)
@@ -248,7 +240,6 @@ export function setGuiUpdateChannel(channel: GuiUpdateChannel): void {
     autoUpdater.setFeedURL({ provider: 'generic', url: nextFeedUrl })
   })
 }
-
 async function checkManualUpdate(
   channel: GuiUpdateChannel,
   code: GuiUpdateFailureCode = 'unsupported',
@@ -322,7 +313,6 @@ async function checkManualUpdate(
     }
   }
 }
-
 export function initializeGuiUpdater(
   windowGetter: () => BrowserWindow | null,
   channelGetter?: () => GuiUpdateChannel | Promise<GuiUpdateChannel>,
@@ -337,31 +327,26 @@ export function initializeGuiUpdater(
   setUpdateInstallQuitting = updateInstallQuittingSetter ?? null
   if (initialized) return
   initialized = true
-
   if (DEVELOPMENT_APP_FLAVOR) return
-
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
   configureUpdaterChannel(configuredChannel)
-  eventOperation = operations.begin('check', configuredChannel, configuredFeedUrl)
+  eventOperation = null
   if (!app.isPackaged) {
     autoUpdater.forceDevUpdateConfig = true
   }
-
   autoUpdater.logger = {
     info: (message?: unknown) => console.info('[kun-gui updater]', message),
     warn: (message?: unknown) => console.warn('[kun-gui updater]', message),
     error: (message?: unknown) => console.error('[kun-gui updater]', message)
   }
-
   autoUpdater.on('checking-for-update', () => {
-    if (!operations.isCurrent(eventOperation)) return
+    if (!operations.isCurrent(eventOperation) || eventOperation.kind !== 'check') return
     emitGuiUpdateState({ status: 'checking', info: lastInfo ?? undefined })
   })
 
   autoUpdater.on('update-available', (updateInfo: UpdateInfo) => {
-    if (!operations.isCurrent(eventOperation)) return
-    downloaded = false
+    if (!operations.isCurrent(eventOperation) || eventOperation.kind !== 'check') return
     eventOperation.targetVersion = updateInfo.version.trim()
     const info = toGuiInfo(updateInfo, true, eventOperation)
     lastInfo = info
@@ -369,23 +354,20 @@ export function initializeGuiUpdater(
   })
 
   autoUpdater.on('update-not-available', (updateInfo: UpdateInfo) => {
-    if (!operations.isCurrent(eventOperation)) return
-    downloaded = false
+    if (!operations.isCurrent(eventOperation) || eventOperation.kind !== 'check') return
     const info = toGuiInfo(updateInfo, false, eventOperation)
     lastInfo = info
     emitGuiUpdateState({ status: 'not_available', info })
   })
 
   autoUpdater.on('download-progress', (progress: ProgressInfo) => {
-    if (!operations.isCurrent(eventOperation)) return
+    if (!operations.isCurrent(eventOperation) || eventOperation.kind !== 'download') return
     emitGuiUpdateState({ status: 'downloading', info: lastInfo ?? undefined, progress })
   })
 
   autoUpdater.on('update-downloaded', (event: UpdateDownloadedEvent) => {
-    if (!eventOperation || !operations.isCurrent(eventOperation)) return
-    eventOperation.targetVersion ??= event.version.trim()
+    if (!eventOperation || !operations.isCurrent(eventOperation) || eventOperation.kind !== 'download') return
     if (!operations.markDownloaded(eventOperation, event.version.trim())) return
-    downloaded = true
     const info = toGuiInfo(event, true, eventOperation)
     lastInfo = info
     pendingVersionStateWrite = recordPendingUpdate(event)
@@ -405,10 +387,9 @@ export function initializeGuiUpdater(
       updateInstallLaunchError = asError(error)
       scheduleFailedUpdateInstallRecovery()
     }
-    const downloadFailed = !installFailed && operations.isCurrent(eventOperation) &&
-      (downloadPromise !== null || lastState.status === 'downloading')
+    const downloadFailed = !installFailed && eventOperation?.kind === 'download' &&
+      operations.isCurrent(eventOperation) && (downloadPromise !== null || lastState.status === 'downloading')
     if (downloadFailed) {
-      downloaded = false
       operations.clearDownloaded()
       downloadPromise = null
     }
@@ -446,7 +427,17 @@ export function getGuiUpdateState(): GuiUpdateState {
 }
 
 export async function checkGuiUpdate(channel?: GuiUpdateChannel): Promise<GuiUpdateInfo> {
+  const requestGeneration = operations.currentGeneration()
   const selectedChannel = await resolveUpdateChannel(channel)
+  if (!operations.isGenerationCurrent(requestGeneration)) {
+    return {
+      ok: false,
+      currentVersion: app.getVersion(),
+      channel: selectedChannel,
+      code: 'unknown',
+      message: 'The update channel changed before checking for updates.'
+    }
+  }
   if (DEVELOPMENT_APP_FLAVOR) {
     return {
       ok: false,
@@ -456,7 +447,6 @@ export async function checkGuiUpdate(channel?: GuiUpdateChannel): Promise<GuiUpd
       message: DEVELOPMENT_UPDATE_MESSAGE
     }
   }
-  const requestGeneration = operations.currentGeneration()
   return operations.run(async () => {
     if (!operations.isGenerationCurrent(requestGeneration)) {
       return {
@@ -517,7 +507,16 @@ export async function checkGuiUpdate(channel?: GuiUpdateChannel): Promise<GuiUpd
 }
 
 export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<GuiUpdateDownloadResult> {
+  const requestGeneration = operations.currentGeneration()
   const selectedChannel = await resolveUpdateChannel(channel)
+  if (!operations.isGenerationCurrent(requestGeneration)) {
+    return {
+      ok: false,
+      currentVersion: app.getVersion(),
+      code: 'download_failed',
+      message: 'The update channel changed before download.'
+    }
+  }
   if (DEVELOPMENT_APP_FLAVOR) {
     return { ok: false, currentVersion: app.getVersion(), code: 'unsupported', message: DEVELOPMENT_UPDATE_MESSAGE }
   }
@@ -533,7 +532,6 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
       }
     }
   }
-  const requestGeneration = operations.currentGeneration()
   return operations.run(async () => {
     if (!operations.isGenerationCurrent(requestGeneration)) {
       return {
@@ -560,7 +558,7 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
     const operation = operations.begin('download', selectedChannel, configuredFeedUrl)
     operation.targetVersion = lastInfo.latestVersion
     eventOperation = operation
-    downloaded = false
+    operations.clearDownloaded()
     try {
       let tracked: Promise<string[]>
       tracked = autoUpdater.downloadUpdate().finally(() => {
@@ -574,7 +572,6 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
         operation.targetVersion
       )) {
         operations.markDownloaded(operation, operation.targetVersion)
-        downloaded = true
       }
       if (!operations.isCurrent(operation) || !operations.downloadedFor(
         operation.channel,
@@ -591,7 +588,6 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
       return { ok: true, paths }
     } catch (e) {
       if (operations.isCurrent(operation)) {
-        downloaded = false
         operations.clearDownloaded()
         const message = e instanceof Error ? e.message : String(e)
         emitGuiUpdateState({ status: 'error', info: lastInfo ?? undefined, message, code: 'download_failed' })
@@ -615,7 +611,7 @@ export function installGuiUpdate(): Promise<GuiUpdateInstallResult> {
   if (updateInstallAttemptActive || updateInstallHandoffPending || updateInstallHandoffStarted) {
     return Promise.resolve({ ok: true })
   }
-  const operation = installGuiUpdateOnce()
+  const operation = operations.run(installGuiUpdateOnce)
   installPromise = operation
   void operation.then(
     () => {
@@ -640,12 +636,7 @@ async function installGuiUpdateOnce(): Promise<GuiUpdateInstallResult> {
   let updateInstallQuitMarked = false
   let restoreInstallerUpdateSource = (): void => undefined
   try {
-    if (!downloaded || !lastInfo || !operations.downloadedFor(
-      configuredChannel,
-      configuredFeedUrl,
-      lastInfo.latestVersion
-    )) {
-      downloaded = false
+    if (!hasCurrentDownloadedUpdate()) {
       operations.clearDownloaded()
       return {
         ok: false,
@@ -658,6 +649,16 @@ async function installGuiUpdateOnce(): Promise<GuiUpdateInstallResult> {
     markUpdateInstallQuitting(true)
     updateInstallQuitMarked = true
     await Promise.all([pendingVersionStateWrite, runBeforeInstallUpdate()])
+    if (!hasCurrentDownloadedUpdate()) {
+      clearBeforeInstallUpdatePreparation()
+      markUpdateInstallQuitting(false)
+      return {
+        ok: false,
+        currentVersion: app.getVersion(),
+        code: 'install_failed',
+        message: 'The selected update is no longer eligible for installation.'
+      }
+    }
     restoreInstallerUpdateSource = setWindowsInstallerUpdateSource()
     restoreInstallerUpdateSourceAfterFailure = restoreInstallerUpdateSource
     // In-app updates must stay silent on Windows. The assisted NSIS UI can

@@ -105,6 +105,22 @@ function platformManifestName(): string {
   return 'latest.yml'
 }
 
+async function downloadInstallEligibleUpdate(
+  module: typeof import('./gui-updater'),
+  channel: 'stable' | 'frontier' = 'stable'
+): Promise<void> {
+  process.env.KUN_UPDATE_URL = `https://updates.example.test/${channel}/`
+  process.env.DEEPSEEK_GUI_ALLOW_UNSIGNED_UPDATES = '1'
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }))
+  updater.checkForUpdates.mockResolvedValue({
+    updateInfo: { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' },
+    isUpdateAvailable: true
+  })
+  updater.downloadUpdate.mockResolvedValue(['C:\\Temp\\Kun-0.2.0.exe'])
+  await expect(module.checkGuiUpdate(channel)).resolves.toMatchObject({ ok: true, hasUpdate: true })
+  await expect(module.downloadGuiUpdate(channel)).resolves.toMatchObject({ ok: true })
+}
+
 describe('checkGuiUpdate feed URL', () => {
   it('uses architecture-specific Linux update metadata', async () => {
     const { platformManifestName: manifestName } = await import('./gui-updater-support')
@@ -244,10 +260,7 @@ describe('installGuiUpdate', () => {
         expect(process.env.KUN_INSTALLER_UPDATE_SOURCE).toBe('D:\\Apps\\Kun')
       })
       module.initializeGuiUpdater(() => null, () => 'stable')
-      updater.emit('update-downloaded', {
-        version: '0.2.0',
-        releaseDate: '2026-06-06T00:00:00.000Z'
-      })
+      await downloadInstallEligibleUpdate(module)
 
       await expect(module.installGuiUpdate()).resolves.toEqual({ ok: true })
       expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true)
@@ -300,10 +313,10 @@ describe('installGuiUpdate', () => {
       undefined,
       setUpdateInstallQuitting
     )
-    updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+    await downloadInstallEligibleUpdate(module)
 
     const installing = module.installGuiUpdate()
-    await Promise.resolve()
+    for (let index = 0; index < 3; index += 1) await Promise.resolve()
 
     expect(beforeInstall).toHaveBeenCalledTimes(1)
     expect(setUpdateInstallQuitting).toHaveBeenCalledWith(true)
@@ -320,6 +333,29 @@ describe('installGuiUpdate', () => {
       updater.quitAndInstall.mock.invocationCallOrder[0]
     )
     expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true)
+  })
+
+  it('rejects installation when the channel changes during cleanup', async () => {
+    const module = await import('./gui-updater')
+    let finishCleanup = (): void => undefined
+    module.initializeGuiUpdater(
+      () => null,
+      () => 'stable',
+      () => new Promise<void>((resolve) => { finishCleanup = resolve })
+    )
+    await downloadInstallEligibleUpdate(module)
+
+    const installing = module.installGuiUpdate()
+    for (let index = 0; index < 3; index += 1) await Promise.resolve()
+    module.setGuiUpdateChannel('frontier')
+    finishCleanup()
+
+    await expect(installing).resolves.toMatchObject({
+      ok: false,
+      code: 'install_failed',
+      message: 'The selected update is no longer eligible for installation.'
+    })
+    expect(updater.quitAndInstall).not.toHaveBeenCalled()
   })
 
   it('reuses the same cleanup when the native updater emits before-quit-for-update', async () => {
@@ -339,7 +375,7 @@ describe('installGuiUpdate', () => {
       undefined,
       setUpdateInstallQuitting
     )
-    updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+    await downloadInstallEligibleUpdate(module)
 
     nativeUpdater.emit('before-quit-for-update')
     expect(setUpdateInstallQuitting).toHaveBeenCalledTimes(1)
@@ -373,7 +409,7 @@ describe('installGuiUpdate', () => {
       undefined,
       setUpdateInstallQuitting
     )
-    updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+    await downloadInstallEligibleUpdate(module)
 
     await expect(module.installGuiUpdate()).resolves.toMatchObject({
       ok: false,
@@ -398,7 +434,7 @@ describe('installGuiUpdate', () => {
       undefined,
       setUpdateInstallQuitting
     )
-    updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+    await downloadInstallEligibleUpdate(module)
 
     await expect(module.installGuiUpdate()).resolves.toMatchObject({
       ok: false,
@@ -423,7 +459,7 @@ describe('installGuiUpdate', () => {
       undefined,
       setUpdateInstallQuitting
     )
-    updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+    await downloadInstallEligibleUpdate(module)
 
     await expect(module.installGuiUpdate()).resolves.toEqual({ ok: true })
     await Promise.resolve()
@@ -450,7 +486,7 @@ describe('installGuiUpdate', () => {
       undefined,
       setUpdateInstallQuitting
     )
-    updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+    await downloadInstallEligibleUpdate(module)
 
     await expect(module.installGuiUpdate()).resolves.toMatchObject({
       ok: false,
@@ -474,13 +510,13 @@ describe('installGuiUpdate', () => {
       () => 'stable',
       () => new Promise<void>((resolve) => { finishCleanup = resolve })
     )
-    updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+    await downloadInstallEligibleUpdate(module)
 
     const first = module.installGuiUpdate()
     const second = module.installGuiUpdate()
     expect(second).toBe(first)
 
-    await Promise.resolve()
+    for (let index = 0; index < 3; index += 1) await Promise.resolve()
     finishCleanup()
     await expect(first).resolves.toEqual({ ok: true })
     expect(updater.quitAndInstall).toHaveBeenCalledTimes(1)
@@ -494,7 +530,11 @@ describe('downloadGuiUpdate recovery', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }))
     const module = await import('./gui-updater')
     module.initializeGuiUpdater(() => null, () => 'stable')
-    updater.emit('update-available', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+    updater.checkForUpdates.mockResolvedValue({
+      updateInfo: { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' },
+      isUpdateAvailable: true
+    })
+    await expect(module.checkGuiUpdate()).resolves.toMatchObject({ ok: true, hasUpdate: true })
     updater.downloadUpdate
       .mockRejectedValueOnce(new Error('connection reset'))
       .mockResolvedValueOnce(['C:\\Temp\\Kun-0.2.0.exe'])
@@ -526,7 +566,11 @@ describe('downloadGuiUpdate recovery', () => {
     }))
     const module = await import('./gui-updater')
     module.initializeGuiUpdater(() => null, () => 'stable')
-    updater.emit('update-available', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
+    updater.checkForUpdates.mockResolvedValue({
+      updateInfo: { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' },
+      isUpdateAvailable: true
+    })
+    await expect(module.checkGuiUpdate('stable')).resolves.toMatchObject({ ok: true, hasUpdate: true })
 
     const downloading = module.downloadGuiUpdate('stable')
     for (let index = 0; index < 4; index += 1) await Promise.resolve()

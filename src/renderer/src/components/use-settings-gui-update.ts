@@ -42,6 +42,10 @@ export function useSettingsGuiUpdate({
 
   const applyGuiUpdateState = useCallback((state: GuiUpdateState): void => {
     if ('info' in state && state.info?.ok && channel && state.info.channel !== channel) return
+    if (state.status === 'idle') {
+      resetGuiUpdateState()
+      return
+    }
     if ('info' in state && state.info) {
       setGuiUpdateInfo(state.info)
     }
@@ -90,7 +94,7 @@ export function useSettingsGuiUpdate({
       setGuiUpdateProgress(null)
       setGuiUpdateError(state.message)
     }
-  }, [channel])
+  }, [channel, resetGuiUpdateState])
 
   const checkGuiUpdate = useCallback(async (): Promise<void> => {
     if (typeof window.kunGui?.checkGuiUpdate !== 'function') return
@@ -153,11 +157,22 @@ export function useSettingsGuiUpdate({
 
   useEffect(() => {
     if (typeof window.kunGui?.onGuiUpdateState !== 'function') return
-    const unsubscribe = window.kunGui.onGuiUpdateState(applyGuiUpdateState)
-    if (typeof window.kunGui?.getGuiUpdateState === 'function') {
-      void window.kunGui.getGuiUpdateState().then(applyGuiUpdateState).catch(() => undefined)
+    let receivedEvent = false
+    let cancelled = false
+    const applyEvent = (state: GuiUpdateState): void => {
+      receivedEvent = true
+      applyGuiUpdateState(state)
     }
-    return unsubscribe
+    const unsubscribe = window.kunGui.onGuiUpdateState(applyEvent)
+    if (typeof window.kunGui?.getGuiUpdateState === 'function') {
+      void window.kunGui.getGuiUpdateState().then((state) => {
+        if (!cancelled && !receivedEvent) applyGuiUpdateState(state)
+      }).catch(() => undefined)
+    }
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
   }, [applyGuiUpdateState])
 
   useEffect(() => {

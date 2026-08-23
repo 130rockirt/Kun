@@ -72,7 +72,9 @@ export class GuiUpdateOperationCoordinator {
   }
 
   markDownloaded(operation: GuiUpdateOperation, version: string): boolean {
-    if (!this.isCurrent(operation) || !version || operation.targetVersion !== version) return false
+    if (operation.kind !== 'download' || !this.isCurrent(operation) || !version || operation.targetVersion !== version) {
+      return false
+    }
     this.downloaded = { generation: operation.generation, channel: operation.channel, feedUrl: operation.feedUrl, version }
     return true
   }
