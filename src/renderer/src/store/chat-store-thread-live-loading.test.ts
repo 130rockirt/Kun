@@ -1,0 +1,194 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ChatBlock, NormalizedThread } from '../agent/types'
+import type { ThreadDetail } from '../agent/provider-types'
+import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
+
+const registryMock = vi.hoisted(() => ({ getProvider: vi.fn() }))
+
+vi.mock('../agent/registry', () => ({ getProvider: registryMock.getProvider }))
+
+import { createThreadActions } from './chat-store-thread-actions'
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: Error) => void } {
+  let resolve!: (value: T) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done
+    reject = fail
+  })
+  return { promise, resolve, reject }
+}
+
+function thread(id: string): NormalizedThread {
+  return {
+    id,
+    title: id,
+    updatedAt: '2026-08-23T00:00:00.000Z',
+    model: 'deepseek-v4-pro',
+    mode: 'agent',
+    workspace: '/workspace/deepseek-gui',
+    status: 'idle'
+  }
+}
+
+function detail(id: string): ThreadDetail {
+  return {
+    blocks: [{ kind: 'assistant', id: `${id}-answer`, text: `${id} ready` }],
+    latestSeq: 9,
+    threadStatus: 'idle'
+  }
+}
+
+function buildHarness(): { actions: ReturnType<typeof createThreadActions>; state: ChatState } {
+  let state: ChatState
+  state = {
+    activeThreadId: 'thread-a',
+    activeThreadRelation: 'primary',
+    activeThreadParentId: null,
+    activeThreadGoal: null,
+    activeThreadTodos: null,
+    awaitingUserInputThreadIds: {},
+    blocks: [{ kind: 'assistant', id: 'thread-a-answer', text: 'thread-a ready' }],
+    busy: false,
+    busyUnconfirmed: false,
+    clawChannels: [],
+    codeWorkspaceRoots: [],
+    composerModel: '',
+    composerMode: 'agent',
+    composerOrchestration: 'direct',
+    composerProviderId: '',
+    currentTurnId: null,
+    currentTurnOrchestration: null,
+    currentTurnUserId: null,
+    error: null,
+    extensionComposerContexts: [],
+    lastSeq: 5,
+    liveDeltaSeqFloor: 5,
+    liveReasoning: '',
+    liveAssistant: '',
+    queuedMessages: [],
+    refreshThreads: vi.fn(async () => undefined),
+    route: 'chat',
+    runtimeConnection: 'ready',
+    threadLoadingId: null,
+    threadHistoryCursor: null,
+    threadHasMoreHistory: false,
+    threadHistoryLoading: false,
+    turnDurationByUserId: {},
+    turnReasoningFirstAtByUserId: {},
+    turnReasoningLastAtByUserId: {},
+    turnStartedAtByUserId: {},
+    unreadThreadIds: {},
+    watchTurnCompletion: {},
+    threads: [thread('thread-a'), thread('thread-b'), thread('thread-c')]
+  } as unknown as ChatState
+  const set: ChatStoreSet = (partial) => {
+    const update = typeof partial === 'function' ? partial(state) : partial
+    Object.assign(state, update)
+  }
+  const get: ChatStoreGet = () => state
+  return {
+    actions: createThreadActions({ set, get, sseAbortRef: { current: null } }),
+    state
+  }
+}
+
+describe('live thread hydration loading', () => {
+  beforeEach(() => {
+    registryMock.getProvider.mockReset()
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(),
+      removeItem: vi.fn()
+    })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps a cross-thread live target loading until canonical detail commits', async () => {
+    const pending = deferred<ThreadDetail>()
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(() => pending.promise),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+
+    const hydration = actions.subscribeThreadEventsLive('thread-b')
+    expect(state.activeThreadId).toBe('thread-b')
+    expect(state.threadLoadingId).toBe('thread-b')
+    expect(state.blocks).toEqual([])
+
+    pending.resolve(detail('thread-b'))
+    await hydration
+
+    expect(state.threadLoadingId).toBeNull()
+    expect(state.blocks).toEqual(detail('thread-b').blocks)
+  })
+
+  it('clears only the current target loading state when live detail fails', async () => {
+    const pending = deferred<ThreadDetail>()
+    const subscribeThreadEvents = vi.fn(async () => undefined)
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(() => pending.promise),
+      subscribeThreadEvents
+    })
+    const { actions, state } = buildHarness()
+
+    const hydration = actions.subscribeThreadEventsLive('thread-b')
+    expect(state.threadLoadingId).toBe('thread-b')
+    pending.reject(new Error('network down'))
+    await hydration
+
+    expect(state.threadLoadingId).toBeNull()
+    expect(state.error).toContain('network down')
+    expect(subscribeThreadEvents).toHaveBeenCalledWith(
+      'thread-b',
+      0,
+      expect.anything(),
+      expect.anything()
+    )
+  })
+
+  it('keeps a same-thread ready projection visible during live recovery', async () => {
+    const pending = deferred<ThreadDetail>()
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(() => pending.promise),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    const existingBlocks: ChatBlock[] = [...state.blocks]
+
+    const hydration = actions.subscribeThreadEventsLive('thread-a')
+    expect(state.threadLoadingId).toBeNull()
+    expect(state.blocks).toEqual(existingBlocks)
+
+    pending.resolve(detail('thread-a'))
+    await hydration
+    expect(state.threadLoadingId).toBeNull()
+  })
+
+  it('does not let a stale live snapshot clear or replace a newer target', async () => {
+    const pending = deferred<ThreadDetail>()
+    const subscribeThreadEvents = vi.fn(async () => undefined)
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(() => pending.promise),
+      subscribeThreadEvents
+    })
+    const { actions, state } = buildHarness()
+
+    const staleHydration = actions.subscribeThreadEventsLive('thread-b')
+    state.activeThreadId = 'thread-c'
+    state.threadLoadingId = 'thread-c'
+    state.blocks = [{ kind: 'assistant', id: 'thread-c-answer', text: 'thread-c ready' }]
+
+    pending.resolve(detail('thread-b'))
+    await staleHydration
+
+    expect(state.activeThreadId).toBe('thread-c')
+    expect(state.threadLoadingId).toBe('thread-c')
+    expect(state.blocks).toEqual([{ kind: 'assistant', id: 'thread-c-answer', text: 'thread-c ready' }])
+    expect(subscribeThreadEvents).not.toHaveBeenCalled()
+  })
+})

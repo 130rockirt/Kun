@@ -11,6 +11,7 @@ import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import { FloatingComposer } from '../chat/FloatingComposer'
 import { ConversationFileDropZone } from '../chat/ConversationFileDropZone'
 import { LazyMessageTimeline } from '../chat/LazyMessageTimeline'
+import { ThreadHydrationLoading } from '../chat/ThreadHydrationLoading'
 import {
   GraphChildSessionBar,
   SubagentReturnBar,
@@ -261,7 +262,7 @@ export function WorkbenchChatStage({
             options={conversationFileDropOptions}
           >
             <LazyMessageTimeline
-              fallback={<WorkbenchPaneFallback />}
+              fallback={activeThreadId ? <ThreadHydrationLoading /> : <WorkbenchPaneFallback />}
               blocks={blocks}
               liveReasoning={liveReasoning}
               live={liveAssistant}

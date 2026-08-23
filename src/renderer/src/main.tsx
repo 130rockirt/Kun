@@ -36,7 +36,11 @@ const rootElement = document.getElementById('root')
 if (!rootElement) throw new Error('Missing root element')
 const reactRoot = ReactDOM.createRoot(rootElement)
 
-void bootstrap()
+void bootstrap().catch((error: unknown) => {
+  // The i18n chunk (or anything else awaited before the first render) failed,
+  // so React never mounted. Render a minimal non-React error view with retry.
+  renderBootstrapFailure(rootElement, error)
+})
 
 async function bootstrap(): Promise<void> {
   await import('./i18n')
@@ -48,4 +52,37 @@ async function bootstrap(): Promise<void> {
       />
     </React.StrictMode>
   )
+}
+
+function renderBootstrapFailure(target: HTMLElement, error: unknown): void {
+  const message = error instanceof Error && error.message ? error.message : String(error)
+  const view = document.createElement('main')
+  view.style.cssText =
+    'min-height:100vh;display:flex;align-items:center;justify-content:center;' +
+    'background:#f7f7f8;color:#1f2329;font-family:system-ui,sans-serif;padding:2rem;'
+
+  const card = document.createElement('section')
+  card.style.cssText =
+    'max-width:28rem;display:flex;flex-direction:column;align-items:center;gap:1rem;' +
+    'border:1px solid #e2e3e6;border-radius:1rem;background:#ffffff;padding:2rem;text-align:center;'
+
+  const title = document.createElement('h1')
+  title.textContent = 'Failed to start Kun'
+  title.style.cssText = 'font-size:1rem;font-weight:600;margin:0;'
+
+  const detail = document.createElement('p')
+  detail.textContent = message
+  detail.style.cssText = 'font-size:0.8125rem;color:#6b7280;word-break:break-word;margin:0;'
+
+  const retry = document.createElement('button')
+  retry.type = 'button'
+  retry.textContent = 'Retry'
+  retry.style.cssText =
+    'min-height:2.25rem;padding:0.5rem 1rem;border-radius:9999px;border:none;' +
+    'background:#1f2329;color:#ffffff;font-size:0.8125rem;font-weight:500;cursor:pointer;'
+  retry.addEventListener('click', () => window.location.reload())
+
+  card.append(title, detail, retry)
+  view.append(card)
+  target.replaceChildren(view)
 }

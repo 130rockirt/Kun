@@ -545,12 +545,13 @@ export function createThreadSelectionActions(
     // snapshot request fails. Cross-thread fallback starts from an empty
     // projection/cursor and can safely replay from zero.
     const keepExistingBlocks = prevState.activeThreadId === targetThreadId
+    const hydratingTarget = !keepExistingBlocks
     const fallbackSinceSeq = keepExistingBlocks ? prevState.lastSeq : 0
     resetBusyRecoveryAttempts()
     clearBusyWatchdog()
     set({
       activeThreadId: targetThreadId,
-      threadLoadingId: null,
+      threadLoadingId: hydratingTarget ? targetThreadId : null,
       threadHistoryCursor: keepExistingBlocks ? prevState.threadHistoryCursor : null,
       threadHasMoreHistory: keepExistingBlocks ? prevState.threadHasMoreHistory : false,
       threadHistoryLoading: false,
@@ -599,7 +600,7 @@ export function createThreadSelectionActions(
         historyCursor,
         hasMoreHistory = false
       } = await p.getThreadDetail(targetThreadId)
-      if (ac.signal.aborted) return
+      if (ac.signal.aborted || get().activeThreadId !== targetThreadId) return
       const loaded = hydrateBlockModelLabels(targetThreadId, rawBlocks)
       const busy = threadSnapshotLooksRunning(loaded, threadStatus, latestTurnStatus)
       // Settle blocks left open by an interrupted turn when the server has
@@ -616,6 +617,7 @@ export function createThreadSelectionActions(
       set({
         activeThreadGoal: goal ?? null,
         activeThreadTodos: todos ?? null,
+        threadLoadingId: get().threadLoadingId === targetThreadId ? null : get().threadLoadingId,
         threadHistoryCursor: historyCursor ?? null,
         threadHasMoreHistory: hasMoreHistory,
         threadHistoryLoading: false,
@@ -648,12 +650,13 @@ export function createThreadSelectionActions(
         void get().drainQueuedMessages()
       }
     } catch (e) {
-      if (ac.signal.aborted) return
+      if (ac.signal.aborted || get().activeThreadId !== targetThreadId) return
       // The fallback cursor matches the projection installed above, so this
       // cannot replay older lifecycle records over newer on-screen state.
       subscribeFrom(fallbackSinceSeq)
       if (get().busy) armBusyWatchdog(set, get)
       set({
+        threadLoadingId: get().threadLoadingId === targetThreadId ? null : get().threadLoadingId,
         error: formatRuntimeError(e),
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }

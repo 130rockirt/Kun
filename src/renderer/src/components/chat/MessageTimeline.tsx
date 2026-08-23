@@ -45,7 +45,7 @@ import {
 } from './message-timeline-jump-preview'
 import { MemoMessageTurn } from './message-timeline-conversation-turn'
 import type { MessageTimelineProps } from './message-timeline-props'
-import { ThreadHydrationLoading } from './ThreadHydrationLoading'
+import { ThreadHydrationGate } from './ThreadHydrationLoading'
 import { useTurnUsageState } from '../../hooks/use-turn-usage'
 
 export {
@@ -161,7 +161,6 @@ export function MessageTimeline({
     activeThread ? [activeThread] : [],
     workspaceRoot
   )
-
   const heroRoute: 'chat' | 'claw' = route === 'claw' ? 'claw' : 'chat'
   const hasContent = blocks.length > 0 || live || liveReasoning
   const endRef = useRef<HTMLDivElement>(null)
@@ -185,7 +184,6 @@ export function MessageTimeline({
     position: { x: number; y: number }
     context: JsonValue
   } | null>(null)
-
   const turns = useMemo(() => groupTurns(blocks), [blocks])
   const latestBlock = blocks[blocks.length - 1]
   const scrollContentKey = [
@@ -372,7 +370,6 @@ export function MessageTimeline({
   const jumpRailHoveredIndex = jumpRailPreview
     ? visibleTurnAnchors.findIndex((item) => item.key === jumpRailPreview.key)
     : -1
-
   return (
     <TimelineFilePreviewWorkspaceProvider
       workspaceRoot={filePreviewWorkspaceRoot}
@@ -380,6 +377,7 @@ export function MessageTimeline({
     >
     <InjectedMemoryLookupProvider workspaceRoot={workspaceRoot}>
     <div ref={containerRef} className="ds-no-drag relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
+      <ThreadHydrationGate loading={Boolean(activeThreadId && threadLoadingId === activeThreadId)}>
       {visibleTurnAnchors.length > 2 && jumpRailLayout ? (
         <div className="timeline-jump-rail-anchor">
           <nav
@@ -450,9 +448,7 @@ export function MessageTimeline({
       <div className={`ds-message-timeline-content ds-chat-column-inset ds-chat-content-max-width mx-auto flex w-full min-w-0 flex-col ${compactCards ? 'gap-5' : 'gap-8'} pt-8 ${
         timelineBottomPaddingClass()
       }`}>
-        {activeThreadId && threadLoadingId === activeThreadId ? (
-          <ThreadHydrationLoading />
-        ) : !hasContent || !activeThreadId ? (
+        {!hasContent || !activeThreadId ? (
           <MessageTimelineEmptyHero
             route={heroRoute}
             ready={runtimeConnection === 'ready'}
@@ -692,6 +688,7 @@ export function MessageTimeline({
           onClose={() => setMessageContextMenu(null)}
         />
       ) : null}
+      </ThreadHydrationGate>
     </div>
     </InjectedMemoryLookupProvider>
     </TimelineFilePreviewWorkspaceProvider>

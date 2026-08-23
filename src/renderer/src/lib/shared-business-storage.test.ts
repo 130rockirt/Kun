@@ -1,5 +1,8 @@
+/** @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  installSharedBusinessStorage,
+  resetSharedBusinessStorageInstallForTests,
   syncSharedBusinessStorageOnce,
   type SharedBusinessStorageCursor
 } from './shared-business-storage'
@@ -48,6 +51,8 @@ function deferred<T>(): {
 describe('shared business storage synchronization', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    resetSharedBusinessStorageInstallForTests()
   })
 
   it('pushes a Design registry written while the remote read is pending', async () => {
@@ -85,6 +90,71 @@ describe('shared business storage synchronization', () => {
     expect(storage.getItem(DESIGN_REGISTRY_KEY)).toBe(newRegistry)
     expect(result.baseline[DESIGN_REGISTRY_KEY]).toBe(newRegistry)
     expect(result.retry).toBe(false)
+  })
+
+  it('retries the initial remote read before giving up', async () => {
+    const storage = new MemoryStorage()
+    vi.stubGlobal('localStorage', storage)
+    const read = vi
+      .fn<() => Promise<{ revision: number; value: Record<string, string> }>>()
+      .mockRejectedValueOnce(new Error('ipc down'))
+      .mockRejectedValueOnce(new Error('ipc down'))
+      .mockResolvedValue({ revision: 1, value: {} })
+    const setIntervalSpy = vi.spyOn(window, 'setInterval')
+    ;(window as unknown as { kunGui: unknown }).kunGui = {
+      sharedClientState: { read, write: vi.fn() },
+      appEnvironment: { flavor: 'development' }
+    }
+
+    await installSharedBusinessStorage()
+
+    expect(read).toHaveBeenCalledTimes(3)
+    // Successful install starts exactly one polling timer.
+    expect(setIntervalSpy).toHaveBeenCalledTimes(1)
+    delete (window as unknown as { kunGui?: unknown }).kunGui
+  })
+
+  it('rejects after the initial read retries are exhausted and allows a later retry', async () => {
+    const storage = new MemoryStorage()
+    vi.stubGlobal('localStorage', storage)
+    const read = vi
+      .fn<() => Promise<{ revision: number; value: Record<string, string> }>>()
+      .mockRejectedValue(new Error('ipc down'))
+    ;(window as unknown as { kunGui: unknown }).kunGui = {
+      sharedClientState: { read, write: vi.fn() },
+      appEnvironment: { flavor: 'development' }
+    }
+
+    await expect(installSharedBusinessStorage()).rejects.toThrow('ipc down')
+    expect(read).toHaveBeenCalledTimes(3)
+
+    // A later retry (e.g. the StartupGate retry button) must be able to install
+    // again after the failure cleared the cached install promise.
+    read.mockResolvedValue({ revision: 1, value: {} })
+    await installSharedBusinessStorage()
+    expect(read).toHaveBeenCalledTimes(4)
+    delete (window as unknown as { kunGui?: unknown }).kunGui
+  })
+
+  it('does not create a second polling timer when install is called again after success', async () => {
+    const storage = new MemoryStorage()
+    vi.stubGlobal('localStorage', storage)
+    const read = vi
+      .fn<() => Promise<{ revision: number; value: Record<string, string> }>>()
+      .mockResolvedValue({ revision: 1, value: {} })
+    const setIntervalSpy = vi.spyOn(window, 'setInterval')
+    ;(window as unknown as { kunGui: unknown }).kunGui = {
+      sharedClientState: { read, write: vi.fn() },
+      appEnvironment: { flavor: 'development' }
+    }
+
+    await installSharedBusinessStorage()
+    await installSharedBusinessStorage()
+    await installSharedBusinessStorage()
+
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(setIntervalSpy).toHaveBeenCalledTimes(1)
+    delete (window as unknown as { kunGui?: unknown }).kunGui
   })
 
   it('protects a newer local registry written while its previous value is being committed', async () => {

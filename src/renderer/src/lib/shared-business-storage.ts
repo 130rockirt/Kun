@@ -31,12 +31,54 @@ export type SharedBusinessStorageSyncResult = SharedBusinessStorageCursor & {
 }
 
 const POLL_INTERVAL_MS = 1_000
+const INITIAL_READ_ATTEMPTS = 3
+const INITIAL_READ_RETRY_DELAY_MS = 300
+
+let installPromise: Promise<void> | null = null
+
+// Test-only escape hatch: the production singleton intentionally survives a
+// successful install, but unit tests must reset it between scenarios.
+export function resetSharedBusinessStorageInstallForTests(): void {
+  installPromise = null
+}
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+
+async function readInitialSnapshot(api: SharedClientStateApi): Promise<SharedClientStateSnapshot> {
+  let lastError: unknown
+  for (let attempt = 0; attempt < INITIAL_READ_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) await delay(INITIAL_READ_RETRY_DELAY_MS)
+    try {
+      return await api.read()
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
+}
 
 export async function installSharedBusinessStorage(): Promise<void> {
+  if (installPromise) return installPromise
+  const promise = doInstallSharedBusinessStorage()
+  installPromise = promise
+  try {
+    await promise
+  } catch (error) {
+    // Allow a later retry (e.g. the StartupGate retry button) to install again.
+    // A settled success keeps `installPromise` so the poller is never duplicated.
+    if (installPromise === promise) installPromise = null
+    throw error
+  }
+}
+
+async function doInstallSharedBusinessStorage(): Promise<void> {
   const api = window.kunGui?.sharedClientState
   if (!api || typeof localStorage === 'undefined') return
 
-  let snapshot = await api.read()
+  let snapshot = await readInitialSnapshot(api)
   const localAtStartup = readLocalEntries()
   if (
     snapshot.revision === 0 &&

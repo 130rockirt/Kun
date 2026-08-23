@@ -47,6 +47,7 @@ describe('CodeCanvasPanel', () => {
   it('reserves Electron window-control space in focused presentation', () => {
     expect(codeCanvasPanelTitlebarStyle('focused')).toEqual({
       left: 'calc(0.75rem + var(--ds-window-controls-safe-inset))',
+      right: 'auto',
       top: 'calc(0.75rem + var(--ds-window-controls-safe-block))'
     })
     expect(codeCanvasPanelTitlebarStyle('docked')).toBeUndefined()

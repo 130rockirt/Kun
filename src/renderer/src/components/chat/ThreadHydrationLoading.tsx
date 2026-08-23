@@ -1,6 +1,13 @@
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+
+export function ThreadHydrationGate({ loading, children }: {
+  loading: boolean
+  children: ReactNode
+}): ReactElement {
+  return loading ? <ThreadHydrationLoading /> : <>{children}</>
+}
 
 export function ThreadHydrationLoading(): ReactElement {
   const { t } = useTranslation('common')

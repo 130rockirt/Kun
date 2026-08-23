@@ -590,6 +590,8 @@ export function Workbench(): ReactElement {
     canvasFocusMode,
     exitCanvasFocusMode,
     startNewDesignCanvasConversation,
+    leftSidebarCollapsed,
+    toggleLeftSidebar,
     input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
     taskSurface, taskSurfaceLocked, taskSurfaceTransitioning, designTaskProfile, designProfileLocked,
     threadHasDesignDocument, lockedDesignProfile, onTaskSurfaceChange, onDesignTaskProfileChange,

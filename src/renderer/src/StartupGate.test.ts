@@ -18,6 +18,17 @@ vi.mock('./lib/shared-business-storage', () => ({
   installSharedBusinessStorage: vi.fn(async () => undefined)
 }))
 
+async function mockedInstallSharedBusinessStorage(): Promise<ReturnType<typeof vi.fn>> {
+  const { installSharedBusinessStorage } = await import('./lib/shared-business-storage')
+  return installSharedBusinessStorage as unknown as ReturnType<typeof vi.fn>
+}
+
+async function flushAsync(rounds = 6): Promise<void> {
+  await act(async () => {
+    for (let i = 0; i < rounds; i += 1) await Promise.resolve()
+  })
+}
+
 type PhaseListener = (phase: DesktopStartupPhase) => void
 
 function setReactActEnvironment(value: boolean): void {
@@ -103,11 +114,75 @@ describe('StartupGate', () => {
   })
 
   it('installs shared business storage exactly once despite StrictMode double effects', async () => {
-    const { installSharedBusinessStorage } = await import('./lib/shared-business-storage')
+    const installSharedBusinessStorage = await mockedInstallSharedBusinessStorage()
     installStartupApi('ready')
     renderGate({})
     await act(async () => undefined)
     expect(installSharedBusinessStorage).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows an error view with retry when shared storage install fails', async () => {
+    const installSharedBusinessStorage = await mockedInstallSharedBusinessStorage()
+    installSharedBusinessStorage.mockRejectedValueOnce(new Error('shared storage unavailable'))
+    installStartupApi('ready')
+    renderGate({})
+    await flushAsync()
+    expect(container.querySelector('[data-testid="workbench-app"]')).toBeNull()
+    expect(container.textContent).toContain('Failed to start Kun workbench')
+    expect(container.textContent).toContain('shared storage unavailable')
+    expect(container.querySelector('button')?.textContent).toBe('Retry')
+  })
+
+  it('shows an error view when the App chunk fails to load', async () => {
+    const installSharedBusinessStorage = await mockedInstallSharedBusinessStorage()
+    installSharedBusinessStorage.mockRejectedValueOnce(new Error('App chunk load failed'))
+    const api = installStartupApi('bootstrapping')
+    renderGate({})
+    await flushAsync()
+    // Workbench must stay on the shell while the phase disallows it.
+    expect(container.querySelector('[data-testid="workbench-app"]')).toBeNull()
+
+    await act(async () => {
+      api.listeners.forEach((listener) => listener('ready'))
+    })
+    await flushAsync()
+    expect(installSharedBusinessStorage).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toContain('Failed to start Kun workbench')
+    expect(container.textContent).toContain('App chunk load failed')
+  })
+
+  it('recovers into the workbench when the retry succeeds', async () => {
+    const installSharedBusinessStorage = await mockedInstallSharedBusinessStorage()
+    installSharedBusinessStorage.mockRejectedValueOnce(new Error('shared storage unavailable'))
+    installStartupApi('ready')
+    renderGate({})
+    await flushAsync()
+    expect(container.textContent).toContain('Failed to start Kun workbench')
+
+    const retry = container.querySelector('button')
+    expect(retry?.textContent).toBe('Retry')
+    await act(async () => {
+      retry?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flushAsync()
+    })
+    expect(installSharedBusinessStorage).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('[data-testid="workbench-app"]')).not.toBeNull()
+  })
+
+  it('does not restart the workbench on later phase updates after a failure', async () => {
+    const installSharedBusinessStorage = await mockedInstallSharedBusinessStorage()
+    installSharedBusinessStorage.mockRejectedValueOnce(new Error('shared storage unavailable'))
+    const api = installStartupApi('ready')
+    renderGate({})
+    await flushAsync()
+    expect(container.textContent).toContain('Failed to start Kun workbench')
+
+    await act(async () => {
+      api.listeners.forEach((listener) => listener('ready'))
+    })
+    await flushAsync()
+    expect(installSharedBusinessStorage).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toContain('Failed to start Kun workbench')
   })
 
   it('keeps the shell visible while the App chunk is still loading', async () => {
