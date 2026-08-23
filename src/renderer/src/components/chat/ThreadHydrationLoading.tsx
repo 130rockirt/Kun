@@ -6,7 +6,12 @@ export function ThreadHydrationGate({ loading, children }: {
   loading: boolean
   children: ReactNode
 }): ReactElement {
-  return loading ? <ThreadHydrationLoading /> : <>{children}</>
+  return (
+    <>
+      {children}
+      {loading ? <ThreadHydrationLoading /> : null}
+    </>
+  )
 }
 
 export function ThreadHydrationLoading(): ReactElement {
@@ -18,7 +23,7 @@ export function ThreadHydrationLoading(): ReactElement {
       role="status"
       aria-busy="true"
       aria-live="polite"
-      className="absolute inset-0 z-20 flex min-h-[18rem] select-none items-center justify-center bg-white px-6 dark:bg-ds-main"
+      className="pointer-events-auto absolute inset-0 z-20 flex min-h-[18rem] select-none items-center justify-center bg-white px-6 dark:bg-ds-main"
     >
       <div className="flex max-w-sm flex-col items-center text-center">
         <div className="flex h-12 w-12 items-center justify-center rounded-full border border-ds-border-muted bg-ds-card shadow-sm">

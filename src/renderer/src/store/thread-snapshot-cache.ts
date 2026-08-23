@@ -23,6 +23,7 @@ export const THREAD_SNAPSHOT_CACHE_MAX_BYTES = 32 * 1024 * 1024
 // conservative fallback still makes a locally-created thread bounded if it is
 // switched away before a durable detail response has been observed.
 const UNKNOWN_SNAPSHOT_BYTES = 4 * 1024 * 1024
+const SNAPSHOT_ESTIMATE_OVERFLOW = THREAD_SNAPSHOT_CACHE_MAX_BYTES + 1
 
 export type ThreadSnapshot = {
   threadId: string
@@ -107,6 +108,73 @@ function normalizedPayloadBytes(value: number | undefined): number {
     : UNKNOWN_SNAPSHOT_BYTES
 }
 
+/** Estimate retained bytes without allocating a full serialized projection. */
+function estimateSnapshotBytes(value: unknown): number {
+  let bytes = 0
+  const ancestors = new WeakSet<object>()
+  const add = (amount: number): boolean => {
+    bytes += amount
+    return bytes <= THREAD_SNAPSHOT_CACHE_MAX_BYTES
+  }
+  const addString = (text: string): boolean => {
+    if (!add(2)) return false
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index)
+      let amount = 1
+      if (code === 0x22 || code === 0x5c || code < 0x20) amount = code < 0x20 ? 6 : 2
+      else if (code < 0x80) amount = 1
+      else if (code < 0x800) amount = 2
+      else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+        const next = text.charCodeAt(index + 1)
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          amount = 4
+          index += 1
+        } else amount = 3
+      } else amount = 3
+      if (!add(amount)) return false
+    }
+    return true
+  }
+  const visit = (candidate: unknown): boolean => {
+    if (candidate === null) return add(4)
+    switch (typeof candidate) {
+      case 'string': return addString(candidate)
+      case 'boolean': return add(candidate ? 4 : 5)
+      case 'number': return add(Number.isFinite(candidate) ? 24 : 4)
+      case 'undefined': return add(4)
+      case 'object': {
+        if (ancestors.has(candidate)) return false
+        if (!Array.isArray(candidate)) {
+          const prototype = Object.getPrototypeOf(candidate)
+          if (prototype !== Object.prototype && prototype !== null) return false
+        }
+        ancestors.add(candidate)
+        if (!add(2)) return false
+        if (Array.isArray(candidate)) {
+          for (let index = 0; index < candidate.length; index += 1) {
+            if (index > 0 && !add(1)) return false
+            if (!visit(candidate[index])) return false
+          }
+        } else {
+          const record = candidate as Record<string, unknown>
+          let index = 0
+          for (const key in record) {
+            if (!Object.prototype.hasOwnProperty.call(record, key)) continue
+            if (index > 0 && !add(1)) return false
+            if (!addString(key) || !add(1) || !visit(record[key])) return false
+            index += 1
+          }
+        }
+        ancestors.delete(candidate)
+        return true
+      }
+      default:
+        return false
+    }
+  }
+  return visit(value) ? bytes : SNAPSHOT_ESTIMATE_OVERFLOW
+}
+
 function evictUntilBounded(): void {
   while (
     snapshots.size > THREAD_SNAPSHOT_CACHE_MAX_ENTRIES ||
@@ -132,9 +200,10 @@ export function cacheThreadSnapshot(
   token?: ThreadSnapshotCacheToken
 ): boolean {
   if (token && !threadSnapshotCacheTokenIsCurrent(snapshot.threadId, token)) return false
-  const bytes = normalizedPayloadBytes(snapshot.payloadBytes)
+  const payloadBytes = normalizedPayloadBytes(snapshot.payloadBytes)
+  const bytes = Math.max(payloadBytes, estimateSnapshotBytes(snapshot))
   if (bytes > THREAD_SNAPSHOT_CACHE_MAX_BYTES) {
-    removeSnapshot(snapshot.threadId)
+    invalidateThreadSnapshot(snapshot.threadId)
     return false
   }
   removeSnapshot(snapshot.threadId)

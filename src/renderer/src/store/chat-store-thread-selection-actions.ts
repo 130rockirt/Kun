@@ -195,8 +195,11 @@ export function createThreadSelectionActions(
     const nextUnread = { ...get().unreadThreadIds }
     delete nextUnread[id]
 
-    sseAbortRef.current?.abort()
-    sseAbortRef.current = null
+    const refreshingActiveThread = prevId === id
+    if (!refreshingActiveThread) {
+      sseAbortRef.current?.abort()
+      sseAbortRef.current = null
+    }
     const p = getProvider()
     const durableQueuedMessages = queuedMessagesForThread(id)
     // Park the outgoing renderer projection before its state is replaced. This
@@ -213,8 +216,10 @@ export function createThreadSelectionActions(
     const cached = prevId !== id && targetThread
       ? getThreadSnapshotForSelection(targetThread)
       : null
-    resetBusyRecoveryAttempts()
-    clearBusyWatchdog()
+    if (!refreshingActiveThread) {
+      resetBusyRecoveryAttempts()
+      clearBusyWatchdog()
+    }
     if (cached) {
       // The durable queue is the only authoritative queue source. The parked
       // snapshot may hold a queue that was already consumed (e.g. guidance
@@ -290,7 +295,20 @@ export function createThreadSelectionActions(
     // shows a skeleton and the composer is disabled until detail hydration
     // commits, preventing sends against an unhydrated thread.
     const initialComposerState = resolveThreadComposerState(get(), targetThread)
-    set({
+    if (prevId === id) {
+      // A same-thread refresh keeps the current projection mounted beneath the
+      // hydration overlay. The detail response replaces it atomically; failure
+      // removes the overlay while leaving the last usable projection intact.
+      set({
+        watchTurnCompletion: nextWatch,
+        unreadThreadIds: nextUnread,
+        threadLoadingId: id,
+        threadHistoryLoading: false,
+        error: null,
+        ...initialComposerState
+      })
+    } else {
+      set({
       watchTurnCompletion: nextWatch,
       unreadThreadIds: nextUnread,
       activeThreadId: id,
@@ -319,8 +337,9 @@ export function createThreadSelectionActions(
       inspectorSelectedId: null,
       queuedMessages: [],
       error: null,
-      ...initialComposerState
-    })
+        ...initialComposerState
+      })
+    }
     try {
       const prewarmHandle = targetThread ? getThreadPrewarmHandle(targetThread) : null
       let detail = await (prewarmHandle?.promise ?? p.getThreadDetail(id))
@@ -397,6 +416,12 @@ export function createThreadSelectionActions(
         turnId: latestTurnId,
         blocks
       })
+      if (refreshingActiveThread) {
+        sseAbortRef.current?.abort()
+        sseAbortRef.current = null
+        resetBusyRecoveryAttempts()
+        clearBusyWatchdog()
+      }
       // Re-derive the awaiting-input marker from the runtime's pending gate so
       // switching threads (or restarting) keeps the sidebar hint accurate.
       const hasLivePendingUserInput = blocks.some(

@@ -376,8 +376,9 @@ export function MessageTimeline({
       threadId={activeThreadId}
     >
     <InjectedMemoryLookupProvider workspaceRoot={workspaceRoot}>
-    <div ref={containerRef} className="ds-no-drag relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
       <ThreadHydrationGate loading={Boolean(activeThreadId && threadLoadingId === activeThreadId)}>
+      <div ref={containerRef} className="ds-no-drag relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
       {visibleTurnAnchors.length > 2 && jumpRailLayout ? (
         <div className="timeline-jump-rail-anchor">
           <nav
@@ -688,6 +689,7 @@ export function MessageTimeline({
           onClose={() => setMessageContextMenu(null)}
         />
       ) : null}
+      </div>
       </ThreadHydrationGate>
     </div>
     </InjectedMemoryLookupProvider>

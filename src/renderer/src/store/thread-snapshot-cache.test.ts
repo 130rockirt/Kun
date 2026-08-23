@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { NormalizedThread } from '../agent/types'
 import type { ChatState } from './chat-store-types'
 import {
@@ -62,7 +62,10 @@ describe('thread snapshot cache', () => {
       snapshotThreadProjection(stateFor(`thr_${index}`), 1)
     }
 
-    expect(threadSnapshotCacheStats()).toEqual({ entries: 6, bytes: 6 })
+    const stats = threadSnapshotCacheStats()
+    expect(stats.entries).toBe(6)
+    expect(stats.bytes).toBeGreaterThan(6)
+    expect(stats.bytes).toBeLessThan(THREAD_SNAPSHOT_CACHE_MAX_BYTES)
     expect(getThreadSnapshot('thr_0')).toBeNull()
     expect(getThreadSnapshot('thr_6')?.lastSeq).toBe(1)
   })
@@ -72,6 +75,70 @@ describe('thread snapshot cache', () => {
 
     expect(getThreadSnapshot('thr_large')).toBeNull()
     expect(threadSnapshotCacheStats()).toEqual({ entries: 0, bytes: 0 })
+  })
+
+  it('evicts a snapshot that grows beyond the budget after hydration', () => {
+    const state = stateFor('thr_growing')
+    snapshotThreadProjection(state, 1 * 1024 * 1024)
+    expect(getThreadSnapshot('thr_growing')).not.toBeNull()
+
+    state.blocks = [{
+      kind: 'assistant',
+      id: 'large-answer',
+      text: 'x'.repeat(40 * 1024 * 1024)
+    }]
+    snapshotThreadProjection(state)
+
+    expect(getThreadSnapshot('thr_growing')).toBeNull()
+    expect(threadSnapshotCacheStats()).toEqual({ entries: 0, bytes: 0 })
+  })
+
+  it('accounts for budget-safe projection growth during LRU eviction', () => {
+    const growing = stateFor('thr_growing')
+    snapshotThreadProjection(growing, 1 * 1024 * 1024)
+    const initialBytes = threadSnapshotCacheStats().bytes
+    growing.blocks = [{
+      kind: 'assistant',
+      id: 'grown-answer',
+      text: 'x'.repeat(12 * 1024 * 1024)
+    }]
+    snapshotThreadProjection(growing)
+    expect(threadSnapshotCacheStats().bytes).toBeGreaterThan(initialBytes)
+
+    for (const threadId of ['thr_second', 'thr_third']) {
+      const state = stateFor(threadId)
+      state.blocks = [{
+        kind: 'assistant',
+        id: `${threadId}-answer`,
+        text: 'x'.repeat(11 * 1024 * 1024)
+      }]
+      snapshotThreadProjection(state, 1)
+    }
+
+    expect(getThreadSnapshot('thr_growing')).toBeNull()
+    expect(threadSnapshotCacheStats().bytes).toBeLessThanOrEqual(THREAD_SNAPSHOT_CACHE_MAX_BYTES)
+  })
+
+  it('walks structured metadata without materializing object entry arrays', () => {
+    const state = stateFor('thr_wide_meta')
+    const meta = Object.fromEntries(
+      Array.from({ length: 2_000 }, (_, index) => [`field_${index}`, index])
+    )
+    state.blocks = [{
+      kind: 'tool',
+      id: 'wide-tool',
+      summary: 'wide metadata',
+      status: 'success',
+      meta
+    }]
+    const entries = vi.spyOn(Object, 'entries').mockImplementation(() => {
+      throw new Error('Object.entries must not be used by snapshot estimation')
+    })
+
+    snapshotThreadProjection(state, 1)
+    entries.mockRestore()
+
+    expect(getThreadSnapshot('thr_wide_meta')).not.toBeNull()
   })
 
   it('rejects a snapshot when the authoritative thread fingerprint changes', () => {

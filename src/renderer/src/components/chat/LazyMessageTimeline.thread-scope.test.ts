@@ -54,7 +54,7 @@ describe('LazyMessageTimeline thread scope', () => {
     useChatStore.setState({ threadLoadingId: null })
   })
 
-  it('recreates local timeline state for thread and hydration-phase boundaries', async () => {
+  it('recreates local state only when the thread identity changes', async () => {
     await act(async () => { renderer = create(timeline('thread-a')) })
     expect(renderer!.root.findByProps({ 'data-testid': 'timeline-instance' }).props['data-instance-id']).toBe(1)
 
@@ -62,13 +62,13 @@ describe('LazyMessageTimeline thread scope', () => {
     expect(renderer!.root.findByProps({ 'data-testid': 'timeline-instance' }).props['data-instance-id']).toBe(2)
 
     await act(async () => { useChatStore.setState({ threadLoadingId: 'thread-b' }) })
-    expect(renderer!.root.findByProps({ 'data-testid': 'timeline-instance' }).props['data-instance-id']).toBe(3)
+    expect(renderer!.root.findByProps({ 'data-testid': 'timeline-instance' }).props['data-instance-id']).toBe(2)
 
     await act(async () => { useChatStore.setState({ threadLoadingId: null }) })
-    expect(renderer!.root.findByProps({ 'data-testid': 'timeline-instance' }).props['data-instance-id']).toBe(4)
+    expect(renderer!.root.findByProps({ 'data-testid': 'timeline-instance' }).props['data-instance-id']).toBe(2)
 
     await act(async () => { useChatStore.setState({ threadLoadingId: 'thread-c' }) })
-    expect(renderer!.root.findByProps({ 'data-testid': 'timeline-instance' }).props['data-instance-id']).toBe(4)
-    expect(instances.unmounted).toEqual([1, 2, 3])
+    expect(renderer!.root.findByProps({ 'data-testid': 'timeline-instance' }).props['data-instance-id']).toBe(2)
+    expect(instances.unmounted).toEqual([1])
   })
 })

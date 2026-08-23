@@ -3,7 +3,7 @@ import { act, createElement, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DesktopStartupPhase } from '@shared/desktop-startup-state'
-import { StartupGate } from './StartupGate'
+import { StartupGate, STARTUP_STATE_TIMEOUT_MS } from './StartupGate'
 
 vi.mock('./components/StorageRelocationBootView', () => ({
   StorageRelocationBootView: () => createElement('div', { 'data-testid': 'storage-relocation-view' })
@@ -30,6 +30,15 @@ async function flushAsync(rounds = 6): Promise<void> {
 }
 
 type PhaseListener = (phase: DesktopStartupPhase) => void
+
+function deferredValue<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+} {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
 
 function setReactActEnvironment(value: boolean): void {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = value
@@ -68,6 +77,7 @@ describe('StartupGate', () => {
     container.remove()
     setReactActEnvironment(false)
     delete (window as unknown as { kunGui?: unknown }).kunGui
+    vi.useRealTimers()
     vi.clearAllMocks()
   })
 
@@ -85,6 +95,103 @@ describe('StartupGate', () => {
       )
     })
   }
+
+  it('shows a retryable error when the startup API is missing', async () => {
+    renderGate({})
+    await flushAsync()
+
+    expect(container.textContent).toContain('Failed to read Kun startup state')
+    expect(container.textContent).toContain('desktop startup API is unavailable')
+    expect(container.querySelector('[data-testid="workbench-app"]')).toBeNull()
+  })
+
+  it('subscribes before reading startup state and never regresses a ready event', async () => {
+    const calls: string[] = []
+    const pending = deferredValue<DesktopStartupPhase>()
+    const listeners = new Set<PhaseListener>()
+    ;(window as unknown as { kunGui: unknown }).kunGui = {
+      startup: {
+        onState: vi.fn((listener: PhaseListener) => {
+          calls.push('subscribe')
+          listeners.add(listener)
+          return () => listeners.delete(listener)
+        }),
+        getState: vi.fn(() => {
+          calls.push('getState')
+          return pending.promise
+        })
+      }
+    }
+    renderGate({})
+    expect(calls[0]).toBe('subscribe')
+    expect(calls[1]).toBe('getState')
+
+    await act(async () => listeners.forEach((listener) => listener('ready')))
+    await flushAsync()
+    expect(container.querySelector('[data-testid="workbench-app"]')).not.toBeNull()
+
+    await act(async () => pending.resolve('runtime_starting'))
+    await flushAsync()
+    expect(container.querySelector('[data-testid="workbench-app"]')).not.toBeNull()
+  })
+
+  it('retries after startup state rejects', async () => {
+    let shouldReject = true
+    const listeners = new Set<PhaseListener>()
+    ;(window as unknown as { kunGui: unknown }).kunGui = {
+      startup: {
+        onState: (listener: PhaseListener) => {
+          listeners.add(listener)
+          return () => listeners.delete(listener)
+        },
+        getState: () => shouldReject
+          ? Promise.reject(new Error('startup IPC unavailable'))
+          : Promise.resolve('ready' as const)
+      }
+    }
+    renderGate({})
+    await flushAsync()
+    expect(container.textContent).toContain('startup IPC unavailable')
+
+    shouldReject = false
+    const retry = [...container.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Retry')
+    await act(async () => retry?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flushAsync()
+    expect(container.querySelector('[data-testid="workbench-app"]')).not.toBeNull()
+  })
+
+  it('times out a pending startup snapshot and ignores its late result', async () => {
+    vi.useFakeTimers()
+    const pending = deferredValue<DesktopStartupPhase>()
+    const listeners = new Set<PhaseListener>()
+    ;(window as unknown as { kunGui: unknown }).kunGui = {
+      startup: {
+        onState: (listener: PhaseListener) => {
+          listeners.add(listener)
+          return () => listeners.delete(listener)
+        },
+        getState: () => pending.promise
+      }
+    }
+    renderGate({})
+    await act(async () => vi.advanceTimersByTimeAsync(STARTUP_STATE_TIMEOUT_MS))
+    expect(container.textContent).toContain('timed out')
+
+    await act(async () => pending.resolve('ready'))
+    await flushAsync()
+    expect(container.textContent).toContain('Failed to read Kun startup state')
+    expect(container.querySelector('[data-testid="workbench-app"]')).toBeNull()
+  })
+
+  it('opens logs from a startup error and reports unavailable recovery APIs', async () => {
+    renderGate({})
+    await flushAsync()
+    const openLogs = [...container.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Open log folder')
+    await act(async () => openLogs?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(container.textContent).toContain('log folder API is unavailable')
+  })
 
   it('shows the startup shell for the initial phase', async () => {
     const api = installStartupApi('bootstrapping')
