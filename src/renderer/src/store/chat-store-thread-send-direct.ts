@@ -44,6 +44,7 @@ import {
   withoutConsumedComposerContexts
 } from './chat-store-thread-actions-support'
 import type { PreparedThreadSend } from './chat-store-thread-send-direct-types'
+import { copyLiveProjection, emptyLiveProjection } from './chat-store-live-projection'
 
 /**
  * A queued message freezes the model captured when it was enqueued. Draining
@@ -112,8 +113,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
     const previousCurrentTurnId = get().currentTurnId
     const previousCurrentTurnOrchestration = get().currentTurnOrchestration
     const previousCurrentTurnUserId = get().currentTurnUserId
-    const previousLiveReasoning = get().liveReasoning
-    const previousLiveAssistant = get().liveAssistant
+    const previousLiveProjection = copyLiveProjection(get())
     const previousTurnStartedAtByUserId = get().turnStartedAtByUserId
     const previousTurnDurationByUserId = get().turnDurationByUserId
     const previousTurnReasoningFirstAtByUserId = get().turnReasoningFirstAtByUserId
@@ -154,8 +154,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
             : {})
         }
       ],
-      liveReasoning: '',
-      liveAssistant: '',
+      ...emptyLiveProjection(s.lastSeq),
       error: null,
       currentTurnOrchestration: orchestration,
       currentTurnUserId: userBlockId,
@@ -176,6 +175,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
             blocks: previousBlocks,
             busy: false,
             busyUnconfirmed: false,
+            ...previousLiveProjection,
             currentTurnId: previousCurrentTurnId,
             currentTurnOrchestration: previousCurrentTurnOrchestration,
             currentTurnUserId: previousCurrentTurnUserId,
@@ -255,6 +255,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
           lastSeq: previousLastSeq,
           busy: false,
           busyUnconfirmed: false,
+          ...previousLiveProjection,
           currentTurnId: previousCurrentTurnId,
           currentTurnOrchestration: previousCurrentTurnOrchestration,
           currentTurnUserId: previousCurrentTurnUserId,
@@ -313,8 +314,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
             lastSeq: previousLastSeq,
             busy: false,
             busyUnconfirmed: false,
-            liveReasoning: previousLiveReasoning,
-            liveAssistant: previousLiveAssistant,
+            ...previousLiveProjection,
             currentTurnId: previousCurrentTurnId,
             currentTurnOrchestration: previousCurrentTurnOrchestration,
             currentTurnUserId: previousCurrentTurnUserId,
@@ -561,6 +561,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
           blocks: previousBlocks,
           busy: true,
           busyUnconfirmed: false,
+          ...previousLiveProjection,
           currentTurnId: previousCurrentTurnId,
           currentTurnOrchestration: previousCurrentTurnOrchestration,
           currentTurnUserId: previousCurrentTurnUserId,
@@ -604,6 +605,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
           blocks: previousBlocks,
           busy: false,
           busyUnconfirmed: false,
+          ...previousLiveProjection,
           currentTurnId: previousCurrentTurnId,
           currentTurnOrchestration: previousCurrentTurnOrchestration,
           currentTurnUserId: previousCurrentTurnUserId,
@@ -661,6 +663,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         error: view.summary,
         busy: false,
         busyUnconfirmed: false,
+        ...emptyLiveProjection(state.lastSeq),
         currentTurnId: null,
         currentTurnOrchestration: null,
         queuedMessages: failQueuedSubmission(

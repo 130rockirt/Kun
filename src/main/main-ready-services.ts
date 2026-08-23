@@ -21,6 +21,7 @@ import { syncLoginItemSettings } from './desktop-behavior'
 import { resolveLogDirectory, resolveNamedPreloadPath } from './main-paths'
 import { SETTINGS_FILE_NAME } from './settings-file-paths'
 import {
+  normalizeDarkUiColors,
   type AppSettingsV1
 } from '../shared/app-settings'
 import {
@@ -269,7 +270,8 @@ export async function initializeMainServices(): Promise<MainServices | null> {
           colorMode: settings.theme === 'dark' ||
             (settings.theme === 'system' && nativeTheme.shouldUseDarkColors)
             ? 'dark'
-            : 'light'
+            : 'light',
+          darkUiColors: normalizeDarkUiColors(settings.darkUiColors)
         }
       },
       action: (action) => {

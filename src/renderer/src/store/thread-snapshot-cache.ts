@@ -6,6 +6,12 @@ import type {
   ThreadTodoList
 } from '../agent/types'
 import type { ChatState, QueuedUserMessage } from './chat-store-types'
+import {
+  copyLiveProjection,
+  emptyLiveProjection,
+  liveProjectionIsCoherent,
+  type LiveProjectionState
+} from './chat-store-live-projection'
 import { hydrateBlockModelLabels } from './chat-store-helpers'
 import {
   settlePendingRuntimeWorkAfterInterrupt,
@@ -32,9 +38,6 @@ export type ThreadSnapshot = {
   lastSeq: number
   threadHistoryCursor: string | null
   threadHasMoreHistory: boolean
-  liveDeltaSeqFloor: number
-  liveReasoning: string
-  liveAssistant: string
   busy: boolean
   busyUnconfirmed: boolean
   currentTurnId: string | null
@@ -50,7 +53,7 @@ export type ThreadSnapshot = {
   activeThreadTodos: ThreadTodoList | null
   queuedMessages: QueuedUserMessage[]
   payloadBytes: number
-}
+} & LiveProjectionState
 
 const snapshots = new Map<string, ThreadSnapshot>()
 let totalBytes = 0
@@ -200,6 +203,10 @@ export function cacheThreadSnapshot(
   token?: ThreadSnapshotCacheToken
 ): boolean {
   if (token && !threadSnapshotCacheTokenIsCurrent(snapshot.threadId, token)) return false
+  if (!liveProjectionIsCoherent(snapshot)) {
+    invalidateThreadSnapshot(snapshot.threadId)
+    return false
+  }
   const payloadBytes = normalizedPayloadBytes(snapshot.payloadBytes)
   const bytes = Math.max(payloadBytes, estimateSnapshotBytes(snapshot))
   if (bytes > THREAD_SNAPSHOT_CACHE_MAX_BYTES) {
@@ -232,9 +239,7 @@ export function snapshotThreadProjection(state: ChatState, payloadBytes?: number
     lastSeq: state.lastSeq,
     threadHistoryCursor: state.threadHistoryCursor,
     threadHasMoreHistory: state.threadHasMoreHistory,
-    liveDeltaSeqFloor: state.liveDeltaSeqFloor,
-    liveReasoning: state.liveReasoning,
-    liveAssistant: state.liveAssistant,
+    ...copyLiveProjection(state),
     busy: state.busy,
     busyUnconfirmed: state.busyUnconfirmed,
     currentTurnId: state.currentTurnId,
@@ -278,6 +283,10 @@ export function getThreadSnapshot(
 export function getThreadSnapshotForSelection(thread: NormalizedThread): ThreadSnapshot | null {
   const snapshot = snapshots.get(thread.id)
   if (!snapshot) return null
+  if (!liveProjectionIsCoherent(snapshot)) {
+    invalidateThreadSnapshot(thread.id)
+    return null
+  }
   const fingerprint = threadSnapshotFingerprint(thread)
   if (snapshot.fingerprint === fingerprint) {
     snapshots.delete(thread.id)
@@ -336,9 +345,7 @@ export function buildPrefetchedThreadSnapshot(
     lastSeq: detail.latestSeq,
     threadHistoryCursor: detail.historyCursor ?? null,
     threadHasMoreHistory: detail.hasMoreHistory === true,
-    liveDeltaSeqFloor: detail.latestSeq,
-    liveReasoning: '',
-    liveAssistant: '',
+    ...emptyLiveProjection(detail.latestSeq),
     busy: false,
     busyUnconfirmed: false,
     currentTurnId: null,

@@ -44,6 +44,15 @@ describe('defaultCanvasConversationLayout', () => {
     expect(layout.x).toBe(0)
     expect(layout.y).toBeGreaterThan(0)
   })
+
+  it('drops below the focused titlebar when a window-controls top inset applies', () => {
+    // Height is small enough that the reserved top band shrinks the panel.
+    const bounds = { width: 1600, height: 760 }
+    const withoutInset = defaultCanvasConversationLayout(bounds, 'desktop')
+    const withInset = defaultCanvasConversationLayout(bounds, 'desktop', 42)
+    expect(withInset.y).toBe(withoutInset.y + 42)
+    expect(withInset.height).toBe(withoutInset.height - 42)
+  })
 })
 
 describe('clampCanvasConversationLayout', () => {
@@ -56,6 +65,16 @@ describe('clampCanvasConversationLayout', () => {
     expect(clamped.x).toBe(CANVAS_CONVERSATION_EDGE_MARGIN)
     expect(clamped.y).toBeLessThan(800)
     expect(clamped.y).toBeGreaterThanOrEqual(CANVAS_CONVERSATION_EDGE_MARGIN)
+  })
+
+  it('keeps the panel clear of the focused titlebar band', () => {
+    const clamped = clampCanvasConversationLayout(
+      { open: true, minimized: false, x: 200, y: 4, width: 420, height: 680 },
+      { width: 1200, height: 800 },
+      'desktop',
+      42
+    )
+    expect(clamped.y).toBe(72 + 42)
   })
 
   it('forces sheet mode geometry on mobile', () => {

@@ -102,6 +102,7 @@ function buildHarness(fetchModelsResult: FetchModelsResult): {
     applyChatContentMaxWidth: () => undefined,
     applyCursorSpotlight: () => undefined,
     applyCursorSpotlightColor: () => undefined,
+    applyDarkUiColors: () => undefined,
     applyWriteTypography: () => undefined,
     applyDocumentLocale: () => undefined,
     workspaceLabelFromPath: (workspaceRoot) => workspaceRoot,

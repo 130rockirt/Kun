@@ -64,6 +64,24 @@ export {
   toolEventChildId
 } from './chat-projection-reducer-support'
 
+function liveBufferMatchesTurn(input: {
+  text?: string
+  itemId?: string
+  turnId?: string
+  targetTurnId?: string
+}): boolean {
+  const text = input.text ?? ''
+  const hasState = Boolean(text.trim() || input.itemId || input.turnId)
+  if (!hasState) return true
+  return Boolean(
+    text.trim() &&
+    input.itemId &&
+    input.turnId &&
+    input.targetTurnId &&
+    input.turnId === input.targetTurnId
+  )
+}
+
 /** Pure state projection for normalized actions; browser work is emitted elsewhere. */
 export function reduceChatProjection(
   state: ChatState,
@@ -156,6 +174,18 @@ export function reduceChatProjection(
           liveDeltaSeqFloor = delta.seq
         }
         if (delta.kind === 'agent_reasoning') {
+          const targetTurnId = delta.turnId ?? state.currentTurnId ?? undefined
+          if (!liveBufferMatchesTurn({
+            text: liveReasoning,
+            itemId: liveReasoningItemId,
+            turnId: liveReasoningTurnId,
+            targetTurnId
+          })) {
+            liveReasoning = ''
+            liveReasoningItemId = undefined
+            liveReasoningTurnId = undefined
+            liveReasoningCreatedAt = undefined
+          }
           const text = unseenDeltaText(
             delta,
             blocks,
@@ -174,6 +204,9 @@ export function reduceChatProjection(
               })
             }
             liveReasoning = ''
+            liveReasoningItemId = undefined
+            liveReasoningTurnId = undefined
+            liveReasoningCreatedAt = undefined
           }
           liveReasoningItemId = delta.itemId ?? liveReasoningItemId
           liveReasoningTurnId = delta.turnId ?? liveReasoningTurnId ?? state.currentTurnId ?? undefined
@@ -182,6 +215,18 @@ export function reduceChatProjection(
           sawReasoning = true
           sawUnseenDelta = true
         } else {
+          const targetTurnId = delta.turnId ?? state.currentTurnId ?? undefined
+          if (!liveBufferMatchesTurn({
+            text: liveAssistant,
+            itemId: liveAssistantItemId,
+            turnId: liveAssistantTurnId,
+            targetTurnId
+          })) {
+            liveAssistant = ''
+            liveAssistantItemId = undefined
+            liveAssistantTurnId = undefined
+            liveAssistantCreatedAt = undefined
+          }
           const text = unseenDeltaText(
             delta,
             blocks,
@@ -200,6 +245,9 @@ export function reduceChatProjection(
               })
             }
             liveAssistant = ''
+            liveAssistantItemId = undefined
+            liveAssistantTurnId = undefined
+            liveAssistantCreatedAt = undefined
           }
           liveAssistantItemId = delta.itemId ?? liveAssistantItemId
           liveAssistantTurnId = delta.turnId ?? liveAssistantTurnId ?? state.currentTurnId ?? undefined

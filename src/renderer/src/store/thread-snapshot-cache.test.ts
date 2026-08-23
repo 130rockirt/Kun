@@ -186,6 +186,51 @@ describe('thread snapshot cache', () => {
     })
   })
 
+  it('round-trips live buffers together with their runtime identity', () => {
+    const state = stateFor('thr_live_identity')
+    Object.assign(state, {
+      busy: true,
+      currentTurnId: 'turn_live',
+      liveDeltaSeqFloor: 7,
+      liveReasoning: 'Inspecting files',
+      liveReasoningItemId: 'reasoning_live',
+      liveReasoningTurnId: 'turn_live',
+      liveReasoningCreatedAt: '2026-08-23T00:00:01.000Z',
+      liveAssistant: 'Preparing the answer',
+      liveAssistantItemId: 'assistant_live',
+      liveAssistantTurnId: 'turn_live',
+      liveAssistantCreatedAt: '2026-08-23T00:00:02.000Z'
+    })
+
+    snapshotThreadProjection(state, 10)
+
+    expect(getThreadSnapshot(state.activeThreadId!)).toMatchObject({
+      liveDeltaSeqFloor: 7,
+      liveReasoning: 'Inspecting files',
+      liveReasoningItemId: 'reasoning_live',
+      liveReasoningTurnId: 'turn_live',
+      liveReasoningCreatedAt: '2026-08-23T00:00:01.000Z',
+      liveAssistant: 'Preparing the answer',
+      liveAssistantItemId: 'assistant_live',
+      liveAssistantTurnId: 'turn_live',
+      liveAssistantCreatedAt: '2026-08-23T00:00:02.000Z'
+    })
+  })
+
+  it('rejects a parked running projection with live text but no matching identity', () => {
+    const state = stateFor('thr_incomplete_live')
+    Object.assign(state, {
+      busy: true,
+      currentTurnId: 'turn_live',
+      liveReasoning: 'Orphaned live text'
+    })
+
+    snapshotThreadProjection(state, 10)
+
+    expect(getThreadSnapshot(state.activeThreadId!)).toBeNull()
+    expect(threadSnapshotCacheStats()).toEqual({ entries: 0, bytes: 0 })
+  })
+
   it('rejects drifted running snapshots without matching live evidence', () => {
     const initial = thread('thr_guarded', {
       status: 'running',

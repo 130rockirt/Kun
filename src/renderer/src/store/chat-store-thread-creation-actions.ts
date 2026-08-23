@@ -82,6 +82,7 @@ import {
   threadSnapshotLooksRunning,
   threadBelongsToWorkspace
 } from './chat-store-runtime-helpers'
+import { emptyLiveProjection } from './chat-store-live-projection'
 import {
   WRITE_ASSISTANT_THREAD_TITLE,
   activeWriteThreadForWorkspace,
@@ -468,9 +469,7 @@ export function createThreadCreationActions(
           lastSeq: latestSeq,
           // Re-baseline the shared delta floor to this subscription's since_seq,
           // in lockstep with the liveAssistant reset below.
-          liveDeltaSeqFloor: latestSeq,
-          liveReasoning: '',
-          liveAssistant: '',
+          ...emptyLiveProjection(latestSeq),
           error: busy ? runtimeStreamRecoveringMessage() : null,
           busy,
           // Recovery re-read a persisted snapshot; its running claim stays

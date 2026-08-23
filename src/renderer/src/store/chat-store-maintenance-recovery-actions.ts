@@ -39,6 +39,7 @@ import {
   saveQueuedMessagesForThread
 } from './queued-message-persistence'
 import { invalidateThreadSnapshot } from './thread-snapshot-cache'
+import { emptyLiveProjection } from './chat-store-live-projection'
 import { invalidatePendingTurnStarts } from './turn-start-fence'
 
 /**
@@ -479,8 +480,7 @@ export function createMaintenanceRecoveryActions(
       invalidateThreadSnapshot(state.activeThreadId)
       set({
         blocks: trimmedBlocks,
-        liveReasoning: '',
-        liveAssistant: '',
+        ...emptyLiveProjection(state.lastSeq),
         currentTurnId: null,
         currentTurnOrchestration: null,
         currentTurnUserId: null,

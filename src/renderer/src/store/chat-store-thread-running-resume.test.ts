@@ -55,6 +55,9 @@ function buildHarness(busyUnconfirmed = false): {
     lastSeq: 11,
     liveDeltaSeqFloor: 11,
     liveReasoning: 'Still working',
+    liveReasoningItemId: 'reasoning_a',
+    liveReasoningTurnId: 'turn_a',
+    liveReasoningCreatedAt: '2026-08-23T00:00:01.000Z',
     liveAssistant: '',
     queuedMessages: [],
     recoverActiveTurn: vi.fn(async () => true),
@@ -149,6 +152,8 @@ describe('running thread parked projection resume', () => {
     expect(state.busy).toBe(true)
     expect(state.busyUnconfirmed).toBe(false)
     expect(state.liveReasoning).toBe('Still working')
+    expect(state.liveReasoningItemId).toBe('reasoning_a')
+    expect(state.liveReasoningTurnId).toBe('turn_a')
     expect(getThreadDetail).toHaveBeenCalledTimes(1)
     await selecting
     expect(subscribeThreadEvents).toHaveBeenLastCalledWith(
@@ -160,9 +165,17 @@ describe('running thread parked projection resume', () => {
 
     const resumedSink = sinks.get('thr_a')
     expect(resumedSink).toBeDefined()
-    resumedSink!.onDeltas([{ kind: 'agent_message', text: 'Caught up', seq: 12 }])
+    resumedSink!.onDeltas([{
+      kind: 'agent_message',
+      text: 'Caught up',
+      seq: 12,
+      itemId: 'assistant_a',
+      turnId: 'turn_a'
+    }])
     resumedSink!.onSeq(12)
     expect(state.liveAssistant).toBe('Caught up')
+    expect(state.liveAssistantItemId).toBe('assistant_a')
+    expect(state.liveAssistantTurnId).toBe('turn_a')
     expect(state.lastSeq).toBe(12)
 
     resumedSink!.onTurnComplete({
@@ -193,5 +206,71 @@ describe('running thread parked projection resume', () => {
     expect(getThreadDetail).toHaveBeenCalledTimes(1)
     expect(state.busy).toBe(true)
     expect(state.busyUnconfirmed).toBe(true)
+  })
+
+  it('keeps live identity isolated while repeatedly switching running threads', async () => {
+    const sinks = new Map<string, ThreadEventSink>()
+    const getThreadDetail = vi.fn(async (id: string) => {
+      if (id !== 'thr_b') throw new Error(`unexpected detail request for ${id}`)
+      return {
+        blocks: [{ kind: 'user' as const, id: 'b-user', turnId: 'turn_b', text: 'Run B' }],
+        latestSeq: 22,
+        threadStatus: 'running',
+        latestTurnId: 'turn_b',
+        latestTurnStatus: 'running'
+      }
+    })
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail,
+      subscribeThreadEvents: vi.fn(async (
+        id: string,
+        _sinceSeq: number,
+        sink: ThreadEventSink
+      ) => { sinks.set(id, sink) })
+    })
+    const { actions, state } = buildHarness()
+    state.threads = state.threads.map((candidate) => candidate.id === 'thr_b'
+      ? {
+          ...candidate,
+          status: 'running',
+          latestSeq: 22,
+          latestTurnId: 'turn_b',
+          latestTurnStatus: 'running'
+        }
+      : candidate)
+
+    await actions.selectThread('thr_b')
+    sinks.get('thr_b')!.onDeltas([{
+      kind: 'agent_message',
+      text: 'B is working',
+      seq: 23,
+      itemId: 'assistant_b',
+      turnId: 'turn_b'
+    }])
+
+    await actions.selectThread('thr_a')
+    expect(state.liveReasoning).toBe('Still working')
+    expect(state.liveReasoningItemId).toBe('reasoning_a')
+    expect(state.liveReasoningTurnId).toBe('turn_a')
+    expect(state.blocks.some((block) => block.turnId === 'turn_b')).toBe(false)
+
+    sinks.get('thr_a')!.onDeltas([{
+      kind: 'agent_reasoning',
+      text: ' on A',
+      seq: 12,
+      itemId: 'reasoning_a',
+      turnId: 'turn_a'
+    }])
+    await actions.selectThread('thr_b')
+    expect(state.liveAssistant).toBe('B is working')
+    expect(state.liveAssistantItemId).toBe('assistant_b')
+    expect(state.liveAssistantTurnId).toBe('turn_b')
+    expect(state.blocks.some((block) => block.turnId === 'turn_a')).toBe(false)
+
+    await actions.selectThread('thr_a')
+    expect(state.liveReasoning).toBe('Still working on A')
+    expect(state.liveReasoningItemId).toBe('reasoning_a')
+    expect(state.liveReasoningTurnId).toBe('turn_a')
+    expect(getThreadDetail).toHaveBeenCalledTimes(1)
   })
 })

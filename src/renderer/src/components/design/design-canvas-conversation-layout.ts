@@ -48,7 +48,8 @@ export function canvasConversationLayoutKey(workspaceRoot: string, documentId: s
 
 export function defaultCanvasConversationLayout(
   bounds: CanvasConversationLayoutBounds,
-  mode: CanvasConversationResponsiveMode = 'desktop'
+  mode: CanvasConversationResponsiveMode = 'desktop',
+  topInset = 0
 ): CanvasConversationLayout {
   if (mode === 'sheet') {
     const size = canvasConversationPanelSize(bounds, mode)
@@ -61,12 +62,12 @@ export function defaultCanvasConversationLayout(
       height: size.height
     }
   }
-  const size = canvasConversationPanelSize(bounds, mode)
+  const size = canvasConversationPanelSize(bounds, mode, undefined, topInset)
   return {
     open: false,
     minimized: false,
     x: CANVAS_CONVERSATION_EDGE_MARGIN + CANVAS_CONVERSATION_SAFE_INSET,
-    y: CANVAS_CONVERSATION_TOP_MARGIN,
+    y: CANVAS_CONVERSATION_TOP_MARGIN + topInset,
     width: size.width,
     height: size.height
   }
@@ -83,7 +84,8 @@ export function canvasConversationResponsiveMode(
 export function canvasConversationPanelSize(
   bounds: CanvasConversationLayoutBounds,
   mode: CanvasConversationResponsiveMode,
-  requested?: Pick<CanvasConversationLayout, 'width' | 'height'>
+  requested?: Pick<CanvasConversationLayout, 'width' | 'height'>,
+  topInset = 0
 ): { width: number; height: number } {
   if (mode === 'sheet') {
     return {
@@ -113,7 +115,7 @@ export function canvasConversationPanelSize(
   )
   const maxHeight = Math.min(
     CANVAS_CONVERSATION_PANEL_MAX_HEIGHT,
-    Math.max(0, bounds.height - CANVAS_CONVERSATION_TOP_MARGIN - CANVAS_CONVERSATION_EDGE_MARGIN)
+    Math.max(0, bounds.height - CANVAS_CONVERSATION_TOP_MARGIN - topInset - CANVAS_CONVERSATION_EDGE_MARGIN)
   )
   const minHeight = Math.min(CANVAS_CONVERSATION_PANEL_MIN_HEIGHT, maxHeight)
   const height = clampNumber(
@@ -127,26 +129,28 @@ export function canvasConversationPanelSize(
 export function clampCanvasConversationLayout(
   layout: CanvasConversationLayout,
   bounds: CanvasConversationLayoutBounds,
-  mode: CanvasConversationResponsiveMode = 'desktop'
+  mode: CanvasConversationResponsiveMode = 'desktop',
+  topInset = 0
 ): CanvasConversationLayout {
   if (mode === 'sheet') {
     const size = canvasConversationPanelSize(bounds, mode, layout)
     return { ...layout, x: 0, y: 0, ...size }
   }
-  const size = canvasConversationPanelSize(bounds, mode, layout)
+  const size = canvasConversationPanelSize(bounds, mode, layout, topInset)
   const maxX = Math.max(
     CANVAS_CONVERSATION_EDGE_MARGIN,
     bounds.width - size.width - CANVAS_CONVERSATION_EDGE_MARGIN
   )
+  const minY = CANVAS_CONVERSATION_TOP_MARGIN + topInset
   const maxY = Math.max(
-    CANVAS_CONVERSATION_TOP_MARGIN,
+    minY,
     bounds.height - size.height - CANVAS_CONVERSATION_EDGE_MARGIN
   )
   return {
     ...layout,
     ...size,
     x: clampNumber(layout.x, CANVAS_CONVERSATION_EDGE_MARGIN, maxX),
-    y: clampNumber(layout.y, CANVAS_CONVERSATION_TOP_MARGIN, maxY)
+    y: clampNumber(layout.y, minY, maxY)
   }
 }
 
@@ -175,9 +179,10 @@ export function normalizeCanvasConversationLayout(value: unknown): CanvasConvers
 export function readCanvasConversationLayout(
   key: string,
   bounds: CanvasConversationLayoutBounds,
-  mode: CanvasConversationResponsiveMode = 'desktop'
+  mode: CanvasConversationResponsiveMode = 'desktop',
+  topInset = 0
 ): CanvasConversationLayout {
-  if (!key) return defaultCanvasConversationLayout(bounds, mode)
+  if (!key) return defaultCanvasConversationLayout(bounds, mode, topInset)
   let stored: Record<string, unknown> = {}
   try {
     const raw = readBrowserStorageItem(CANVAS_CONVERSATION_LAYOUT_STORAGE_KEY)
@@ -197,13 +202,28 @@ export function readCanvasConversationLayout(
       return clampCanvasConversationLayout(
         { ...legacy, open: true, minimized: false },
         bounds,
-        mode
+        mode,
+        topInset
       )
     }
   }
   const normalized = normalizeCanvasConversationLayout(target)
-  if (!normalized) return defaultCanvasConversationLayout(bounds, mode)
-  return clampCanvasConversationLayout(normalized, bounds, mode)
+  if (!normalized) return defaultCanvasConversationLayout(bounds, mode, topInset)
+  return clampCanvasConversationLayout(normalized, bounds, mode, topInset)
+}
+
+/**
+ * The focused whiteboard titlebar drops below the macOS window controls via
+ * `--ds-window-controls-safe-block`; the floating conversation must clear the
+ * same band so its launcher and panel never slide under that chrome.
+ */
+export function readCanvasConversationTopInset(): number {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return 0
+  const raw = window
+    .getComputedStyle(document.documentElement)
+    .getPropertyValue('--ds-window-controls-safe-block')
+  const value = Number.parseFloat(raw)
+  return Number.isFinite(value) ? Math.max(0, value) : 0
 }
 
 export function writeCanvasConversationLayout(key: string, layout: CanvasConversationLayout): void {

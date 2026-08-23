@@ -6,12 +6,7 @@ export function ThreadHydrationGate({ loading, children }: {
   loading: boolean
   children: ReactNode
 }): ReactElement {
-  return (
-    <>
-      {children}
-      {loading ? <ThreadHydrationLoading /> : null}
-    </>
-  )
+  return loading ? <ThreadHydrationLoading /> : <>{children}</>
 }
 
 export function ThreadHydrationLoading(): ReactElement {

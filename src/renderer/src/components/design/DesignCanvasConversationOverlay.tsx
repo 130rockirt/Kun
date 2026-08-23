@@ -15,12 +15,14 @@ import {
 } from './DesignConversationContent'
 import {
   CANVAS_CONVERSATION_EDGE_MARGIN,
+  CANVAS_CONVERSATION_TOP_MARGIN,
   canvasConversationLayoutKey,
   canvasConversationPanelSize,
   canvasConversationResponsiveMode,
   clampCanvasConversationLayout,
   defaultCanvasConversationLayout,
   readCanvasConversationLayout,
+  readCanvasConversationTopInset,
   writeCanvasConversationLayout,
   type CanvasConversationLayout
 } from './design-canvas-conversation-layout'
@@ -35,6 +37,14 @@ type PanelDragState = {
   clientY: number
   originX: number
   originY: number
+}
+
+type PanelResizeState = {
+  pointerId: number
+  clientX: number
+  clientY: number
+  originWidth: number
+  originHeight: number
 }
 
 type Props = {
@@ -70,27 +80,29 @@ export function DesignCanvasConversationOverlay({
     () => canvasConversationLayoutKey(workspaceRoot, documentId ?? ''),
     [documentId, workspaceRoot]
   )
+  const [topInset] = useState(() => readCanvasConversationTopInset())
   const [layout, setLayout] = useState<CanvasConversationLayout>(() =>
-    readCanvasConversationLayout(storageKey, hostBounds, mode)
+    readCanvasConversationLayout(storageKey, hostBounds, mode, topInset)
   )
   const dragRef = useRef<PanelDragState | null>(null)
+  const resizeRef = useRef<PanelResizeState | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
   const launcherRef = useRef<HTMLButtonElement | null>(null)
   const conversationOpen = layout.open && !layout.minimized
 
   useEffect(() => {
-    setLayout(readCanvasConversationLayout(storageKey, hostBounds, mode))
-  }, [hostBounds, mode, storageKey])
+    setLayout(readCanvasConversationLayout(storageKey, hostBounds, mode, topInset))
+  }, [hostBounds, mode, storageKey, topInset])
 
   useEffect(() => {
-    const next = clampCanvasConversationLayout(layout, hostBounds, mode)
+    const next = clampCanvasConversationLayout(layout, hostBounds, mode, topInset)
     if (
       next.x === layout.x && next.y === layout.y &&
       next.width === layout.width && next.height === layout.height
     ) return
     setLayout(next)
     // Intentionally not persisted: a resize clamp is a transient correction.
-  }, [hostBounds, layout, mode])
+  }, [hostBounds, layout, mode, topInset])
 
   const persist = useCallback((next: CanvasConversationLayout): void => {
     setLayout(next)
@@ -113,11 +125,11 @@ export function DesignCanvasConversationOverlay({
 
   const resetPosition = useCallback((): void => {
     persist({
-      ...defaultCanvasConversationLayout(hostBounds, mode),
+      ...defaultCanvasConversationLayout(hostBounds, mode, topInset),
       open: true,
       minimized: false
     })
-  }, [hostBounds, mode, persist])
+  }, [hostBounds, mode, persist, topInset])
 
   useEffect(() => {
     if (!conversationOpen) return
@@ -170,7 +182,8 @@ export function DesignCanvasConversationOverlay({
         y: drag.originY + (event.clientY - drag.clientY)
       },
       hostBounds,
-      mode
+      mode,
+      topInset
     )
     setLayout(next)
   }
@@ -186,12 +199,56 @@ export function DesignCanvasConversationOverlay({
         y: drag.originY + (event.clientY - drag.clientY)
       },
       hostBounds,
-      mode
+      mode,
+      topInset
     )
     persist(next)
   }
 
-  const panelSize = canvasConversationPanelSize(hostBounds, mode, layout)
+  const beginResize = (event: ReactPointerEvent<HTMLElement>): void => {
+    if (mode === 'sheet') return
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    resizeRef.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      originWidth: layout.width,
+      originHeight: layout.height
+    }
+  }
+
+  const resizedLayout = (event: ReactPointerEvent<HTMLElement>): CanvasConversationLayout | null => {
+    const resize = resizeRef.current
+    if (!resize || resize.pointerId !== event.pointerId) return null
+    event.preventDefault()
+    return clampCanvasConversationLayout(
+      {
+        ...layout,
+        width: resize.originWidth + (event.clientX - resize.clientX),
+        height: resize.originHeight + (event.clientY - resize.clientY)
+      },
+      hostBounds,
+      mode,
+      topInset
+    )
+  }
+
+  const moveResize = (event: ReactPointerEvent<HTMLElement>): void => {
+    const next = resizedLayout(event)
+    if (next) setLayout(next)
+  }
+
+  const endResize = (event: ReactPointerEvent<HTMLElement>): void => {
+    const next = resizedLayout(event)
+    if (!next) return
+    resizeRef.current = null
+    persist(next)
+  }
+
+  const panelSize = canvasConversationPanelSize(hostBounds, mode, layout, topInset)
   const panelStyle =
     mode === 'sheet'
       ? {
@@ -205,31 +262,8 @@ export function DesignCanvasConversationOverlay({
           left: layout.x,
           top: layout.y,
           width: panelSize.width,
-          height: panelSize.height,
-          resize: 'both' as const
+          height: panelSize.height
         }
-
-  useEffect(() => {
-    const panel = panelRef.current
-    if (!conversationOpen || mode === 'sheet' || !panel || typeof ResizeObserver !== 'function') return
-    const observer = new ResizeObserver(([entry]) => {
-      if (!entry) return
-      const width = Math.round(entry.contentRect.width)
-      const height = Math.round(entry.contentRect.height)
-      setLayout((current) => {
-        if (current.width === width && current.height === height) return current
-        const next = clampCanvasConversationLayout(
-          { ...current, width, height },
-          hostBounds,
-          mode
-        )
-        writeCanvasConversationLayout(storageKey, next)
-        return next
-      })
-    })
-    observer.observe(panel)
-    return () => observer.disconnect()
-  }, [conversationOpen, hostBounds, mode, storageKey])
 
   return (
     <div className={`pointer-events-none absolute inset-0 z-40 ${className}`} aria-hidden={false}>
@@ -237,8 +271,11 @@ export function DesignCanvasConversationOverlay({
         ref={launcherRef}
         type="button"
         onClick={conversationOpen ? minimizePanel : openPanel}
-        className={`pointer-events-auto absolute top-[72px] flex h-9 items-center justify-center gap-2 rounded-full border border-ds-border bg-ds-card/95 px-3 text-[12px] font-medium text-ds-ink shadow-[0_12px_32px_rgba(20,47,95,0.14)] transition hover:bg-ds-card motion-reduce:transition-none dark:bg-ds-card/95 ${conversationOpen ? 'invisible' : ''}`}
-        style={{ left: 'calc(1.5rem + var(--ds-window-controls-safe-inset))' }}
+        className={`pointer-events-auto absolute flex h-9 items-center justify-center gap-2 rounded-full border border-ds-border bg-ds-card/95 px-3 text-[12px] font-medium text-ds-ink shadow-[0_12px_32px_rgba(20,47,95,0.14)] transition hover:bg-ds-card motion-reduce:transition-none dark:bg-ds-card/95 ${conversationOpen ? 'invisible' : ''}`}
+        style={{
+          left: 'calc(1.5rem + var(--ds-window-controls-safe-inset))',
+          top: `calc(${CANVAS_CONVERSATION_TOP_MARGIN}px + var(--ds-window-controls-safe-block))`
+        }}
         aria-label={t('designCanvasConversationOpen')}
         title={t('designCanvasConversationOpen')}
         aria-expanded={conversationOpen}
@@ -339,7 +376,30 @@ export function DesignCanvasConversationOverlay({
               <X className="h-3.5 w-3.5" strokeWidth={1.9} />
             </button>
           </div>
-          <DesignConversationContent {...conversation} />
+          <DesignConversationContent {...conversation} showActiveThreadConversation />
+          {mode !== 'sheet' ? (
+            <div
+              role="separator"
+              aria-label={t('designCanvasConversationResize')}
+              title={t('designCanvasConversationResize')}
+              className="absolute bottom-0 right-0 z-10 flex h-6 w-6 cursor-nwse-resize touch-none items-center justify-center text-ds-faint transition hover:text-ds-ink"
+              onPointerDown={beginResize}
+              onPointerMove={moveResize}
+              onPointerUp={endResize}
+              onPointerCancel={endResize}
+              data-design-canvas-conversation-resize-handle
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className="shrink-0">
+                <path
+                  d="M1.5 9L9 1.5M5 9L9 5M8.5 9L9 8.5"
+                  stroke="currentColor"
+                  strokeWidth="1.2"
+                  strokeLinecap="round"
+                  fill="none"
+                />
+              </svg>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

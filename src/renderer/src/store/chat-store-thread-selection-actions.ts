@@ -129,6 +129,7 @@ import {
   invalidateThreadSnapshot,
   snapshotThreadProjection
 } from './thread-snapshot-cache'
+import { copyLiveProjection, emptyLiveProjection } from './chat-store-live-projection'
 import { getThreadPrewarmHandle, threadPrewarmHandleIsCurrent } from './thread-detail-prewarm'
 import {
   ensureRuntimeProviderForSend,
@@ -258,9 +259,7 @@ export function createThreadSelectionActions(
         activeThreadTodos: cached.activeThreadTodos,
         blocks: cached.blocks,
         lastSeq: cached.lastSeq,
-        liveDeltaSeqFloor: cached.liveDeltaSeqFloor,
-        liveReasoning: cached.liveReasoning,
-        liveAssistant: cached.liveAssistant,
+        ...copyLiveProjection(cached),
         error: null,
         busy: cached.busy,
         // Preserve whether the parked projection already had live evidence.
@@ -319,9 +318,7 @@ export function createThreadSelectionActions(
         activeThreadTodos: targetThread?.todos ?? null,
         blocks: [],
         lastSeq: 0,
-        liveDeltaSeqFloor: 0,
-        liveReasoning: '',
-        liveAssistant: '',
+        ...emptyLiveProjection(),
         busy: false,
         busyUnconfirmed: false,
         currentTurnId: null,
@@ -446,9 +443,7 @@ export function createThreadSelectionActions(
         activeThreadTodos: todos ?? null,
         blocks,
         lastSeq: latestSeq,
-        liveDeltaSeqFloor: latestSeq,
-        liveReasoning: '',
-        liveAssistant: '',
+        ...emptyLiveProjection(latestSeq),
         error: null,
         busy,
         // The persisted snapshot's running claim may be stale (interrupted
@@ -581,19 +576,24 @@ export function createThreadSelectionActions(
       threadHistoryLoading: false,
       blocks: keepExistingBlocks ? prevState.blocks : [],
       lastSeq: fallbackSinceSeq,
-      liveDeltaSeqFloor: fallbackSinceSeq,
-      liveReasoning: '',
-      liveAssistant: '',
+      ...(keepExistingBlocks
+        ? copyLiveProjection(prevState)
+        : emptyLiveProjection(fallbackSinceSeq)),
       unreadThreadIds: { ...prevState.unreadThreadIds, [targetThreadId]: false },
       busy: true,
-      currentTurnId: null,
+      busyUnconfirmed: keepExistingBlocks ? prevState.busyUnconfirmed : true,
+      currentTurnId:
+        keepExistingBlocks && prevState.busy ? prevState.currentTurnId : null,
       currentTurnOrchestration:
         keepExistingBlocks && prevState.busy ? prevState.currentTurnOrchestration : null,
-      currentTurnUserId: null,
-      turnStartedAtByUserId: {},
-      turnDurationByUserId: {},
-      turnReasoningFirstAtByUserId: {},
-      turnReasoningLastAtByUserId: {},
+      currentTurnUserId:
+        keepExistingBlocks && prevState.busy ? prevState.currentTurnUserId : null,
+      turnStartedAtByUserId: keepExistingBlocks ? prevState.turnStartedAtByUserId : {},
+      turnDurationByUserId: keepExistingBlocks ? prevState.turnDurationByUserId : {},
+      turnReasoningFirstAtByUserId:
+        keepExistingBlocks ? prevState.turnReasoningFirstAtByUserId : {},
+      turnReasoningLastAtByUserId:
+        keepExistingBlocks ? prevState.turnReasoningLastAtByUserId : {},
       inspectorSelectedId: null,
       queuedMessages: keepExistingBlocks
         ? prevState.queuedMessages
@@ -647,7 +647,7 @@ export function createThreadSelectionActions(
         threadHistoryLoading: false,
         blocks,
         lastSeq: latestSeq,
-        liveDeltaSeqFloor: latestSeq,
+        ...emptyLiveProjection(latestSeq),
         busy,
         // Persisted running claim is unconfirmed until live events arrive.
         busyUnconfirmed: busy,

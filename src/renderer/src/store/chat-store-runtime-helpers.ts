@@ -11,6 +11,7 @@ import {
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import { shouldAutoTitleThread } from '../lib/thread-title'
 import type { ChatState } from './chat-store-types'
+import { emptyLiveProjection } from './chat-store-live-projection'
 
 type ThreadDetailProviderLike = {
   getThreadDetail: (threadId: string) => Promise<{ blocks: ChatBlock[] }>
@@ -298,7 +299,13 @@ export function clearedThreadSelection(): Pick<
   | 'lastSeq'
   | 'liveDeltaSeqFloor'
   | 'liveReasoning'
+  | 'liveReasoningItemId'
+  | 'liveReasoningTurnId'
+  | 'liveReasoningCreatedAt'
   | 'liveAssistant'
+  | 'liveAssistantItemId'
+  | 'liveAssistantTurnId'
+  | 'liveAssistantCreatedAt'
   | 'busy'
   | 'busyUnconfirmed'
   | 'currentTurnId'
@@ -324,9 +331,7 @@ export function clearedThreadSelection(): Pick<
     activeThreadTodos: null,
     blocks: [],
     lastSeq: 0,
-    liveDeltaSeqFloor: 0,
-    liveReasoning: '',
-    liveAssistant: '',
+    ...emptyLiveProjection(),
     busy: false,
     busyUnconfirmed: false,
     currentTurnId: null,

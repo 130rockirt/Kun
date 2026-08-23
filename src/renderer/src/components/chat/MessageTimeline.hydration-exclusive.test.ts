@@ -67,7 +67,7 @@ describe('MessageTimeline hydration presentation', () => {
     vi.unstubAllGlobals()
   })
 
-  it('keeps the timeline mounted beneath the loading overlay', async () => {
+  it('renders only loading until the target projection is ready', async () => {
     const element = createElement(MessageTimeline, {
       blocks: [{ kind: 'assistant', id: 'target-answer', text: 'target-ready-content' }],
       liveReasoning: '',
@@ -82,13 +82,12 @@ describe('MessageTimeline hydration presentation', () => {
     const messageNode = [...container.querySelectorAll('*')]
       .find((node) => node.textContent === 'target-ready-content')
     expect(container.querySelector('[data-testid="thread-hydration-loading"]')).not.toBeNull()
-    expect(container.textContent).toContain('target-ready-content')
-    expect(messageNode).toBeDefined()
+    expect(container.textContent).not.toContain('target-ready-content')
+    expect(messageNode).toBeUndefined()
 
     await act(async () => useChatStore.setState({ threadLoadingId: null }))
 
     expect(container.querySelector('[data-testid="thread-hydration-loading"]')).toBeNull()
     expect(container.textContent).toContain('target-ready-content')
-    expect([...container.querySelectorAll('*')]).toContain(messageNode)
   })
 })

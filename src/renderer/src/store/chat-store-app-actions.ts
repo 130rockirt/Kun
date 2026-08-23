@@ -46,6 +46,7 @@ type CreateAppActionsOptions = {
   applyChatContentMaxWidth: (widthPx: AppSettingsV1['chatContentMaxWidthPx']) => void
   applyCursorSpotlight: (enabled: boolean) => void
   applyCursorSpotlightColor: (color: AppSettingsV1['cursorSpotlightColor']) => void
+  applyDarkUiColors: (colors: AppSettingsV1['darkUiColors']) => void
   applyWriteTypography: (typography: AppSettingsV1['write']['typography']) => void
   applyDocumentLocale: (locale: AppSettingsV1['locale']) => void
   workspaceLabelFromPath: (workspaceRoot: string) => string
@@ -97,6 +98,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
     applyChatContentMaxWidth,
     applyCursorSpotlight,
     applyCursorSpotlightColor,
+    applyDarkUiColors,
     applyWriteTypography,
     applyDocumentLocale,
     workspaceLabelFromPath,
@@ -361,6 +363,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
       applyChatContentMaxWidth(settings.chatContentMaxWidthPx)
       applyCursorSpotlight(settings.cursorSpotlight !== false)
       applyCursorSpotlightColor(settings.cursorSpotlightColor)
+      applyDarkUiColors(settings.darkUiColors)
       if (settings.write?.typography) applyWriteTypography(settings.write.typography)
       set({
         workspaceRoot,

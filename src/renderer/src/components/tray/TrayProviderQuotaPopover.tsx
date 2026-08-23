@@ -85,6 +85,9 @@ export function TrayProviderQuotaPopover({
     document.documentElement.lang = context.locale
     document.documentElement.dataset.theme = context.colorMode
     document.documentElement.dataset.platform = context.platform
+    document.documentElement.style.setProperty('--kun-dark-ui-background', context.darkUiColors.background)
+    document.documentElement.style.setProperty('--kun-dark-ui-border', context.darkUiColors.border)
+    document.documentElement.style.setProperty('--kun-dark-ui-panel', context.darkUiColors.panel)
     if (i18n.resolvedLanguage !== context.locale) {
       await i18n.changeLanguage(context.locale)
     }
