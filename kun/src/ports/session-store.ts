@@ -3,6 +3,14 @@ import type { RuntimeEvent } from '../contracts/events.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { UsageSnapshot } from '../contracts/usage.js'
 
+export type SessionUsageQueryOptions = {
+  threadId?: string
+  /** Inclusive ISO-8601 UTC timestamp boundary. Requires `toExclusive`. */
+  fromInclusive?: string
+  /** Exclusive ISO-8601 UTC timestamp boundary. Requires `fromInclusive`. */
+  toExclusive?: string
+}
+
 export type SessionUsageRecord = {
   threadId: string
   turnId?: string
@@ -189,7 +197,7 @@ export interface SessionStore {
    * Optional indexed usage query. Implementations may return per-event
    * usage deltas without replaying the full event log.
    */
-  loadUsageRecords?(options?: { threadId?: string }): Promise<SessionUsageRecord[]>
+  loadUsageRecords?(options?: SessionUsageQueryOptions): Promise<SessionUsageRecord[]>
   /** Optional indexed latest cumulative usage snapshot query. */
   loadLatestUsageSnapshots?(options?: { threadIds?: string[] }): Promise<SessionLatestUsageSnapshot[]>
   /** Forget the per-thread in-memory state without touching disk. */

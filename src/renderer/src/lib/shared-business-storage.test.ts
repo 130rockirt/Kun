@@ -256,6 +256,96 @@ describe('shared business storage synchronization', () => {
     delete (window as unknown as { kunGui?: unknown }).kunGui
   })
 
+  it('runs the immediate follow-up after clearing the completed in-flight sync', async () => {
+    const storage = new MemoryStorage()
+    const remoteRegistry = '{"version":1,"workspaces":{}}'
+    const firstLocalRegistry = '{"version":1,"workspaces":{"drawing-1":{}}}'
+    const latestLocalRegistry = '{"version":1,"workspaces":{"drawing-2":{}}}'
+    storage.setItem(DESIGN_REGISTRY_KEY, firstLocalRegistry)
+    vi.stubGlobal('localStorage', storage)
+    writeSharedBusinessStorageJournal({
+      version: 1,
+      acknowledgedRevision: 3,
+      acknowledgedEntries: { [DESIGN_REGISTRY_KEY]: remoteRegistry },
+      dirtyKeys: [DESIGN_REGISTRY_KEY]
+    })
+
+    let remote: { revision: number; value: Record<string, string> } = {
+      revision: 3,
+      value: { [DESIGN_REGISTRY_KEY]: remoteRegistry }
+    }
+    const firstWrite = deferred<typeof remote>()
+    const write = vi
+      .fn<(revision: number, value: Record<string, string>) => Promise<typeof remote>>()
+      .mockImplementationOnce(() => firstWrite.promise)
+      .mockImplementation(async (_revision, value) => {
+        remote = { revision: remote.revision + 1, value: { ...value } }
+        return remote
+      })
+    ;(window as unknown as { kunGui: unknown }).kunGui = {
+      sharedClientState: {
+        read: vi.fn(async () => remote),
+        write
+      },
+      appEnvironment: { flavor: 'development' }
+    }
+
+    const installing = installSharedBusinessStorage()
+    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce())
+    storage.setItem(DESIGN_REGISTRY_KEY, latestLocalRegistry)
+    remote = {
+      revision: 4,
+      value: { [DESIGN_REGISTRY_KEY]: firstLocalRegistry }
+    }
+    firstWrite.resolve(remote)
+
+    await installing
+    await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(2))
+
+    expect(write).toHaveBeenLastCalledWith(4, {
+      [DESIGN_REGISTRY_KEY]: latestLocalRegistry
+    })
+    expect(storage.getItem(DESIGN_REGISTRY_KEY)).toBe(latestLocalRegistry)
+    delete (window as unknown as { kunGui?: unknown }).kunGui
+  })
+
+  it('bounds immediate retries when writes keep failing', async () => {
+    const storage = new MemoryStorage()
+    const remoteRegistry = '{"remote":true}'
+    const localRegistry = '{"local":true}'
+    storage.setItem(DESIGN_REGISTRY_KEY, localRegistry)
+    vi.stubGlobal('localStorage', storage)
+    writeSharedBusinessStorageJournal({
+      version: 1,
+      acknowledgedRevision: 6,
+      acknowledgedEntries: { [DESIGN_REGISTRY_KEY]: remoteRegistry },
+      dirtyKeys: [DESIGN_REGISTRY_KEY]
+    })
+    const write = vi.fn().mockRejectedValue(new Error('write unavailable'))
+    ;(window as unknown as { kunGui: unknown }).kunGui = {
+      sharedClientState: {
+        read: vi.fn(async () => ({
+          revision: 6,
+          value: { [DESIGN_REGISTRY_KEY]: remoteRegistry }
+        })),
+        write
+      },
+      appEnvironment: { flavor: 'development' }
+    }
+
+    await installSharedBusinessStorage()
+    await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(6))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(write).toHaveBeenCalledTimes(6)
+    expect(storage.getItem(DESIGN_REGISTRY_KEY)).toBe(localRegistry)
+    expect(JSON.parse(storage.getItem(SHARED_BUSINESS_STORAGE_JOURNAL_KEY) ?? '{}')).toMatchObject({
+      dirtyKeys: [DESIGN_REGISTRY_KEY]
+    })
+    delete (window as unknown as { kunGui?: unknown }).kunGui
+  })
+
   it('protects a newer local registry written while its previous value is being committed', async () => {
     const storage = new MemoryStorage()
     const remoteRegistry = '{"version":1,"workspaces":{}}'

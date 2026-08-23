@@ -109,21 +109,25 @@ async function doInstallSharedBusinessStorage(): Promise<void> {
   let revision = journal.acknowledgedRevision
   let syncing: Promise<void> | null = null
 
-  const sync = (): Promise<void> => {
+  const sync = (allowImmediateRetry = true): Promise<void> => {
     if (syncing) return syncing
-    syncing = (async () => {
+    let retry = false
+    const current = (async () => {
       try {
         const result = await syncSharedBusinessStorageOnce(api, { baseline, revision })
         baseline = result.baseline
         revision = result.revision
-        if (result.retry) queueMicrotask(() => void sync())
+        retry = result.retry
       } catch {
         // Keep the profile-local mirror and durable journal intact for retry.
       }
-    })().finally(() => {
-      syncing = null
+    })()
+    syncing = current
+    void current.finally(() => {
+      if (syncing === current) syncing = null
+      if (retry && allowImmediateRetry) queueMicrotask(() => void sync(false))
     })
-    return syncing
+    return current
   }
   activeFlush = sync
 

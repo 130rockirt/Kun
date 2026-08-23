@@ -1,24 +1,19 @@
 import { mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { Database as BetterSqliteDatabase, Statement } from 'better-sqlite3'
-import {
-  ThreadSchema,
-  type ThreadRecord,
-  type ThreadSummary
-} from '../../contracts/threads.js'
+import { ThreadSchema, type ThreadRecord, type ThreadSummary } from '../../contracts/threads.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
 import type { ThreadStore, ThreadStoreConditionalWrite, ThreadStoreListOptions, ThreadStoreListPage } from '../../ports/thread-store.js'
-import type { SessionLatestUsageSnapshot, SessionUsageRecord } from '../../ports/session-store.js'
-import { legacyWorkThreadTitleMatches, resolveThreadAgentSurface, toThreadSummary } from '../../domain/thread.js'
+import type { SessionLatestUsageSnapshot, SessionUsageQueryOptions, SessionUsageRecord } from '../../ports/session-store.js'
+import { legacyWorkThreadTitleMatches, resolveThreadAgentSurface } from '../../domain/thread.js'
+import { filterThreadSummaries } from '../../domain/thread-list-query.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
 import { readJsonl } from '../file/file-thread-store.js'
 import { stripThreadItemBodies, type ThreadMetadataLine } from './hybrid-thread-projection.js'
 import { HybridThreadDocumentRepository } from './hybrid-thread-documents.js'
-import {
-  filterThreadSummaries,
-  type ThreadIndexRecord,
-  type ThreadRow
-} from './hybrid-thread-index-mapping.js'
+import { HybridFilesystemSummaryCache } from './hybrid-filesystem-summary-cache.js'
+import { HybridSqliteDegradedState } from './hybrid-sqlite-degraded-state.js'
+import { type ThreadIndexRecord, type ThreadRow } from './hybrid-thread-index-mapping.js'
 import { requiresLegacyWorkThreadHydration } from './hybrid-thread-legacy-surface.js'
 import { HybridThreadIndexRepository } from './hybrid-thread-index.js'
 import { hybridThreadStoreListPage, summariesFromRows } from './hybrid-thread-list-page.js'
@@ -30,13 +25,13 @@ import {
   latestUsageSnapshotsFromRows,
   pathExists,
   previewFromItems,
-  usageRecordsFromRows,
   usageRowFromEvent,
   warnSqlite,
   yieldToEventLoop,
   type UsageRow,
   type UsageRuntimeEvent
 } from './hybrid-thread-support.js'
+import { loadIndexedUsageRecords } from './hybrid-usage-query.js'
 
 export { describeSqliteAbiMismatch } from './hybrid-thread-support.js'
 
@@ -61,15 +56,23 @@ export class HybridThreadStore implements ThreadStore {
   // Per-thread floor that keeps metadata compaction from re-running on every
   // append when a single snapshot is already larger than the threshold.
   private readonly metadataCompactFloor = new Map<string, number>()
-
+  private readonly filesystemSummaries: HybridFilesystemSummaryCache
+  private readonly sqliteState = new HybridSqliteDegradedState()
   constructor(options: { dataDir: string; sqlitePath?: string; nowIso?: () => string }) {
     this.dataDir = resolve(options.dataDir, 'threads')
     this.documents = new HybridThreadDocumentRepository(options.dataDir)
     this.sqlitePath = resolve(options.sqlitePath ?? join(options.dataDir, 'index.sqlite3'))
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
+    this.filesystemSummaries = new HybridFilesystemSummaryCache({
+      threadIds: () => this.threadIdsFromFilesystem(),
+      readMetadata: (threadId) => this.readThreadMetadataFromDisk(threadId),
+      readThread: (threadId) => this.readThreadFromDisk(threadId),
+      warn: (threadId, error) => console.warn(
+        `[kun] skipping unreadable filesystem thread ${threadId}: ${error instanceof Error ? error.message : String(error)}`
+      )
+    })
     this.readyPromise = this.initialize()
   }
-
   async ready(): Promise<void> {
     await this.readyPromise
   }
@@ -84,20 +87,25 @@ export class HybridThreadStore implements ThreadStore {
       this.statementCache.clear()
     }
   }
-
   async shutdown(): Promise<void> {
     await this.ready()
     this.backfill?.stop()
     await this.backfill?.wait()
     this.close()
   }
-
   async waitForBackfill(): Promise<void> {
     await this.ready()
     await this.backfill?.wait()
   }
+  private hasDb(): boolean { return this.sqliteState.available(this.db !== null) }
 
-  private hasDb(): boolean { return this.db !== null }
+  private markSqliteDegraded(action: string, error: unknown): void {
+    this.sqliteState.fail(action, error)
+  }
+
+  private markSqliteHealthy(): void {
+    this.sqliteState.recover()
+  }
 
   async list(options: ThreadStoreListOptions = {}): Promise<ThreadSummary[]> {
     await this.ready()
@@ -105,11 +113,13 @@ export class HybridThreadStore implements ThreadStore {
     // canonical JSONL metadata before the first list response. Usage/event
     // backfill remains in the background so large histories stay responsive.
     await this.backfill?.waitForIndex()
-    if (this.db) {
+    if (this.hasDb()) {
       try {
-        return summariesFromRows(this, this.queryThreadRows(options))
+        const summaries = await summariesFromRows(this, this.queryThreadRows(options))
+        this.markSqliteHealthy()
+        return summaries
       } catch (error) {
-        warnSqlite('list', error)
+        this.markSqliteDegraded('list', error)
       }
     }
     return filterThreadSummaries(await this.listFromFilesystem(), options)
@@ -151,6 +161,7 @@ export class HybridThreadStore implements ThreadStore {
     if (!current) return false
     const next = ThreadSchema.parse({ ...current, updatedAt })
     await this.appendMetadata(next)
+    this.invalidateFilesystemCache()
     if (this.db) {
       try {
         this.cachedStatement(`
@@ -188,6 +199,7 @@ export class HybridThreadStore implements ThreadStore {
   private async storeRevision(thread: ThreadRecord, revision: number): Promise<ThreadRecord> {
     const stored = ThreadSchema.parse({ ...thread, revision: revision + 1 })
     await this.appendMetadataNow(stored)
+    this.invalidateFilesystemCache()
     this.upsertIndexBestEffort(this.indexRecordForThread(stored))
     return stored
   }
@@ -205,6 +217,7 @@ export class HybridThreadStore implements ThreadStore {
     this.deleteIndexRow(threadId)
     this.documents.invalidate(threadId)
     this.metadataCompactFloor.delete(threadId)
+    this.invalidateFilesystemCache()
     return true
   }
 
@@ -250,23 +263,11 @@ export class HybridThreadStore implements ThreadStore {
     }
   }
 
-  async loadUsageRecords(options: { threadId?: string } = {}): Promise<SessionUsageRecord[]> {
+  async loadUsageRecords(options: SessionUsageQueryOptions = {}): Promise<SessionUsageRecord[]> {
     await this.ready()
     if (!this.db) throw new Error('hybrid sqlite unavailable')
     try {
-      const threadId = options.threadId?.trim()
-      const rows = threadId
-        ? this.db
-            .prepare(`
-              SELECT * FROM usage_events
-              WHERE thread_id = @thread_id
-              ORDER BY thread_id ASC, seq ASC
-            `)
-            .all({ thread_id: threadId }) as UsageRow[]
-        : this.db
-            .prepare('SELECT * FROM usage_events ORDER BY thread_id ASC, seq ASC')
-            .all() as UsageRow[]
-      return usageRecordsFromRows(rows)
+      return loadIndexedUsageRecords(this.db, options)
     } catch (error) {
       warnSqlite('load usage records', error)
       throw error
@@ -637,22 +638,21 @@ export class HybridThreadStore implements ThreadStore {
     }
   }
 
-  private async listFromFilesystem(): Promise<ThreadSummary[]> {
-    const summaries: ThreadSummary[] = []
-    for (const threadId of await this.threadIdsFromFilesystem()) {
-      const metadata = await this.readThreadMetadataFromDisk(threadId)
-      const thread = metadata && requiresLegacyWorkThreadHydration(metadata) ? await this.readThreadFromDisk(threadId) ?? metadata : metadata
-      if (thread) summaries.push(toThreadSummary(thread))
-    }
-    return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  private invalidateFilesystemCache(): void {
+    this.filesystemSummaries.invalidate()
+  }
+
+  private listFromFilesystem(): Promise<ThreadSummary[]> {
+    return this.filesystemSummaries.list()
   }
 
   private async threadIdsFromFilesystem(): Promise<string[]> {
     try {
       const entries = await readdir(this.dataDir, { withFileTypes: true })
       return entries.filter((entry) => entry.isDirectory() && isSafeThreadId(entry.name)).map((entry) => entry.name)
-    } catch {
-      return []
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
     }
   }
 

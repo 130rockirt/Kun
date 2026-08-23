@@ -135,6 +135,39 @@ describe('HybridThreadStore usage timing persistence', () => {
     }
   })
 
+  it('keeps the pre-range cumulative snapshot as the differential baseline', async () => {
+    const { store } = await createStore()
+    try {
+      await store.noteEvent(usageEvent(1, {
+        promptTokens: 100,
+        completionTokens: 10,
+        totalTokens: 110,
+        cacheHitRate: null,
+        turns: 1
+      }))
+      await store.noteEvent(usageEvent(2, {
+        promptTokens: 140,
+        completionTokens: 15,
+        totalTokens: 155,
+        cacheHitRate: null,
+        turns: 2
+      }))
+
+      const records = await store.loadUsageRecords({
+        fromInclusive: '2026-08-08T00:00:02.000Z',
+        toExclusive: '2026-08-08T00:00:03.000Z'
+      })
+
+      expect(records).toHaveLength(1)
+      expect(records[0]).toMatchObject({
+        turnId: 'turn-2',
+        usage: { promptTokens: 40, completionTokens: 5, totalTokens: 45, turns: 1 }
+      })
+    } finally {
+      store.close()
+    }
+  })
+
   it('defaults timing aggregates to null when snapshots omit them', async () => {
     const { store } = await createStore()
     try {
@@ -183,6 +216,31 @@ describe('HybridThreadStore filesystem surface fallback', () => {
       fullRead.mockRestore()
       store.close()
     }
+  })
+
+  it('reuses one filesystem scan across cursor pages', async () => {
+    const { root, store } = await createStore()
+    const records = [
+      legacyWorkThread('thread_cache_c', 'Cache C'),
+      legacyWorkThread('thread_cache_b', 'Cache B')
+    ]
+    await Promise.all(records.map((record) => writeThreadDocument(root, record)))
+    await store.ready()
+    store.close()
+    const source = store as unknown as { threadIdsFromFilesystem(): Promise<string[]> }
+    const scan = vi.spyOn(source, 'threadIdsFromFilesystem')
+
+    const first = await store.listPage({ includeArchived: true, limit: 1 })
+    const second = await store.listPage({
+      includeArchived: true,
+      limit: 1,
+      cursor: first.nextCursor
+    })
+
+    expect(first).toMatchObject({ hasMore: true, total: 2 })
+    expect(second).toMatchObject({ hasMore: false })
+    expect([...first.threads, ...second.threads]).toHaveLength(2)
+    expect(scan).toHaveBeenCalledTimes(1)
   })
 })
 

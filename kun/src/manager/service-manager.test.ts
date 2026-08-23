@@ -11,6 +11,7 @@ import {
   type ServiceManagerConnection
 } from './manager-client.js'
 import { ManagerRemoteGraphRunStore } from './remote-data-stores.js'
+import { SessionUsageQuerySchema } from './shared-data-store-contracts.js'
 import type { ManagerSharedDataStore } from './shared-data-store.js'
 import {
   buildServiceManagerRouter,
@@ -18,6 +19,21 @@ import {
   ServiceManagerState,
   ThreadLeaseBusyError
 } from './service-manager.js'
+
+describe('manager usage query contract', () => {
+  it('accepts complete UTC ranges and rejects partial ranges', () => {
+    expect(SessionUsageQuerySchema.parse({
+      fromInclusive: '2026-08-01T00:00:00.000Z',
+      toExclusive: '2026-08-02T00:00:00.000Z'
+    })).toEqual({
+      fromInclusive: '2026-08-01T00:00:00.000Z',
+      toExclusive: '2026-08-02T00:00:00.000Z'
+    })
+    expect(() => SessionUsageQuerySchema.parse({
+      fromInclusive: '2026-08-01T00:00:00.000Z'
+    })).toThrow('usage range requires both boundaries')
+  })
+})
 
 afterEach(() => {
   vi.unstubAllGlobals()

@@ -93,6 +93,29 @@ export const AgentSessionSchema = z.object({
   closed: z.boolean()
 })
 
+export const SessionUsageQuerySchema = z.object({
+  threadId: ThreadIdSchema.optional(),
+  fromInclusive: z.string().datetime({ offset: true }).optional(),
+  toExclusive: z.string().datetime({ offset: true }).optional()
+}).strict().transform((input, context) => {
+  if (Boolean(input.fromInclusive) !== Boolean(input.toExclusive)) {
+    context.addIssue({ code: 'custom', message: 'usage range requires both boundaries' })
+    return z.NEVER
+  }
+  if (!input.fromInclusive || !input.toExclusive) return input
+  const fromMs = Date.parse(input.fromInclusive)
+  const toMs = Date.parse(input.toExclusive)
+  if (fromMs >= toMs) {
+    context.addIssue({ code: 'custom', message: 'usage range must be increasing' })
+    return z.NEVER
+  }
+  return {
+    ...input,
+    fromInclusive: new Date(fromMs).toISOString(),
+    toExclusive: new Date(toMs).toISOString()
+  }
+})
+
 export type ManagerThreadStoreOperation =
   | 'list'
   | 'listPage'

@@ -3,7 +3,7 @@ import type { UsageEvent } from '../contracts/events.js'
 import { emptyUsageSnapshot } from '../contracts/usage.js'
 import type { ThreadRecord, ThreadSummary } from '../contracts/threads.js'
 import { diffUsage, hasUsage } from '../domain/usage.js'
-import type { SessionStore } from '../ports/session-store.js'
+import type { SessionStore, SessionUsageQueryOptions } from '../ports/session-store.js'
 import type { UsageService } from './usage-service.js'
 import type { ThreadUsageRecord } from './usage-service-query.js'
 
@@ -70,16 +70,24 @@ function writeHydratedThreadMemo(threadId: string, record: ThreadRecord | null):
  */
 export async function loadUsageHistory(
   source: UsageHistorySource,
-  options: { threadId?: string } = {}
+  options: SessionUsageQueryOptions = {}
 ): Promise<ThreadUsageRecord[]> {
   const threadId = options.threadId?.trim()
-  const key = threadId ? `thread:${threadId}` : 'all'
+  const key = JSON.stringify({
+    threadId: threadId || null,
+    fromInclusive: options.fromInclusive ?? null,
+    toExclusive: options.toExclusive ?? null
+  })
   const loads = usageRecordLoads.get(source) ?? new Map<string, Promise<ThreadUsageRecord[]>>()
   usageRecordLoads.set(source, loads)
   const active = loads.get(key)
   if (active) return active
   let load: Promise<ThreadUsageRecord[]>
-  load = loadUsageRecords(source, { ...(threadId ? { threadId } : {}) }).finally(() => {
+  load = loadUsageRecords(source, {
+    ...(threadId ? { threadId } : {}),
+    ...(options.fromInclusive ? { fromInclusive: options.fromInclusive } : {}),
+    ...(options.toExclusive ? { toExclusive: options.toExclusive } : {})
+  }).finally(() => {
     if (loads.get(key) === load) loads.delete(key)
     if (loads.size === 0) usageRecordLoads.delete(source)
   })
@@ -89,7 +97,7 @@ export async function loadUsageHistory(
 
 async function loadUsageRecords(
   source: UsageHistorySource,
-  options: { threadId?: string }
+  options: SessionUsageQueryOptions
 ): Promise<ThreadUsageRecord[]> {
   const explicitThread = options.threadId
     ? await source.threadService.get(options.threadId)
@@ -138,7 +146,7 @@ async function loadUsageRecords(
       const allowedThreadIds = new Set(
         options.threadId ? [options.threadId] : threadSummaries.map((thread) => thread.id)
       )
-      const indexedRaw = await source.sessionStore.loadUsageRecords({ threadId: options.threadId })
+      const indexedRaw = await source.sessionStore.loadUsageRecords(options)
       // Legacy indexed rows carry no persisted providerId; without a hydrate
       // they would be attributed to the thread's *current* provider.
       const hydrationIds: string[] = []
@@ -150,7 +158,9 @@ async function loadUsageRecords(
       }
       const hydrated = await hydrateThreadsWithBounds(hydrationIds, hydrateThread)
       const records: ThreadUsageRecord[] = indexedRaw
-        .filter((record) => allowedThreadIds.has(record.threadId))
+        .filter((record) =>
+          allowedThreadIds.has(record.threadId) && timestampInUsageRange(record.completedAt, options)
+        )
         .map((record) => {
           const thread = explicitThread?.id === record.threadId
             ? explicitThread
@@ -186,6 +196,8 @@ async function loadUsageRecords(
           ? explicitThread
           : await hydrateThread(threadId) ?? summariesById.get(threadId)
         if (!thread) continue
+        const completedAt = thread.updatedAt || source.nowIso()
+        if (!timestampInUsageRange(completedAt, options)) continue
         const turnId = latestTurnId(thread)
         records.push({
           threadId,
@@ -194,7 +206,7 @@ async function loadUsageRecords(
           ...(usageRecordProvider(thread, { turnId })
             ? { providerId: usageRecordProvider(thread, { turnId }) }
             : {}),
-          completedAt: thread.updatedAt || source.nowIso(),
+          completedAt,
           usage: liveRemainder
         })
       }
@@ -208,7 +220,7 @@ async function loadUsageRecords(
   const sources: UsageThreadSource[] = explicitThread
     ? [{ id: explicitThread.id, thread: explicitThread }]
     : threadSummaries.map((thread) => ({ id: thread.id, summary: thread }))
-  return loadUsageRecordsFromSources(source, sources, hydrateThread)
+  return loadUsageRecordsFromSources(source, sources, hydrateThread, options)
 }
 
 async function hydrateThreadsWithBounds(
@@ -232,7 +244,8 @@ async function hydrateThreadsWithBounds(
 async function loadUsageRecordsFromSources(
   source: UsageHistorySource,
   sources: UsageThreadSource[],
-  hydrateThread: ThreadHydrator
+  hydrateThread: ThreadHydrator,
+  options: SessionUsageQueryOptions
 ): Promise<ThreadUsageRecord[]> {
   const recordsBySource: ThreadUsageRecord[][] = Array.from({ length: sources.length })
   let nextIndex = 0
@@ -241,7 +254,12 @@ async function loadUsageRecordsFromSources(
     while (nextIndex < sources.length) {
       const index = nextIndex
       nextIndex += 1
-      recordsBySource[index] = await loadUsageRecordsForSource(source, sources[index], hydrateThread)
+      recordsBySource[index] = await loadUsageRecordsForSource(
+        source,
+        sources[index],
+        hydrateThread,
+        options
+      )
     }
   }))
   return recordsBySource.flat()
@@ -250,7 +268,8 @@ async function loadUsageRecordsFromSources(
 async function loadUsageRecordsForSource(
   source: UsageHistorySource,
   item: UsageThreadSource,
-  hydrateThread: ThreadHydrator
+  hydrateThread: ThreadHydrator,
+  options: SessionUsageQueryOptions
 ): Promise<ThreadUsageRecord[]> {
   // Hydrate the full record before falling back to the summary: the summary
   // lacks `turns`, so provider attribution on it would use the thread's
@@ -275,7 +294,7 @@ async function loadUsageRecordsForSource(
   for (const event of usageEvents) {
     const delta = diffUsage(event.usage, latestPersisted)
     latestPersisted = event.usage
-    if (!hasUsage(delta)) continue
+    if (!hasUsage(delta) || !timestampInUsageRange(event.timestamp, options)) continue
     records.push({
       threadId: thread.id,
       ...(event.turnId ? { turnId: event.turnId } : {}),
@@ -289,7 +308,8 @@ async function loadUsageRecordsForSource(
   }
 
   const liveRemainder = diffUsage(source.usageService.forThread(thread.id), latestPersisted)
-  if (hasUsage(liveRemainder)) {
+  const liveTimestamp = thread.updatedAt || source.nowIso()
+  if (hasUsage(liveRemainder) && timestampInUsageRange(liveTimestamp, options)) {
     const turnId = latestTurnId(thread)
     records.push({
       threadId: thread.id,
@@ -303,6 +323,15 @@ async function loadUsageRecordsForSource(
     })
   }
   return records
+}
+
+function timestampInUsageRange(timestamp: string, options: SessionUsageQueryOptions): boolean {
+  if (!options.fromInclusive && !options.toExclusive) return true
+  const value = Date.parse(timestamp)
+  if (!Number.isFinite(value)) return false
+  if (options.fromInclusive && value < Date.parse(options.fromInclusive)) return false
+  if (options.toExclusive && value >= Date.parse(options.toExclusive)) return false
+  return true
 }
 
 function latestTurnId(thread: unknown): string | undefined {

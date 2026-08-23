@@ -4,6 +4,25 @@ import type { ServerRuntime } from './server-runtime.js'
 import { usageJsonResponse } from './usage.js'
 
 describe('usageJsonResponse', () => {
+  it('validates day queries before loading history and forwards the UTC range', async () => {
+    const loadUsageRecords = vi.fn(async () => [])
+    const runtime = runtimeFixture({ list: vi.fn(async () => []), loadUsageRecords })
+
+    const invalid = await usageJsonResponse(
+      new Request('http://kun.local/v1/usage?group_by=day&from=bad&to=2026-08-09&timezone=UTC'),
+      runtime
+    )
+    expect(invalid.status).toBe(400)
+    expect(loadUsageRecords).not.toHaveBeenCalled()
+
+    const valid = await usageJsonResponse(request('day', '2026-08-01', '2026-08-09'), runtime)
+    expect(valid.status).toBe(200)
+    expect(loadUsageRecords).toHaveBeenCalledWith({
+      fromInclusive: '2026-08-01T00:00:00.000Z',
+      toExclusive: '2026-08-10T00:00:00.000Z'
+    })
+  })
+
   it('returns persisted latest cache telemetry when reopening a thread', async () => {
     const usage = {
       ...emptyUsageSnapshot(),
@@ -341,7 +360,7 @@ function runtimeFixture(overrides: {
   get?: (threadId: string) => Promise<unknown>
   list: (options?: unknown) => Promise<unknown[]>
   loadEventsSince?: (threadId: string, sinceSeq: number) => Promise<unknown[]>
-  loadUsageRecords: () => Promise<unknown[]>
+  loadUsageRecords: (options?: unknown) => Promise<unknown[]>
 }): ServerRuntime {
   return {
     threadService: {

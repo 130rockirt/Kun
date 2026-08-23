@@ -62,6 +62,7 @@ import { buildPublicItemHistoryPage } from '../services/item-history-page.js'
 import { ManagerSharedDataStoreCore } from './shared-data-store-core.js'
 import {
   AgentSessionSchema,
+  SessionUsageQuerySchema,
   ThreadIdSchema,
   ThreadStoreListOptionsSchema,
   attachmentScopeRequest,
@@ -543,7 +544,7 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
         return this.allocateEventSeq(threadId)
       }
       case 'loadUsageRecords': {
-        const body = z.object({ threadId: ThreadIdSchema.optional() }).strict().parse(value ?? {})
+        const body = SessionUsageQuerySchema.parse(value ?? {})
         return this.sessionStore.loadUsageRecords?.(body) ?? []
       }
       case 'loadLatestUsageSnapshots': {

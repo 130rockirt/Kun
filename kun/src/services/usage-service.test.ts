@@ -4,6 +4,7 @@ import {
   buildThreadUsageResponse,
   buildTurnUsageResponse,
   type ThreadUsageRecord,
+  usageQueryUtcRange,
   UsageService
 } from './usage-service.js'
 
@@ -15,6 +16,20 @@ const signature = {
   toolCatalogFingerprint: 'tools-a',
   activeSkillIds: ['skill-a']
 }
+
+describe('usage UTC query ranges', () => {
+  it('uses DST-aware half-open UTC boundaries', () => {
+    expect(usageQueryUtcRange({
+      groupBy: 'day',
+      from: '2026-03-08',
+      to: '2026-03-08',
+      timezone: 'America/New_York'
+    })).toEqual({
+      fromInclusive: '2026-03-08T05:00:00.000Z',
+      toExclusive: '2026-03-09T04:00:00.000Z'
+    })
+  })
+})
 
 describe('usage cache diagnostics', () => {
   it('attaches cache diagnostics to recorded usage snapshots', () => {

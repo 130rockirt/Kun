@@ -56,6 +56,7 @@ import type {
   ItemTextSearchOptions,
   SessionLatestUsageSnapshot,
   SessionStore,
+  SessionUsageQueryOptions,
   SessionUsageRecord
 } from '../ports/session-store.js'
 import type {
@@ -339,7 +340,7 @@ export class ManagerRemoteSessionStore implements SessionStore {
     return z.number().int().nonnegative().parse(await this.call('highestSeq', { threadId }))
   }
 
-  async loadUsageRecords(options: { threadId?: string } = {}): Promise<SessionUsageRecord[]> {
+  async loadUsageRecords(options: SessionUsageQueryOptions = {}): Promise<SessionUsageRecord[]> {
     return UsageRecordSchema.array().parse(await this.call('loadUsageRecords', options)) as SessionUsageRecord[]
   }
 

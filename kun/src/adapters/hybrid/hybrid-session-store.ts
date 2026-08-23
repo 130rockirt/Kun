@@ -10,6 +10,7 @@ import type {
   ItemTextSearchOptions,
   SessionLatestUsageSnapshot,
   SessionStore,
+  SessionUsageQueryOptions,
   SessionUsageRecord
 } from '../../ports/session-store.js'
 import { FileSessionStore } from '../file/file-session-store.js'
@@ -136,7 +137,7 @@ export class HybridSessionStore implements SessionStore {
     return Math.max(indexed ?? 0, durable)
   }
 
-  async loadUsageRecords(options?: { threadId?: string }): Promise<SessionUsageRecord[]> {
+  async loadUsageRecords(options?: SessionUsageQueryOptions): Promise<SessionUsageRecord[]> {
     return this.index.loadUsageRecords(options)
   }
 

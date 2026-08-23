@@ -101,6 +101,27 @@ describe('loadUsageHistory provider attribution', () => {
     })
   })
 
+  it('filters JSONL fallback only after computing cumulative deltas', async () => {
+    const source = makeSwitchedThreadSource({
+      loadUsageRecords: vi.fn(async () => { throw new Error('index unavailable') })
+    })
+    source.sessionStore.loadEventsSince = vi.fn(async () => [
+      jsonlUsageEvent(1, 'turn-1', 1_000, 100),
+      jsonlUsageEvent(2, 'turn-2', 1_200, 140)
+    ])
+
+    const records = await loadUsageHistory(source as never, {
+      fromInclusive: '2026-08-23T00:00:02.000Z',
+      toExclusive: '2026-08-23T00:00:03.000Z'
+    })
+
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({
+      turnId: 'turn-2',
+      usage: { promptTokens: 200, completionTokens: 40, totalTokens: 240 }
+    })
+  })
+
   it('hydrates full threads in the JSONL fallback path too', async () => {
     const source = makeSwitchedThreadSource({
       loadUsageRecords: vi.fn(async () => {
