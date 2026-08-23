@@ -130,6 +130,13 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
       }
       case 'upsert':
         return this.threadStore.upsert(ThreadSchema.parse(z.object({ thread: z.unknown() }).parse(value).thread))
+      case 'upsertIfRevision': {
+        const body = z.object({
+          thread: z.unknown(),
+          expectedRevision: z.number().int().nonnegative()
+        }).strict().parse(value)
+        return this.threadStore.upsertIfRevision!(ThreadSchema.parse(body.thread), body.expectedRevision)
+      }
       case 'delete': {
         const { threadId } = parseThreadId(value)
         this.seqFloors.delete(threadId)

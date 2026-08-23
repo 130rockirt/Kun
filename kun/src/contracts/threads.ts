@@ -346,6 +346,8 @@ export type DesignCloneOperation = z.infer<typeof DesignCloneOperationSchema>
 
 export const ThreadSchemaBase = z.object({
   id: z.string().min(1),
+  /** Internal optimistic-concurrency version; defaults for legacy records. */
+  revision: z.number().int().nonnegative().optional(),
   title: z.string(),
   /**
    * Whether the current title was auto-derived (client-side first-message

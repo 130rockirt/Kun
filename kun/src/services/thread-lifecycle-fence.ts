@@ -8,7 +8,12 @@ import type {
   SessionLatestUsageSnapshot,
   SessionUsageRecord
 } from '../ports/session-store.js'
-import type { ThreadStore, ThreadStoreListOptions, ThreadStoreListPage } from '../ports/thread-store.js'
+import type {
+  ThreadStore,
+  ThreadStoreConditionalWrite,
+  ThreadStoreListOptions,
+  ThreadStoreListPage
+} from '../ports/thread-store.js'
 import type { ThreadRecord, ThreadSummary } from '../contracts/threads.js'
 
 /**
@@ -181,6 +186,14 @@ export class LifecycleFencedThreadStore implements ThreadStore {
     } finally {
       lease.release()
     }
+  }
+
+  async upsertIfRevision(
+    thread: ThreadRecord,
+    expectedRevision: number
+  ): Promise<ThreadStoreConditionalWrite> {
+    return this.write(thread.id, { applied: false, revision: expectedRevision }, () =>
+      this.raw.upsertIfRevision!(thread, expectedRevision))
   }
 
   /**

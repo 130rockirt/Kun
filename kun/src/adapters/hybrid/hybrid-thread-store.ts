@@ -7,7 +7,7 @@ import {
   type ThreadSummary
 } from '../../contracts/threads.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
-import type { ThreadStore, ThreadStoreListOptions, ThreadStoreListPage } from '../../ports/thread-store.js'
+import type { ThreadStore, ThreadStoreConditionalWrite, ThreadStoreListOptions, ThreadStoreListPage } from '../../ports/thread-store.js'
 import type { SessionLatestUsageSnapshot, SessionUsageRecord } from '../../ports/session-store.js'
 import { legacyWorkThreadTitleMatches, resolveThreadAgentSurface, toThreadSummary } from '../../domain/thread.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
@@ -170,14 +170,26 @@ export class HybridThreadStore implements ThreadStore {
   }
 
   async upsert(thread: ThreadRecord): Promise<ThreadRecord> {
-    const normalized = ThreadSchema.parse(thread)
-    assertSafeThreadId(normalized.id)
-    await this.ready()
-    await this.appendMetadata(normalized)
-    if (this.db) {
-      this.upsertIndexBestEffort(this.indexRecordForThread(normalized))
-    }
-    return normalized
+    assertSafeThreadId(thread.id); await this.ready()
+    return this.withMetadataMutation(thread.id, async () => this.storeRevision(thread, (await this.documents.readMetadata(thread.id))?.revision ?? -1))
+  }
+
+  async upsertIfRevision(thread: ThreadRecord, expectedRevision: number): Promise<ThreadStoreConditionalWrite> {
+    assertSafeThreadId(thread.id); await this.ready()
+    return this.withMetadataMutation(thread.id, async () => {
+      const current = await this.documents.readMetadata(thread.id)
+      const revision = current?.revision ?? 0
+      if (!current || revision !== expectedRevision) return { applied: false, revision }
+      const stored = await this.storeRevision(thread, revision)
+      return { applied: true, thread: stored, revision: stored.revision ?? revision + 1 }
+    })
+  }
+
+  private async storeRevision(thread: ThreadRecord, revision: number): Promise<ThreadRecord> {
+    const stored = ThreadSchema.parse({ ...thread, revision: revision + 1 })
+    await this.appendMetadataNow(stored)
+    this.upsertIndexBestEffort(this.indexRecordForThread(stored))
+    return stored
   }
 
   async delete(threadId: string): Promise<boolean> {
@@ -525,36 +537,24 @@ export class HybridThreadStore implements ThreadStore {
   }
 
   private async appendMetadata(thread: ThreadRecord): Promise<void> {
-    const previous = this.metadataQueues.get(thread.id) ?? Promise.resolve()
-    const run = previous.catch(() => undefined).then(async () => {
-      await mkdir(this.threadDir(thread.id), { recursive: true })
-      const line: ThreadMetadataLine = {
-        kind: 'thread_metadata',
-        version: 1,
-        timestamp: this.nowIso(),
-        thread: stripThreadItemBodies(thread)
-      }
-      await appendJsonlLine(this.metadataPath(thread.id), line)
-      await this.maybeCompactMetadata(thread.id)
-    })
-    const guard = run.then(() => undefined, () => undefined)
-    this.metadataQueues.set(thread.id, guard)
-    try {
-      await run
-    } finally {
-      if (this.metadataQueues.get(thread.id) === guard) {
-        this.metadataQueues.delete(thread.id)
-      }
-    }
+    await this.withMetadataMutation(thread.id, () => this.appendMetadataNow(thread))
   }
 
-  /**
-   * Every upsert appends a full thread snapshot, so metadata.jsonl grows
-   * quadratically with turn activity (observed: 4.2MB for an 8-turn thread
-   * whose latest snapshot is 6KB). Once the file passes the threshold it is
-   * rewritten as a single normalized snapshot. Runs inside the per-thread
-   * metadata queue, so no append can interleave with the rewrite.
-   */
+  private async appendMetadataNow(thread: ThreadRecord): Promise<void> {
+    await mkdir(this.threadDir(thread.id), { recursive: true }); await appendJsonlLine(this.metadataPath(thread.id), {
+      kind: 'thread_metadata', version: 1, timestamp: this.nowIso(), thread: stripThreadItemBodies(thread)
+    }); await this.maybeCompactMetadata(thread.id)
+  }
+
+  private async withMetadataMutation<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.metadataQueues.get(threadId) ?? Promise.resolve()
+    const run = previous.catch(() => undefined).then(operation)
+    const guard = run.then(() => undefined, () => undefined)
+    this.metadataQueues.set(threadId, guard)
+    try { return await run } finally { if (this.metadataQueues.get(threadId) === guard) this.metadataQueues.delete(threadId) }
+  }
+
+  /** Compacts append-only metadata snapshots inside the per-thread queue. */
   private async maybeCompactMetadata(threadId: string): Promise<void> {
     const path = this.metadataPath(threadId)
     const tmpPath = `${path}.compact.tmp`

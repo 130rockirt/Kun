@@ -204,6 +204,14 @@ export class ManagerRemoteThreadStore implements ThreadStore {
     return ThreadSchema.parse(await this.call('upsert', { thread }))
   }
 
+  async upsertIfRevision(thread: ThreadRecord, expectedRevision: number) {
+    return z.object({
+      applied: z.boolean(),
+      thread: ThreadSchema.optional(),
+      revision: z.number().int().nonnegative()
+    }).strict().parse(await this.call('upsertIfRevision', { thread, expectedRevision }))
+  }
+
   async delete(threadId: string) {
     return z.boolean().parse(await this.call('delete', { threadId }))
   }

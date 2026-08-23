@@ -1,6 +1,10 @@
 import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import type { ThreadStore, ThreadStoreListOptions } from '../../ports/thread-store.js'
+import type {
+  ThreadStore,
+  ThreadStoreConditionalWrite,
+  ThreadStoreListOptions
+} from '../../ports/thread-store.js'
 import {
   ThreadSchema,
   ThreadSchemaReadable,
@@ -27,6 +31,7 @@ export class FileThreadStore implements ThreadStore {
   private readonly dataDir: string
   private readonly now: () => Date
   private indexQueue: Promise<void> = Promise.resolve()
+  private readonly threadQueues = new Map<string, Promise<void>>()
 
   constructor(options: { dataDir: string; now?: () => Date }) {
     this.dataDir = resolve(options.dataDir, 'threads')
@@ -62,17 +67,52 @@ export class FileThreadStore implements ThreadStore {
   }
 
   async upsert(thread: ThreadRecord): Promise<ThreadRecord> {
+    return this.withThreadWrite(thread.id, async () => {
+      const current = await this.readThread(thread.id)
+      return this.writeThread({ ...thread, revision: (current?.revision ?? -1) + 1 })
+    })
+  }
+
+  async upsertIfRevision(
+    thread: ThreadRecord,
+    expectedRevision: number
+  ): Promise<ThreadStoreConditionalWrite> {
+    return this.withThreadWrite(thread.id, async () => {
+      const current = await this.readThread(thread.id)
+      const revision = current?.revision ?? 0
+      if (!current || revision !== expectedRevision) return { applied: false, revision }
+      const stored = await this.writeThread({ ...thread, revision: revision + 1 })
+      return { applied: true, thread: stored, revision: stored.revision ?? revision + 1 }
+    })
+  }
+
+  private async writeThread(thread: ThreadRecord): Promise<ThreadRecord> {
     const normalized = ThreadSchema.parse(thread)
     assertSafeThreadId(normalized.id)
     await this.ensureDir(this.threadDir(normalized.id))
-    const path = this.threadFilePath(normalized.id)
-    await this.atomicWrite(path, JSON.stringify(normalized))
+    await this.atomicWrite(this.threadFilePath(normalized.id), JSON.stringify(normalized))
     await this.updateIndex((current) => {
       const next = new Set(current.order)
       next.add(normalized.id)
       return { order: [...next], updatedAt: this.now().toISOString() }
     })
     return normalized
+  }
+
+  private async readThread(threadId: string): Promise<ThreadRecord | null> {
+    return this.get(threadId)
+  }
+
+  private async withThreadWrite<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.threadQueues.get(threadId) ?? Promise.resolve()
+    const run = previous.catch(() => undefined).then(operation)
+    const guard = run.then(() => undefined, () => undefined)
+    this.threadQueues.set(threadId, guard)
+    try {
+      return await run
+    } finally {
+      if (this.threadQueues.get(threadId) === guard) this.threadQueues.delete(threadId)
+    }
   }
 
   async delete(threadId: string): Promise<boolean> {

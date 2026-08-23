@@ -50,6 +50,7 @@ import type { UsageService } from './usage-service.js'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
 import { rewriteItemHistoryWithRetry } from './history-commit-coordinator.js'
 import { withThreadStoreMutation } from './thread-mutation-coordinator.js'
+import { withManagerDataMutex } from '../manager/data-mutex.js'
 import type { ThreadLifecycleFence } from './thread-lifecycle-fence.js'
 import { ThreadItemProjectionService } from './thread-item-projection.js'
 import { ComposerContextAttachmentSchema } from '../contracts/composer-context.js'
@@ -399,37 +400,52 @@ async pruneThread(this: TurnService, input: {
     threadId: string
     request: PruneThreadRequest
   }): Promise<PruneThreadResponse> {
-    const current = await this['deps'].threadStore.get(input.threadId)
-    if (!current) throw new Error(`thread not found: ${input.threadId}`)
-    if (current.turns.some(isActiveTurn)) throw new TurnConflictError('thread has an active turn')
-    const policy = input.request
-    const cutoffTurnId = selectRetentionCutoff(current, policy, this['deps'].nowIso())
-    const compacted = cutoffTurnId
-      ? await this.compact({
-          threadId: input.threadId,
-          request: {
-            cutoffTurnId,
-            reason: 'thread retention policy',
-            archiveBeforePrune: policy.archiveBeforePrune
-          }
-        })
-      : undefined
-    const latest = await this['deps'].threadStore.get(input.threadId)
-    if (!latest) throw new Error(`thread not found: ${input.threadId}`)
-    await this['deps'].threadStore.upsert({
-      ...latest,
-      retentionPolicy: policy,
-      updatedAt: this['deps'].nowIso()
+    return withManagerDataMutex(`thread:${input.threadId}`, async () => {
+      const policy = input.request
+      const cutoffTurnId = await this['withThreadMutation'](input.threadId, async () => {
+        const current = await this['deps'].threadStore.get(input.threadId)
+        if (!current) throw new Error(`thread not found: ${input.threadId}`)
+        if (current.turns.some(isActiveTurn)) throw new TurnConflictError('thread has an active turn')
+        return selectRetentionCutoff(current, policy, this['deps'].nowIso())
+      })
+      const compacted = cutoffTurnId
+        ? await this.compact({
+            threadId: input.threadId,
+            request: {
+              cutoffTurnId,
+              reason: 'thread retention policy',
+              archiveBeforePrune: policy.archiveBeforePrune
+            }
+          })
+        : undefined
+      await this['withThreadMutation'](input.threadId, async () => {
+        // The manager lease prevents other runtimes from starting a turn in
+        // this transaction; CAS also rejects any stale durable snapshot.
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const latest = await this['deps'].threadStore.get(input.threadId)
+          if (!latest) throw new Error(`thread not found: ${input.threadId}`)
+          if (latest.turns.some(isActiveTurn)) throw new TurnConflictError('thread has an active turn')
+          const conditionalWrite = this['deps'].threadStore.upsertIfRevision
+          if (!conditionalWrite) throw new Error('thread store does not support conditional writes')
+          const committed = await conditionalWrite.call(this['deps'].threadStore, {
+            ...latest,
+            retentionPolicy: policy,
+            updatedAt: this['deps'].nowIso()
+          }, latest.revision ?? 0)
+          if (committed.applied) return
+        }
+        throw new TurnConflictError('thread changed while retention policy was being committed')
+      })
+      return {
+        threadId: input.threadId,
+        policy,
+        pruned: Boolean(compacted),
+        ...(cutoffTurnId ? { cutoffTurnId } : {}),
+        archivedItems: compacted?.archivedItems ?? 0,
+        retainedItems: compacted?.retainedItems ?? (await this['deps'].sessionStore.loadItems(input.threadId)).length,
+        ...(compacted?.archivePath ? { archivePath: compacted.archivePath } : {})
+      }
     })
-    return {
-      threadId: input.threadId,
-      policy,
-      pruned: Boolean(compacted),
-      ...(cutoffTurnId ? { cutoffTurnId } : {}),
-      archivedItems: compacted?.archivedItems ?? 0,
-      retainedItems: compacted?.retainedItems ?? (await this['deps'].sessionStore.loadItems(input.threadId)).length,
-      ...(compacted?.archivePath ? { archivePath: compacted.archivePath } : {})
-    }
   },
 
 /**

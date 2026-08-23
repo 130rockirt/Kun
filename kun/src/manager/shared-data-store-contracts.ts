@@ -100,6 +100,7 @@ export type ManagerThreadStoreOperation =
   | 'getMetadata'
   | 'touch'
   | 'upsert'
+  | 'upsertIfRevision'
   | 'delete'
 
 export type ManagerSessionStoreOperation =
@@ -212,7 +213,7 @@ export function mutationThreadId(value: unknown): string | null {
 }
 
 export function isThreadMutation(operation: ManagerThreadStoreOperation): boolean {
-  return operation === 'touch' || operation === 'upsert' || operation === 'delete'
+  return operation === 'touch' || operation === 'upsert' || operation === 'upsertIfRevision' || operation === 'delete'
 }
 
 export function isSessionMutation(operation: ManagerSessionStoreOperation): boolean {
