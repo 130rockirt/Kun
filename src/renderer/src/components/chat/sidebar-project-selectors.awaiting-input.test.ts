@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { NormalizedThread } from '../../agent/types'
 import {
-  prioritizeSidebarThreadActivity,
   sidebarThreadActivity,
   type SidebarThreadActivityContext
 } from './sidebar-project-selectors'
+import { createSidebarThreadOrderTracker } from './sidebar-thread-order-tracker'
 
 function thread(id: string, overrides: Partial<NormalizedThread> = {}): NormalizedThread {
   return {
@@ -36,17 +36,23 @@ describe('awaiting-input sidebar activity', () => {
     expect(sidebarThreadActivity(thread('thr_unread'), context)).toBe('unread')
   })
 
-  it('keeps the caller order for awaiting-input threads instead of reordering rows', () => {
-    const context: SidebarThreadActivityContext = {
+  it('promotes awaiting input within its scoped ordering tracker', () => {
+    const tracker = createSidebarThreadOrderTracker()
+    const runningContext: SidebarThreadActivityContext = {
       ...baseContext,
-      awaitingUserInputThreadIds: { thr_waiting: true },
       watchTurnCompletion: { thr_running: true }
     }
-    const ordered = prioritizeSidebarThreadActivity(
-      [thread('thr_read'), thread('thr_running'), thread('thr_waiting')],
-      context
-    )
-    expect(ordered.map((item) => item.id)).toEqual(['thr_read', 'thr_running', 'thr_waiting'])
+    const items = [thread('thr_read'), thread('thr_running')]
+    tracker.reconcile({ containerKey: 'scope:root', context: runningContext, threads: items })
+    const ordered = tracker.reconcile({
+      containerKey: 'scope:root',
+      context: {
+        ...runningContext,
+        awaitingUserInputThreadIds: { thr_running: true }
+      },
+      threads: items
+    })
+    expect(ordered.map((item) => item.id)).toEqual(['thr_running', 'thr_read'])
   })
 
   it('falls back to running when the thread is not awaiting input', () => {

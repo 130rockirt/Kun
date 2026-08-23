@@ -30,6 +30,7 @@ import { SidebarIconButton, SidebarTreeRow } from '../sidebar/SidebarPrimitives'
 import type { SidebarThreadWorktreeRecord } from './sidebar-project-selectors'
 import type { ScheduledThreadActivity } from '../../store/chat-store-types'
 import type { SidebarDropPosition } from './sidebar-order'
+import { requestThreadPrewarm } from '../../store/thread-detail-prewarm'
 
 const DRAFT_HISTORY_PAGE_SIZE = 3
 
@@ -319,7 +320,13 @@ export function ThreadRow({
       title={[thread.title, thread.summary?.trim(), worktreeLabel].filter(Boolean).join('\n')}
       onClick={onSelect}
       onContextMenu={onContextMenu}
-      onMouseEnter={(event) => onPreviewOpen(event, worktreeRecord)}
+      onMouseEnter={(event) => {
+        if (!active) requestThreadPrewarm(thread)
+        onPreviewOpen(event, worktreeRecord)
+      }}
+      onFocusCapture={() => {
+        if (!active) requestThreadPrewarm(thread)
+      }}
       onMouseLeave={onPreviewClose}
     >
       <span className="flex min-w-0 flex-1 items-center gap-1.5">

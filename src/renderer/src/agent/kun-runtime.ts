@@ -3,6 +3,7 @@ import type {
   ChatBlock,
   NormalizedThread,
   ReviewTarget,
+  ThreadDetail,
   ThreadEventSink,
   ThreadUsageSnapshot,
   UserInputAnswer
@@ -342,25 +343,7 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
     ))
   }
 
-  async getThreadDetail(threadId: string, options: { before?: string } = {}): Promise<{
-    blocks: ChatBlock[]
-    latestSeq: number
-    threadStatus?: string
-    latestTurnId?: string
-    latestTurnStatus?: string
-    latestTurnOrchestration?: 'direct' | 'graph'
-    latestUserMessageId?: string
-    turnDurationByUserId?: Record<string, number>
-    usage?: ThreadUsageSnapshot
-    relation?: 'primary' | 'fork' | 'side'
-    parentThreadId?: string
-    goal?: NormalizedThread['goal']
-    todos?: NormalizedThread['todos']
-    payloadBytes?: number
-    historyCursor?: string
-    hasMoreHistory?: boolean
-    designProfile?: DesignTaskProfile
-  }> {
+  async getThreadDetail(threadId: string, options: { before?: string } = {}): Promise<ThreadDetail> {
     let response = await rendererRuntimeClient.runtimeRequest(
       kunThreadTimelinePath(threadId, {
         ...(options.before ? { before: options.before } : {}),

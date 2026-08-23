@@ -9,8 +9,13 @@ import {
 import {
   clearThreadSnapshotCache,
   getThreadSnapshot,
-  snapshotThreadProjection
+  snapshotThreadProjection,
+  threadSnapshotFingerprint
 } from './thread-snapshot-cache'
+import {
+  requestThreadPrewarm,
+  resetThreadPrewarmState
+} from './thread-detail-prewarm'
 import {
   resolveCatalogComposerSelection,
   resolveThreadComposerState,
@@ -123,6 +128,12 @@ function detail(blocks: ThreadDetail['blocks'] = [], model = ''): ThreadDetail {
   }
 }
 
+async function flushAsyncWork(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
 function expectComposerState(
   state: ChatState,
   expected: {
@@ -146,12 +157,14 @@ function seedComposerPreferences(): void {
 describe('thread composer state restoration', () => {
   beforeEach(() => {
     clearThreadSnapshotCache()
+    resetThreadPrewarmState()
     vi.stubGlobal('localStorage', new MemoryStorage())
     registryMock.getProvider.mockReset()
     registryMock.getProvider.mockReturnValue({})
   })
 
   afterEach(() => {
+    resetThreadPrewarmState()
     clearThreadSnapshotCache()
     vi.unstubAllGlobals()
   })
@@ -244,6 +257,65 @@ describe('thread composer state restoration', () => {
       composerModel: 'model-b',
       composerProviderId: 'provider-b'
     })
+  })
+
+  it('switches synchronously when a settled thread detail was already prewarmed', async () => {
+    const getThreadDetail = vi.fn(async () => detail([
+      { kind: 'assistant', id: 'answer-b', text: 'already ready' }
+    ]))
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail,
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    const target = thread('thread-b')
+    state.activeThreadId = 'thread-a'
+    state.threads = [thread('thread-a'), target]
+    state.blocks = [{ kind: 'assistant', id: 'answer-a', text: 'thread a' }]
+
+    requestThreadPrewarm(target)
+    await flushAsyncWork()
+    expect(getThreadSnapshot(target.id, threadSnapshotFingerprint(target))).not.toBeNull()
+
+    const selecting = actions.selectThread(target.id)
+    expect(state.activeThreadId).toBe(target.id)
+    expect(state.threadLoadingId).toBeNull()
+    expect(state.blocks).toEqual([
+      { kind: 'assistant', id: 'answer-b', text: 'already ready' }
+    ])
+    await selecting
+    expect(getThreadDetail).toHaveBeenCalledTimes(1)
+  })
+
+  it('reuses an in-flight prewarm request when the thread is selected', async () => {
+    const pending = deferred<ThreadDetail>()
+    const getThreadDetail = vi.fn(() => pending.promise)
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail,
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    const target = thread('thread-b')
+    state.activeThreadId = 'thread-a'
+    state.threads = [thread('thread-a'), target]
+
+    requestThreadPrewarm(target)
+    const selecting = actions.selectThread(target.id)
+
+    expect(getThreadDetail).toHaveBeenCalledTimes(1)
+    expect(state.activeThreadId).toBe(target.id)
+    expect(state.threadLoadingId).toBe(target.id)
+
+    pending.resolve(detail([
+      { kind: 'assistant', id: 'answer-b', text: 'shared request' }
+    ]))
+    await selecting
+
+    expect(getThreadDetail).toHaveBeenCalledTimes(1)
+    expect(state.threadLoadingId).toBeNull()
+    expect(state.blocks).toEqual([
+      { kind: 'assistant', id: 'answer-b', text: 'shared request' }
+    ])
   })
 
   it('keeps a newer thread selection when an older detail response lands', async () => {

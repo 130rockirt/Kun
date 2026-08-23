@@ -127,8 +127,10 @@ import {
 import {
   getThreadSnapshot,
   invalidateThreadSnapshot,
-  snapshotThreadProjection
+  snapshotThreadProjection,
+  threadSnapshotFingerprint
 } from './thread-snapshot-cache'
+import { getThreadPrewarmPromise } from './thread-detail-prewarm'
 import {
   ensureRuntimeProviderForSend,
   fallbackComposerProviderIdForSend,
@@ -208,8 +210,13 @@ export function createThreadSelectionActions(
     // Re-selecting the active conversation is an explicit refresh (and is
     // used by recovery paths to pick up durable queues), so only cross-thread
     // navigation may consume an in-memory snapshot.
-    const cached = prevId !== id ? getThreadSnapshot(id) : null
     const targetThread = get().threads.find((thread) => thread.id === id) ?? null
+    const cached = prevId !== id
+      ? getThreadSnapshot(
+          id,
+          targetThread ? threadSnapshotFingerprint(targetThread) : undefined
+        )
+      : null
     resetBusyRecoveryAttempts()
     clearBusyWatchdog()
     if (cached) {
@@ -313,6 +320,7 @@ export function createThreadSelectionActions(
       ...initialComposerState
     })
     try {
+      const prewarmPromise = targetThread ? getThreadPrewarmPromise(targetThread) : null
       const {
         blocks: rawBlocks,
         latestSeq,
@@ -332,7 +340,7 @@ export function createThreadSelectionActions(
         payloadBytes,
         historyCursor,
         hasMoreHistory = false
-      } = await p.getThreadDetail(id)
+      } = await (prewarmPromise ?? p.getThreadDetail(id))
       if (!selectionStillCurrent()) return
       // A subagent's `side` thread has no locally-stored per-turn model labels
       // (it was never sent through the composer). Backfill the user blocks with

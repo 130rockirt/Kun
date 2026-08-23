@@ -527,7 +527,7 @@ function QuotaMetricDetail({
       {metric.resetsAt ? (
         <p className="tray-quota-reset">
           <Clock3 aria-hidden="true" />
-          {t('providerQuotaResetsAt', { time: formatQuotaDate(metric.resetsAt, locale) })}
+          {t(metric.id === 'reset-credits' ? 'providerQuotaEarliestExpiry' : 'providerQuotaResetsAt', { time: formatQuotaDate(metric.resetsAt, locale) })}
         </p>
       ) : null}
     </article>

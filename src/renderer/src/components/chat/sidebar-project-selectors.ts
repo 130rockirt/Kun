@@ -454,40 +454,11 @@ export function filterEmptySddAssistantThreadsFromSidebar(
   )
 }
 
-// Sort anchors freeze a thread's position key while its turn is in flight.
-// A running turn bumps `updatedAt` on every event, which would otherwise bubble
-// the row upward on each poll; the anchor holds the pre-turn timestamp so the
-// row stays put until the turn settles, then lands once on its final time.
-const sidebarSortAnchorUpdatedAt = new Map<string, string>()
-
-function sidebarActivityFreezesSort(activity: SidebarThreadActivity): boolean {
-  return activity === 'running' || activity === 'awaiting-input'
-}
-
-function sidebarSortTimestamp(
-  thread: NormalizedThread,
-  context?: SidebarThreadActivityContext
-): number {
-  const id = thread.id.trim()
-  const frozen = context && sidebarActivityFreezesSort(sidebarThreadActivity(thread, context))
-  if (frozen) {
-    if (!sidebarSortAnchorUpdatedAt.has(id)) {
-      sidebarSortAnchorUpdatedAt.set(id, thread.updatedAt)
-    }
-    return Date.parse(sidebarSortAnchorUpdatedAt.get(id) ?? thread.updatedAt)
-  }
-  sidebarSortAnchorUpdatedAt.delete(id)
-  return Date.parse(thread.updatedAt)
-}
-
-export function sortSidebarThreads(
-  threads: NormalizedThread[],
-  context?: SidebarThreadActivityContext
-): NormalizedThread[] {
+export function sortSidebarThreads(threads: NormalizedThread[]): NormalizedThread[] {
   return [...threads].sort((a, b) => {
     if (a.pinned === true && b.pinned !== true) return -1
     if (b.pinned === true && a.pinned !== true) return 1
-    return sidebarSortTimestamp(b, context) - sidebarSortTimestamp(a, context)
+    return Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
   })
 }
 

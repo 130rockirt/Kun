@@ -638,7 +638,7 @@ export type ThreadErrorOptions = {
   scope?: 'conversation' | 'runtime'
 }
 
-export type { AgentProvider, ThreadEventSink } from './provider-types'
+export type { AgentProvider, ThreadDetail, ThreadEventSink } from './provider-types'
 export type {
   DelegatedRuntimeState,
   RequestContextSnapshot,

@@ -1,5 +1,20 @@
-import type { ChatBlock, ThreadGoal, ThreadTodoList } from '../agent/types'
+import type {
+  ChatBlock,
+  NormalizedThread,
+  ThreadDetail,
+  ThreadGoal,
+  ThreadTodoList
+} from '../agent/types'
 import type { ChatState, QueuedUserMessage } from './chat-store-types'
+import { hydrateBlockModelLabels } from './chat-store-helpers'
+import {
+  settlePendingRuntimeWorkAfterInterrupt,
+  threadSnapshotLooksRunning
+} from './chat-store-runtime-helpers'
+import {
+  queuedMessagesForThread,
+  reconcileQueuedMessages
+} from './queued-message-persistence'
 
 export const THREAD_SNAPSHOT_CACHE_MAX_ENTRIES = 6
 export const THREAD_SNAPSHOT_CACHE_MAX_BYTES = 32 * 1024 * 1024
@@ -10,6 +25,7 @@ const UNKNOWN_SNAPSHOT_BYTES = 4 * 1024 * 1024
 
 export type ThreadSnapshot = {
   threadId: string
+  fingerprint: string
   blocks: ChatBlock[]
   lastSeq: number
   threadHistoryCursor: string | null
@@ -36,6 +52,53 @@ export type ThreadSnapshot = {
 
 const snapshots = new Map<string, ThreadSnapshot>()
 let totalBytes = 0
+let cacheGeneration = 0
+const threadGenerations = new Map<string, number>()
+
+export type ThreadSnapshotCacheToken = {
+  cacheGeneration: number
+  threadGeneration: number
+}
+
+type ThreadFingerprintSource = Pick<
+  NormalizedThread,
+  | 'id'
+  | 'updatedAt'
+  | 'status'
+  | 'latestSeq'
+  | 'latestTurnId'
+  | 'latestTurnStatus'
+  | 'relation'
+  | 'archived'
+>
+
+export function threadSnapshotFingerprint(thread: ThreadFingerprintSource): string {
+  return [
+    thread.id,
+    thread.updatedAt,
+    thread.status?.trim().toLowerCase() ?? '',
+    String(thread.latestSeq ?? ''),
+    thread.latestTurnId ?? '',
+    thread.latestTurnStatus?.trim().toLowerCase() ?? '',
+    thread.relation ?? '',
+    thread.archived === true ? 'archived' : ''
+  ].join('\u0000')
+}
+
+export function captureThreadSnapshotCacheToken(threadId: string): ThreadSnapshotCacheToken {
+  return {
+    cacheGeneration,
+    threadGeneration: threadGenerations.get(threadId) ?? 0
+  }
+}
+
+export function threadSnapshotCacheTokenIsCurrent(
+  threadId: string,
+  token: ThreadSnapshotCacheToken
+): boolean {
+  return token.cacheGeneration === cacheGeneration &&
+    token.threadGeneration === (threadGenerations.get(threadId) ?? 0)
+}
 
 function normalizedPayloadBytes(value: number | undefined): number {
   return Number.isFinite(value) && (value ?? 0) > 0
@@ -56,6 +119,30 @@ function evictUntilBounded(): void {
   }
 }
 
+function removeSnapshot(threadId: string): void {
+  const existing = snapshots.get(threadId)
+  if (!existing) return
+  snapshots.delete(threadId)
+  totalBytes -= existing.payloadBytes
+}
+
+export function cacheThreadSnapshot(
+  snapshot: ThreadSnapshot,
+  token?: ThreadSnapshotCacheToken
+): boolean {
+  if (token && !threadSnapshotCacheTokenIsCurrent(snapshot.threadId, token)) return false
+  const bytes = normalizedPayloadBytes(snapshot.payloadBytes)
+  if (bytes > THREAD_SNAPSHOT_CACHE_MAX_BYTES) {
+    removeSnapshot(snapshot.threadId)
+    return false
+  }
+  removeSnapshot(snapshot.threadId)
+  snapshots.set(snapshot.threadId, { ...snapshot, payloadBytes: bytes })
+  totalBytes += bytes
+  evictUntilBounded()
+  return snapshots.has(snapshot.threadId)
+}
+
 export function snapshotThreadProjection(state: ChatState, payloadBytes?: number): void {
   const threadId = state.activeThreadId
   if (!threadId || state.threadLoadingId === threadId) return
@@ -65,12 +152,12 @@ export function snapshotThreadProjection(state: ChatState, payloadBytes?: number
     invalidateThreadSnapshot(threadId)
     return
   }
-  if (existing) {
-    snapshots.delete(threadId)
-    totalBytes -= existing.payloadBytes
-  }
-  snapshots.set(threadId, {
+  const thread = state.threads?.find((candidate) => candidate.id === threadId)
+  cacheThreadSnapshot({
     threadId,
+    fingerprint: thread
+      ? threadSnapshotFingerprint(thread)
+      : [threadId, '', '', '', '', '', '', ''].join('\u0000'),
     blocks: state.blocks,
     lastSeq: state.lastSeq,
     threadHistoryCursor: state.threadHistoryCursor,
@@ -94,29 +181,87 @@ export function snapshotThreadProjection(state: ChatState, payloadBytes?: number
     queuedMessages: state.queuedMessages,
     payloadBytes: bytes
   })
-  totalBytes += bytes
-  evictUntilBounded()
 }
 
-export function getThreadSnapshot(threadId: string): ThreadSnapshot | null {
+export function getThreadSnapshot(
+  threadId: string,
+  expectedFingerprint?: string
+): ThreadSnapshot | null {
   const snapshot = snapshots.get(threadId)
   if (!snapshot) return null
+  if (expectedFingerprint && snapshot.fingerprint !== expectedFingerprint) {
+    invalidateThreadSnapshot(threadId)
+    return null
+  }
   // Map insertion order is our LRU ordering.
   snapshots.delete(threadId)
   snapshots.set(threadId, snapshot)
   return snapshot
 }
 
+export function buildPrefetchedThreadSnapshot(
+  thread: NormalizedThread,
+  detail: ThreadDetail
+): ThreadSnapshot | null {
+  const labeledBlocks =
+    detail.relation === 'side' && detail.model
+      ? detail.blocks.map((block) =>
+          block.kind === 'user' && !block.modelLabel
+            ? { ...block, modelLabel: detail.model }
+            : block
+        )
+      : detail.blocks
+  const loaded = hydrateBlockModelLabels(thread.id, labeledBlocks)
+  const busy = threadSnapshotLooksRunning(
+    loaded,
+    detail.threadStatus,
+    detail.latestTurnStatus
+  )
+  if (busy) return null
+  const blocks = settlePendingRuntimeWorkAfterInterrupt(loaded)
+  const queuedMessages = reconcileQueuedMessages(queuedMessagesForThread(thread.id), {
+    busy: false,
+    turnId: detail.latestTurnId,
+    blocks
+  })
+  return {
+    threadId: thread.id,
+    fingerprint: threadSnapshotFingerprint(thread),
+    blocks,
+    lastSeq: detail.latestSeq,
+    threadHistoryCursor: detail.historyCursor ?? null,
+    threadHasMoreHistory: detail.hasMoreHistory === true,
+    liveDeltaSeqFloor: detail.latestSeq,
+    liveReasoning: '',
+    liveAssistant: '',
+    busy: false,
+    busyUnconfirmed: false,
+    currentTurnId: null,
+    currentTurnOrchestration: null,
+    currentTurnUserId: null,
+    turnStartedAtByUserId: {},
+    turnDurationByUserId: detail.turnDurationByUserId ?? {},
+    turnReasoningFirstAtByUserId: {},
+    turnReasoningLastAtByUserId: {},
+    activeThreadRelation: detail.relation ?? thread.relation ?? 'primary',
+    activeThreadParentId: detail.parentThreadId ?? thread.parentThreadId ?? null,
+    activeThreadGoal: detail.goal ?? thread.goal ?? null,
+    activeThreadTodos: detail.todos ?? thread.todos ?? null,
+    queuedMessages,
+    payloadBytes: normalizedPayloadBytes(detail.payloadBytes)
+  }
+}
+
 export function invalidateThreadSnapshot(threadId: string): void {
-  const existing = snapshots.get(threadId)
-  if (!existing) return
-  snapshots.delete(threadId)
-  totalBytes -= existing.payloadBytes
+  threadGenerations.set(threadId, (threadGenerations.get(threadId) ?? 0) + 1)
+  removeSnapshot(threadId)
 }
 
 export function clearThreadSnapshotCache(): void {
   snapshots.clear()
   totalBytes = 0
+  cacheGeneration += 1
+  threadGenerations.clear()
 }
 
 /** Test-only, kept narrow so product code never depends on cache internals. */

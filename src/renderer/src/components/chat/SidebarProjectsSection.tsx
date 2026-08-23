@@ -4,7 +4,7 @@ import type {
   MouseEvent as ReactMouseEvent,
   ReactElement
 } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronDown,
   ChevronRight,
@@ -76,6 +76,7 @@ import {
   type SidebarThreadWorktreeRecord,
   type SidebarThreadWorktrees
 } from './sidebar-project-selectors'
+import { createSidebarThreadOrderTracker } from './sidebar-thread-order-tracker'
 import {
   SIDEBAR_THREAD_DRAG_DATA_KEY,
   SIDEBAR_WORKSPACE_DRAG_DATA_KEY,
@@ -251,6 +252,7 @@ export function SidebarProjectsSection({
   onSearchQueryChange,
   t
 }: SidebarProjectsSectionProps): ReactElement {
+  const orderTracker = useRef(createSidebarThreadOrderTracker()).current
   const [sidebarCollapse, setSidebarCollapse] = useState<SidebarCollapseRegistry>(
     () => readSidebarCollapseRegistry()
   )
@@ -608,6 +610,7 @@ export function SidebarProjectsSection({
     threadWorktrees,
     sidebarFolders,
     sidebarOrder,
+    orderTracker,
     deletingThreadIds,
     draggingWorkspacePath,
     draggingThreadId,
@@ -651,7 +654,7 @@ export function SidebarProjectsSection({
   })
   return <SidebarProjectsContent {...{
     t, runtimeReady, workspaceRoot, searchQuery, showArchived, allGroupsCollapsed, searchVisible,
-    busy, activeView, activeThreadId, locale, displayGroups, sidebarCollapse, sidebarOrder,
+    busy, activeView, activeThreadId, locale, displayGroups, sidebarCollapse, sidebarOrder, orderTracker,
     threadListStatus, threadListError, onRetryThreads, onLoadMoreThreads, threadListCursorByWorkspace,
     sidebarFolders, expandedWorkspaces, deletingThreadIds, draggingWorkspacePath, draggingThreadId,
     workspaceOrderDropTarget, threadOrderDropTarget, dragOverWorkspace, folderDropTarget,
