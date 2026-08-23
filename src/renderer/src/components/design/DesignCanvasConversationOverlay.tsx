@@ -237,7 +237,8 @@ export function DesignCanvasConversationOverlay({
         ref={launcherRef}
         type="button"
         onClick={conversationOpen ? minimizePanel : openPanel}
-        className={`pointer-events-auto absolute left-6 top-[72px] flex h-9 items-center justify-center gap-2 rounded-full border border-ds-border bg-ds-card/95 px-3 text-[12px] font-medium text-ds-ink shadow-[0_12px_32px_rgba(20,47,95,0.14)] transition hover:bg-ds-card motion-reduce:transition-none dark:bg-ds-card/95 ${conversationOpen ? 'invisible' : ''}`}
+        className={`pointer-events-auto absolute top-[72px] flex h-9 items-center justify-center gap-2 rounded-full border border-ds-border bg-ds-card/95 px-3 text-[12px] font-medium text-ds-ink shadow-[0_12px_32px_rgba(20,47,95,0.14)] transition hover:bg-ds-card motion-reduce:transition-none dark:bg-ds-card/95 ${conversationOpen ? 'invisible' : ''}`}
+        style={{ left: 'calc(1.5rem + var(--ds-window-controls-safe-inset))' }}
         aria-label={t('designCanvasConversationOpen')}
         title={t('designCanvasConversationOpen')}
         aria-expanded={conversationOpen}

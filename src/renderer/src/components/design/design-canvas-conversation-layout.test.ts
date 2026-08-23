@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CANVAS_CONVERSATION_EDGE_MARGIN,
+  CANVAS_CONVERSATION_SAFE_INSET,
   canvasConversationLayoutKey,
   canvasConversationPanelSize,
   canvasConversationResponsiveMode,
@@ -27,13 +28,14 @@ describe('canvasConversationResponsiveMode', () => {
 })
 
 describe('defaultCanvasConversationLayout', () => {
-  it('places the panel on the right, clear of the canvas toolbar', () => {
+  it('places the panel left of center, clear of the canvas toolbar and window controls', () => {
     const layout = defaultCanvasConversationLayout({ width: 1600, height: 900 }, 'desktop')
     expect(layout.open).toBe(false)
     expect(layout.minimized).toBe(false)
     // The assistant launcher/panel is aligned to the left beside canvas properties,
-    // leaving the right toolbar and bottom zoom controls unobstructed.
-    expect(layout.x).toBe(CANVAS_CONVERSATION_EDGE_MARGIN)
+    // leaving the right toolbar and bottom zoom controls unobstructed. It also
+    // clears the macOS traffic-light window controls via the safe inset.
+    expect(layout.x).toBe(CANVAS_CONVERSATION_EDGE_MARGIN + CANVAS_CONVERSATION_SAFE_INSET)
     expect(layout.y).toBeGreaterThan(CANVAS_CONVERSATION_EDGE_MARGIN)
   })
 

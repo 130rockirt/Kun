@@ -87,8 +87,9 @@ describe('DesignCanvasConversationOverlay', () => {
     const { root } = render()
     openPanel(root)
     act(() => {
-      // The launcher (first) and the panel header (second) share the label.
-      root.findAllByProps({ 'aria-label': i18n.t('designCanvasConversationCollapse') })[1].props.onClick()
+      // The panel header carries the collapse control; the launcher now always
+      // shows the open label, so the header button is the only collapse match.
+      root.findAllByProps({ 'aria-label': i18n.t('designCanvasConversationCollapse') })[0].props.onClick()
     })
     expect(root.findAllByProps({ 'data-design-canvas-conversation-panel': true }).length)
       .toBe(0)

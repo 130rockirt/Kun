@@ -11,6 +11,9 @@ export const CANVAS_CONVERSATION_PANEL_MIN_HEIGHT = 320
 export const CANVAS_CONVERSATION_PANEL_MAX_HEIGHT = 680
 export const CANVAS_CONVERSATION_EDGE_MARGIN = 24
 export const CANVAS_CONVERSATION_TOP_MARGIN = 72
+/** macOS traffic-light window controls occupy ~112px on the left when the
+ * left sidebar is collapsed; keep the floating panel clear of them. */
+export const CANVAS_CONVERSATION_SAFE_INSET = 112
 export const CANVAS_CONVERSATION_RIGHT_TOOLBAR_WIDTH = 56
 export const CANVAS_CONVERSATION_TOOLBAR_GAP = 16
 export const CANVAS_CONVERSATION_MOBILE_BREAKPOINT = 768
@@ -62,7 +65,7 @@ export function defaultCanvasConversationLayout(
   return {
     open: false,
     minimized: false,
-    x: CANVAS_CONVERSATION_EDGE_MARGIN,
+    x: CANVAS_CONVERSATION_EDGE_MARGIN + CANVAS_CONVERSATION_SAFE_INSET,
     y: CANVAS_CONVERSATION_TOP_MARGIN,
     width: size.width,
     height: size.height
