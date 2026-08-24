@@ -41,7 +41,7 @@ function reconcile(
 }
 
 describe('sidebar stable thread ordering', () => {
-  it('keeps the prior position when running and updatedAt arrive together', () => {
+  it('moves a newly running row above read rows when running and updatedAt arrive together', () => {
     const tracker = createSidebarThreadOrderTracker()
     const settled = thread('settled', { updatedAt: '2026-08-20T00:00:05.000Z' })
     const background = thread('background', { updatedAt: '2026-08-20T00:00:01.000Z' })
@@ -56,20 +56,20 @@ describe('sidebar stable thread ordering', () => {
       watchTurnCompletion: { background: true }
     }
     expect(reconcile(tracker, [refreshed, settled], runningContext)).toEqual([
-      'settled',
-      'background'
+      'background',
+      'settled'
     ])
     expect(reconcile(tracker, [
       thread('background', { updatedAt: '2026-08-20T00:00:12.000Z' }),
       settled
-    ], runningContext)).toEqual(['settled', 'background'])
+    ], runningContext)).toEqual(['background', 'settled'])
   })
 
-  it('uses the normal base order for a running row first discovered at startup', () => {
+  it('places a running row above newer read rows when first discovered at startup', () => {
     const tracker = createSidebarThreadOrderTracker()
     const context = { ...settledContext, watchTurnCompletion: { running: true } }
     expect(reconcile(tracker, [
-      thread('running', { updatedAt: '2026-08-20T00:00:09.000Z' }),
+      thread('running', { updatedAt: '2026-08-20T00:00:01.000Z' }),
       thread('settled', { updatedAt: '2026-08-20T00:00:05.000Z' })
     ], context)).toEqual(['running', 'settled'])
   })
@@ -79,7 +79,7 @@ describe('sidebar stable thread ordering', () => {
     const newer = thread('newer', { updatedAt: '2026-08-20T00:00:05.000Z' })
     const waiting = thread('waiting', { updatedAt: '2026-08-20T00:00:01.000Z' })
     const running = { ...settledContext, watchTurnCompletion: { waiting: true } }
-    expect(reconcile(tracker, [waiting, newer], running)).toEqual(['newer', 'waiting'])
+    expect(reconcile(tracker, [waiting, newer], running)).toEqual(['waiting', 'newer'])
 
     const awaiting = {
       ...running,
@@ -131,17 +131,17 @@ describe('sidebar stable thread ordering', () => {
     const tracker = createSidebarThreadOrderTracker()
     const pinned = thread('pinned', { pinned: true })
     const waiting = thread('waiting-under-pin')
-    reconcile(tracker, [waiting, pinned], {
+    expect(reconcile(tracker, [waiting, pinned], {
       ...settledContext,
       watchTurnCompletion: { 'waiting-under-pin': true }
-    })
+    })).toEqual(['pinned', 'waiting-under-pin'])
     expect(reconcile(tracker, [waiting, pinned], {
       ...settledContext,
       awaitingUserInputThreadIds: { 'waiting-under-pin': true }
     })).toEqual(['pinned', 'waiting-under-pin'])
   })
 
-  it('treats a changed manual-order key as a new explicit baseline', () => {
+  it('keeps attention priority above a changed manual-order baseline', () => {
     const tracker = createSidebarThreadOrderTracker()
     const waiting = thread('manual-waiting')
     const other = thread('manual-other')
@@ -152,7 +152,26 @@ describe('sidebar stable thread ordering', () => {
     expect(reconcile(tracker, [other, waiting], {
       ...settledContext,
       awaitingUserInputThreadIds: { 'manual-waiting': true }
-    }, 'manual-v2')).toEqual(['manual-other', 'manual-waiting'])
+    }, 'manual-v2')).toEqual(['manual-waiting', 'manual-other'])
+  })
+
+  it('keeps the previous relative order while running timestamps refresh', () => {
+    const tracker = createSidebarThreadOrderTracker()
+    const running = {
+      ...settledContext,
+      watchTurnCompletion: { 'running-a': true, 'running-b': true }
+    }
+    expect(reconcile(tracker, [
+      thread('read', { updatedAt: '2026-08-20T00:00:09.000Z' }),
+      thread('running-a', { updatedAt: '2026-08-20T00:00:05.000Z' }),
+      thread('running-b', { updatedAt: '2026-08-20T00:00:04.000Z' })
+    ], running)).toEqual(['running-a', 'running-b', 'read'])
+
+    expect(reconcile(tracker, [
+      thread('running-b', { updatedAt: '2026-08-20T00:00:12.000Z' }),
+      thread('running-a', { updatedAt: '2026-08-20T00:00:11.000Z' }),
+      thread('read', { updatedAt: '2026-08-20T00:00:09.000Z' })
+    ], running)).toEqual(['running-a', 'running-b', 'read'])
   })
 
   it('demotes a viewed completed result after the last still-running thread', () => {

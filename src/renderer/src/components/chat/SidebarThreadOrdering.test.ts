@@ -72,7 +72,7 @@ function visibleThreadTitles(renderer: ReactTestRenderer, ids: string[]): string
 }
 
 describe('sidebar thread ordering integration', () => {
-  it('keeps a late-discovered running project row fixed, then promotes awaiting input into the first five', async () => {
+  it('moves a late-discovered running project row above viewed rows and into the first five', async () => {
     vi.stubGlobal('localStorage', storage())
     const times = ['07', '06', '05', '04', '03', '02', '01']
     const threads = times.map((suffix, index) =>
@@ -97,7 +97,7 @@ describe('sidebar thread ordering integration', () => {
         })))
       })
       expect(visibleThreadTitles(renderer!, ids)).toEqual([
-        'thread-1', 'thread-2', 'thread-3', 'thread-4', 'thread-5', 'background'
+        'background', 'thread-1', 'thread-2', 'thread-3', 'thread-4'
       ])
 
       await act(async () => {
@@ -137,7 +137,7 @@ describe('sidebar thread ordering integration', () => {
           watchTurnCompletion: { waiting: true }
         })))
       })
-      expect(visibleThreadTitles(renderer!, ['newer', 'waiting'])).toEqual(['newer', 'waiting'])
+      expect(visibleThreadTitles(renderer!, ['newer', 'waiting'])).toEqual(['waiting', 'newer'])
       await act(async () => {
         renderer!.update(createElement(SidebarProjectsSection, projectProps(items, {
           watchTurnCompletion: { waiting: true },
@@ -189,7 +189,7 @@ describe('sidebar thread ordering integration', () => {
       const toggle = renderer!.root.find((node) => node.type === 'button' && node.props.title === 'sidebarConversations')
       await act(async () => toggle.props.onClick())
       expect(visibleThreadTitles(renderer!, items.map((item) => item.id))).toEqual([
-        'newer-conversation', 'waiting-conversation'
+        'waiting-conversation', 'newer-conversation'
       ])
 
       await act(async () => useChatStore.setState({

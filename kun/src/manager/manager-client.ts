@@ -9,10 +9,6 @@ import {
   type RuntimeRegistration,
   type ThreadExecutionLease
 } from '../contracts/runtime-flavor.js'
-import {
-  ThreadExecutionBusyError,
-  type ThreadExecutionLeasePort
-} from '../ports/thread-execution-lease.js'
 import { GraphRunConflictError } from '../graph/graph-run-store.js'
 import { isLoopbackHost } from '../server/loopback-host.js'
 import {
@@ -49,6 +45,7 @@ const LEGACY_HANDOVER_TIMEOUT_MS = 5 * 60_000
 export type ServiceManagerConnection = {
   discovery: ManagerDiscoveryRecord
 }
+export { ManagerThreadExecutionLeaseClient } from './manager-thread-execution-lease-client.js'
 
 export class ManagerRevisionConflictError extends Error {
   constructor(readonly currentRevision: number) {
@@ -467,112 +464,6 @@ export async function readManagerRuntime(
     ...(signal ? { signal } : {})
   })
   return z.object({ registration: RuntimeRegistrationSchema.nullable() }).parse(response).registration
-}
-
-export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePort {
-  private readonly renewals = new Map<string, {
-    lease: ThreadExecutionLease
-    timer: ReturnType<typeof setInterval>
-  }>()
-  private onLeaseLost: ((lease: ThreadExecutionLease) => void) | undefined
-
-  constructor(
-    private readonly manager: ServiceManagerConnection,
-    private readonly flavor: RuntimeFlavor,
-    private readonly instanceId: string
-  ) {}
-
-  setLeaseLostHandler(handler: (lease: ThreadExecutionLease) => void): void {
-    this.onLeaseLost = handler
-  }
-
-  async acquire(threadId: string, turnId: string): Promise<ThreadExecutionLease> {
-    const response = await requestManagerResponse(
-      this.manager,
-      `/v1/leases/threads/${encodeURIComponent(threadId)}/acquire`,
-      {
-        method: 'POST',
-        body: { turnId, ownerFlavor: this.flavor, ownerInstanceId: this.instanceId }
-      }
-    )
-    if (response.status === 409) {
-      const body = await response.json().catch(() => null)
-      const owner = z.object({ owner: ThreadExecutionLeaseSchema }).safeParse(body)
-      if (owner.success) throw new ThreadExecutionBusyError(owner.data.owner)
-    }
-    const parsed = z.object({ lease: ThreadExecutionLeaseSchema }).parse(
-      await requireManagerJson(response)
-    )
-    this.startRenewal(parsed.lease)
-    return parsed.lease
-  }
-
-  async release(threadId: string, turnId: string): Promise<void> {
-    this.stopRenewal(threadId, turnId)
-    await requestManagerJson(
-      this.manager,
-      `/v1/leases/threads/${encodeURIComponent(threadId)}/release`,
-      {
-        method: 'POST',
-        body: { turnId, ownerFlavor: this.flavor, ownerInstanceId: this.instanceId }
-      }
-    )
-  }
-
-  async owner(threadId: string): Promise<ThreadExecutionLease | null> {
-    const body = await requestManagerJson(
-      this.manager,
-      `/v1/leases/threads/${encodeURIComponent(threadId)}`,
-      {}
-    )
-    return z.object({ lease: ThreadExecutionLeaseSchema.nullable() }).parse(body).lease
-  }
-
-  shutdown(): void {
-    for (const { timer } of this.renewals.values()) clearInterval(timer)
-    this.renewals.clear()
-  }
-
-  private startRenewal(lease: ThreadExecutionLease): void {
-    this.stopRenewal(lease.threadId)
-    const timer = setInterval(() => void this.renew(lease.threadId), 5_000)
-    timer.unref?.()
-    this.renewals.set(lease.threadId, { lease, timer })
-  }
-
-  private async renew(threadId: string): Promise<void> {
-    const current = this.renewals.get(threadId)
-    if (!current) return
-    try {
-      const response = await requestManagerResponse(
-        this.manager,
-        `/v1/leases/threads/${encodeURIComponent(threadId)}/renew`,
-        {
-          method: 'POST',
-          body: {
-            turnId: current.lease.turnId,
-            ownerFlavor: this.flavor,
-            ownerInstanceId: this.instanceId
-          }
-        }
-      )
-      const parsed = z.object({ lease: ThreadExecutionLeaseSchema }).parse(
-        await requireManagerJson(response)
-      )
-      const latest = this.renewals.get(threadId)
-      if (latest?.lease.turnId === current.lease.turnId) latest.lease = parsed.lease
-    } catch {
-      this.stopRenewal(threadId, current.lease.turnId)
-      this.onLeaseLost?.(current.lease)
-    }
-  }
-
-  private stopRenewal(threadId: string, turnId?: string): void {
-    const current = this.renewals.get(threadId)
-    if (!current || (turnId && current.lease.turnId !== turnId)) return
-    clearInterval(current.timer)
-    this.renewals.delete(threadId)
-  }
 }
 
 export async function forwardRequestToExecutionOwner(input: {

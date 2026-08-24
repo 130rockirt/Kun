@@ -71,6 +71,34 @@ function partitionPinned(order: string[], byId: Map<string, NormalizedThread>): 
   return [...pinned, ...unpinned]
 }
 
+function activityPartition(activity: SidebarThreadActivity): 0 | 1 | 2 {
+  if (isPersistentAttention(activity)) return 0
+  if (activity === 'running') return 1
+  return 2
+}
+
+/**
+ * Keep activity priority visible without letting timestamp refreshes disturb
+ * the relative order inside any partition.
+ */
+function partitionByActivity(options: {
+  activityById: Map<string, SidebarThreadActivity>
+  byId: Map<string, NormalizedThread>
+  order: string[]
+}): string[] {
+  const pinned: string[] = []
+  const activityPartitions: [string[], string[], string[]] = [[], [], []]
+  for (const id of options.order) {
+    if (options.byId.get(id)?.pinned === true) {
+      pinned.push(id)
+      continue
+    }
+    const activity = options.activityById.get(id) ?? 'read'
+    activityPartitions[activityPartition(activity)].push(id)
+  }
+  return [...pinned, ...activityPartitions[0], ...activityPartitions[1], ...activityPartitions[2]]
+}
+
 function isPersistentAttention(activity: SidebarThreadActivity): boolean {
   return activity === 'awaiting-input' || activity === 'failed' || activity === 'unread'
 }
@@ -81,43 +109,6 @@ function shouldPromote(
 ): boolean {
   if (isPersistentAttention(current) && previous !== current) return true
   return previous === 'running' && current !== 'running'
-}
-
-/**
- * The user just opened an unread/failed result. Demote only that row so it
- * lands after the threads that are still working; no other row moves.
- */
-function shouldDemoteAfterViewing(
-  previous: SidebarThreadActivity | undefined,
-  current: SidebarThreadActivity,
-  threadId: string,
-  context: SidebarThreadActivityContext
-): boolean {
-  if (previous !== 'unread' && previous !== 'failed') return false
-  if (current !== 'read') return false
-  return context.activeThreadId === threadId
-}
-
-function demoteAfterLastRunning(options: {
-  activityById: Map<string, SidebarThreadActivity>
-  id: string
-  order: string[]
-}): string[] {
-  const order = [...options.order]
-  const from = order.indexOf(options.id)
-  if (from < 0) return order
-  let insertAt = -1
-  for (let index = order.length - 1; index >= 0; index -= 1) {
-    if (order[index] !== options.id && options.activityById.get(order[index]!) === 'running') {
-      insertAt = index + 1
-      break
-    }
-  }
-  if (insertAt < 0 || insertAt === from) return order
-  const [moved] = order.splice(from, 1)
-  if (moved === undefined) return order
-  order.splice(insertAt > from ? insertAt - 1 : insertAt, 0, moved)
-  return order
 }
 
 function parsedUpdatedAt(thread: NormalizedThread): number {
@@ -178,16 +169,6 @@ export function createSidebarThreadOrderTracker(): SidebarThreadOrderTracker {
       const promotedIds = baselineChanged
         ? []
         : baseIds.filter((id) => shouldPromote(previous?.activityById.get(id), activityById.get(id)!))
-      const demotedViewedIds = baselineChanged
-        ? []
-        : baseIds.filter((id) =>
-            shouldDemoteAfterViewing(
-              previous?.activityById.get(id),
-              activityById.get(id)!,
-              id,
-              context
-            )
-          )
 
       order = promoteAttentionRows({
         byId,
@@ -195,10 +176,7 @@ export function createSidebarThreadOrderTracker(): SidebarThreadOrderTracker {
         previousOrder: previous?.order ?? baseIds,
         promotedIds
       })
-      for (const id of demotedViewedIds) {
-        if (byId.get(id)?.pinned === true) continue
-        order = demoteAfterLastRunning({ activityById, id, order })
-      }
+      order = partitionByActivity({ activityById, byId, order })
       snapshots.set(containerKey, {
         activityById,
         baselineKey,
