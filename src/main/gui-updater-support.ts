@@ -5,6 +5,10 @@ import { dirname, join, win32 as win32Path } from 'node:path'
 import electronUpdater from 'electron-updater'
 import type { UpdateInfo } from 'electron-updater'
 import type { GuiUpdateChannel } from '../shared/gui-update'
+import {
+  normalizeGuiUpdateScheduleState,
+  type GuiUpdateScheduleState
+} from '../shared/gui-update-schedule'
 
 // R2 prefix 保持旧值:线上还在运行的 DeepSeek GUI 老版本轮询的
 // 就是 `deepseek-gui/channels/<channel>/latest/`,prefix 一改老客户端
@@ -198,23 +202,30 @@ export async function recordPendingUpdate(updateInfo: UpdateInfo): Promise<void>
     }
   })
 }
-export async function readLastScheduledCheckAt(): Promise<number | null> {
+export async function readGuiUpdateScheduleState(): Promise<GuiUpdateScheduleState> {
   try {
-    const raw = await readFile(guiUpdateSchedulePath(), 'utf8')
-    const parsed = JSON.parse(raw) as { lastCheckedAt?: unknown }
-    const ms = typeof parsed.lastCheckedAt === 'string' ? Date.parse(parsed.lastCheckedAt) : Number.NaN
-    return Number.isFinite(ms) ? ms : null
+    return normalizeGuiUpdateScheduleState(JSON.parse(await readFile(guiUpdateSchedulePath(), 'utf8')))
   } catch {
-    return null
+    return {}
   }
 }
 
-export async function writeLastScheduledCheckAt(nowMs: number): Promise<void> {
+export async function writeGuiUpdateScheduleState(state: GuiUpdateScheduleState): Promise<void> {
   const path = guiUpdateSchedulePath()
+  const toIso = (value: number | null | undefined): string | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? new Date(value).toISOString() : undefined
+  const normalized = normalizeGuiUpdateScheduleState(state)
   await mkdir(dirname(path), { recursive: true })
   await writeFile(
     path,
-    JSON.stringify({ lastCheckedAt: new Date(nowMs).toISOString() }, null, 2),
+    JSON.stringify({
+      ...(toIso(normalized.lastAttemptAt) ? { lastAttemptAt: toIso(normalized.lastAttemptAt) } : {}),
+      ...(toIso(normalized.lastSuccessAt) ? { lastSuccessAt: toIso(normalized.lastSuccessAt) } : {}),
+      ...(typeof normalized.consecutiveFailures === 'number'
+        ? { consecutiveFailures: normalized.consecutiveFailures }
+        : {}),
+      ...(toIso(normalized.nextRetryAt) ? { nextRetryAt: toIso(normalized.nextRetryAt) } : {})
+    }, null, 2),
     'utf8'
   )
 }

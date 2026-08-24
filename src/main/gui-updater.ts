@@ -8,9 +8,9 @@ import type {
   GuiUpdateInstallResult,
   GuiUpdateState
 } from '../shared/gui-update'
-import { nextGuiUpdateCheckDelay } from '../shared/gui-update-schedule'
 import { DEFAULT_GUI_UPDATE_CHANNEL, normalizeGuiUpdateChannel } from '../shared/gui-update'
 import type { AppLocale } from '../shared/app-locales'
+import { createGuiUpdateScheduler, type GuiUpdateScheduler } from './gui-updater-scheduler'
 import { GuiUpdateOperationCoordinator, type GuiUpdateOperation } from './gui-updater-operation'
 import { showGuiUpdateReleaseNotes } from './gui-updater-release-notes'
 import {
@@ -22,7 +22,7 @@ import {
   isVersionGreater,
   macAutoUpdateAllowed,
   parseYamlScalar,
-  readLastScheduledCheckAt,
+  readGuiUpdateScheduleState,
   recordPendingUpdate,
   releaseUrlForVersion,
   resolveUpdateFeedUrl,
@@ -31,7 +31,7 @@ import {
   unsupportedMessage,
   updateFeedManifestUrl,
   updateFeedUrl,
-  writeLastScheduledCheckAt
+  writeGuiUpdateScheduleState
 } from './gui-updater-support'
 
 export { setWindowsInstallerUpdateSource } from './gui-updater-support'
@@ -53,8 +53,7 @@ let beforeInstallUpdatePromise: Promise<void> | null = null
 let beforeInstallUpdatePrepared = false
 let setUpdateInstallQuitting: ((active: boolean) => void) | null = null
 let pendingVersionStateWrite: Promise<void> | null = null
-let backgroundCheckTimer: NodeJS.Timeout | null = null
-let backgroundCheckPromise: Promise<void> | null = null
+let guiUpdateScheduler: GuiUpdateScheduler | null = null
 let updateInstallQuitting = false
 let installPromise: Promise<GuiUpdateInstallResult> | null = null
 let updateInstallHandoffPending = false
@@ -92,7 +91,11 @@ function hasCurrentDownloadedUpdate(): boolean {
   )
 }
 function emitGuiUpdateState(state: GuiUpdateState): void {
+  const wasSuspended = lastState.status === 'downloaded' || lastState.status === 'installing'
   lastState = state
+  if (wasSuspended && state.status !== 'downloaded' && state.status !== 'installing') {
+    guiUpdateScheduler?.notifyStateChanged()
+  }
   const win = getMainWindow?.()
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
   win.webContents.send('gui:update-state', state)
@@ -152,45 +155,6 @@ function scheduleFailedUpdateInstallRecovery(): void {
     resetFailedUpdateInstallState()
     relaunchAfterFailedUpdateInstall()
   })
-}
-function clearBackgroundCheckTimer(): void {
-  if (backgroundCheckTimer) {
-    clearTimeout(backgroundCheckTimer)
-    backgroundCheckTimer = null
-  }
-}
-function shouldSkipScheduledCheck(): boolean {
-  return (
-    lastState.status === 'checking' ||
-    lastState.status === 'downloading' ||
-    lastState.status === 'downloaded' ||
-    lastState.status === 'installing'
-  )
-}
-async function scheduleNextBackgroundCheck(): Promise<void> {
-  clearBackgroundCheckTimer()
-  const lastCheckedAtMs = await readLastScheduledCheckAt()
-  const delay = nextGuiUpdateCheckDelay(lastCheckedAtMs)
-  backgroundCheckTimer = setTimeout(() => {
-    void runScheduledGuiUpdateCheck()
-  }, delay)
-}
-async function runScheduledGuiUpdateCheck(): Promise<void> {
-  if (backgroundCheckPromise) return backgroundCheckPromise
-  backgroundCheckPromise = (async () => {
-    try {
-      if (shouldSkipScheduledCheck()) return
-      const nowMs = Date.now()
-      await writeLastScheduledCheckAt(nowMs)
-      await checkGuiUpdate()
-    } catch (error) {
-      console.warn('[kun-gui updater] scheduled GUI update check failed:', error)
-    } finally {
-      backgroundCheckPromise = null
-      void scheduleNextBackgroundCheck()
-    }
-  })()
-  return backgroundCheckPromise
 }
 async function resolveUpdateChannel(requested?: GuiUpdateChannel): Promise<GuiUpdateChannel> {
   if (requested) return normalizeGuiUpdateChannel(requested)
@@ -415,7 +379,14 @@ export function initializeGuiUpdater(
     })
   })
 
-  void scheduleNextBackgroundCheck()
+  guiUpdateScheduler = createGuiUpdateScheduler({
+    isBusyState: () => lastState.status === 'checking' || lastState.status === 'downloading',
+    isSuspendedState: () => lastState.status === 'downloaded' || lastState.status === 'installing',
+    readState: readGuiUpdateScheduleState,
+    writeState: writeGuiUpdateScheduleState,
+    runCheck: async () => (await checkGuiUpdate()).ok
+  })
+  void guiUpdateScheduler.scheduleNext()
 }
 
 export async function showPostUpdateReleaseNotes(): Promise<void> {
