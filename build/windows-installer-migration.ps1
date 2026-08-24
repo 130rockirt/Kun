@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('ResolvePath', 'ResolveSource', 'ResolveUpdateScope', 'ResolveUninstaller', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'ValidatePayload', 'CleanupInPlaceLeftovers', 'CleanupJournal', 'UpdatePath')]
+  [ValidateSet('ResolvePath', 'ResolveSource', 'ResolveUpdateScope', 'ResolveUninstaller', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'ValidatePayload', 'BackupPayload', 'RestorePayloadBackup', 'CleanupInPlaceLeftovers', 'CleanupJournal', 'UpdatePath', 'WriteUpdateResult')]
   [string]$Action,
   [string]$ResultPath = ''
 )
@@ -45,6 +45,28 @@ function Update-UserPath {
       -not [string]::Equals($candidatePart, $targetBin.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)
   })
   [Environment]::SetEnvironmentVariable('Path', (($kept + $targetBin) -join ';'), 'User')
+}
+
+function Write-AutomaticUpdateResult {
+  $path = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_PENDING_RESULT')
+  if ([string]::IsNullOrWhiteSpace($path)) {
+    throw 'KUN_INSTALLER_PENDING_RESULT is required for automatic update result reporting.'
+  }
+  $outcome = if ([string]::Equals((Get-EnvironmentValue 'KUN_INSTALLER_ABORT_CODE'), 'success', [StringComparison]::Ordinal)) { 'success' } else { 'aborted' }
+  $payload = [ordered]@{
+    schemaVersion = 1
+    outcome = $outcome
+    code = (Get-EnvironmentValue 'KUN_INSTALLER_ABORT_CODE')
+    message = (Get-EnvironmentValue 'KUN_INSTALLER_ABORT_MESSAGE')
+    phase = (Get-EnvironmentValue 'KUN_INSTALLER_ABORT_PHASE')
+    backupDir = (Get-EnvironmentValue 'KUN_INSTALLER_PAYLOAD_BACKUP')
+    at = [DateTime]::UtcNow.ToString('o')
+  }
+  $parent = Split-Path -Parent $path
+  [IO.Directory]::CreateDirectory($parent) | Out-Null
+  $temporaryPath = "$path.$PID.tmp"
+  $payload | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $temporaryPath -Encoding UTF8
+  Move-Item -LiteralPath $temporaryPath -Destination $path -Force
 }
 
 try {
@@ -93,6 +115,15 @@ try {
     }
     'ValidatePayload' {
       Assert-PackagedInstallPayload
+    }
+    'BackupPayload' {
+      Backup-InPlacePayload
+    }
+    'RestorePayloadBackup' {
+      Restore-InPlacePayloadBackup
+    }
+    'WriteUpdateResult' {
+      Write-AutomaticUpdateResult
     }
     'CleanupInPlaceLeftovers' {
       Invoke-CleanupInPlaceLeftovers

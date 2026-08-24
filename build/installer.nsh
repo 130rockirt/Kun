@@ -16,7 +16,6 @@ Var /GLOBAL KunInstallerPreserveOtherScope
 Var /GLOBAL KunInstallerOtherUninstallString
 Var /GLOBAL KunInstallerOtherQuietUninstallString
 Var /GLOBAL KunInstallerRestoreInteractive
-Var /GLOBAL KunInstallerInPlaceUpdate
 Var /GLOBAL KunInstallerCurrentUserShortcutName
 Var /GLOBAL KunInstallerCurrentUserMenuDirectory
 !endif
@@ -26,6 +25,11 @@ Var /GLOBAL KunInstallerPowerShellPath
 Var /GLOBAL KunInstallerHelperExitCode
 Var /GLOBAL KunInstallerHelperOutput
 Var /GLOBAL KunInstallerCurrentPid
+Var /GLOBAL KunInstallerInPlaceUpdate
+Var /GLOBAL KunInstallerAbortCode
+Var /GLOBAL KunInstallerAbortPhase
+Var /GLOBAL KunInstallerAbortMessage
+Var /GLOBAL KunInstallerPendingResultPath
 !ifdef BUILD_UNINSTALLER
 Var /GLOBAL KunInstallerStopAttempt
 Var /GLOBAL KunInstallerStopResult
@@ -42,6 +46,7 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
   Pop $KunInstallerHelperOutput
 !macroend
 
+!include "${PROJECT_DIR}\build\installer-automatic-update.nsh"
 !include "${PROJECT_DIR}\build\installer-process-check.nsh"
 
 !macro kunSetEnvironmentFromRegister NAME REGISTER
@@ -165,15 +170,13 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
   !insertmacro kunRunMigrationHelper Restore
   ${if} $KunInstallerHelperExitCode != 0
     MessageBox MB_OK|MB_ICONSTOP "Kun was installed, but preserved files could not be restored without overwriting another file. The recovery directory and log were retained.$\r$\n$KunInstallerHelperOutput" /SD IDOK
-    SetErrorLevel 2
-    Quit
+    !insertmacro KunAbortAutomaticUpdate restore_failed restore "Preserved files could not be restored."
   ${endif}
 
   !insertmacro kunRunMigrationHelper ValidatePayload
   ${if} $KunInstallerHelperExitCode != 0
     MessageBox MB_OK|MB_ICONSTOP "Kun installation is incomplete. No PATH changes were made; run the installer again to repair it.$\r$\n$KunInstallerHelperOutput" /SD IDOK
-    SetErrorLevel 2
-    Quit
+    !insertmacro KunAbortAutomaticUpdate payload_invalid validate "The installed payload did not pass validation."
   ${endif}
 
   ${if} ${isUpdated}
@@ -192,10 +195,12 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
   !insertmacro kunRunMigrationHelper UpdatePath
   ${if} $KunInstallerHelperExitCode != 0
     DetailPrint "Kun could not update the user PATH: $KunInstallerHelperOutput"
+    !insertmacro KunAbortAutomaticUpdate path_migration_failed path "The user PATH could not be migrated safely."
   ${else}
     DetailPrint "Reconciled the user PATH from $KunInstallerSourceDir\bin to $INSTDIR\bin."
   ${endif}
   System::Call 'user32::SendMessageTimeout(i 0xffff, i 0x001A, i 0, t "Environment", i 2, i 5000, *i .r0)'
+  !insertmacro KunCompleteAutomaticUpdate
 !macroend
 
 !macro customUnInstall
@@ -223,6 +228,7 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
 # assisted-page declarations. Defining functions there lets them reference the
 # template's installMode/appExe variables without forking the upstream script.
 !macro customHeader
+!insertmacro KunAutomaticUpdateFunctions
 !ifndef BUILD_UNINSTALLER
   Function KunSetProductEnvironment
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_CANONICAL_LEAF", "${APP_FILENAME}").r0'
@@ -275,8 +281,7 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
     ${if} $KunInstallerHelperExitCode != 0
     ${orIf} $KunInstallerHelperOutput == ""
       MessageBox MB_OK|MB_ICONSTOP "Kun found an existing installation registration but could not recover its program directory.$\r$\n$KunInstallerHelperOutput" /SD IDOK
-      SetErrorLevel 2
-      Quit
+      !insertmacro KunAbortAutomaticUpdate resolve_source source "The registered program directory could not be recovered."
     ${endif}
     StrCpy $KunInstallerSourceDir $KunInstallerHelperOutput
   FunctionEnd
@@ -335,8 +340,7 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
     ${if} $KunInstallerHelperExitCode != 0
     ${orIf} $KunInstallerHelperOutput == ""
       MessageBox MB_OK|MB_ICONSTOP "${PRODUCT_NAME} could not match this automatic update to one installed application.$\r$\n$KunInstallerHelperOutput" /SD IDOK
-      SetErrorLevel 2
-      Quit
+      !insertmacro KunAbortAutomaticUpdate scope_mismatch scope "The installed update scope could not be matched."
     ${endif}
 
     ${if} $KunInstallerHelperOutput == "current"
@@ -356,8 +360,7 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
     ${endif}
 
     MessageBox MB_OK|MB_ICONSTOP "${PRODUCT_NAME} received an invalid automatic update scope: $KunInstallerHelperOutput" /SD IDOK
-    SetErrorLevel 2
-    Quit
+    !insertmacro KunAbortAutomaticUpdate invalid_scope scope "The installer returned an invalid update scope."
   FunctionEnd
 
   Function KunRetireSelectedShellState
@@ -453,8 +456,7 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
     ${if} $KunInstallerHelperExitCode != 0
     ${orIf} $KunInstallerHelperOutput == ""
       MessageBox MB_OK|MB_ICONSTOP "Kun could not resolve a safe installation directory.$\r$\n$KunInstallerHelperOutput" /SD IDOK
-      SetErrorLevel 2
-      Quit
+      !insertmacro KunAbortAutomaticUpdate resolve_target target "A safe installation directory could not be resolved."
     ${endif}
     StrCpy $KunInstallerTargetDir $KunInstallerHelperOutput
     StrCpy $INSTDIR $KunInstallerTargetDir
@@ -500,14 +502,12 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
     !insertmacro kunRunMigrationHelper Prepare
     ${if} $KunInstallerHelperExitCode != 0
       MessageBox MB_OK|MB_ICONSTOP "Kun kept the existing installation unchanged because it could not migrate the program directory safely.$\r$\n$KunInstallerHelperOutput" /SD IDOK
-      SetErrorLevel 2
-      Quit
+      !insertmacro KunAbortAutomaticUpdate prepare_failed prepare "The program directory migration could not be prepared safely."
     ${endif}
     Call KunReadMigrationResult
     ${if} $KunInstallerHelperExitCode != 0
       MessageBox MB_OK|MB_ICONSTOP "Kun kept the existing installation unchanged because it could not classify the registered program directory safely.$\r$\n$KunInstallerHelperOutput" /SD IDOK
-      SetErrorLevel 2
-      Quit
+      !insertmacro KunAbortAutomaticUpdate prepare_classification_failed prepare "The program directory migration result could not be classified."
     ${endif}
 
     ${if} $KunInstallerHelperOutput == "1"
@@ -543,7 +543,14 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
     ${endif}
     ${if} $KunInstallerPrimarySourceDir == $KunInstallerTargetDir
       StrCpy $KunInstallerInPlaceUpdate 1
-      DetailPrint "Automatic update will overwrite $KunInstallerTargetDir in place without pre-deleting the application payload."
+      StrCpy $R0 "$APPDATA\KunInstallerRecovery\update-backup-$KunInstallerCurrentPid"
+      System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_PAYLOAD_BACKUP", "$R0").r0'
+      Call KunSetMigrationEnvironment
+      !insertmacro kunRunMigrationHelper BackupPayload
+      ${if} $KunInstallerHelperExitCode != 0
+        !insertmacro KunAbortAutomaticUpdate backup_failed backup "The installed payload could not be backed up before replacement."
+      ${endif}
+      DetailPrint "Automatic update backed up $KunInstallerTargetDir before overwriting it in place."
     ${endif}
   FunctionEnd
 
@@ -573,8 +580,7 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
     ${endif}
     ${if} $KunInstallerHelperExitCode != 0
       MessageBox MB_OK|MB_ICONSTOP "${PRODUCT_NAME} could not validate the old application uninstaller.$\r$\n$KunInstallerHelperOutput" /SD IDOK
-      SetErrorLevel 2
-      Quit
+      !insertmacro KunAbortAutomaticUpdate uninstaller_invalid uninstaller "The old application uninstaller could not be validated."
     ${endif}
   FunctionEnd
 
@@ -627,8 +633,7 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
       !insertmacro kunRunMigrationHelper FallbackCleanup
       ${if} $KunInstallerHelperExitCode != 0
         MessageBox MB_OK|MB_ICONSTOP "Kun could not clean the old program files safely.$\r$\n$KunInstallerHelperOutput" /SD IDOK
-        SetErrorLevel 2
-        Quit
+        !insertmacro KunAbortAutomaticUpdate cleanup_failed cleanup "The old program files could not be cleaned safely."
       ${endif}
       ClearErrors
       StrCpy $R0 0

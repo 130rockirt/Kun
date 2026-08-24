@@ -56,6 +56,7 @@ import {
 import {
   installWebviewSecurityGuards
 } from './extensions/extension-webview-security'
+import { probeRuntimeApi } from './main-runtime-health'
 import {
   beginBrowserUseHostShutdown,
   stopBrowserUseHost,
@@ -252,7 +253,8 @@ export async function loadGuiUpdaterModule(): Promise<GuiUpdaterModule> {
             async () => (await mainState.store.load()).guiUpdate.channel,
             prepareManagedRuntimesForUpdate,
             async () => (await mainState.store.load()).locale,
-            setUpdateInstallQuitting
+            setUpdateInstallQuitting,
+            async () => (await probeRuntimeApi(await mainState.store.load())).ok
           )
           mainState.guiUpdaterInitialized = true
         }

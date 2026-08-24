@@ -13,6 +13,7 @@ export type GuiUpdateFailureCode =
   | 'unsupported'
   | 'download_failed'
   | 'install_failed'
+  | 'install_deferred'
   | 'github_repo_not_found'
   | 'github_forbidden'
   | 'github_rate_limited'

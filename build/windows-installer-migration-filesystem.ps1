@@ -385,6 +385,59 @@ function Assert-PackagedInstallPayload {
   ) 'the unpacked Kun service manager entry'
 }
 
+function Get-InPlacePayloadBackupPath {
+  $configured = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_PAYLOAD_BACKUP')
+  if (-not [string]::IsNullOrWhiteSpace($configured)) {
+    return $configured
+  }
+  $target = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_TARGET')
+  if ([string]::IsNullOrWhiteSpace($target)) {
+    throw 'KUN_INSTALLER_TARGET is required for in-place update backup.'
+  }
+  $recoveryRoot = Join-Path $env:APPDATA 'KunInstallerRecovery'
+  return Join-Path $recoveryRoot ("update-backup-" + (Get-EnvironmentValue 'KUN_INSTALLER_SELF_PID'))
+}
+
+function Set-InPlacePayloadBackupEnvironment([string]$PathValue) {
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_PAYLOAD_BACKUP', $PathValue, 'Process')
+}
+
+function Backup-InPlacePayload {
+  if (-not (Test-InPlaceUpdateRequested)) { return }
+  $target = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_TARGET')
+  Assert-PackagedInstallPayload
+  $backup = Get-InPlacePayloadBackupPath
+  if (Test-Path -LiteralPath $backup) {
+    Remove-Item -LiteralPath $backup -Recurse -Force
+  }
+  [IO.Directory]::CreateDirectory($backup) | Out-Null
+  foreach ($entry in @(Get-ChildItem -LiteralPath $target -Force)) {
+    if ($entry.PSIsContainer) { Assert-NoReparsePointsInTree $entry 'In-place payload backup source' }
+    elseif (Test-ReparsePoint $entry.FullName) { throw "In-place payload backup source is a reparse point: $($entry.FullName)" }
+    Copy-Item -LiteralPath $entry.FullName -Destination $backup -Recurse -Force
+  }
+  Assert-NonEmptyPayloadFile (Join-Path $backup (Get-ExpectedApplicationExecutable)) 'the backup executable'
+  Assert-NonEmptyPayloadFile (Join-Path $backup 'resources\\app.asar') 'the backup resources\\app.asar'
+  Set-InPlacePayloadBackupEnvironment $backup
+}
+
+function Restore-InPlacePayloadBackup {
+  if (-not (Test-InPlaceUpdateRequested)) { return }
+  $backup = Get-InPlacePayloadBackupPath
+  if (-not (Test-Path -LiteralPath $backup -PathType Container)) {
+    throw 'The in-place update backup is unavailable.'
+  }
+  $target = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_TARGET')
+  Assert-SafeInstallRoot $target 'In-place update target'
+  foreach ($entry in @(Get-ChildItem -LiteralPath $backup -Force)) {
+    if ($entry.PSIsContainer) { Assert-NoReparsePointsInTree $entry 'In-place payload backup' }
+    elseif (Test-ReparsePoint $entry.FullName) { throw "In-place payload backup is a reparse point: $($entry.FullName)" }
+    Copy-Item -LiteralPath $entry.FullName -Destination $target -Recurse -Force
+  }
+  Assert-PackagedInstallPayload
+  Set-InPlacePayloadBackupEnvironment $backup
+}
+
 function Test-InPlaceUpdateRequested {
   return [string]::Equals(
     (Get-EnvironmentValue 'KUN_INSTALLER_IN_PLACE_UPDATE').Trim(),

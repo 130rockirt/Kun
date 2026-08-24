@@ -43,8 +43,7 @@
         ${endif}
 
         DetailPrint "Verified ${PRODUCT_NAME} processes are still running; stopping uninstall to preserve the installation."
-        SetErrorLevel 2
-        Quit
+        !insertmacro KunAbortAutomaticUpdate process_stop_failed process_stop "Running application processes could not be stopped."
       ${else}
         DetailPrint "${PRODUCT_NAME} could not safely inspect processes; stopping without changing the installation."
         ${ifNot} ${isUpdated}
@@ -53,8 +52,7 @@
         ${endif}
 
         DetailPrint "${PRODUCT_NAME} process inspection failed; stopping automatic update to preserve the installation."
-        SetErrorLevel 2
-        Quit
+        !insertmacro KunAbortAutomaticUpdate process_check_failed process_check "Application processes could not be inspected safely."
       ${endif}
 
     KunInstallDirProcessesStopped:

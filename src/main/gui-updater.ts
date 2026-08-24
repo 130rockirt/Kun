@@ -12,6 +12,7 @@ import { DEFAULT_GUI_UPDATE_CHANNEL, normalizeGuiUpdateChannel } from '../shared
 import type { AppLocale } from '../shared/app-locales'
 import { createGuiUpdateScheduler, type GuiUpdateScheduler } from './gui-updater-scheduler'
 import { GuiUpdateOperationCoordinator, type GuiUpdateOperation } from './gui-updater-operation'
+import { GuiUpdateInstaller } from './gui-updater-install'
 import { showGuiUpdateReleaseNotes } from './gui-updater-release-notes'
 import {
   autoUpdater,
@@ -55,14 +56,9 @@ let setUpdateInstallQuitting: ((active: boolean) => void) | null = null
 let pendingVersionStateWrite: Promise<void> | null = null
 let guiUpdateScheduler: GuiUpdateScheduler | null = null
 let updateInstallQuitting = false
-let installPromise: Promise<GuiUpdateInstallResult> | null = null
-let updateInstallHandoffPending = false
-let updateInstallHandoffStarted = false
-let updateInstallLaunchError: Error | null = null
-let updateInstallAttemptActive = false
-let updateInstallRecoveryNeeded = false
-let updateInstallRecoveryScheduled = false
-let restoreInstallerUpdateSourceAfterFailure: (() => void) | null = null
+let downloadedInstallerSha512 = ''
+let sessionEnding = false
+let pendingUpdateHealthCheck: (() => Promise<boolean>) | null = null
 function toGuiInfo(
   updateInfo: UpdateInfo,
   hasUpdate: boolean,
@@ -89,6 +85,11 @@ function hasCurrentDownloadedUpdate(): boolean {
     lastInfo?.hasUpdate &&
     operations.downloadedFor(configuredChannel, configuredFeedUrl, lastInfo.latestVersion)
   )
+}
+function clearDownloadedInstaller(): void {
+  downloadedInstallerSha512 = ''
+  updateInstaller.clearDownloadedInstaller()
+  operations.clearDownloaded()
 }
 function emitGuiUpdateState(state: GuiUpdateState): void {
   const wasSuspended = lastState.status === 'downloaded' || lastState.status === 'installing'
@@ -123,39 +124,21 @@ function markUpdateInstallQuitting(active: boolean): void {
 function clearBeforeInstallUpdatePreparation(): void {
   beforeInstallUpdatePrepared = false
 }
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error))
-}
-function relaunchAfterFailedUpdateInstall(): void {
-  try {
-    app.relaunch()
-    app.exit(0)
-  } catch (error) {
-    console.error('[kun-gui updater] failed to relaunch after update install failure:', error)
-  }
-}
-function resetFailedUpdateInstallState(): void {
-  restoreInstallerUpdateSourceAfterFailure?.()
-  restoreInstallerUpdateSourceAfterFailure = null
-  updateInstallAttemptActive = false
-  updateInstallHandoffPending = false
-  updateInstallHandoffStarted = false
-  updateInstallLaunchError = null
-  clearBeforeInstallUpdatePreparation()
-  markUpdateInstallQuitting(false)
-}
-function scheduleFailedUpdateInstallRecovery(): void {
-  updateInstallRecoveryNeeded = true
-  if (updateInstallRecoveryScheduled) return
-  updateInstallRecoveryScheduled = true
-  queueMicrotask(() => {
-    updateInstallRecoveryScheduled = false
-    if (!updateInstallRecoveryNeeded) return
-    updateInstallRecoveryNeeded = false
-    resetFailedUpdateInstallState()
-    relaunchAfterFailedUpdateInstall()
-  })
-}
+const updateInstaller = new GuiUpdateInstaller({
+  runExclusive: (task) => operations.run(task),
+  details: () => ({
+    hasDownloaded: hasCurrentDownloadedUpdate(),
+    targetVersion: lastInfo?.latestVersion ?? '',
+    channel: configuredChannel
+  }),
+  stateInfo: () => lastInfo ?? undefined,
+  emit: emitGuiUpdateState,
+  prepare: runBeforeInstallUpdate,
+  clearPreparation: clearBeforeInstallUpdatePreparation,
+  setQuitting: markUpdateInstallQuitting,
+  quitAndInstall: () => autoUpdater.quitAndInstall(true, true),
+  isSessionEnding: () => sessionEnding
+})
 async function resolveUpdateChannel(requested?: GuiUpdateChannel): Promise<GuiUpdateChannel> {
   if (requested) return normalizeGuiUpdateChannel(requested)
   if (getSelectedChannel) {
@@ -282,13 +265,15 @@ export function initializeGuiUpdater(
   channelGetter?: () => GuiUpdateChannel | Promise<GuiUpdateChannel>,
   beforeInstall?: () => void | Promise<void>,
   localeGetter?: () => AppLocale | Promise<AppLocale>,
-  updateInstallQuittingSetter?: (active: boolean) => void
+  updateInstallQuittingSetter?: (active: boolean) => void,
+  healthCheck?: () => Promise<boolean>
 ): void {
   getMainWindow = windowGetter
   getSelectedChannel = channelGetter ?? null
   beforeInstallUpdate = beforeInstall ?? null
   getSelectedLocale = localeGetter ?? null
   setUpdateInstallQuitting = updateInstallQuittingSetter ?? null
+  pendingUpdateHealthCheck = healthCheck ?? null
   if (initialized) return
   initialized = true
   if (DEVELOPMENT_APP_FLAVOR) return
@@ -332,6 +317,9 @@ export function initializeGuiUpdater(
   autoUpdater.on('update-downloaded', (event: UpdateDownloadedEvent) => {
     if (!eventOperation || !operations.isCurrent(eventOperation) || eventOperation.kind !== 'download') return
     if (!operations.markDownloaded(eventOperation, event.version.trim())) return
+    downloadedInstallerSha512 = typeof (event as { sha512?: unknown }).sha512 === 'string'
+      ? (event as { sha512: string }).sha512
+      : downloadedInstallerSha512
     const info = toGuiInfo(event, true, eventOperation)
     lastInfo = info
     pendingVersionStateWrite = recordPendingUpdate(event)
@@ -346,15 +334,11 @@ export function initializeGuiUpdater(
 
   autoUpdater.on('error', (error) => {
     const message = error instanceof Error ? error.message : String(error)
-    const installFailed = updateInstallAttemptActive
-    if (installFailed) {
-      updateInstallLaunchError = asError(error)
-      scheduleFailedUpdateInstallRecovery()
-    }
+    const installFailed = updateInstaller.onUpdaterError(error)
     const downloadFailed = !installFailed && eventOperation?.kind === 'download' &&
       operations.isCurrent(eventOperation) && (downloadPromise !== null || lastState.status === 'downloading')
     if (downloadFailed) {
-      operations.clearDownloaded()
+      clearDownloadedInstaller()
       downloadPromise = null
     }
     if (!installFailed && !downloadFailed && !operations.isCurrent(eventOperation)) return
@@ -366,19 +350,14 @@ export function initializeGuiUpdater(
     })
   })
 
-  nativeAutoUpdater?.on?.('before-quit-for-update', () => {
-    if (updateInstallHandoffPending) {
-      updateInstallHandoffStarted = true
-      updateInstallHandoffPending = false
-    }
-    markUpdateInstallQuitting(true)
-    void runBeforeInstallUpdate().catch((error) => {
-      clearBeforeInstallUpdatePreparation()
-      markUpdateInstallQuitting(false)
-      console.warn('[kun-gui updater] failed to stop runtimes before update quit:', error)
-    })
-  })
+  nativeAutoUpdater?.on?.('before-quit-for-update', () => updateInstaller.onBeforeQuitForUpdate())
 
+  ;(app as unknown as { on?: (event: string, listener: () => void) => void }).on?.('session-end', () => {
+    sessionEnding = true
+  })
+  void updateInstaller.reconcile(pendingUpdateHealthCheck).catch((error) => {
+    console.warn('[kun-gui updater] could not reconcile a pending installer update:', error)
+  })
   guiUpdateScheduler = createGuiUpdateScheduler({
     isBusyState: () => lastState.status === 'checking' || lastState.status === 'downloading',
     isSuspendedState: () => lastState.status === 'downloaded' || lastState.status === 'installing',
@@ -529,7 +508,7 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
     const operation = operations.begin('download', selectedChannel, configuredFeedUrl)
     operation.targetVersion = lastInfo.latestVersion
     eventOperation = operation
-    operations.clearDownloaded()
+    clearDownloadedInstaller()
     try {
       let tracked: Promise<string[]>
       tracked = autoUpdater.downloadUpdate().finally(() => {
@@ -537,6 +516,7 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
       })
       downloadPromise = tracked
       const paths = await tracked
+      updateInstaller.setDownloadedInstaller(paths, downloadedInstallerSha512)
       if (operations.isCurrent(operation) && !operations.downloadedFor(
         operation.channel,
         operation.feedUrl,
@@ -559,7 +539,7 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
       return { ok: true, paths }
     } catch (e) {
       if (operations.isCurrent(operation)) {
-        operations.clearDownloaded()
+        clearDownloadedInstaller()
         const message = e instanceof Error ? e.message : String(e)
         emitGuiUpdateState({ status: 'error', info: lastInfo ?? undefined, message, code: 'download_failed' })
         return { ok: false, currentVersion: app.getVersion(), code: 'download_failed', message }
@@ -578,94 +558,13 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
 }
 
 export function installGuiUpdate(): Promise<GuiUpdateInstallResult> {
-  if (installPromise) return installPromise
-  if (updateInstallAttemptActive || updateInstallHandoffPending || updateInstallHandoffStarted) {
-    return Promise.resolve({ ok: true })
-  }
-  const operation = operations.run(installGuiUpdateOnce)
-  installPromise = operation
-  void operation.then(
-    () => {
-      if (installPromise === operation) installPromise = null
-    },
-    () => {
-      if (installPromise === operation) installPromise = null
-    }
-  )
-  return operation
-}
-
-async function installGuiUpdateOnce(): Promise<GuiUpdateInstallResult> {
   if (DEVELOPMENT_APP_FLAVOR) {
-    return {
+    return Promise.resolve({
       ok: false,
       currentVersion: app.getVersion(),
       code: 'unsupported',
       message: DEVELOPMENT_UPDATE_MESSAGE
-    }
+    })
   }
-  let updateInstallQuitMarked = false
-  let restoreInstallerUpdateSource = (): void => undefined
-  try {
-    if (!hasCurrentDownloadedUpdate()) {
-      operations.clearDownloaded()
-      return {
-        ok: false,
-        currentVersion: app.getVersion(),
-        code: 'install_failed',
-        message: 'The update has not finished downloading yet.'
-      }
-    }
-    emitGuiUpdateState({ status: 'installing', info: lastInfo ?? undefined })
-    markUpdateInstallQuitting(true)
-    updateInstallQuitMarked = true
-    await Promise.all([pendingVersionStateWrite, runBeforeInstallUpdate()])
-    if (!hasCurrentDownloadedUpdate()) {
-      clearBeforeInstallUpdatePreparation()
-      markUpdateInstallQuitting(false)
-      return {
-        ok: false,
-        currentVersion: app.getVersion(),
-        code: 'install_failed',
-        message: 'The selected update is no longer eligible for installation.'
-      }
-    }
-    restoreInstallerUpdateSource = setWindowsInstallerUpdateSource()
-    restoreInstallerUpdateSourceAfterFailure = restoreInstallerUpdateSource
-    // In-app updates must stay silent on Windows. The assisted NSIS UI can
-    // surface its old-uninstaller retry dialog even though our overwrite
-    // fallback can safely continue; silent mode applies that dialog's default
-    // cancel action instead of asking the user to make the counter-intuitive
-    // choice. Manually launched installers remain interactive.
-    updateInstallLaunchError = null
-    updateInstallAttemptActive = true
-    updateInstallHandoffPending = true
-    updateInstallHandoffStarted = false
-    autoUpdater.quitAndInstall(true, true)
-    if (updateInstallLaunchError) throw updateInstallLaunchError
-    return { ok: true }
-  } catch (e) {
-    const relaunchRequired = updateInstallQuitMarked
-    restoreInstallerUpdateSource()
-    if (restoreInstallerUpdateSourceAfterFailure === restoreInstallerUpdateSource) {
-      restoreInstallerUpdateSourceAfterFailure = null
-    }
-    updateInstallAttemptActive = false
-    updateInstallHandoffPending = false
-    updateInstallHandoffStarted = false
-    updateInstallLaunchError = null
-    if (updateInstallQuitMarked) {
-      clearBeforeInstallUpdatePreparation()
-      markUpdateInstallQuitting(false)
-    }
-    const message = e instanceof Error ? e.message : String(e)
-    emitGuiUpdateState({ status: 'error', info: lastInfo ?? undefined, message, code: 'install_failed' })
-    if (relaunchRequired) scheduleFailedUpdateInstallRecovery()
-    return {
-      ok: false,
-      currentVersion: app.getVersion(),
-      code: 'install_failed',
-      message
-    }
-  }
+  return updateInstaller.install()
 }

@@ -24,6 +24,7 @@ let showMessageBox: ReturnType<typeof vi.fn>
 let openExternal: ReturnType<typeof vi.fn>
 let relaunchApp: ReturnType<typeof vi.fn>
 let exitApp: ReturnType<typeof vi.fn>
+let appListeners: Map<string, () => void>
 
 function createUpdater(): MockUpdater {
   return Object.assign(new EventEmitter(), {
@@ -53,6 +54,7 @@ beforeEach(() => {
   openExternal = vi.fn().mockResolvedValue(undefined)
   relaunchApp = vi.fn()
   exitApp = vi.fn()
+  appListeners = new Map()
   vi.doMock('node:fs/promises', () => ({
     mkdir: vi.fn().mockResolvedValue(undefined),
     readFile: vi.fn(async (path: string) => {
@@ -62,6 +64,15 @@ beforeEach(() => {
     }),
     writeFile: vi.fn(async (path: string, value: string) => {
       mockedFiles.set(String(path), String(value))
+    }),
+    rename: vi.fn(async (from: string, to: string) => {
+      const value = mockedFiles.get(String(from))
+      if (value === undefined) throw Object.assign(new Error('not found'), { code: 'ENOENT' })
+      mockedFiles.delete(String(from))
+      mockedFiles.set(String(to), value)
+    }),
+    rm: vi.fn(async (path: string) => {
+      mockedFiles.delete(String(path))
     })
   }))
   vi.doMock('electron', () => ({
@@ -74,7 +85,8 @@ beforeEach(() => {
       getVersion: () => appVersion,
       getLocale: () => 'en-US',
       relaunch: relaunchApp,
-      exit: exitApp
+      exit: exitApp,
+      on: (event: string, listener: () => void) => appListeners.set(event, listener)
     },
     autoUpdater: nativeUpdater,
     BrowserWindow: class {},
@@ -497,6 +509,32 @@ describe('installGuiUpdate', () => {
     expect(setUpdateInstallQuitting.mock.calls).toEqual([[true], [false]])
     expect(relaunchApp).toHaveBeenCalledOnce()
     expect(exitApp).toHaveBeenCalledWith(0)
+  })
+
+  it('writes pending installer state before handing off to NSIS', async () => {
+    const module = await import('./gui-updater')
+    module.initializeGuiUpdater(() => null, () => 'stable')
+    await downloadInstallEligibleUpdate(module)
+
+    await expect(module.installGuiUpdate()).resolves.toEqual({ ok: true })
+    const stored = [...mockedFiles.entries()].find(([path]) => path.endsWith('pending-update.json'))
+    expect(stored?.[1]).toContain('"oldVersion": "0.1.0"')
+    expect(stored?.[1]).toContain('"newVersion": "0.2.0"')
+    expect(stored?.[1]).toContain('Kun-0.2.0.exe')
+    expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true)
+  })
+
+  it('defers installation during Windows session end without discarding the download', async () => {
+    const module = await import('./gui-updater')
+    module.initializeGuiUpdater(() => null, () => 'stable')
+    await downloadInstallEligibleUpdate(module)
+    appListeners.get('session-end')?.()
+
+    await expect(module.installGuiUpdate()).resolves.toMatchObject({
+      ok: false,
+      code: 'install_deferred'
+    })
+    expect(updater.quitAndInstall).not.toHaveBeenCalled()
   })
 
   it('shares one install operation when the action is triggered twice', async () => {
