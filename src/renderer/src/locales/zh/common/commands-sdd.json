@@ -679,6 +679,7 @@
   "planEmptyTitle": "还没有计划文件",
   "planEmptySub": "可以从输入框创建计划，或重新打开当前工作区最近的计划。",
   "planOpenFile": "打开计划文件",
+  "planCopyPath": "复制计划文件路径",
   "planRefineHint": "想修改计划？直接在左侧对话里继续说，模型会更新这个文件。",
   "sddNewRequirement": "新建需求",
   "sddDraftTitle": "需求草稿",

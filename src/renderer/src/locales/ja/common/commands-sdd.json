@@ -646,6 +646,7 @@
   "planEmptyTitle": "計画ファイルがありません",
   "planEmptySub": "コンポーザーからプランを作成するか、このワークスペースの最近のプランを再度開きます。",
   "planOpenFile": "計画ファイルを開く",
+  "planCopyPath": "計画ファイルのパスをコピー",
   "planRefineHint": "変更が必要ですか?左側でチャットを続けると、モデルがこの計画を更新します。",
   "planBuild": "ビルドする",
   "planBuildDirect": "直接ビルド",

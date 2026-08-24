@@ -680,6 +680,7 @@
   "planEmptyTitle": "No plan file",
   "planEmptySub": "Create a plan from the composer or reopen a recent plan for this workspace.",
   "planOpenFile": "Open plan file",
+  "planCopyPath": "Copy plan file path",
   "planRefineHint": "Want changes? Keep chatting on the left and the model will update this plan.",
   "sddNewRequirement": "New requirement",
   "sddDraftTitle": "Requirement draft",

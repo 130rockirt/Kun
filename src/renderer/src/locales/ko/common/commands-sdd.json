@@ -646,6 +646,7 @@
   "planEmptyTitle": "계획 파일 없음",
   "planEmptySub": "작성기에서 계획을 생성하거나 이 작업공간에 대한 최근 계획을 다시 엽니다.",
   "planOpenFile": "계획 파일 열기",
+  "planCopyPath": "계획 파일 경로 복사",
   "planRefineHint": "변화를 원하시나요? 왼쪽에서 계속 채팅하면 모델이 이 계획을 업데이트합니다.",
   "planBuild": "빌드",
   "planBuildDirect": "직접 빌드",
