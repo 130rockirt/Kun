@@ -128,7 +128,7 @@ export function MessageTimeline({
   const threadLoadingId = useChatStore((state) => state.threadLoadingId)
   const usageRefreshKey = useChatStore((state) => state.usageRefreshKey)
   const cancelToolCall = useChatStore((state) => state.cancelToolCall)
-  const turnUsage = useTurnUsageState(activeThreadId, usageRefreshKey)
+  const turnUsage = useTurnUsageState(threadLoadingId === activeThreadId ? null : activeThreadId, usageRefreshKey)
   const handleCancelToolCall = useCallback(async (block: ToolBlock): Promise<boolean> => {
     if (!activeThreadId || !block.turnId) return false
     const callId = typeof block.meta?.callId === 'string' ? block.meta.callId : ''
@@ -375,7 +375,7 @@ export function MessageTimeline({
       workspaceRoot={filePreviewWorkspaceRoot}
       threadId={activeThreadId}
     >
-    <InjectedMemoryLookupProvider workspaceRoot={workspaceRoot}>
+    <InjectedMemoryLookupProvider workspaceRoot={workspaceRoot} enabled={!activeThreadId || threadLoadingId !== activeThreadId}>
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
       <ThreadHydrationGate loading={Boolean(activeThreadId && threadLoadingId === activeThreadId)}>
       <div ref={containerRef} className="ds-no-drag relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">

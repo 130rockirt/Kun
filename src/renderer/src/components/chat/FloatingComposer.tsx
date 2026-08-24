@@ -308,6 +308,7 @@ export function FloatingComposer({
     : null
   const activeThreadArchived = activeThread?.archived === true
   const showUsageHistoryFooter = shouldShowUsageHistory({ compact, route, runtimeReady })
+  const hydratingActiveThread = activeThreadId != null && threadLoadingId === activeThreadId
   const hasConversationStarted = blocks.some((block) => block.kind === 'user')
   const showWorkspaceControls = shouldShowWorkspaceControls({
     compact,
@@ -317,7 +318,7 @@ export function FloatingComposer({
   })
   const threadUsageState = useThreadUsageState(
     activeThreadId,
-    showUsageHistoryFooter && Boolean(activeThreadId),
+    showUsageHistoryFooter && Boolean(activeThreadId) && !hydratingActiveThread,
     `${activeThread?.updatedAt ?? ''}:${busy ? 'busy' : 'idle'}:${usageRefreshKey}`
   )
   const threadUsage = threadUsageState.usage
@@ -345,7 +346,6 @@ export function FloatingComposer({
     activeClawChannel?.remoteSession?.chatId?.trim()
   )
 
-  const hydratingActiveThread = activeThreadId != null && threadLoadingId === activeThreadId
   const canEditComposer = !disabled && !hydratingActiveThread && (route === 'claw' ? clawHasInboundConversation : true)
   const canCompose = !disabled && !hydratingActiveThread && runtimeReady && (
     route === 'claw'

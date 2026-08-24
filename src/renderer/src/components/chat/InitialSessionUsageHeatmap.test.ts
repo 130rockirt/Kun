@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { act, create as createRenderer } from 'react-test-renderer'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
 import type { DailyUsageState, DailyUsageSummary } from '../../hooks/use-daily-usage'
 import type { ModelUsageState } from '../../hooks/use-model-usage'
@@ -249,6 +249,26 @@ describe('InitialSessionUsageHeatmap', () => {
     expect(output).toContain('Showing 6–6 / 6')
     expect(output).toContain('12.3')
     expect(renderer.root.findByProps({ 'aria-label': 'Next page' }).props.disabled).toBe(true)
+    renderer.unmount()
+  })
+
+  it('notifies the owner before loading the models tab', async () => {
+    const onActiveTabChange = vi.fn()
+    let renderer!: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement(InitialSessionUsageHeatmapView, {
+        state: state({ usage: usage(), loaded: true }),
+        onActiveTabChange
+      }))
+    })
+
+    await act(async () => {
+      renderer.root.findAllByType('button')
+        .find((button) => button.children.includes('Models'))!
+        .props.onClick()
+    })
+
+    expect(onActiveTabChange).toHaveBeenCalledWith('models')
     renderer.unmount()
   })
 

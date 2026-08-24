@@ -68,6 +68,12 @@ describe('MessageTimeline hydration presentation', () => {
   })
 
   it('renders only loading until the target projection is ready', async () => {
+    const runtimeRequest = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({ group_by: 'turn', thread_id: activeThread.id, buckets: [] })
+    })
+    Object.defineProperty(window, 'kunGui', { configurable: true, value: { runtimeRequest } })
     const element = createElement(MessageTimeline, {
       blocks: [{ kind: 'assistant', id: 'target-answer', text: 'target-ready-content' }],
       liveReasoning: '',
@@ -84,10 +90,18 @@ describe('MessageTimeline hydration presentation', () => {
     expect(container.querySelector('[data-testid="thread-hydration-loading"]')).not.toBeNull()
     expect(container.textContent).not.toContain('target-ready-content')
     expect(messageNode).toBeUndefined()
+    expect(runtimeRequest).not.toHaveBeenCalled()
 
-    await act(async () => useChatStore.setState({ threadLoadingId: null }))
+    await act(async () => {
+      useChatStore.setState({ threadLoadingId: null })
+      await Promise.resolve()
+    })
 
     expect(container.querySelector('[data-testid="thread-hydration-loading"]')).toBeNull()
     expect(container.textContent).toContain('target-ready-content')
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/usage?group_by=turn&thread_id=thread-target',
+      'GET'
+    )
   })
 })

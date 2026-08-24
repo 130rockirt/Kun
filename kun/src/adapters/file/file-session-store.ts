@@ -413,7 +413,9 @@ export class FileSessionStore implements SessionStore {
       await source.handle.close()
       return { items: [], hasMore: false, itemBytes: 0 }
     }
-    return readItemPageFromJsonl(source.handle, source.size, options)
+    const page = await readItemPageFromJsonl(source.handle, source.size, options)
+    if (source.size >= this.itemHistoryCompactionMinBytes) this.scheduleItemHistoryCompaction(threadId)
+    return page
   }
 
   private async loadItemsUnlocked(threadId: string): Promise<TurnItem[]> {
