@@ -32,6 +32,7 @@ import {
   type ManagerSessionStoreOperation,
   type ManagerThreadStoreOperation
 } from './shared-data-store.js'
+import { MANAGER_THREAD_STORE_OPERATIONS } from './shared-data-store-contracts.js'
 import {
   RevisionConflictError,
   RevisionedDocumentStore
@@ -59,9 +60,7 @@ export const KUN_MANAGER_CAPABILITIES = [
   'item-page-v1'
 ] as const
 
-export const ThreadStoreOperationSchema = z.enum([
-  'list', 'listPage', 'get', 'getMetadata', 'touch', 'upsert', 'delete'
-])
+export const ThreadStoreOperationSchema = z.enum(MANAGER_THREAD_STORE_OPERATIONS)
 export const SessionStoreOperationSchema = z.enum([
   'appendEvent', 'appendItem', 'rewriteItems', 'loadItemSnapshot',
   'rewriteItemsIfRevision', 'updateItem', 'compactItems', 'loadEventsSince',

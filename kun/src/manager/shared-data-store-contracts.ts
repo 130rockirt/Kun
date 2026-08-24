@@ -116,15 +116,23 @@ export const SessionUsageQuerySchema = z.object({
   }
 })
 
-export type ManagerThreadStoreOperation =
-  | 'list'
-  | 'listPage'
-  | 'get'
-  | 'getMetadata'
-  | 'touch'
-  | 'upsert'
-  | 'upsertIfRevision'
-  | 'delete'
+/**
+ * Single source of truth for the manager thread data-plane protocol. Both the
+ * runtime URL allowlist (ThreadStoreOperationSchema) and this union type are
+ * derived from it so they cannot drift apart again.
+ */
+export const MANAGER_THREAD_STORE_OPERATIONS = [
+  'list',
+  'listPage',
+  'get',
+  'getMetadata',
+  'touch',
+  'upsert',
+  'upsertIfRevision',
+  'delete'
+] as const
+
+export type ManagerThreadStoreOperation = (typeof MANAGER_THREAD_STORE_OPERATIONS)[number]
 
 export type ManagerSessionStoreOperation =
   | 'appendEvent'

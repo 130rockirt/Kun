@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { RuntimeFlavorSchema } from '../contracts/runtime-flavor.js'
 
-const AcquireResultSchema = z.object({ acquired: z.boolean() }).passthrough()
+const AcquireResultSchema = z.object({
+  acquired: z.boolean(),
+  lease: z.object({ expiresAt: z.string() }).passthrough().optional()
+}).passthrough()
 
 /**
  * Serialize a shared-data mutation across production and development Runtime
@@ -21,35 +24,79 @@ export async function withManagerDataMutex<T>(
     ownerFlavor: manager.flavor,
     ownerInstanceId: manager.instanceId
   }
-  const deadline = Date.now() + 30_000
+  const acquireDeadline = Date.now() + 30_000
+  let lease: { expiresAt?: string } | undefined
   for (;;) {
-    const acquired = AcquireResultSchema.parse(await managerRequest(
+    const result = AcquireResultSchema.parse(await managerRequest(
       `${leasePath}/acquire`,
       manager.token,
       body
-    )).acquired
-    if (acquired) break
-    if (Date.now() >= deadline) throw new Error(`shared data resource is busy: ${resource}`)
+    ))
+    if (result.acquired) {
+      lease = result.lease
+      break
+    }
+    if (Date.now() >= acquireDeadline) throw new Error(`shared data resource is busy: ${resource}`)
     await delay(100)
   }
 
+  // Manager deletes the lease at expiresAt even while this runtime cannot
+  // reach it, and another runtime may then enter the critical section. Track
+  // expiresAt locally and fail the operation as soon as the lease is
+  // definitively lost instead of waiting for operation() to settle.
+  let finished = false
   let renewalFailure: unknown
+  let rejectLeaseLost: (error: unknown) => void = () => undefined
+  const leaseLost = new Promise<never>((_, reject) => { rejectLeaseLost = reject })
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined
+  const fail = (error: unknown) => {
+    if (finished || renewalFailure) return
+    renewalFailure = error
+    rejectLeaseLost(error)
+  }
+  const armDeadline = (expiresAt: string | undefined) => {
+    if (deadlineTimer) clearTimeout(deadlineTimer)
+    deadlineTimer = undefined
+    const expiresAtMs = expiresAt ? Date.parse(expiresAt) : Number.NaN
+    if (!Number.isFinite(expiresAtMs)) return
+    deadlineTimer = setTimeout(
+      () => fail(new Error(`shared data resource lease expired: ${resource}`)),
+      Math.max(0, expiresAtMs - Date.now())
+    )
+    deadlineTimer.unref?.()
+  }
+  armDeadline(lease?.expiresAt)
+
   const renew = setInterval(() => {
     void managerRequest(`${leasePath}/acquire`, manager.token, body)
       .then((value) => {
-        if (!AcquireResultSchema.parse(value).acquired) {
-          renewalFailure = new Error(`shared data resource lease was lost: ${resource}`)
+        const result = AcquireResultSchema.parse(value)
+        if (!result.acquired) {
+          fail(new Error(`shared data resource lease was lost: ${resource}`))
+          return
         }
+        armDeadline(result.lease?.expiresAt)
       })
-      .catch((error) => { renewalFailure = error })
+      .catch((error) => {
+        // Transient failure: the local deadline remains the hard limit.
+        console.warn(
+          `[kun] shared data lease renewal delayed resource=${resource}: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+        )
+      })
   }, 3_000)
   renew.unref?.()
   try {
-    const result = await operation()
+    const operationPromise = operation()
+    // The race observes a rejection; this keeps it handled if lease loss wins.
+    operationPromise.catch(() => undefined)
+    const result = await Promise.race([operationPromise, leaseLost])
     if (renewalFailure) throw renewalFailure
     return result
   } finally {
+    finished = true
     clearInterval(renew)
+    if (deadlineTimer) clearTimeout(deadlineTimer)
     await managerRequest(`${leasePath}/release`, manager.token, body).catch(() => undefined)
   }
 }

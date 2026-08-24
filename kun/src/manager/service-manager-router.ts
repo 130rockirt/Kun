@@ -30,8 +30,7 @@ import {
   type ManagerArtifactStoreOperation,
   type ManagerGraphStoreOperation,
   type ManagerMemoryStoreOperation,
-  type ManagerSessionStoreOperation,
-  type ManagerThreadStoreOperation
+  type ManagerSessionStoreOperation
 } from './shared-data-store.js'
 import {
   RevisionConflictError,
@@ -272,7 +271,7 @@ export function buildServiceManagerRouter(input: {
       if (!body.ok) return body.response
       try {
         const result = await input.sharedData!.executeThread(
-          operation.data as ManagerThreadStoreOperation,
+          operation.data,
           body.value
         )
         return jsonResponse({ result })

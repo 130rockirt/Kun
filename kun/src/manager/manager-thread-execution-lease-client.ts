@@ -19,6 +19,7 @@ type ActiveRenewal = {
   lease: ThreadExecutionLease
   timer: ReturnType<typeof setInterval>
   retryTimer?: ReturnType<typeof setTimeout>
+  deadlineTimer?: ReturnType<typeof setTimeout>
   renewing: boolean
   transientFailures: number
 }
@@ -83,6 +84,7 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
     for (const renewal of this.renewals.values()) {
       clearInterval(renewal.timer)
       if (renewal.retryTimer) clearTimeout(renewal.retryTimer)
+      if (renewal.deadlineTimer) clearTimeout(renewal.deadlineTimer)
     }
     this.renewals.clear()
   }
@@ -91,12 +93,14 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
     this.stopRenewal(lease.threadId)
     const timer = setInterval(() => void this.renew(lease.threadId), 5_000)
     timer.unref?.()
-    this.renewals.set(lease.threadId, {
+    const renewal: ActiveRenewal = {
       lease,
       timer,
       renewing: false,
       transientFailures: 0
-    })
+    }
+    this.renewals.set(lease.threadId, renewal)
+    this.armDeadline(renewal)
   }
 
   private async renew(threadId: string): Promise<void> {
@@ -148,6 +152,7 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
     }
     latest.lease = lease
     latest.transientFailures = 0
+    this.armDeadline(latest)
   }
 
   private recordTransientFailure(current: ActiveRenewal, error: unknown): void {
@@ -169,6 +174,31 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
     this.onLeaseLost?.(lease)
   }
 
+  // Local hard deadline: Manager deletes the lease at expiresAt whether or not
+  // this runtime can reach it, so renewal retries must not outlive expiresAt.
+  private armDeadline(current: ActiveRenewal): void {
+    if (current.deadlineTimer) clearTimeout(current.deadlineTimer)
+    current.deadlineTimer = undefined
+    const expiresAtMs = Date.parse(current.lease.expiresAt)
+    if (!Number.isFinite(expiresAtMs)) return
+    const { threadId, turnId } = current.lease
+    current.deadlineTimer = setTimeout(
+      () => this.expireRenewal(threadId, turnId),
+      Math.max(0, expiresAtMs - Date.now())
+    )
+    current.deadlineTimer.unref?.()
+  }
+
+  private expireRenewal(threadId: string, turnId: string): void {
+    const current = this.renewals.get(threadId)
+    if (!current || current.lease.turnId !== turnId) return
+    console.warn(
+      `[kun] thread lease expired without renewal thread=${threadId} ` +
+      `turn=${turnId} expiresAt=${current.lease.expiresAt}`
+    )
+    this.loseRenewal(current.lease)
+  }
+
   private scheduleRenewalRetry(current: ActiveRenewal): void {
     if (current.retryTimer) return
     const retryMs = Math.min(500 * (2 ** Math.min(current.transientFailures - 1, 3)), 5_000)
@@ -184,6 +214,7 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
     if (!current || (turnId && current.lease.turnId !== turnId)) return
     clearInterval(current.timer)
     if (current.retryTimer) clearTimeout(current.retryTimer)
+    if (current.deadlineTimer) clearTimeout(current.deadlineTimer)
     this.renewals.delete(threadId)
   }
 }
