@@ -138,11 +138,23 @@ export class HybridSessionStore implements SessionStore {
   }
 
   async loadUsageRecords(options?: SessionUsageQueryOptions): Promise<SessionUsageRecord[]> {
-    return this.index.loadUsageRecords(options)
+    try {
+      return await this.index.loadUsageRecords(options)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`[kun] sqlite usage index unavailable; using file usage index: ${message}`)
+      return this.delegate.loadUsageRecords(options)
+    }
   }
 
   async loadLatestUsageSnapshots(options?: { threadIds?: string[] }): Promise<SessionLatestUsageSnapshot[]> {
-    return this.index.loadLatestUsageSnapshots(options)
+    try {
+      return await this.index.loadLatestUsageSnapshots(options)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`[kun] sqlite latest usage snapshots unavailable; using file usage index: ${message}`)
+      return this.delegate.loadLatestUsageSnapshots(options)
+    }
   }
 
   async resetMemory(): Promise<void> {

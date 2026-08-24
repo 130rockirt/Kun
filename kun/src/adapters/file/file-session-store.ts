@@ -11,7 +11,10 @@ import type {
   ItemTextSearchOptions,
   SessionArchiveInput,
   SessionArchiveResult,
-  SessionStore
+  SessionLatestUsageSnapshot,
+  SessionStore,
+  SessionUsageQueryOptions,
+  SessionUsageRecord
 } from '../../ports/session-store.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
 import type { TurnItem } from '../../contracts/items.js'
@@ -21,9 +24,9 @@ import {
   parseReplayEventRecord,
   readItemPageFromJsonl,
   readLatestItemsFromJsonl,
-  serializedBytes,
   warnUsageCompaction
 } from './file-session-jsonl.js'
+import { ItemsCache } from './file-session-items-cache.js'
 import { atomicWriteFile } from './atomic-write.js'
 import { isPathBelowDirectory } from './path-containment.js'
 import { buildPublicItemHistoryPage } from '../../services/item-history-page.js'
@@ -32,6 +35,12 @@ import { searchItemTextFile } from './file-session-text-search.js'
 import { writeSessionArchive } from './session-history-archive.js'
 import { compactUsageEventsIfLarge, sessionDirectoryExists } from './file-session-usage-compaction.js'
 import { scanHighestSeqFromTail } from './file-session-seq-tail-scan.js'
+import { FileSessionUsageIndex } from './file-session-usage-index.js'
+import {
+  listThreadDirs,
+  loadLatestUsageSnapshotsFromIndex,
+  loadUsageRecordsFromIndex
+} from './file-session-usage-read.js'
 
 export { readLatestItemsFromJsonl } from './file-session-jsonl.js'
 const DEFAULT_USAGE_EVENT_COMPACTION_MAX_BYTES = 5 * 1024 * 1024
@@ -68,11 +77,8 @@ export class FileSessionStore implements SessionStore {
     retentionDays: number
     nowIso: () => string
   }
-  private readonly itemsCache = new Map<string, TurnItem[]>()
-  private readonly itemsCacheBytes = new Map<string, number>()
-  private readonly itemsCacheMaxBytes: number
+  private readonly itemsCache: ItemsCache
   private readonly itemHistoryCompactionMinBytes: number
-  private readonly itemsCacheVersion = new Map<string, number>()
   /** Opaque revisions used to fence stale read-compute-rewrite snapshots. */
   private readonly itemHistoryRevisions = new Map<string, number>()
   private nextItemHistoryRevision = 0
@@ -81,6 +87,7 @@ export class FileSessionStore implements SessionStore {
   private readonly highestSeqCache = new Map<string, { seq: number; size: number; mtimeMs: number }>()
   private readonly writeQueues = new Map<string, Promise<unknown>>()
   private readonly compactionScheduler: SessionCompactionScheduler
+  private readonly usageIndex: FileSessionUsageIndex
 
   constructor(options: {
     dataDir: string
@@ -94,9 +101,17 @@ export class FileSessionStore implements SessionStore {
     compactionDelayMs?: number
   }) {
     this.dataDir = resolve(options.dataDir, 'threads')
-    this.itemsCacheMaxBytes = Math.max(1, Math.floor(
+    this.usageIndex = new FileSessionUsageIndex(
+      this.dataDir,
+      async function* (this: FileSessionStore, threadId: string, sinceSeq: number) {
+        for await (const event of this.iterateEventsSince(threadId, sinceSeq)) {
+          if (event.kind === 'usage') yield event
+        }
+      }.bind(this)
+    )
+    this.itemsCache = new ItemsCache(ITEMS_CACHE_MAX_THREADS, Math.max(1, Math.floor(
       options.itemsCacheMaxBytes ?? DEFAULT_ITEMS_CACHE_MAX_BYTES
-    ))
+    )))
     this.itemHistoryCompactionMinBytes = Math.max(1, Math.floor(
       options.itemHistoryCompactionMinBytes ?? DEFAULT_ITEM_HISTORY_COMPACTION_MIN_BYTES
     ))
@@ -138,8 +153,8 @@ export class FileSessionStore implements SessionStore {
       const path = this.eventsPath(threadId)
       await appendFile(path, `${JSON.stringify(event)}\n`, { encoding: 'utf-8', mode: 0o600 })
       this.bumpEventHistoryRevision(threadId)
-      const info = await stat(path)
-      this.cacheHighestSeq(threadId, event.seq, info, { preserveHigher: true })
+      this.cacheHighestSeq(threadId, event.seq, await stat(path), { preserveHigher: true })
+      if (event.kind === 'usage') await this.usageIndex.recordUsage(threadId, event)
     })
     // Never await usage compaction on the live append path — a multi-hundred-MB
     // events.jsonl rewrite would starve lease heartbeats (#621 family).
@@ -293,6 +308,16 @@ export class FileSessionStore implements SessionStore {
 
   async flushScheduledCompaction(threadId?: string): Promise<void> {
     await this.compactionScheduler.flush(threadId)
+  }
+
+  async loadUsageRecords(options: SessionUsageQueryOptions = {}): Promise<SessionUsageRecord[]> {
+    return loadUsageRecordsFromIndex(this.usageIndex, () => listThreadDirs(this.dataDir), options)
+  }
+
+  async loadLatestUsageSnapshots(
+    options: { threadIds?: string[] } = {}
+  ): Promise<SessionLatestUsageSnapshot[]> {
+    return loadLatestUsageSnapshotsFromIndex(this.usageIndex, () => listThreadDirs(this.dataDir), options)
   }
 
   async loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]> {
@@ -497,35 +522,26 @@ export class FileSessionStore implements SessionStore {
   async resetMemory(): Promise<void> {
     await this.compactionScheduler.cancelPending().catch(() => undefined)
     this.itemsCache.clear()
-    this.itemsCacheBytes.clear()
-    this.itemsCacheVersion.clear()
     this.itemHistoryRevisions.clear()
     this.eventHistoryRevisions.clear()
     this.highestSeqCache.clear()
+    this.usageIndex.resetMemory()
   }
 
   clearThreadMemory(threadId: string): void {
-    this.removeCachedItems(threadId)
-    this.itemsCacheVersion.delete(threadId)
+    this.itemsCache.removeAll(threadId)
     this.itemHistoryRevisions.delete(threadId)
     this.eventHistoryRevisions.delete(threadId)
     this.highestSeqCache.delete(threadId)
+    this.usageIndex.clearThreadMemory(threadId)
   }
 
   itemCacheStats(): { entries: number; bytes: number; maxBytes: number } {
-    return {
-      entries: this.itemsCache.size,
-      bytes: this.cachedItemsBytes(),
-      maxBytes: this.itemsCacheMaxBytes
-    }
-  }
-
-  private itemsVersionOf(threadId: string): number {
-    return this.itemsCacheVersion.get(threadId) ?? 0
+    return this.itemsCache.stats()
   }
 
   private bumpItemsVersion(threadId: string): void {
-    this.itemsCacheVersion.set(threadId, this.itemsVersionOf(threadId) + 1)
+    this.itemsCache.bumpVersion(threadId)
   }
 
   private itemHistoryRevision(threadId: string): number {
@@ -569,19 +585,7 @@ export class FileSessionStore implements SessionStore {
   }
 
   private cacheItems(threadId: string, items: TurnItem[]): void {
-    this.removeCachedItems(threadId)
-    const bytes = serializedBytes(items)
-    if (bytes > this.itemsCacheMaxBytes / 2 || bytes > this.itemsCacheMaxBytes) return
     this.itemsCache.set(threadId, items)
-    this.itemsCacheBytes.set(threadId, bytes)
-    while (
-      this.itemsCache.size > ITEMS_CACHE_MAX_THREADS ||
-      this.cachedItemsBytes() > this.itemsCacheMaxBytes
-    ) {
-      const oldest = this.itemsCache.keys().next().value
-      if (oldest === undefined) break
-      this.removeCachedItems(oldest)
-    }
   }
 
   private cacheHighestSeq(
@@ -610,42 +614,7 @@ export class FileSessionStore implements SessionStore {
   }
 
   private applyItemToCache(threadId: string, item: TurnItem): void {
-    const cached = this.itemsCache.get(threadId)
-    if (!cached) return
-    const index = cached.findIndex((existing) => existing.id === item.id)
-    const previousBytes = this.itemsCacheBytes.get(threadId) ?? 0
-    const nextBytes = index >= 0
-      ? previousBytes - serializedBytes(cached[index]) + serializedBytes(item)
-      : previousBytes + serializedBytes(item)
-    if (nextBytes > this.itemsCacheMaxBytes / 2 || nextBytes > this.itemsCacheMaxBytes) {
-      this.removeCachedItems(threadId)
-      return
-    }
-    if (index >= 0) cached[index] = item
-    else cached.push(item)
-    this.itemsCache.delete(threadId)
-    this.itemsCache.set(threadId, cached)
-    this.itemsCacheBytes.delete(threadId)
-    this.itemsCacheBytes.set(threadId, nextBytes)
-    while (
-      this.itemsCache.size > ITEMS_CACHE_MAX_THREADS ||
-      this.cachedItemsBytes() > this.itemsCacheMaxBytes
-    ) {
-      const oldest = this.itemsCache.keys().next().value
-      if (oldest === undefined) break
-      this.removeCachedItems(oldest)
-    }
-  }
-
-  private removeCachedItems(threadId: string): void {
-    this.itemsCache.delete(threadId)
-    this.itemsCacheBytes.delete(threadId)
-  }
-
-  private cachedItemsBytes(): number {
-    let total = 0
-    for (const bytes of this.itemsCacheBytes.values()) total += bytes
-    return total
+    this.itemsCache.applyItem(threadId, item)
   }
 
   private threadDir(threadId: string): string {

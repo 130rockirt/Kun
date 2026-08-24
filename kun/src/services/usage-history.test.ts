@@ -101,6 +101,9 @@ describe('loadUsageHistory provider attribution', () => {
     })
   })
 
+  // The index-less JSONL fallback computes cumulative deltas over the whole
+  // event log before filtering by range, so range results must match what the
+  // pre-computed usage index yields for the same thread.
   it('filters JSONL fallback only after computing cumulative deltas', async () => {
     const source = makeSwitchedThreadSource({
       loadUsageRecords: vi.fn(async () => { throw new Error('index unavailable') })
