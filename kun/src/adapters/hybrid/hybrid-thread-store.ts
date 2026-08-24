@@ -8,7 +8,6 @@ import type { SessionLatestUsageSnapshot, SessionUsageQueryOptions, SessionUsage
 import { legacyWorkThreadTitleMatches, resolveThreadAgentSurface } from '../../domain/thread.js'
 import { filterThreadSummaries } from '../../domain/thread-list-query.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
-import { readJsonl } from '../file/file-thread-store.js'
 import { stripThreadItemBodies, type ThreadMetadataLine } from './hybrid-thread-projection.js'
 import { HybridThreadDocumentRepository } from './hybrid-thread-documents.js'
 import { HybridFilesystemSummaryCache } from './hybrid-filesystem-summary-cache.js'
@@ -18,6 +17,7 @@ import { requiresLegacyWorkThreadHydration } from './hybrid-thread-legacy-surfac
 import { HybridThreadIndexRepository } from './hybrid-thread-index.js'
 import { hybridThreadStoreListPage, summariesFromRows } from './hybrid-thread-list-page.js'
 import { HybridThreadBackfillCoordinator } from './hybrid-thread-backfill.js'
+import { scanEventsForUsageBackfill } from './hybrid-thread-usage-scan.js'
 import {
   METADATA_COMPACT_MIN_BYTES,
   addColumnIfMissing,
@@ -447,17 +447,7 @@ export class HybridThreadStore implements ThreadStore {
   private async scanEventsForBackfill(
     threadId: string
   ): Promise<{ highWater: number; usage: UsageRuntimeEvent[] }> {
-    let highWater = 0
-    const usage: UsageRuntimeEvent[] = []
-    try {
-      for (const event of await readJsonl<RuntimeEvent>(this.eventsPath(threadId))) {
-        if (event.seq > highWater) highWater = event.seq
-        if (event.kind === 'usage') usage.push(event)
-      }
-    } catch (error) {
-      warnSqlite(`scan events for ${threadId}`, error)
-    }
-    return { highWater, usage }
+    return scanEventsForUsageBackfill(this.eventsPath(threadId))
   }
 
   /**

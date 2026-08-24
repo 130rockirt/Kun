@@ -89,3 +89,46 @@ describe('HybridThreadBackfillCoordinator shutdown', () => {
     expect(deps.markUsageBackfilled).not.toHaveBeenCalled()
   })
 })
+
+describe('HybridThreadBackfillCoordinator scan failures', () => {
+  it('skips a thread whose events scan fails and keeps it unmarked', async () => {
+    const failure = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    const deps = makeDeps({
+      indexedRows: vi.fn(() => [
+        { id: 'thread_1', usage_backfilled: 0 },
+        { id: 'thread_2', usage_backfilled: 0 }
+      ]),
+      filesystemThreadIds: vi.fn(async () => ['thread_1', 'thread_2']),
+      scanEvents: vi.fn(async (threadId: string) => {
+        if (threadId === 'thread_1') throw failure
+        return { highWater: 4, usage: [{ seq: 4 }] }
+      })
+    })
+    const coordinator = new HybridThreadBackfillCoordinator(deps)
+
+    coordinator.start()
+    await coordinator.wait()
+
+    expect(deps.warn).toHaveBeenCalledWith('usage backfill scan for thread_1', failure)
+    expect(deps.noteExistingHighWater).not.toHaveBeenCalledWith('thread_1', expect.anything())
+    expect(deps.insertUsage).not.toHaveBeenCalledWith('thread_1', expect.anything())
+    expect(deps.markUsageBackfilled).not.toHaveBeenCalledWith('thread_1')
+    expect(deps.noteExistingHighWater).toHaveBeenCalledWith('thread_2', 4)
+    expect(deps.insertUsage).toHaveBeenCalledWith('thread_2', [{ seq: 4 }])
+    expect(deps.markUsageBackfilled).toHaveBeenCalledWith('thread_2')
+  })
+
+  it('marks a thread whose successful scan returned no usage rows', async () => {
+    const deps = makeDeps({
+      scanEvents: vi.fn(async () => ({ highWater: 0, usage: [] }))
+    })
+    const coordinator = new HybridThreadBackfillCoordinator(deps)
+
+    coordinator.start()
+    await coordinator.wait()
+
+    expect(deps.noteExistingHighWater).toHaveBeenCalledWith('thread_1', 0)
+    expect(deps.insertUsage).toHaveBeenCalledWith('thread_1', [])
+    expect(deps.markUsageBackfilled).toHaveBeenCalledWith('thread_1')
+  })
+})

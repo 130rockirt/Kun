@@ -72,7 +72,16 @@ export class HybridThreadBackfillCoordinator<TUsage> {
       if (usageBackfilled === undefined && !this.readableMissingThreadIds.has(threadId)) {
         continue
       }
-      const scan = await this.deps.scanEvents(threadId)
+      let scan: BackfillScan<TUsage>
+      try {
+        scan = await this.deps.scanEvents(threadId)
+      } catch (error) {
+        // Keep the thread eligible for the next startup instead of recording
+        // a failed scan as a completed backfill.
+        this.deps.warn(`usage backfill scan for ${threadId}`, error)
+        await this.deps.yieldToEventLoop()
+        continue
+      }
       if (this.stopped) return
       this.deps.noteExistingHighWater(threadId, scan.highWater)
       await this.deps.insertUsage(threadId, scan.usage)

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HybridThreadStore } from './hybrid-thread-store.js'
@@ -23,6 +23,16 @@ async function createStore(): Promise<{ root: string; store: HybridThreadStore }
   const root = await mkdtemp(join(tmpdir(), 'kun-hybrid-usage-'))
   roots.push(root)
   return { root, store: new HybridThreadStore({ dataDir: root }) }
+}
+
+function backfillInternals(store: HybridThreadStore): {
+  db: { prepare(sql: string): { get(...args: unknown[]): unknown } } | null
+  backfill: { wait(): Promise<void> } | null
+} {
+  return store as unknown as {
+    db: { prepare(sql: string): { get(...args: unknown[]): unknown } } | null
+    backfill: { wait(): Promise<void> } | null
+  }
 }
 
 function usageEvent(seq: number, usage: UsageSnapshot): UsageEvent {
@@ -274,6 +284,45 @@ describe('HybridThreadStore SQLite pagination', () => {
       expect(filesystemScan).not.toHaveBeenCalled()
     } finally {
       filesystemScan.mockRestore()
+      store.close()
+    }
+  })
+})
+
+describe('HybridThreadStore usage backfill scan failures', () => {
+  it('leaves the thread eligible for a later backfill when events.jsonl is unreadable', async () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return
+    const { root, store } = await createStore()
+    const thread = createThreadRecord({
+      id: 'thread_unreadable_events',
+      title: 'Unreadable events',
+      workspace: '/tmp/workspace',
+      model: 'test-model'
+    })
+    await writeThreadDocument(root, thread)
+    const eventsPath = join(root, 'threads', thread.id, 'events.jsonl')
+    await writeFile(eventsPath, `${JSON.stringify(usageEvent(1, {
+      promptTokens: 10,
+      completionTokens: 5,
+      totalTokens: 15,
+      cacheHitRate: null,
+      turns: 1
+    }))}\n`)
+    await chmod(eventsPath, 0o000)
+
+    try {
+      await store.ready()
+      const internals = backfillInternals(store)
+      if (!internals.db || !internals.backfill) return
+      await internals.backfill.wait()
+      const row = internals.db.prepare(
+        'SELECT usage_backfilled, event_seq_high_water FROM threads WHERE id = ?'
+      ).get(thread.id) as { usage_backfilled: number; event_seq_high_water: number } | undefined
+      expect(row?.usage_backfilled ?? 0).toBe(0)
+      expect(row?.event_seq_high_water ?? 0).toBe(0)
+      expect(await store.loadUsageRecords({ threadId: thread.id })).toHaveLength(0)
+    } finally {
+      await chmod(eventsPath, 0o600).catch(() => undefined)
       store.close()
     }
   })

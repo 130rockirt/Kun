@@ -314,18 +314,25 @@ function warnFileStore(action: string, path: string, error: unknown): void {
 
 /** Helper used by the JSONL event store to enumerate disk content. */
 export async function readJsonl<T>(path: string): Promise<T[]> {
+  let content: string
   try {
-    const content = await readFile(path, 'utf-8')
-    const out: T[] = []
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      try { out.push(JSON.parse(trimmed) as T) } catch { /* skip malformed records */ }
-    }
-    return out
-  } catch {
-    return []
+    content = await readFile(path, 'utf-8')
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return []
+    throw fileError('read JSONL', path, error)
   }
+  const out: T[] = []
+  const lines = content.split('\n')
+  for (let index = 0; index < lines.length; index += 1) {
+    const trimmed = lines[index].trim()
+    if (!trimmed) continue
+    try {
+      out.push(JSON.parse(trimmed) as T)
+    } catch (error) {
+      warnFileStore(`skip malformed JSONL line ${index + 1}`, path, error)
+    }
+  }
+  return out
 }
 
 export { readdir }
