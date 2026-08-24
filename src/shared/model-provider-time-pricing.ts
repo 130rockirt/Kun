@@ -45,12 +45,12 @@ export const MODEL_TIME_PRICING_RULES: readonly ModelTimePricingRule[] = [
     benefitKind: 'unit-price-discount',
     timeZone: 'Asia/Shanghai',
     peakWindows: [
-      { startMinute: 9 * 60, endMinute: 12 * 60 },
-      { startMinute: 14 * 60, endMinute: 18 * 60 }
+      { startMinute: 9 * 60, endMinute: 12 * 60, weekDays: [1, 2, 3, 4, 5] },
+      { startMinute: 14 * 60, endMinute: 18 * 60, weekDays: [1, 2, 3, 4, 5] }
     ],
     models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
     sourceUrl: 'https://api-docs.deepseek.com/quick_start/pricing/',
-    verifiedAt: '2026-08-18',
+    verifiedAt: '2026-08-24',
     description: 'This official API model uses time-based token pricing.',
     matchesProvider: officialDeepSeek
   },
