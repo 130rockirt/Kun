@@ -18,6 +18,8 @@ import { unregisterRuntimeWithManager } from '../../../kun/src/manager/manager-c
 import {
   listListeningPidsOnPort,
   processCommandLine,
+  processIdentity,
+  type ProcessIdentity,
   terminateVerifiedPid,
   waitForPidExit
 } from '../kun-process-ports'
@@ -46,6 +48,7 @@ export type KunServeReplacementDependencies = {
   waitForExit: typeof waitForPidExit
   commandLine: typeof processCommandLine
   listenerPids: typeof listListeningPidsOnPort
+  processIdentity: typeof processIdentity
   terminate: typeof terminateVerifiedPid
   removeDiscovery: typeof removeRuntimeDiscovery
   withAncillaryWriter: typeof withRuntimeDataDirAncillaryWriter
@@ -59,6 +62,7 @@ const defaultDependencies: KunServeReplacementDependencies = {
   waitForExit: waitForPidExit,
   commandLine: processCommandLine,
   listenerPids: listListeningPidsOnPort,
+  processIdentity,
   terminate: terminateVerifiedPid,
   removeDiscovery: removeRuntimeDiscovery,
   withAncillaryWriter: withRuntimeDataDirAncillaryWriter,
@@ -197,15 +201,35 @@ async function targetStillMatches(
   const current = await inspectTarget(dataDir, fetchImpl, scope, deps)
   if (!current.ok || !current.value || !sameRuntimeOwner(target, current.value)) return false
   if (target.discovery.pid === process.pid) return false
-  const [command, listeners] = await Promise.all([
-    deps.commandLine(target.discovery.pid).catch(() => ''),
-    deps.listenerPids(target.discovery.port).catch((): number[] => [])
-  ])
-  return commandLooksLikeExpectedServe(
-    command,
+  const identity = await deps.processIdentity(target.discovery.pid).catch(() => null)
+  return identityMatchesExpectedRuntime(
+    identity,
+    target.discovery,
     dataDir,
     runtimeFlavorFor(target, scope)
-  ) && listeners.includes(target.discovery.pid)
+  )
+}
+
+const MAX_STARTED_AT_DIFFERENCE_MS = 60_000
+
+function identityMatchesExpectedRuntime(
+  identity: ProcessIdentity | null,
+  discovery: RuntimeHandoffDiscoveryRecord,
+  dataDir: string,
+  flavor: RuntimeFlavor
+): boolean {
+  if (!identity || identity.pid !== discovery.pid) return false
+  if (!commandLooksLikeExpectedServe(identity.commandLine, dataDir, flavor)) return false
+  if (process.platform === 'win32' && !looksLikeRuntimeExecutable(identity.executablePath)) return false
+  const discoveryStartedAtMs = Date.parse(discovery.startedAt)
+  return Number.isFinite(discoveryStartedAtMs) &&
+    identity.startedAtMs !== null &&
+    Math.abs(identity.startedAtMs - discoveryStartedAtMs) <= MAX_STARTED_AT_DIFFERENCE_MS
+}
+
+function looksLikeRuntimeExecutable(executablePath: string | null): boolean {
+  if (!executablePath) return false
+  return /(?:^|[/\\\\])(?:node|electron|kun[^/\\\\]*)\.exe$/iu.test(executablePath)
 }
 
 function sameRuntimeOwner(

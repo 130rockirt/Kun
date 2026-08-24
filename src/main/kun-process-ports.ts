@@ -159,6 +159,67 @@ export async function processCommandLine(pid: number): Promise<string> {
   return stdout.trim()
 }
 
+export type ProcessIdentity = {
+  pid: number
+  commandLine: string
+  executablePath: string | null
+  startedAtMs: number | null
+}
+
+/**
+ * Read immutable process identity attributes so replacement can reject a PID
+ * that was recycled after its runtime discovery record was written.
+ */
+export async function processIdentity(pid: number): Promise<ProcessIdentity | null> {
+  if (packagedUpdateHandoffInspectionDenied()) return null
+  try {
+    if (process.platform === 'win32') return await windowsProcessIdentity(pid)
+    const { stdout } = await execFileAsync(
+      'ps',
+      ['-p', String(pid), '-o', 'lstart=', '-o', 'command='],
+      { timeout: 5_000 }
+    )
+    const line = stdout.trim()
+    if (line.length < 25) return null
+    const startedAtMs = Date.parse(line.slice(0, 24))
+    const commandLine = line.slice(24).trim()
+    if (!commandLine || !Number.isFinite(startedAtMs)) return null
+    return { pid, commandLine, executablePath: null, startedAtMs }
+  } catch {
+    return null
+  }
+}
+
+async function windowsProcessIdentity(pid: number): Promise<ProcessIdentity | null> {
+  const { stdout } = await execFileAsync(
+    'powershell',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `$process = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if ($process) { [pscustomobject]@{ ProcessId = $process.ProcessId; ExecutablePath = $process.ExecutablePath; CommandLine = $process.CommandLine; CreationDate = $process.CreationDate } | ConvertTo-Json -Compress }`
+    ],
+    { windowsHide: true, timeout: 5_000 }
+  )
+  const record = JSON.parse(stdout.trim()) as {
+    ProcessId?: unknown
+    ExecutablePath?: unknown
+    CommandLine?: unknown
+    CreationDate?: unknown
+  }
+  const commandLine = typeof record.CommandLine === 'string' ? record.CommandLine.trim() : ''
+  const startedAtMs = typeof record.CreationDate === 'string'
+    ? Date.parse(record.CreationDate)
+    : Number.NaN
+  if (record.ProcessId !== pid || !commandLine || !Number.isFinite(startedAtMs)) return null
+  return {
+    pid,
+    commandLine,
+    executablePath: typeof record.ExecutablePath === 'string' ? record.ExecutablePath : null,
+    startedAtMs
+  }
+}
+
 export function packagedUpdateHandoffInspectionDenied(
   env: NodeJS.ProcessEnv = process.env
 ): boolean {

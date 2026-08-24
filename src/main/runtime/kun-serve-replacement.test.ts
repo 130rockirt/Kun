@@ -60,6 +60,12 @@ describe('stopSharedRuntimeForReplacement', () => {
       waitForExit: vi.fn(async () => true),
       commandLine: vi.fn(async () => 'kun-runtime'),
       listenerPids: vi.fn(async () => [target.discovery.pid]),
+      processIdentity: vi.fn(async () => ({
+        pid: target.discovery.pid,
+        commandLine: 'kun-runtime',
+        executablePath: null,
+        startedAtMs: Date.parse(target.discovery.startedAt)
+      })),
       terminate: vi.fn(),
       removeDiscovery,
       withAncillaryWriter: async (_dataDir, action) => action(),
@@ -98,6 +104,12 @@ describe('stopSharedRuntimeForReplacement', () => {
       waitForExit,
       commandLine: vi.fn(async () => 'kun-runtime'),
       listenerPids: vi.fn(async () => [target.discovery.pid]),
+      processIdentity: vi.fn(async () => ({
+        pid: target.discovery.pid,
+        commandLine: 'kun-runtime',
+        executablePath: null,
+        startedAtMs: Date.parse(target.discovery.startedAt)
+      })),
       terminate,
       removeDiscovery,
       withAncillaryWriter: async (_dataDir, action) => action(),
@@ -139,6 +151,12 @@ describe('stopSharedRuntimeForReplacement', () => {
       waitForExit: vi.fn(async (_pid, timeoutMs) => timeoutMs === 0),
       commandLine: vi.fn(async () => 'kun-runtime'),
       listenerPids: vi.fn(async () => [target.discovery.pid]),
+      processIdentity: vi.fn(async () => ({
+        pid: target.discovery.pid,
+        commandLine: 'kun-runtime',
+        executablePath: null,
+        startedAtMs: Date.parse(target.discovery.startedAt)
+      })),
       terminate,
       removeDiscovery,
       withAncillaryWriter: async (_dataDir, action) => action(),
@@ -159,11 +177,44 @@ describe('stopSharedRuntimeForReplacement', () => {
     })
   })
 
+  it('forces the matching discovery PID after HTTP has stopped listening', async () => {
+    const target = inspection()
+    let current: SharedRuntimeInspection | null = target
+    const terminate = vi.fn(async (_pid: number, verify: () => Promise<boolean>) => {
+      expect(await verify()).toBe(true)
+      current = null
+      return true
+    })
+
+    await expect(stopSharedRuntimeForReplacement(dataDir, fetch, {
+      runtimeFlavor: 'production',
+      manager
+    }, {
+      inspect: vi.fn(async () => current),
+      requestShutdown: vi.fn(async () => { throw new Error('shutdown unavailable') }),
+      waitForExit: vi.fn(async (_pid, timeoutMs) => timeoutMs === 0),
+      commandLine: vi.fn(async () => 'kun-runtime'),
+      listenerPids: vi.fn(async () => []),
+      processIdentity: vi.fn(async () => ({
+        pid: target.discovery.pid,
+        commandLine: `node serve-entry.js --data-dir ${dataDir}`,
+        executablePath: null,
+        startedAtMs: Date.parse(target.discovery.startedAt)
+      })),
+      terminate,
+      removeDiscovery: vi.fn(async () => true),
+      withAncillaryWriter: async (_dataDir, action) => action(),
+      unregister: vi.fn(async () => undefined)
+    })).resolves.toEqual({ stopped: true, forced: true })
+
+    expect(terminate).toHaveBeenCalledOnce()
+  })
+
   it.each([
-    ['command mismatch', 'node unrelated-service.js', [101]],
-    ['listener mismatch', 'node serve-entry.js --runtime-flavor production --data-dir /tmp/kun-replacement-data', [202]],
-    ['process inspection denied', '', []]
-  ])('does not signal a PID on %s', async (_label, command, listeners) => {
+    ['command mismatch', 'node unrelated-service.js', Date.parse('2026-08-13T00:00:00.000Z')],
+    ['PID reuse', 'kun-runtime', Date.parse('2026-08-13T00:02:00.000Z')],
+    ['process inspection denied', '', null]
+  ])('does not signal a PID on %s', async (_label, command, startedAtMs) => {
     const target = inspection()
     let signalSent = false
     const terminate = vi.fn(async (_pid: number, verify: () => Promise<boolean>) => {
@@ -181,7 +232,13 @@ describe('stopSharedRuntimeForReplacement', () => {
       requestShutdown: vi.fn(async () => { throw new Error('shutdown unavailable') }),
       waitForExit: vi.fn(async () => false),
       commandLine: vi.fn(async () => command),
-      listenerPids: vi.fn(async () => listeners),
+      listenerPids: vi.fn(async () => []),
+      processIdentity: vi.fn(async () => startedAtMs === null ? null : ({
+        pid: target.discovery.pid,
+        commandLine: command,
+        executablePath: null,
+        startedAtMs
+      })),
       terminate,
       removeDiscovery,
       withAncillaryWriter: async (_dataDir, action) => action(),
@@ -216,6 +273,12 @@ describe('stopSharedRuntimeForReplacement', () => {
       waitForExit: vi.fn(async (_pid, timeoutMs) => timeoutMs === 0),
       commandLine: vi.fn(async () => 'kun-runtime'),
       listenerPids: vi.fn(async () => [target.discovery.pid]),
+      processIdentity: vi.fn(async () => ({
+        pid: target.discovery.pid,
+        commandLine: 'kun-runtime',
+        executablePath: null,
+        startedAtMs: Date.parse(target.discovery.startedAt)
+      })),
       terminate,
       removeDiscovery,
       withAncillaryWriter: async (_dataDir, action) => action(),
