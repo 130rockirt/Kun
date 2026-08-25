@@ -17,6 +17,7 @@ import {
 } from './main-lifecycle'
 import { stopRuntimeWatchdog } from './main-runtime-health'
 import { startMainApp } from './main-ready'
+import { readUpdateHealthRequest, runUpdateHealthCheck } from './update-health-check'
 import {
   packagedUpdateHandoffSmokeFailure,
   packagedUpdateHandoffSmokeRequested,
@@ -37,7 +38,18 @@ if (runningClawScheduleMcpServer) {
     }
   )
 } else {
-  void startMainApp()
+  const updateHealthRequest = readUpdateHealthRequest()
+  if (updateHealthRequest) {
+    void runUpdateHealthCheck(updateHealthRequest).then(
+      () => app.exit(0),
+      (error) => {
+        console.error('[kun-gui update health] failed:', error)
+        app.exit(71)
+      }
+    )
+  } else {
+    void startMainApp()
+  }
 }
 
 app.on('window-all-closed', () => {

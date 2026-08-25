@@ -40,13 +40,16 @@ describe('gui updater pending state', () => {
     expect(await pending.readPendingUpdate(directory)).toMatchObject({ oldVersion: '0.1.0' })
     await expect(readFile(pending.pendingUpdatePath(directory), 'utf8')).resolves.toContain('Kun-0.2.0.exe')
 
-    await pending.writePendingUpdateResult({
+    const result = await pending.writePendingUpdateResult({
       outcome: 'aborted',
       code: 'payload_invalid',
       phase: 'validate',
       message: 'Payload validation failed.',
-      backupDir: 'C:\\Users\\test\\AppData\\Roaming\\KunInstallerRecovery\\update-backup-123'
+      backupDir: 'C:\\Users\\test\\AppData\\Roaming\\KunInstallerRecovery\\update-backup-123',
+      transactionState: 'rolled_back',
+      rollbackOutcome: 'succeeded'
     }, directory)
+    expect(result).toMatchObject({ schemaVersion: 2, transactionState: 'rolled_back' })
     await expect(pending.consumePendingUpdateResult(directory)).resolves.toMatchObject({
       outcome: 'aborted',
       code: 'payload_invalid',
@@ -84,10 +87,19 @@ describe('gui updater pending state', () => {
     expect(warning).toHaveBeenCalled()
 
     const environment: NodeJS.ProcessEnv = { KUN_PENDING_UPDATE_PATH: 'old-path' }
-    const restore = pending.setPendingUpdateEnvironment('next-path', 'next-result', environment, 'win32')
+    const restore = pending.setPendingUpdateEnvironment(
+      'next-path',
+      'next-result',
+      '0.1.0',
+      '0.2.0',
+      environment,
+      'win32'
+    )
     expect(environment).toMatchObject({
       KUN_PENDING_UPDATE_PATH: 'next-path',
-      KUN_PENDING_UPDATE_RESULT: 'next-result'
+      KUN_PENDING_UPDATE_RESULT: 'next-result',
+      KUN_INSTALLER_OLD_VERSION: '0.1.0',
+      KUN_INSTALLER_NEW_VERSION: '0.2.0'
     })
     restore()
     expect(environment).toEqual({ KUN_PENDING_UPDATE_PATH: 'old-path' })

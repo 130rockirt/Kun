@@ -467,6 +467,14 @@ try {
   $otherUserInstallRegistryPath = $script:installRegistryPath
   $otherUserUninstallRegistryPath = $script:uninstallRegistryPath
   $otherUserUninstallString = Get-ItemPropertyValue -LiteralPath $otherUserUninstallRegistryPath -Name UninstallString
+  $machineHashBeforeAmbiguousUpdate = (Get-FileHash -LiteralPath (Join-Path $machineTarget 'Kun.exe') -Algorithm SHA256).Hash
+  $otherUserHashBeforeAmbiguousUpdate = (Get-FileHash -LiteralPath (Join-Path $otherUserTarget 'Kun.exe') -Algorithm SHA256).Hash
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_UPDATE_SOURCE', '', 'Process')
+  Invoke-Installer 'ambiguous automatic update scope rejection' @('--updated', '/S') 2
+  Assert-True (Test-PathEqual (Get-ItemPropertyValue -LiteralPath $machineInstallRegistryPath -Name InstallLocation) $machineTarget) 'Ambiguous scope rejection changed the all-users registration.'
+  Assert-True (Test-PathEqual (Get-ItemPropertyValue -LiteralPath $otherUserInstallRegistryPath -Name InstallLocation) $otherUserTarget) 'Ambiguous scope rejection changed the current-user registration.'
+  Assert-True ((Get-FileHash -LiteralPath (Join-Path $machineTarget 'Kun.exe') -Algorithm SHA256).Hash -eq $machineHashBeforeAmbiguousUpdate) 'Ambiguous scope rejection changed the all-users payload.'
+  Assert-True ((Get-FileHash -LiteralPath (Join-Path $otherUserTarget 'Kun.exe') -Algorithm SHA256).Hash -eq $otherUserHashBeforeAmbiguousUpdate) 'Ambiguous scope rejection changed the current-user payload.'
 
   $attackerPath = Join-Path $root 'tampered-uninstaller.exe'
   $attackerMarker = Join-Path $root 'tampered-uninstaller-ran.txt'

@@ -11,7 +11,10 @@ export const GUI_UPDATE_HEALTH_RETRY_MS = 6 * 60 * 60 * 1_000
 export const GUI_UPDATE_MAX_HEALTH_ATTEMPTS = 3
 export const KUN_PENDING_UPDATE_PATH = 'KUN_PENDING_UPDATE_PATH'
 export const KUN_PENDING_UPDATE_RESULT = 'KUN_PENDING_UPDATE_RESULT'
+export const KUN_INSTALLER_OLD_VERSION = 'KUN_INSTALLER_OLD_VERSION'
+export const KUN_INSTALLER_NEW_VERSION = 'KUN_INSTALLER_NEW_VERSION'
 export const PENDING_UPDATE_SCHEMA_VERSION = 1
+export const PENDING_UPDATE_RESULT_SCHEMA_VERSION = 2
 
 export type PendingUpdate = {
   schemaVersion: typeof PENDING_UPDATE_SCHEMA_VERSION
@@ -27,13 +30,15 @@ export type PendingUpdate = {
 }
 
 export type PendingUpdateResult = {
-  schemaVersion: typeof PENDING_UPDATE_SCHEMA_VERSION
+  schemaVersion: 1 | typeof PENDING_UPDATE_RESULT_SCHEMA_VERSION
   outcome: 'success' | 'aborted'
   code: string
   message: string
   at: string
   phase?: string
   backupDir?: string
+  transactionState?: 'prepared' | 'payload_switched' | 'awaiting_health' | 'cleanup_pending' | 'committed' | 'rolling_back' | 'rolled_back' | 'rollback_incomplete' | ''
+  rollbackOutcome?: 'not_started' | 'succeeded' | 'failed' | ''
 }
 
 export type GuiUpdateRecovery = {
@@ -83,7 +88,8 @@ function isPendingUpdate(value: unknown): value is PendingUpdate {
 function isPendingUpdateResult(value: unknown): value is PendingUpdateResult {
   if (!value || typeof value !== 'object') return false
   const record = value as Record<string, unknown>
-  return record.schemaVersion === PENDING_UPDATE_SCHEMA_VERSION &&
+  return (record.schemaVersion === PENDING_UPDATE_SCHEMA_VERSION ||
+      record.schemaVersion === PENDING_UPDATE_RESULT_SCHEMA_VERSION) &&
     (record.outcome === 'success' || record.outcome === 'aborted') &&
     typeof record.code === 'string' &&
     typeof record.message === 'string' &&
@@ -164,7 +170,7 @@ export async function writePendingUpdateResult(
   userDataPath?: string
 ): Promise<PendingUpdateResult> {
   const pendingResult: PendingUpdateResult = {
-    schemaVersion: PENDING_UPDATE_SCHEMA_VERSION,
+    schemaVersion: PENDING_UPDATE_RESULT_SCHEMA_VERSION,
     at: new Date().toISOString(),
     ...result
   }
@@ -190,17 +196,26 @@ export async function consumePendingUpdateResult(userDataPath?: string): Promise
 export function setPendingUpdateEnvironment(
   pendingPath = pendingUpdatePath(),
   resultPath = pendingUpdateResultPath(),
+  oldVersion = app.getVersion(),
+  newVersion = '',
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform
 ): () => void {
   if (platform !== 'win32') return () => undefined
-  const previous = [KUN_PENDING_UPDATE_PATH, KUN_PENDING_UPDATE_RESULT].map((key) => ({
+  const previous = [
+    KUN_PENDING_UPDATE_PATH,
+    KUN_PENDING_UPDATE_RESULT,
+    KUN_INSTALLER_OLD_VERSION,
+    KUN_INSTALLER_NEW_VERSION
+  ].map((key) => ({
     key,
     hadValue: Object.prototype.hasOwnProperty.call(env, key),
     value: env[key]
   }))
   env[KUN_PENDING_UPDATE_PATH] = pendingPath
   env[KUN_PENDING_UPDATE_RESULT] = resultPath
+  env[KUN_INSTALLER_OLD_VERSION] = oldVersion
+  env[KUN_INSTALLER_NEW_VERSION] = newVersion
   return () => {
     for (const item of previous) {
       if (item.hadValue && item.value !== undefined) env[item.key] = item.value

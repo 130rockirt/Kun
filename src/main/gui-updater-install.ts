@@ -94,30 +94,30 @@ export class GuiUpdateInstaller {
     let recovery = await readGuiUpdateRecovery()
     const pending = await readPendingUpdate()
     const result = await readPendingUpdateResult()
-    if (pending && result?.outcome === 'aborted') {
-      await cleanupPendingUpdateBackup(result.backupDir)
-      await clearPendingUpdateResult()
-      await clearPendingUpdate()
+    if (result?.outcome === 'aborted') {
+      const rollbackComplete = result.transactionState === 'rolled_back' &&
+        result.rollbackOutcome === 'succeeded'
+      if (rollbackComplete) {
+        await cleanupPendingUpdateBackup(result.backupDir)
+        await clearPendingUpdateResult()
+        await clearPendingUpdate()
+      }
       this.deps.emit({ status: 'error', info: this.deps.stateInfo(), code: 'install_failed',
         message: result.message || `The update installer stopped during ${result.phase ?? result.code}.` })
       return
     }
     if (pending) {
       const installed = app.getVersion() === pending.newVersion
-      const stale = Date.now() - Date.parse(pending.writtenAt) >= 86_400_000
-      if (installed && (result?.outcome === 'success' || stale)) {
+      const transactionCommitted = result?.schemaVersion === 1 || result?.transactionState === 'committed'
+      if (installed && result?.outcome === 'success' && transactionCommitted) {
         recovery = await writeGuiUpdateRecovery({
           installedVersion: pending.newVersion,
           channel: pending.channel,
           verifiedAt: new Date().toISOString(),
           healthAttempts: 0,
-          backupDir: result?.backupDir,
+          backupDir: result.backupDir,
           backupExpiresAt: new Date(Date.now() + GUI_UPDATE_BACKUP_GRACE_MS).toISOString()
         })
-        await clearPendingUpdateResult()
-        await clearPendingUpdate()
-      } else if (!installed && stale) {
-        await cleanupPendingUpdateBackup(result?.backupDir)
         await clearPendingUpdateResult()
         await clearPendingUpdate()
       }
@@ -175,7 +175,12 @@ export class GuiUpdateInstaller {
       }
       if (!this.installerPath) throw new Error('The downloaded installer path is unavailable.')
       const restoreUpdateSource = setWindowsInstallerUpdateSource()
-      const restorePendingEnvironment = setPendingUpdateEnvironment()
+      const restorePendingEnvironment = setPendingUpdateEnvironment(
+        undefined,
+        undefined,
+        app.getVersion(),
+        current.targetVersion
+      )
       restoreEnvironment = () => {
         restorePendingEnvironment()
         restoreUpdateSource()

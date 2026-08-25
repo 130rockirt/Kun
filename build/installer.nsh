@@ -3,6 +3,9 @@ Var /GLOBAL KunInstallerSourceDir
 Var /GLOBAL KunInstallerPrimarySourceDir
 Var /GLOBAL KunInstallerSecondarySourceDir
 Var /GLOBAL KunInstallerTargetDir
+Var /GLOBAL KunInstallerFinalTargetDir
+Var /GLOBAL KunInstallerStageDir
+Var /GLOBAL KunInstallerTransactionPath
 Var /GLOBAL KunInstallerResultPath
 Var /GLOBAL KunInstallerResultHandle
 Var /GLOBAL KunInstallerMigrationPrepared
@@ -18,6 +21,14 @@ Var /GLOBAL KunInstallerOtherQuietUninstallString
 Var /GLOBAL KunInstallerRestoreInteractive
 Var /GLOBAL KunInstallerCurrentUserShortcutName
 Var /GLOBAL KunInstallerCurrentUserMenuDirectory
+Var /GLOBAL KunInstallerInPlaceUpdate
+Var /GLOBAL KunInstallerAbortCode
+Var /GLOBAL KunInstallerAbortPhase
+Var /GLOBAL KunInstallerAbortMessage
+Var /GLOBAL KunInstallerPendingResultPath
+Var /GLOBAL KunInstallerHealthResultPath
+Var /GLOBAL KunInstallerHealthToken
+Var /GLOBAL KunInstallerHealthAttempt
 !endif
 Var /GLOBAL KunInstallerHelperPath
 Var /GLOBAL KunInstallerJournalPath
@@ -25,11 +36,6 @@ Var /GLOBAL KunInstallerPowerShellPath
 Var /GLOBAL KunInstallerHelperExitCode
 Var /GLOBAL KunInstallerHelperOutput
 Var /GLOBAL KunInstallerCurrentPid
-Var /GLOBAL KunInstallerInPlaceUpdate
-Var /GLOBAL KunInstallerAbortCode
-Var /GLOBAL KunInstallerAbortPhase
-Var /GLOBAL KunInstallerAbortMessage
-Var /GLOBAL KunInstallerPendingResultPath
 !ifdef BUILD_UNINSTALLER
 Var /GLOBAL KunInstallerStopAttempt
 Var /GLOBAL KunInstallerStopResult
@@ -74,6 +80,7 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
   File /oname=$PLUGINSDIR\windows-installer-migration-journal.ps1 "${PROJECT_DIR}\build\windows-installer-migration-journal.ps1"
   File /oname=$PLUGINSDIR\windows-installer-migration-filesystem.ps1 "${PROJECT_DIR}\build\windows-installer-migration-filesystem.ps1"
   File /oname=$PLUGINSDIR\windows-installer-migration-actions.ps1 "${PROJECT_DIR}\build\windows-installer-migration-actions.ps1"
+  File /oname=$PLUGINSDIR\windows-installer-migration-transaction.ps1 "${PROJECT_DIR}\build\windows-installer-migration-transaction.ps1"
   StrCpy $KunInstallerHelperPath "$PLUGINSDIR\kun-windows-installer-migration.ps1"
   StrCpy $KunInstallerResultPath "$PLUGINSDIR\kun-windows-installer-result.txt"
   System::Call 'kernel32::GetCurrentProcessId() i .r0'
@@ -84,6 +91,9 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
   StrCpy $KunInstallerSecondarySourceStale 0
   StrCpy $KunInstallerCandidateExplicit 0
   StrCpy $KunInstallerPresentedTargetDir ""
+  StrCpy $KunInstallerFinalTargetDir ""
+  StrCpy $KunInstallerStageDir ""
+  StrCpy $KunInstallerTransactionPath ""
   StrCpy $KunInstallerUpdateSourceDir ""
   StrCpy $KunInstallerPreserveOtherScope 0
   StrCpy $KunInstallerOtherUninstallString ""
@@ -108,6 +118,7 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
 
   Call KunSetProductEnvironment
   Call KunSelectAutomaticUpdateMode
+  Call KunRecoverInterruptedAutomaticUpdate
   Call KunRefreshInstallPaths
 
   ${if} ${UAC_IsInnerInstance}
@@ -117,13 +128,11 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
 !macroend
 
 !macro customUnInstallCheck
-  ${if} $KunInstallerInPlaceUpdate == 1
-    # Same-directory automatic updates overwrite in place. Running the old
-    # uninstaller or FallbackCleanup first can empty the program directory when
-    # the subsequent extract/validate step fails.
+  ${if} ${isUpdated}
+    # Automatic updates retain the old payload through candidate health validation.
     ClearErrors
     StrCpy $R0 0
-    DetailPrint "In-place automatic update; skipping pre-install removal of $KunInstallerPrimarySourceDir."
+    DetailPrint "Automatic update; deferring removal of $KunInstallerPrimarySourceDir until commit."
   ${elseIf} $KunInstallerPrimarySourceStale != 1
     StrCpy $KunInstallerSourceDir $KunInstallerPrimarySourceDir
     Call KunHandleOldUninstallerResult
@@ -139,6 +148,16 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
 !macroend
 
 !macro customUnInstallCheckCurrentUser
+  ${if} ${isUpdated}
+    ${if} $KunInstallerPreserveOtherScope == 1
+      Call KunRestoreCurrentUserUninstallRegistration
+    ${endif}
+    ClearErrors
+    StrCpy $R0 0
+    StrCpy $KunInstallerSourceDir $KunInstallerPrimarySourceDir
+    Call KunRestoreInteractiveInstaller
+    Return
+  ${endif}
   ${if} $KunInstallerPreserveOtherScope == 1
     Call KunRestoreCurrentUserUninstallRegistration
     ClearErrors
@@ -164,8 +183,12 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
 !macroend
 
 !macro customInstall
-  StrCpy $KunInstallerTargetDir $INSTDIR
-  Call KunSetMigrationEnvironment
+  ${if} ${isUpdated}
+    Call KunFinishAutomaticUpdateTransaction
+  ${else}
+    StrCpy $KunInstallerTargetDir $INSTDIR
+    Call KunSetMigrationEnvironment
+  ${endif}
 
   !insertmacro kunRunMigrationHelper Restore
   ${if} $KunInstallerHelperExitCode != 0
@@ -180,8 +203,11 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
   ${endif}
 
   ${if} ${isUpdated}
-    # electron-builder keeps existing shortcuts during --updated installs, but
-    # a scope/directory migration may already have removed the old link.
+    # Rebuild final shell state after payload cutover.
+    StrCpy $appExe "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+    !insertmacro registryAddInstallInfo
+    !insertmacro setLinkVars
+    !insertmacro addStartMenuLink "false"
     !insertmacro addDesktopLink "false"
   ${endif}
 
@@ -200,6 +226,12 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
     DetailPrint "Reconciled the user PATH from $KunInstallerSourceDir\bin to $INSTDIR\bin."
   ${endif}
   System::Call 'user32::SendMessageTimeout(i 0xffff, i 0x001A, i 0, t "Environment", i 2, i 5000, *i .r0)'
+  ${if} ${isUpdated}
+    !insertmacro kunRunMigrationHelper ValidateCutover
+    ${if} $KunInstallerHelperExitCode != 0
+      !insertmacro KunAbortAutomaticUpdate cutover_invalid cutover "The installed shell state did not pass validation."
+    ${endif}
+  ${endif}
   !insertmacro KunCompleteAutomaticUpdate
 !macroend
 
@@ -224,12 +256,9 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
   ${endif}
 !macroend
 
-# installer.nsi inserts customHeader after common.nsh, multiUser.nsh, and the
-# assisted-page declarations. Defining functions there lets them reference the
-# template's installMode/appExe variables without forking the upstream script.
 !macro customHeader
-!insertmacro KunAutomaticUpdateFunctions
 !ifndef BUILD_UNINSTALLER
+!insertmacro KunAutomaticUpdateFunctions
   Function KunSetProductEnvironment
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_CANONICAL_LEAF", "${APP_FILENAME}").r0'
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_APP_EXECUTABLE", "${APP_EXECUTABLE_FILENAME}").r0'
@@ -238,8 +267,7 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
   FunctionEnd
 
   Function KunSetMigrationEnvironment
-    # $APPDATA follows SetShellVarContext, so per-machine recovery is shared
-    # while current-user recovery stays in the selected user's profile.
+    # Recovery state follows the selected shell context.
     StrCpy $KunInstallerJournalPath "$APPDATA\KunInstallerRecovery\${APP_GUID}.json"
 
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SOURCE", "$KunInstallerSourceDir").r0'
@@ -250,7 +278,15 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_PRIMARY_SOURCE_STALE", "$KunInstallerPrimarySourceStale").r0'
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_SECONDARY_SOURCE_STALE", "$KunInstallerSecondarySourceStale").r0'
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_CANDIDATE_EXPLICIT", "$KunInstallerCandidateExplicit").r0'
+    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_TRANSACTION", "$KunInstallerTransactionPath").r0'
+    System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_STAGE", "$KunInstallerStageDir").r0'
+    Call KunSetAutomaticUpdateShellEnvironment
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_IN_PLACE_UPDATE", "$KunInstallerInPlaceUpdate").r0'
+    ${if} ${isUpdated}
+      System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_AUTOMATIC_UPDATE", "1").r0'
+    ${else}
+      System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_AUTOMATIC_UPDATE", "0").r0'
+    ${endif}
     System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_INSTALL_MODE", "$installMode").r0'
   FunctionEnd
 
@@ -292,9 +328,6 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
     ${endif}
     ReadEnvStr $KunInstallerUpdateSourceDir "KUN_INSTALLER_UPDATE_SOURCE"
     ${if} $KunInstallerUpdateSourceDir == ""
-      # Older Kun versions did not export the running application directory.
-      # Select an unambiguous single registration explicitly because the
-      # updater's --updated path may otherwise retain the default install mode.
       ReadRegStr $R0 HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}" InstallLocation
       ReadRegStr $R1 HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" UninstallString
       ReadRegStr $R2 HKEY_LOCAL_MACHINE "${INSTALL_REGISTRY_KEY}" InstallLocation
@@ -499,6 +532,21 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
       Return
     ${endif}
     Call KunRefreshInstallPaths
+    ${if} ${isUpdated}
+      StrCpy $KunInstallerFinalTargetDir $KunInstallerTargetDir
+      StrCpy $KunInstallerStageDir "$KunInstallerFinalTargetDir.kun-stage-$KunInstallerCurrentPid"
+      StrCpy $KunInstallerTransactionPath "$APPDATA\KunInstallerRecovery\${APP_GUID}-update.json"
+      StrCpy $R0 "$APPDATA\KunInstallerRecovery\update-backup-$KunInstallerCurrentPid"
+      System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_PAYLOAD_BACKUP", "$R0").r0'
+      ReadEnvStr $R1 "KUN_PENDING_UPDATE_RESULT"
+      ${if} $R1 == ""
+        StrCpy $KunInstallerHealthResultPath "$TEMP\Kun-update-health-$KunInstallerCurrentPid.json"
+      ${else}
+        StrCpy $KunInstallerHealthResultPath "$R1.health.json"
+      ${endif}
+      System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_HEALTH_RESULT", "$KunInstallerHealthResultPath").r0'
+      Call KunSetMigrationEnvironment
+    ${endif}
     Delete "$KunInstallerResultPath"
     !insertmacro kunRunMigrationHelper Prepare
     ${if} $KunInstallerHelperExitCode != 0
@@ -532,6 +580,10 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
     ${endif}
     StrCpy $KunInstallerSourceDir $KunInstallerPrimarySourceDir
     StrCpy $KunInstallerMigrationPrepared 1
+    ${if} ${isUpdated}
+      StrCpy $INSTDIR $KunInstallerStageDir
+      DetailPrint "Automatic update will extract the candidate payload into $KunInstallerStageDir."
+    ${endif}
   FunctionEnd
 
   Function KunMarkInPlaceAutomaticUpdate
@@ -544,15 +596,8 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
     ${endif}
     ${if} $KunInstallerPrimarySourceDir == $KunInstallerTargetDir
       StrCpy $KunInstallerInPlaceUpdate 1
-      StrCpy $R0 "$APPDATA\KunInstallerRecovery\update-backup-$KunInstallerCurrentPid"
-      System::Call 'kernel32::SetEnvironmentVariable(t, t)i ("KUN_INSTALLER_PAYLOAD_BACKUP", "$R0").r0'
-      Call KunSetMigrationEnvironment
-      !insertmacro kunRunMigrationHelper BackupPayload
-      ${if} $KunInstallerHelperExitCode != 0
-        !insertmacro KunAbortAutomaticUpdate backup_failed backup "The installed payload could not be backed up before replacement."
-      ${endif}
-      DetailPrint "Automatic update backed up $KunInstallerTargetDir before overwriting it in place."
     ${endif}
+    Call KunSetMigrationEnvironment
   FunctionEnd
 
   Function KunSuspendCurrentUserUninstallRegistration
@@ -586,12 +631,12 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
   FunctionEnd
 
   Function KunSecureSelectedUninstallRegistration
-    ${if} $KunInstallerInPlaceUpdate == 1
-      # Hide the old uninstaller from electron-builder so it cannot wipe the
-      # same directory before the new payload is written and validated.
+    ${if} ${isUpdated}
+      # Never expose the old uninstaller during an automatic update. The old
+      # payload is the recovery source for both in-place and brand migrations.
       DeleteRegValue SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" UninstallString
       DeleteRegValue SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" QuietUninstallString
-      DetailPrint "In-place automatic update; suppressed the selected-scope uninstaller until the new payload is installed."
+      DetailPrint "Automatic update; suppressed the selected-scope uninstaller until commit."
       Return
     ${endif}
     Call KunResolveTrustedUninstaller

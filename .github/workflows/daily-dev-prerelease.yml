@@ -158,8 +158,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test Windows update rollback failpoints
+        run: npx vitest run src/main/windows-installer-migration.transaction.test.ts
+
       - name: Build Windows installer
         run: npm run dist:win
+
+      - name: Smoke Windows installer migration
+        timeout-minutes: 25
+        run: npm run smoke:windows-installer-migration -- -InstallerPath (Get-ChildItem dist/Kun-*-win-x64.exe | Select-Object -First 1 -ExpandProperty FullName)
 
       - name: Smoke packaged update handoff (Windows)
         timeout-minutes: 20
