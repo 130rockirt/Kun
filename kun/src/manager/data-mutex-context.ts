@@ -5,7 +5,9 @@ export type ManagerDataMutexOperationContext = {
   resource: string
   signal: AbortSignal
   fence?: ManagerResourceFence
+  /** Check Manager fencing immediately before an irreversible side effect. */
   assertCurrent: () => Promise<void>
+  /** Keep irreversible effects inside this reservation so Manager can fence their final commit. */
   withCommit: <T>(operation: (commitId?: string) => Promise<T>) => Promise<T>
 }
 

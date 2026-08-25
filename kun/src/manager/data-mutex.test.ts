@@ -133,6 +133,87 @@ describe('withManagerDataMutex', () => {
     expect(aborted).toBe(true)
   })
 
+  it('expires a commit reservation even when a later lease renewal succeeds', async () => {
+    vi.useFakeTimers()
+    stubManagerEnv()
+    let aborted = false
+    vi.stubGlobal('fetch', managerFetch(async (operation) => {
+      if (operation === 'acquire' || operation === 'renew') return acquireResponse(true)
+      if (operation === 'commit-begin') return commitResponse(4)
+      if (operation === 'commit-renew') throw new Error('manager unreachable')
+      if (operation === 'commit-end' || operation === 'release') return releaseResponse()
+      throw new Error(`unexpected operation: ${operation}`)
+    }))
+
+    const promise = withManagerDataMutex('reservation', async ({ signal, withCommit }) => {
+      await withCommit(async () => {
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => {
+          aborted = true
+          resolve()
+        }, { once: true }))
+      })
+    })
+
+    const assertion = expect(promise).rejects.toThrow(
+      'shared data resource commit reservation expired: reservation'
+    )
+    await vi.advanceTimersByTimeAsync(4_000)
+    await assertion
+    expect(aborted).toBe(true)
+  })
+
+  it('does not let a later commit deadline delay lease expiry', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    stubManagerEnv()
+    let aborted = false
+    vi.stubGlobal('fetch', managerFetch(async (operation) => {
+      if (operation === 'acquire') return acquireResponse(true)
+      if (operation === 'renew' || operation === 'commit-renew') {
+        throw new Error('manager unreachable')
+      }
+      if (operation === 'commit-begin') return commitResponse(20)
+      if (operation === 'commit-end' || operation === 'release') return releaseResponse()
+      throw new Error(`unexpected operation: ${operation}`)
+    }))
+
+    const promise = withManagerDataMutex('earliest', async ({ signal, withCommit }) => {
+      await withCommit(async () => {
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => {
+          aborted = true
+          resolve()
+        }, { once: true }))
+      })
+    })
+
+    const assertion = expect(promise).rejects.toThrow('shared data resource lease expired: earliest')
+    await vi.advanceTimersByTimeAsync(10_000)
+    await assertion
+    expect(aborted).toBe(true)
+  })
+
+  it('returns after a bounded abort grace period when an operation ignores its signal', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    stubManagerEnv()
+    let releaseCalled = false
+    vi.stubGlobal('fetch', managerFetch(async (operation) => {
+      if (operation === 'acquire') return acquireResponse(true)
+      if (operation === 'renew') throw new Error('manager unreachable')
+      if (operation === 'release') {
+        releaseCalled = true
+        return releaseResponse()
+      }
+      throw new Error(`unexpected operation: ${operation}`)
+    }))
+
+    const promise = withManagerDataMutex('bounded', async () => new Promise<never>(() => undefined))
+    const assertion = expect(promise).rejects.toThrow('shared data resource lease expired: bounded')
+    await vi.advanceTimersByTimeAsync(15_000)
+    await assertion
+    expect(releaseCalled).toBe(true)
+  })
+
   it('serializes concurrent same-resource operations before acquiring the Manager lease', async () => {
     stubManagerEnv()
     let acquireCalls = 0
@@ -198,7 +279,9 @@ function managerFetch(
   respond: (operation: string, body: Record<string, unknown>) => Promise<Response>
 ) {
   return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    const operation = String(input).split('/').at(-1) ?? ''
+    const url = String(input)
+    const suffix = url.split('/').at(-1) ?? ''
+    const operation = url.includes('/commits/') ? `commit-${suffix}` : suffix
     const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
     if (operation !== 'acquire') expect(body.fencingToken).toBe(1)
     return respond(operation, body)
@@ -223,6 +306,12 @@ function acquireResponse(acquired: boolean): Response {
 
 function renewResponse(): Response {
   return jsonResponse({ lease: lease() })
+}
+
+function commitResponse(ttlSeconds: number): Response {
+  return jsonResponse({
+    lease: { ...lease(), commitExpiresAt: new Date(Date.now() + ttlSeconds * 1_000).toISOString() }
+  })
 }
 
 function validResponse(): Response {

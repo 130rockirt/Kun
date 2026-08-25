@@ -22,6 +22,7 @@ const LeaseSchema = z.object({
 }).passthrough()
 const AcquireResultSchema = z.object({ acquired: z.boolean(), lease: LeaseSchema }).passthrough()
 const RenewResultSchema = z.object({ lease: LeaseSchema })
+const OPERATION_ABORT_GRACE_MS = 5_000
 const localQueues = new Map<string, Promise<void>>()
 
 /** Serialize a shared-data mutation across Runtime processes. */
@@ -72,6 +73,8 @@ async function withManagerDataMutexLocked<T>(
   const leaseLost = new Promise<never>((_, reject) => { rejectLeaseLost = reject })
   leaseLost.catch(() => undefined)
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined
+  let leaseExpiresAtMs: number | undefined
+  let commitExpiresAtMs: number | undefined
   let stopped = false
   let renewalInFlight = false
   const maintenance = new Set<Promise<void>>()
@@ -82,18 +85,37 @@ async function withManagerDataMutexLocked<T>(
     controller.abort(error)
     rejectLeaseLost(error)
   }
-  const armDeadline = (expiresAt: string) => {
+  // Preserve the earliest known deadline: ambiguous renewals must never extend it.
+  const rescheduleDeadlineTimer = () => {
     if (deadlineTimer) clearTimeout(deadlineTimer)
-    const expiresAtMs = Date.parse(expiresAt)
-    if (!Number.isFinite(expiresAtMs)) {
-      fail(new Error(`shared data resource lease has invalid deadline: ${resource}`))
-      return
-    }
+    if (stopped || leaseLostError) return
+    const deadline = [
+      { expiresAtMs: leaseExpiresAtMs, kind: 'lease' },
+      { expiresAtMs: commitExpiresAtMs, kind: 'commit reservation' }
+    ].filter((entry): entry is { expiresAtMs: number, kind: string } =>
+      Number.isFinite(entry.expiresAtMs))
+      .sort((left, right) => left.expiresAtMs - right.expiresAtMs)[0]
+    if (!deadline) return
     deadlineTimer = setTimeout(
-      () => fail(new Error(`shared data resource lease expired: ${resource}`)),
-      Math.max(0, expiresAtMs - Date.now())
+      () => fail(new Error(`shared data resource ${deadline.kind} expired: ${resource}`)),
+      Math.max(0, deadline.expiresAtMs - Date.now())
     )
     deadlineTimer.unref?.()
+  }
+  const setDeadline = (kind: 'lease' | 'commit', expiresAt?: string) => {
+    if (expiresAt === undefined) {
+      if (kind === 'commit') commitExpiresAtMs = undefined
+      rescheduleDeadlineTimer()
+      return
+    }
+    const expiresAtMs = Date.parse(expiresAt)
+    if (!Number.isFinite(expiresAtMs)) {
+      fail(new Error(`shared data resource ${kind} has invalid deadline: ${resource}`))
+      return
+    }
+    if (kind === 'lease') leaseExpiresAtMs = expiresAtMs
+    else commitExpiresAtMs = expiresAtMs
+    rescheduleDeadlineTimer()
   }
   const assertCurrent = async () => {
     if (leaseLostError) throw leaseLostError
@@ -123,7 +145,7 @@ async function withManagerDataMutexLocked<T>(
         `${leasePath}/commits/${encodeURIComponent(commitId)}/renew`, manager.token, fence
       ).then((value) => {
         const renewed = RenewResultSchema.parse(value).lease
-        if (renewed.commitExpiresAt) armDeadline(renewed.commitExpiresAt)
+        if (renewed.commitExpiresAt) setDeadline('commit', renewed.commitExpiresAt)
       }).catch((error) => {
         if (isManagerConflict(error)) {
           fail(new Error(`shared data resource commit fence was lost: ${resource}`, { cause: error }))
@@ -135,12 +157,13 @@ async function withManagerDataMutexLocked<T>(
       commitMaintenance.add(request)
     }, 3_000)
     commitTimer.unref?.()
-    if (begun.commitExpiresAt) armDeadline(begun.commitExpiresAt)
+    if (begun.commitExpiresAt) setDeadline('commit', begun.commitExpiresAt)
     try {
       return await runWithManagerDataCommitId(commitId, () => commit(commitId))
     } finally {
       clearInterval(commitTimer)
       await Promise.allSettled([...commitMaintenance])
+      setDeadline('commit')
       await managerRequest(
         `${leasePath}/commits/${encodeURIComponent(commitId)}/end`, manager.token, fence
       ).catch(() => undefined)
@@ -153,7 +176,7 @@ async function withManagerDataMutexLocked<T>(
     assertCurrent,
     withCommit
   }
-  armDeadline(acquired.expiresAt)
+  setDeadline('lease', acquired.expiresAt)
 
   const renewTimer = setInterval(() => {
     if (stopped || leaseLostError || renewalInFlight) return
@@ -161,7 +184,7 @@ async function withManagerDataMutexLocked<T>(
     const request = managerRequest(`${leasePath}/renew`, manager.token, fence)
       .then((value) => {
         if (stopped || leaseLostError) return
-        armDeadline(RenewResultSchema.parse(value).lease.expiresAt)
+        setDeadline('lease', RenewResultSchema.parse(value).lease.expiresAt)
       })
       .catch((error) => {
         if (isManagerConflict(error)) {
@@ -193,7 +216,13 @@ async function withManagerDataMutexLocked<T>(
       result = await Promise.race([operationPromise, leaseLost])
     } catch (error) {
       if (leaseLostError) {
-        await operationPromise.catch(() => undefined)
+        const cleanedUp = await Promise.race([
+          operationPromise.then(() => true, () => true),
+          delay(OPERATION_ABORT_GRACE_MS).then(() => false)
+        ])
+        if (!cleanedUp) {
+          console.warn(`[kun] shared data operation did not stop after abort resource=${resource}`)
+        }
         throw leaseLostError
       }
       operationRejected = true
