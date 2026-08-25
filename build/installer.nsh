@@ -320,8 +320,9 @@ Var /GLOBAL KunInstallerStopDiagnosticPath
         DetailPrint "Automatic update selected the only registered current-user ${PRODUCT_NAME} installation."
         Return
       ${endif}
-      DetailPrint "Automatic update source marker is unavailable with registrations in both scopes; keeping the requested install mode."
-      Return
+      DetailPrint "Automatic update source marker is unavailable with registrations in both scopes; aborting the update."
+      MessageBox MB_OK|MB_ICONSTOP "${PRODUCT_NAME} found both a current-user and an all-users installation, and this updater could not determine which one is running. The automatic update was cancelled and both installations were left unchanged. The previously running installation could not be identified; restart ${PRODUCT_NAME} manually, then run the latest installer to merge or remove one installation." /SD IDOK
+      !insertmacro KunAbortAutomaticUpdate scope_ambiguous scope "The update source marker is unavailable with registrations in both scopes."
     ${endif}
 
     ReadRegStr $R0 HKEY_CURRENT_USER "${INSTALL_REGISTRY_KEY}" InstallLocation

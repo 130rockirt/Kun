@@ -306,7 +306,10 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
       'Automatic update selected the only registered all-users ${PRODUCT_NAME} installation.'
     )
     expect(installerScript).toContain(
-      'Automatic update source marker is unavailable with registrations in both scopes; keeping the requested install mode.'
+      'Automatic update source marker is unavailable with registrations in both scopes; aborting the update.'
+    )
+    expect(installerScript).toContain(
+      '!insertmacro KunAbortAutomaticUpdate scope_ambiguous scope'
     )
     expect(installerScript).toContain('KUN_INSTALLER_CURRENT_USER_SOURCE')
     expect(installerScript).toContain('KUN_INSTALLER_ALL_USERS_SOURCE')

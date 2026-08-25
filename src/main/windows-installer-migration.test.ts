@@ -233,6 +233,25 @@ describe('Windows installer migration ACL contract', () => {
     expect(script).toContain('retrying once after 2 seconds')
   })
 
+  it('aborts an ambiguous dual-scope automatic update without a source marker', () => {
+    const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8')
+    const selectionStart = installerScript.indexOf('Function KunSelectAutomaticUpdateMode')
+    const scopeAbort = installerScript.indexOf(
+      '!insertmacro KunAbortAutomaticUpdate scope_ambiguous scope'
+    )
+    const scopeResolution = installerScript.indexOf('!insertmacro kunRunMigrationHelper ResolveUpdateScope')
+
+    expect(selectionStart).toBeGreaterThanOrEqual(0)
+    expect(scopeAbort).toBeGreaterThan(selectionStart)
+    expect(scopeAbort).toBeLessThan(scopeResolution)
+    expect(installerScript).toContain(
+      'Automatic update source marker is unavailable with registrations in both scopes; aborting the update.'
+    )
+    expect(installerScript).not.toContain(
+      'Automatic update source marker is unavailable with registrations in both scopes; keeping the requested install mode.'
+    )
+  })
+
   it('keeps same-directory automatic updates from pre-deleting the application payload', () => {
     const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8')
     const migrationScript = readHelperSources()
