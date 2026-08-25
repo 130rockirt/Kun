@@ -3,12 +3,18 @@ import { win32 as win32Path } from 'node:path'
 import type { GuiUpdateChannel, GuiUpdateInfo, GuiUpdateInstallResult, GuiUpdateState } from '../shared/gui-update'
 import { setWindowsInstallerUpdateSource } from './gui-updater-support'
 import {
+  GUI_UPDATE_BACKUP_GRACE_MS,
+  GUI_UPDATE_HEALTH_RETRY_MS,
+  GUI_UPDATE_MAX_HEALTH_ATTEMPTS,
+  clearGuiUpdateRecovery,
   clearPendingUpdate,
   clearPendingUpdateResult,
   cleanupPendingUpdateBackup,
+  readGuiUpdateRecovery,
   readPendingUpdate,
   readPendingUpdateResult,
   setPendingUpdateEnvironment,
+  writeGuiUpdateRecovery,
   writePendingUpdate
 } from './gui-updater-pending'
 
@@ -85,34 +91,64 @@ export class GuiUpdateInstaller {
   }
 
   async reconcile(healthCheck?: () => Promise<boolean>): Promise<void> {
+    let recovery = await readGuiUpdateRecovery()
     const pending = await readPendingUpdate()
-    if (!pending) return
     const result = await readPendingUpdateResult()
-    if (result?.outcome === 'aborted') {
+    if (pending && result?.outcome === 'aborted') {
       await cleanupPendingUpdateBackup(result.backupDir)
       await clearPendingUpdateResult()
       await clearPendingUpdate()
-      this.deps.emit({
-        status: 'error',
-        info: this.deps.stateInfo(),
-        code: 'install_failed',
-        message: result.message || `The update installer stopped during ${result.phase ?? result.code}.`
-      })
+      this.deps.emit({ status: 'error', info: this.deps.stateInfo(), code: 'install_failed',
+        message: result.message || `The update installer stopped during ${result.phase ?? result.code}.` })
       return
     }
-    const installed = app.getVersion() === pending.newVersion
-    const stale = Date.now() - Date.parse(pending.writtenAt) >= 86_400_000
-    if (installed && (result?.outcome === 'success' || stale) && await (healthCheck?.() ?? Promise.resolve(true))) {
-      await cleanupPendingUpdateBackup(result?.backupDir)
-      await clearPendingUpdateResult()
-      await clearPendingUpdate()
+    if (pending) {
+      const installed = app.getVersion() === pending.newVersion
+      const stale = Date.now() - Date.parse(pending.writtenAt) >= 86_400_000
+      if (installed && (result?.outcome === 'success' || stale)) {
+        recovery = await writeGuiUpdateRecovery({
+          installedVersion: pending.newVersion,
+          channel: pending.channel,
+          verifiedAt: new Date().toISOString(),
+          healthAttempts: 0,
+          backupDir: result?.backupDir,
+          backupExpiresAt: new Date(Date.now() + GUI_UPDATE_BACKUP_GRACE_MS).toISOString()
+        })
+        await clearPendingUpdateResult()
+        await clearPendingUpdate()
+      } else if (!installed && stale) {
+        await cleanupPendingUpdateBackup(result?.backupDir)
+        await clearPendingUpdateResult()
+        await clearPendingUpdate()
+      }
+    }
+    if (!recovery) return
+    if (Date.now() >= Date.parse(recovery.backupExpiresAt)) {
+      await cleanupPendingUpdateBackup(recovery.backupDir)
+      await clearGuiUpdateRecovery()
       return
     }
-    if (!installed && stale) {
-      await cleanupPendingUpdateBackup(result?.backupDir)
-      await clearPendingUpdateResult()
-      await clearPendingUpdate()
+    const retryAt = recovery.nextHealthCheckAt ? Date.parse(recovery.nextHealthCheckAt) : 0
+    if (recovery.healthAttempts >= GUI_UPDATE_MAX_HEALTH_ATTEMPTS || retryAt > Date.now()) {
+      this.emitDegraded(recovery.healthAttempts, recovery.lastError)
+      return
     }
+    const healthy = await (healthCheck?.() ?? Promise.resolve(true)).catch(() => false)
+    if (healthy) {
+      await cleanupPendingUpdateBackup(recovery.backupDir)
+      await clearGuiUpdateRecovery()
+      return
+    }
+    const attempts = recovery.healthAttempts + 1
+    const message = 'GUI update installed, but Kun Runtime health checks are still failing.'
+    await writeGuiUpdateRecovery({ ...recovery, healthAttempts: attempts,
+      nextHealthCheckAt: new Date(Date.now() + GUI_UPDATE_HEALTH_RETRY_MS).toISOString(), lastError: message })
+    this.emitDegraded(attempts, message)
+  }
+
+  private emitDegraded(attempts: number, message?: string): void {
+    this.deps.emit({ status: 'error', info: this.deps.stateInfo(), code: 'install_failed',
+      message: `${message || 'Kun Runtime needs repair after the GUI update.'} Health attempts: ${attempts}.` })
   }
 
   private async installOnce(): Promise<GuiUpdateInstallResult> {

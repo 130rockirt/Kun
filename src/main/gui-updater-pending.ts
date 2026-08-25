@@ -5,6 +5,10 @@ import type { GuiUpdateChannel } from '../shared/gui-update'
 
 export const PENDING_UPDATE_FILE = 'pending-update.json'
 export const PENDING_UPDATE_RESULT_FILE = 'pending-update-result.json'
+export const GUI_UPDATE_RECOVERY_FILE = 'gui-update-recovery.json'
+export const GUI_UPDATE_BACKUP_GRACE_MS = 7 * 86_400_000
+export const GUI_UPDATE_HEALTH_RETRY_MS = 6 * 60 * 60 * 1_000
+export const GUI_UPDATE_MAX_HEALTH_ATTEMPTS = 3
 export const KUN_PENDING_UPDATE_PATH = 'KUN_PENDING_UPDATE_PATH'
 export const KUN_PENDING_UPDATE_RESULT = 'KUN_PENDING_UPDATE_RESULT'
 export const PENDING_UPDATE_SCHEMA_VERSION = 1
@@ -32,8 +36,24 @@ export type PendingUpdateResult = {
   backupDir?: string
 }
 
+export type GuiUpdateRecovery = {
+  schemaVersion: 1
+  installedVersion: string
+  channel: GuiUpdateChannel
+  verifiedAt: string
+  healthAttempts: number
+  nextHealthCheckAt?: string
+  backupDir?: string
+  backupExpiresAt: string
+  lastError?: string
+}
+
 export function pendingUpdatePath(userDataPath = app.getPath('userData')): string {
   return join(userDataPath, PENDING_UPDATE_FILE)
+}
+
+export function guiUpdateRecoveryPath(userDataPath = app.getPath('userData')): string {
+  return join(userDataPath, GUI_UPDATE_RECOVERY_FILE)
 }
 
 export function pendingUpdateResultPath(userDataPath = app.getPath('userData')): string {
@@ -70,6 +90,15 @@ function isPendingUpdateResult(value: unknown): value is PendingUpdateResult {
     typeof record.at === 'string'
 }
 
+function isGuiUpdateRecovery(value: unknown): value is GuiUpdateRecovery {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return record.schemaVersion === 1 && typeof record.installedVersion === 'string' &&
+    (record.channel === 'stable' || record.channel === 'frontier') &&
+    typeof record.verifiedAt === 'string' && typeof record.healthAttempts === 'number' &&
+    typeof record.backupExpiresAt === 'string'
+}
+
 async function readJson(path: string): Promise<unknown | null> {
   try {
     return JSON.parse(await readFile(path, 'utf8')) as unknown
@@ -79,6 +108,24 @@ async function readJson(path: string): Promise<unknown | null> {
     }
     return null
   }
+}
+
+export async function readGuiUpdateRecovery(userDataPath?: string): Promise<GuiUpdateRecovery | null> {
+  const value = await readJson(guiUpdateRecoveryPath(userDataPath))
+  return isGuiUpdateRecovery(value) ? value : null
+}
+
+export async function writeGuiUpdateRecovery(
+  recovery: Omit<GuiUpdateRecovery, 'schemaVersion'>,
+  userDataPath?: string
+): Promise<GuiUpdateRecovery> {
+  const value: GuiUpdateRecovery = { schemaVersion: 1, ...recovery }
+  await writeAtomically(guiUpdateRecoveryPath(userDataPath), value)
+  return value
+}
+
+export async function clearGuiUpdateRecovery(userDataPath?: string): Promise<void> {
+  await rm(guiUpdateRecoveryPath(userDataPath), { force: true })
 }
 
 export async function writePendingUpdate(

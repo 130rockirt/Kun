@@ -55,6 +55,24 @@ describe('gui updater pending state', () => {
     await expect(pending.readPendingUpdateResult(directory)).resolves.toBeNull()
   })
 
+  it('persists recovery separately from the installer handoff', async () => {
+    const directory = await tempDir()
+    directories.push(directory)
+    const pending = await import('./gui-updater-pending')
+    await pending.writeGuiUpdateRecovery({
+      installedVersion: '0.2.0', channel: 'frontier', verifiedAt: '2026-08-25T00:00:00.000Z',
+      healthAttempts: 2, nextHealthCheckAt: '2026-08-25T06:00:00.000Z',
+      backupDir: 'C:\\Users\\test\\AppData\\Roaming\\KunInstallerRecovery\\update-backup-123',
+      backupExpiresAt: '2026-09-01T00:00:00.000Z', lastError: 'runtime unavailable'
+    }, directory)
+    await expect(pending.readGuiUpdateRecovery(directory)).resolves.toMatchObject({
+      schemaVersion: 1, installedVersion: '0.2.0', healthAttempts: 2
+    })
+    await expect(pending.readPendingUpdate(directory)).resolves.toBeNull()
+    await pending.clearGuiUpdateRecovery(directory)
+    await expect(pending.readGuiUpdateRecovery(directory)).resolves.toBeNull()
+  })
+
   it('treats malformed files as absent and restores inherited installer environment', async () => {
     const directory = await tempDir()
     directories.push(directory)
