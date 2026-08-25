@@ -47,10 +47,16 @@ import {
   placeLiveCanvasTurnImages,
   recordReadyCanvasReplayWatermarks,
   markFailedSvgForRetry,
+  suppressPendingCanvasContinuations,
   type CanvasReplayBarrierState,
   type CanvasScreenCreatedHandler,
   type PendingScreenGeneration
 } from './canvas-design-replay-support'
+import {
+  canvasLiveTurnOutcome,
+  canvasTurnAllowsContinuation,
+  type CanvasTurnOutcome
+} from './canvas-turn-outcome'
 
 export {
   hasDispatchedSvgFollowup, shouldApplyDesignCanvasToolBlock,
@@ -174,6 +180,16 @@ export function useApplyShapeOpsLive(
         disposed,
         barriers: replayBarriers,
         record: (turnId) => useCanvasShapeStore.getState().recordRendererReplayWatermark(turnId)
+      })
+    }
+
+    const suppressContinuations = (): void => {
+      suppressPendingCanvasContinuations({
+        pendingScreens,
+        pendingSvgToolBlocks,
+        svgSourceTurnIds,
+        svgRetryCounts,
+        barriers: replayBarriers
       })
     }
 
@@ -448,7 +464,10 @@ export function useApplyShapeOpsLive(
       })
     }
 
-    const finalizeTurn = (completedTurnId?: string): void => {
+    const finalizeTurn = (
+      completedTurnId?: string,
+      outcome: CanvasTurnOutcome = 'unknown'
+    ): void => {
       if (trailingTimer) {
         clearTimeout(trailingTimer)
         trailingTimer = null
@@ -513,18 +532,21 @@ export function useApplyShapeOpsLive(
       setLastCanvasOpErrors([...errorsThisTurn], errorKey)
       if (completedTurnId && replayThreadId && (activeDesignTarget || durableReplaySurface)) {
         const barrier = ensureReplayBarrier(completedTurnId)
-        if (activeDesignTarget) {
+        if (activeDesignTarget && canvasTurnAllowsContinuation(outcome)) {
           enqueueTurnScreens({
             turnId: completedTurnId, blocks: durableTurnBlocks, affectedIds: all
           })
         }
+        if (!canvasTurnAllowsContinuation(outcome)) suppressContinuations()
         if (barrier) barrier.replayComplete = true
         commitReadyWatermarks()
       }
       resetTurn()
       // Let chat/runtime state settle before starting the follow-up HTML turn.
-      scheduleScreenDrain(120)
-      scheduleSvgDrain(120)
+      if (canvasTurnAllowsContinuation(outcome)) {
+        scheduleScreenDrain(120)
+        scheduleSvgDrain(120)
+      }
     }
 
     const replayIdle = (state: ReturnType<typeof useChatStore.getState>): void => {
@@ -547,11 +569,15 @@ export function useApplyShapeOpsLive(
         affectedIds: affectedThisTurn, errors: errorsThisTurn, resetTurn, applyToolBlock,
         onTurnReplayed: (completion, affectedIds) => {
           const barrier = ensureReplayBarrier(completion.turnId)
-          enqueueTurnScreens({ turnId: completion.turnId, blocks: completion.blocks, affectedIds })
+          if (canvasTurnAllowsContinuation(completion.outcome)) {
+            enqueueTurnScreens({ turnId: completion.turnId, blocks: completion.blocks, affectedIds })
+          } else suppressContinuations()
           if (barrier) barrier.replayComplete = true
           commitReadyWatermarks()
-          if (pendingScreens.length > 0) scheduleScreenDrain(0)
-          if (pendingSvgToolBlocks.size > 0) scheduleSvgDrain(0)
+          if (canvasTurnAllowsContinuation(completion.outcome)) {
+            if (pendingScreens.length > 0) scheduleScreenDrain(0)
+            if (pendingSvgToolBlocks.size > 0) scheduleSvgDrain(0)
+          }
         }
       })
     }
@@ -610,7 +636,14 @@ export function useApplyShapeOpsLive(
       if (state.currentTurnId && state.liveAssistant !== prev.liveAssistant) {
         scheduleStreaming()
       }
-      if (turnEnded) finalizeTurn(prev.currentTurnId ?? undefined)
+      if (turnEnded) {
+        const completedTurnId = prev.currentTurnId ?? undefined
+        finalizeTurn(completedTurnId, canvasLiveTurnOutcome({
+          threads: state.threads,
+          threadId: targetThreadId ?? state.activeThreadId,
+          turnId: completedTurnId
+        }))
+      }
       if (
         !state.currentTurnId &&
         !state.busy &&
