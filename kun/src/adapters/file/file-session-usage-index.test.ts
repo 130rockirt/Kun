@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -85,6 +85,43 @@ describe('FileSessionStore usage index', () => {
     })
   })
 
+  it('writes an atomic sidecar with sparse day offsets and the indexed byte boundary', async () => {
+    const threadId = 'thread-sidecar'
+    await store.appendEvent(threadId, usageEvent(threadId, 1, '2026-08-20T00:00:00.000Z', 100, 10))
+    await store.appendEvent(threadId, usageEvent(threadId, 2, '2026-08-21T00:00:00.000Z', 200, 20))
+
+    const threadDir = join(root, 'threads', threadId)
+    const indexPath = join(threadDir, 'usage-index.jsonl')
+    const sidecar = JSON.parse(await readFile(join(threadDir, 'usage-index.state.json'), 'utf-8')) as {
+      version: number
+      indexedBytes: number
+      days: Record<string, number>
+      sha256: string
+    }
+
+    expect(sidecar.version).toBe(1)
+    expect(sidecar.indexedBytes).toBe((await stat(indexPath)).size)
+    expect(sidecar.days['2026-08-20']).toBe(0)
+    expect(sidecar.days['2026-08-21']).toBeGreaterThan(sidecar.days['2026-08-20'])
+    expect(sidecar.sha256).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('atomically rebuilds after the index is truncated behind its sidecar', async () => {
+    const threadId = 'thread-truncated'
+    await store.appendEvent(threadId, usageEvent(threadId, 1, '2026-08-20T00:00:00.000Z', 100, 10))
+    await store.appendEvent(threadId, usageEvent(threadId, 2, '2026-08-21T00:00:00.000Z', 250, 25))
+    const indexPath = join(root, 'threads', threadId, 'usage-index.jsonl')
+    const complete = await readFile(indexPath, 'utf-8')
+    await writeFile(indexPath, complete.slice(0, complete.indexOf('\n') + 1), 'utf-8')
+
+    const records = await store.loadUsageRecords({ threadId })
+
+    expect(records.map((record) => record.usage.promptTokens)).toEqual([100, 150])
+    expect((await readFile(indexPath, 'utf-8')).trimEnd().split('\n')).toHaveLength(3)
+    expect((await stat(indexPath)).size).toBe(
+      JSON.parse(await readFile(join(root, 'threads', threadId, 'usage-index.state.json'), 'utf-8')).indexedBytes
+    )
+  })
   it('returns the latest cumulative snapshot per thread from the index tail', async () => {
     await store.appendEvent('thread-a', usageEvent('thread-a', 1, '2026-08-20T00:00:00.000Z', 100, 10))
     await store.appendEvent('thread-a', usageEvent('thread-a', 2, '2026-08-21T00:00:00.000Z', 300, 30))
@@ -177,6 +214,25 @@ describe('FileSessionStore usage index', () => {
     expect(repaired).not.toContain('{"type":"delta"\n{"type":"delta"')
   })
 
+  it('bounds cross-thread reads at six and restores stable input order', async () => {
+    let active = 0
+    let maximum = 0
+    const reader = {
+      async loadUsageRecords(threadId: string): Promise<SessionUsageRecord[]> {
+        active += 1
+        maximum = Math.max(maximum, active)
+        await new Promise((resolve) => setTimeout(resolve, threadId === 'thread-a' ? 20 : 1))
+        active -= 1
+        return [{ threadId, completedAt: '2026-08-20T00:00:00.000Z', usage: cumulative(1, 1) }]
+      },
+      async loadLatestUsageSnapshot(): Promise<SessionLatestUsageSnapshot | null> { return null }
+    }
+    const ids = Array.from({ length: 13 }, (_, index) => `thread-${String.fromCharCode(97 + index)}`)
+    const records = await loadUsageRecordsFromIndex(reader, async () => ids)
+
+    expect(maximum).toBe(6)
+    expect(records.map((record) => record.threadId)).toEqual(ids)
+  })
   it('isolates cross-thread usage failures and retains diagnostics', async () => {
     const failure = Object.assign(new Error('permission denied'), { code: 'EACCES' })
     const reader = {

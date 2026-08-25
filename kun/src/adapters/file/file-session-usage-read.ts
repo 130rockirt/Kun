@@ -5,6 +5,8 @@ import type {
   SessionUsageRecord
 } from '../../ports/session-store.js'
 
+const DEFAULT_THREAD_READ_CONCURRENCY = 6
+
 type UsageIndexReader = {
   loadUsageRecords(threadId: string, options?: SessionUsageQueryOptions): Promise<SessionUsageRecord[]>
   loadLatestUsageSnapshot(threadId: string): Promise<SessionLatestUsageSnapshot | null>
@@ -26,10 +28,9 @@ export async function listThreadDirs(threadsDir: string): Promise<string[]> {
 }
 
 /**
- * Indexed usage query served from per-thread usage-index.jsonl deltas. A
- * corrupt index rebuilds from events.jsonl. Cross-thread reads isolate real
- * per-thread I/O failures and retain a diagnostic warning for each skipped
- * thread, while an explicit single-thread query remains fail-fast.
+ * Indexed usage query served from per-thread deltas. Cross-thread reads are
+ * bounded and run in input order batches; flattening by batch preserves the
+ * historical stable thread ordering regardless of completion timing.
  */
 export async function loadUsageRecordsFromIndex(
   usageIndex: UsageIndexReader,
@@ -42,15 +43,15 @@ export async function loadUsageRecordsFromIndex(
     return usageIndex.loadUsageRecords(threadId, options)
   }
   const threadIds = await listThreadIds()
-  const records: SessionUsageRecord[] = []
-  for (const id of threadIds) {
+  const results = await readInStableBatches(threadIds, async (id) => {
     try {
-      records.push(...await usageIndex.loadUsageRecords(id, options))
+      return await usageIndex.loadUsageRecords(id, options)
     } catch (error) {
       warnUsageThreadFailure('loadUsageRecords', id, error)
+      return []
     }
-  }
-  return records
+  })
+  return results.flat()
 }
 
 export async function loadLatestUsageSnapshotsFromIndex(
@@ -60,17 +61,29 @@ export async function loadLatestUsageSnapshotsFromIndex(
 ): Promise<SessionLatestUsageSnapshot[]> {
   const threadIds = options.threadIds?.map((id) => id.trim()).filter(Boolean) ?? []
   const targets = threadIds.length > 0 ? threadIds : await listThreadIds()
-  const snapshots: SessionLatestUsageSnapshot[] = []
-  for (const id of targets) {
-    if (!isSafeThreadId(id)) continue
+  const results = await readInStableBatches(targets, async (id) => {
+    if (!isSafeThreadId(id)) return []
     try {
       const snapshot = await usageIndex.loadLatestUsageSnapshot(id)
-      if (snapshot) snapshots.push(snapshot)
+      return snapshot ? [snapshot] : []
     } catch (error) {
       warnUsageThreadFailure('loadLatestUsageSnapshot', id, error)
+      return []
     }
+  })
+  return results.flat()
+}
+
+async function readInStableBatches<T>(
+  threadIds: string[],
+  read: (threadId: string) => Promise<T[]>
+): Promise<T[][]> {
+  const results: T[][] = []
+  for (let start = 0; start < threadIds.length; start += DEFAULT_THREAD_READ_CONCURRENCY) {
+    const batch = threadIds.slice(start, start + DEFAULT_THREAD_READ_CONCURRENCY)
+    results.push(...await Promise.all(batch.map(read)))
   }
-  return snapshots
+  return results
 }
 
 function warnUsageThreadFailure(operation: string, threadId: string, error: unknown): void {
