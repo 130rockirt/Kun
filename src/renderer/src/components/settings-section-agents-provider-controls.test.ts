@@ -370,7 +370,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       await clickProviderTab(renderer, 'Advanced')
       const customIdInput = renderer.root.findAllByType('input')
         .find((input) => input.props.value === 'custom-provider-2')
-      expect(customIdInput?.props.readOnly).toBe(false)
+      expect(customIdInput?.props.readOnly).toBe(true)
       expect(activePanelText(renderer)).toContain('Provider identity')
       expect(activePanelText(renderer)).toContain('Failure retry')
       expect(rendererText(renderer)).toContain('Danger zone')

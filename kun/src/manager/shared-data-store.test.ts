@@ -11,6 +11,7 @@ import type { ServiceManagerConnection } from './manager-client.js'
 import { ManagerRemoteThreadStore } from './remote-data-stores.js'
 import { buildServiceManagerRouter, ServiceManagerState } from './service-manager.js'
 import { ManagerSharedDataStore } from './shared-data-store.js'
+import { requiresAtomicReplace } from './shared-data-store-core.js'
 
 const roots: string[] = []
 
@@ -23,6 +24,17 @@ async function dataStore(): Promise<ManagerSharedDataStore> {
   roots.push(root)
   return ManagerSharedDataStore.create(join(root, 'data'))
 }
+
+describe('manager atomic JSON policy', () => {
+  it('requires atomic replacement only for provider and credential registries', () => {
+    const dataDir = '/tmp/kun-data'
+    expect(requiresAtomicReplace(dataDir, join(dataDir, 'model-connections.v1.json'))).toBe(true)
+    expect(requiresAtomicReplace(dataDir, join(dataDir, 'credentials', 'credentials.enc.json'))).toBe(true)
+    expect(requiresAtomicReplace(dataDir, join(dataDir, 'extensions', 'accounts.json'))).toBe(true)
+    expect(requiresAtomicReplace(dataDir, join(dataDir, 'extensions', 'provider-bindings.json'))).toBe(true)
+    expect(requiresAtomicReplace(dataDir, join(dataDir, 'cache', 'models.json'))).toBe(false)
+  })
+})
 
 describe('manager shared data store', () => {
   it('proxies the lock-free item text search so palette deep search works in shared mode', async () => {

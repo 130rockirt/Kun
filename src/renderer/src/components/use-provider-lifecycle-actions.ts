@@ -81,20 +81,12 @@ export function useProviderLifecycleActions(scope: Record<string, any>): Record<
     transform: (item: ModelProviderProfileV1) => ModelProviderProfileV1
   ) => void
   const updateModelProviderId = (id: string, value: string): void => {
-    if (id === DEFAULT_MODEL_PROVIDER_ID) return
+    if (!draftProvider || id !== draftProvider.id || id === DEFAULT_MODEL_PROVIDER_ID) return
     const nextId = normalizeModelProviderId(value)
     if (!nextId || nextId === id) return
     if (displayProviders.some((item) => item.id === nextId && item.id !== id)) return
-    if (draftProvider && id === draftProvider.id) {
-      setSelectedProviderId(nextId)
-      setDraftProvider({ ...draftProvider, id: nextId })
-      return
-    }
     setSelectedProviderId(nextId)
-    updateModelProviders(
-      modelProviders.map((item) => item.id === id ? { ...item, id: nextId } : item),
-      kun.providerId === id ? { providerId: nextId } : undefined
-    )
+    setDraftProvider({ ...draftProvider, id: nextId })
   }
 
   const startProviderDraft = (profile: ModelProviderProfileV1): void => {

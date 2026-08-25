@@ -4,8 +4,7 @@ import type {
 } from '@shared/app-settings'
 import {
   DEFAULT_MODEL_PROVIDER_ID,
-  defaultModelRequestRetrySettings,
-  resolveModelProviderPresetSource
+  defaultModelRequestRetrySettings
 } from '@shared/app-settings'
 import { defaultModelProviderSettings } from '@shared/app-settings-provider-core'
 import type {
@@ -252,12 +251,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   }, [displayProviders, selectedProviderId, sharedConnections?.defaultProviderId])
   const activeRetry = activeProvider ? providerRetrySettings(activeProvider) : defaultModelRequestRetrySettings()
   const isDraftActive = Boolean(draftProvider && activeProvider?.id === draftProvider.id)
-  const canEditActiveProviderId = Boolean(
-    activeProvider &&
-    activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID &&
-    !sharedConnections?.providers.some((connection) => connection.id === activeProvider.id) &&
-    !resolveModelProviderPresetSource(activeProvider)
-  )
+  const canEditActiveProviderId = isDraftActive
   const activeKunProviderId: string = kun.providerId?.trim() || DEFAULT_MODEL_PROVIDER_ID
   const providerProxy = provider.proxy ?? { enabled: false, url: '' }
 
