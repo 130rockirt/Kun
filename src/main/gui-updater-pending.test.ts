@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 
 const getPath = vi.fn(() => '/tmp/kun-updater-test-user-data')
 const getVersion = vi.fn(() => '0.1.0')
@@ -20,6 +20,32 @@ describe('gui updater pending state', () => {
   afterEach(async () => {
     await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
     vi.restoreAllMocks()
+  })
+
+  it('only resolves direct Windows backup children inside the recovery root', async () => {
+    const pending = await import('./gui-updater-pending')
+    const root = 'C:\\Users\\test\\AppData\\Roaming\\KunInstallerRecovery'
+
+    expect(pending.resolveBackupDeleteTarget(root, `${root}\\update-backup-123`, win32))
+      .toBe(`${root}\\update-backup-123`)
+    expect(pending.resolveBackupDeleteTarget(root, 'D:\\KunInstallerRecovery\\update-backup-123', win32)).toBeNull()
+    expect(pending.resolveBackupDeleteTarget(root, `${root}\\..\\update-backup-123`, win32)).toBeNull()
+    expect(pending.resolveBackupDeleteTarget(root, root, win32)).toBeNull()
+    expect(pending.resolveBackupDeleteTarget(root, `${root}\\nested\\update-backup-123`, win32)).toBeNull()
+    expect(pending.resolveBackupDeleteTarget(root, `${root}\\update-backup-invalid`, win32)).toBeNull()
+  })
+
+  it('does not remove backups outside Windows', async () => {
+    const directory = await tempDir()
+    directories.push(directory)
+    const backup = join(directory, 'update-backup-123')
+    await mkdir(backup)
+    await writeFile(join(backup, 'keep.txt'), 'keep', 'utf8')
+    const pending = await import('./gui-updater-pending')
+
+    await pending.cleanupPendingUpdateBackup(backup)
+
+    await expect(readFile(join(backup, 'keep.txt'), 'utf8')).resolves.toBe('keep')
   })
 
   it('persists schema-versioned pending state and consumes an atomic result', async () => {

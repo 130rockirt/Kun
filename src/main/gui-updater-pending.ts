@@ -1,6 +1,7 @@
 import { app } from 'electron'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { basename, dirname, join, relative, resolve } from 'node:path'
+import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import * as path from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import type { GuiUpdateChannel } from '../shared/gui-update'
 
 export const PENDING_UPDATE_FILE = 'pending-update.json'
@@ -157,12 +158,42 @@ export async function clearPendingUpdate(userDataPath?: string): Promise<void> {
   await rm(pendingUpdatePath(userDataPath), { force: true })
 }
 
+export function resolveBackupDeleteTarget(
+  recoveryRoot: string,
+  backupDir: string,
+  pathApi: Pick<typeof path, 'basename' | 'isAbsolute' | 'join' | 'parse' | 'relative' | 'resolve'> = path
+): string | null {
+  const backupName = pathApi.basename(backupDir)
+  if (!/^update-backup-\d+$/.test(backupName)) return null
+
+  const root = pathApi.resolve(recoveryRoot)
+  const backup = pathApi.resolve(backupDir)
+  if (pathApi.parse(root).root !== pathApi.parse(backup).root) return null
+
+  const relativePath = pathApi.relative(root, backup)
+  if (!relativePath || pathApi.isAbsolute(relativePath) || relativePath.split(/[\\/]+/).includes('..')) return null
+
+  const target = pathApi.join(root, backupName)
+  return backup === target ? target : null
+}
+
 export async function cleanupPendingUpdateBackup(backupDir?: string): Promise<void> {
   if (!backupDir || process.platform !== 'win32') return
   const recoveryRoot = resolve(app.getPath('appData'), 'KunInstallerRecovery')
-  const backup = resolve(backupDir)
-  if (!/^update-backup-\d+$/.test(basename(backup)) || relative(recoveryRoot, backup).startsWith('..')) return
-  await rm(backup, { recursive: true, force: true })
+  const target = resolveBackupDeleteTarget(recoveryRoot, backupDir)
+  if (!target) return
+
+  try {
+    const realRoot = await realpath(recoveryRoot)
+    const realTarget = await realpath(target)
+    const expectedRealTarget = join(realRoot, basename(target))
+    if (resolveBackupDeleteTarget(realRoot, realTarget) !== expectedRealTarget) return
+    await rm(realTarget, { recursive: true, force: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('[kun-gui updater] failed to clean update backup:', error)
+    }
+  }
 }
 
 export async function writePendingUpdateResult(
