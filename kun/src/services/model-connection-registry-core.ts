@@ -224,7 +224,8 @@ export class ModelConnectionRegistry {
     assertManagerAtomicJsonPath(registryPath)
     this.file = new AtomicJsonFile(
       registryPath,
-      (value) => RegistryDocumentSchema.parse(value)
+      (value) => RegistryDocumentSchema.parse(value),
+      false
     )
   }
 }

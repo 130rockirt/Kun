@@ -4,6 +4,7 @@ import type {
 } from '@shared/app-settings'
 
 export type PendingSharedProviderName = {
+  generation?: number
   localName: string
   canonicalName: string
   localBaseUrl?: string
@@ -13,6 +14,10 @@ export type PendingSharedProviderName = {
 
 export type PendingSharedProviderCatalog = {
   generation: number
+  localProviderName?: string
+  localProviderBaseUrl?: string
+  localProviderEndpointFormat?: ModelProviderProfileV1['endpointFormat']
+  localProviderKind?: ModelProviderProfileV1['kind']
   baseModels: string[]
   baseModelProfiles: Record<string, ModelProviderModelProfileV1>
   localModels: string[]
@@ -24,7 +29,7 @@ export type PendingSharedProviderCredential = {
   generation: number
   operationToken: string
   credential: string
-  fence?: Promise<void>
+  fence?: Promise<boolean | void>
 }
 
 export type PendingSharedProviderDeletion = {
@@ -44,6 +49,7 @@ export const sharedProviderMutationCoordinator = {
   pendingCredentials: new Map<string, PendingSharedProviderCredential>(),
   catalogTimers: new Map<string, SharedProviderMutationTimer>(),
   credentialTimers: new Map<string, SharedProviderMutationTimer>(),
+  profileGeneration: 0,
   deletionGeneration: 0,
   catalogGeneration: 0,
   credentialGeneration: 0
@@ -82,7 +88,7 @@ export function hasInFlightSharedProviderCatalogMutation(): boolean {
 export function stageSharedProviderCredentialMutation(
   providerId: string,
   credential: string,
-  fence?: (operationToken: string) => Promise<void>
+  fence?: (operationToken: string) => Promise<boolean | void>
 ): PendingSharedProviderCredential {
   const generation = sharedProviderMutationCoordinator.credentialGeneration + 1
   const operationToken = credentialOperationToken(generation)
@@ -106,19 +112,25 @@ export async function drainSharedProviderCredentialMutation<T>(
   operation: (
     credential: string,
     operationToken: string,
-    isCurrent: () => boolean
+    isCurrent: () => boolean,
+    fenceInstalled: boolean
   ) => Promise<T>
 ): Promise<{ value: T; committed: boolean } | null> {
   return enqueueSharedModelMutation(async () => {
     const pending = sharedProviderMutationCoordinator.pendingCredentials.get(providerId)
     if (!pending || pending.generation !== generation) return null
-    await pending.fence
+    const fenceInstalled = await pending.fence
     if (sharedProviderMutationCoordinator.pendingCredentials.get(providerId)?.generation !== generation) {
       return null
     }
     const isCurrent = (): boolean =>
       sharedProviderMutationCoordinator.pendingCredentials.get(providerId)?.generation === generation
-    const value = await operation(pending.credential, pending.operationToken, isCurrent)
+    const value = await operation(
+      pending.credential,
+      pending.operationToken,
+      isCurrent,
+      fenceInstalled === true
+    )
     const current = sharedProviderMutationCoordinator.pendingCredentials.get(providerId)
     const committed = current?.generation === generation
     if (committed) sharedProviderMutationCoordinator.pendingCredentials.delete(providerId)
@@ -161,6 +173,7 @@ export function resetSharedProviderMutationCoordinatorForTests(): void {
   sharedProviderMutationCoordinator.pendingCredentials.clear()
   sharedProviderMutationCoordinator.catalogTimers.clear()
   sharedProviderMutationCoordinator.credentialTimers.clear()
+  sharedProviderMutationCoordinator.profileGeneration = 0
   sharedProviderMutationCoordinator.deletionGeneration = 0
   sharedProviderMutationCoordinator.catalogGeneration = 0
   sharedProviderMutationCoordinator.credentialGeneration = 0

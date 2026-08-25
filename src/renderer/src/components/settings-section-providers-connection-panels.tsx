@@ -56,7 +56,7 @@ export { sharedModelConnectionHasUsableCredential } from '../lib/provider-creden
 
 
 export function ProviderConnectionAdvancedPanels({ view }: { view: Record<string, any> }): ReactElement {
-  const { t, showApiKey, selectControlClass, zh, sharedConnectionsError, credentialRevealError, activeTab, expandedCapabilities, activeProvider, activeRetry, isDraftActive, canEditActiveProviderId, patchProviderProfile, updateModelProvider, updateActiveProviderCredential, toggleActiveProviderCredentialVisibility, updateModelProviderImage, removeModelProviderImage, updateModelProviderId, activeProbe, probeNotice, activeBaseUrlInvalid, activeImageBaseUrlInvalid, activeMissingCredential, activeCursorAccount, activeCursorAccountFresh, activeCursorApiKeyUrl, activeSharedConnection, activeCredentialNeedsReplacement, activeApiKeyPlaceholder, activeApiKeyValue, activeCredentialRevealBusy } = view
+  const { t, showApiKey, selectControlClass, zh, sharedConnectionsError, credentialRevealError, activeTab, expandedCapabilities, activeProvider, activeRetry, isDraftActive, canEditActiveProviderId, patchProviderProfile, updateModelProvider, updateActiveProviderCredential, toggleActiveProviderCredentialVisibility, flushSharedProviderCredential, updateModelProviderImage, removeModelProviderImage, updateModelProviderId, activeProbe, probeNotice, activeBaseUrlInvalid, activeImageBaseUrlInvalid, activeMissingCredential, activeCursorAccount, activeCursorAccountFresh, activeCursorApiKeyUrl, activeSharedConnection, activeCredentialNeedsReplacement, activeApiKeyPlaceholder, activeApiKeyValue, activeCredentialRevealBusy } = view
   const activeProviderNeedsApiKey = modelProviderRequiresApiKey(activeProvider)
   const activeTokenPlanRegions = view.activeTokenPlanRegions as ModelProviderTokenPlanRegion[]
   const sharedConnections = view.sharedConnections as SharedModelConnectionsSnapshot | null
@@ -132,6 +132,7 @@ export function ProviderConnectionAdvancedPanels({ view }: { view: Record<string
                           className="min-h-11 !rounded-lg"
                           value={activeApiKeyValue}
                           onChange={updateActiveProviderCredential}
+                          onBlur={() => { void flushSharedProviderCredential(activeProvider.id) }}
                           visible={showApiKey}
                           onToggleVisibility={() => { void toggleActiveProviderCredentialVisibility() }}
                           toggleBusy={activeCredentialRevealBusy}
@@ -196,6 +197,7 @@ export function ProviderConnectionAdvancedPanels({ view }: { view: Record<string
                           className="min-h-11 !rounded-lg"
                           value={activeApiKeyValue}
                           onChange={updateActiveProviderCredential}
+                          onBlur={() => { void flushSharedProviderCredential(activeProvider.id) }}
                           visible={showApiKey}
                           onToggleVisibility={() => { void toggleActiveProviderCredentialVisibility() }}
                           toggleBusy={activeCredentialRevealBusy}

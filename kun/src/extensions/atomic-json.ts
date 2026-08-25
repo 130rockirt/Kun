@@ -22,7 +22,8 @@ export class AtomicJsonFile<T> {
 
   constructor(
     readonly path: string,
-    private readonly validate: JsonValidator<T>
+    private readonly validate: JsonValidator<T>,
+    private readonly allowDirectWriteFallback = true
   ) {}
 
   async read(fallback: () => T): Promise<T> {
@@ -68,7 +69,8 @@ export class AtomicJsonFile<T> {
     }
     options.signal?.throwIfAborted()
     await atomicWriteFile(this.path, `${JSON.stringify(validated, null, 2)}\n`, {
-      signal: options.signal
+      signal: options.signal,
+      allowDirectWriteFallback: this.allowDirectWriteFallback
     })
   }
 

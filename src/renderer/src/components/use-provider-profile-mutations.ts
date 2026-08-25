@@ -6,6 +6,7 @@ import type {
   ModelProviderTextToSpeechCapabilityV1,
   ModelProviderVideoCapabilityV1
 } from '@shared/app-settings'
+import { sharedProviderMutationCoordinator } from './shared-provider-mutation-coordinator'
 import { sharedModelConnectionHasUsableCredential } from '../lib/provider-credential-readiness'
 import {
   defaultImageCapability, defaultMusicCapability,
@@ -72,7 +73,10 @@ export function useProviderProfileMutations(scope: Record<string, any>): Record<
         nextProvider.endpointFormat !== target.endpointFormat
       )
     ) {
+      const generation = sharedProviderMutationCoordinator.profileGeneration + 1
+      sharedProviderMutationCoordinator.profileGeneration = generation
       pendingSharedProviderNames.current.set(id, {
+        generation,
         localName: nextProvider.name,
         canonicalName: nextProvider.name.trim() || id,
         localBaseUrl: nextProvider.baseUrl,

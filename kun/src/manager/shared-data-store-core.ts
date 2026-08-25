@@ -134,7 +134,10 @@ export abstract class ManagerSharedDataStoreCore {
         throw new RevisionConflictError(document.revision)
       }
       const serialized = `${JSON.stringify(input.value, null, 2)}\n`
-      await atomicWriteFile(target, serialized, { beforeCommit: input.beforeCommit })
+      await atomicWriteFile(target, serialized, {
+        beforeCommit: input.beforeCommit,
+        allowDirectWriteFallback: false
+      })
       document.value = input.value
       document.revision += 1
       return { revision: document.revision, value: input.value }

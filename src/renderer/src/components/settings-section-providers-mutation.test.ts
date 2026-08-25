@@ -3,10 +3,12 @@ import {
   type ModelProviderModelProfileV1
 } from '@shared/app-settings'
 import { describe, expect, it, vi } from 'vitest'
+import type { SharedModelConnection } from './settings-section-providers-shared-api'
 import {
   clearPendingSharedProviderDeletionForExplicitAdd,
   createSharedModelMutationQueue,
   projectSharedModelConnections,
+  reconcilePendingSharedProviderCatalogs,
   selectSharedModelConnection,
   sharedProvidersEligibleForSync
 } from './settings-section-providers'
@@ -24,6 +26,32 @@ const textModelProfile: ModelProviderModelProfileV1 = {
   supportsToolCalling: true,
   messageParts: ['text']
 }
+
+describe('pending provider profile metadata', () => {
+  it('keeps the overlay until baseUrl and endpoint metadata reach the registry', () => {
+    const connection = {
+      id: 'custom-provider-2', accountId: 'account:custom-provider-2',
+      name: 'Custom Provider', kind: 'http' as const, authType: 'api-key' as const,
+      baseUrl: 'https://old.example.com/v1', endpointFormat: 'chat_completions' as const,
+      configured: true, models: ['model-a'], modelCapabilities: { 'model-a': { id: 'model-a', ...textModelProfile } }
+    } satisfies SharedModelConnection
+    const pending = {
+      generation: 4, localProviderName: 'Edited Provider',
+      localProviderBaseUrl: 'https://new.example.com/v1',
+      localProviderEndpointFormat: 'responses' as const, localProviderKind: 'http' as const,
+      baseModels: ['model-a'], baseModelProfiles: { 'model-a': textModelProfile },
+      localModels: ['model-a'], localModelProfiles: { 'model-a': textModelProfile }, committedRevision: 5
+    }
+    const snapshot = (provider: SharedModelConnection) => ({ schemaVersion: 1 as const, revision: 5, providers: [provider] })
+
+    expect(reconcilePendingSharedProviderCatalogs(snapshot(connection), new Map([[connection.id, pending]]))
+      .has(connection.id)).toBe(true)
+    expect(reconcilePendingSharedProviderCatalogs(snapshot({
+      ...connection, name: 'Edited Provider', baseUrl: pending.localProviderBaseUrl,
+      endpointFormat: pending.localProviderEndpointFormat
+    }), new Map([[connection.id, pending]])).has(connection.id)).toBe(false)
+  })
+})
 
 describe('shared model connection mutation ordering', () => {
   it('continues processing after an earlier queued mutation fails', async () => {

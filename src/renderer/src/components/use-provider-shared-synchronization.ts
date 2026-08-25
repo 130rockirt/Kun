@@ -239,6 +239,7 @@ export function useProviderSharedSynchronization(scope: Record<string, any>): vo
           if (needsPatch) {
             if (pendingSharedProviderDeletions.current.has(item.id)) continue
             const canonicalName = item.name.trim() || item.id
+            const pendingProfile = pendingSharedProviderNames.current.get(item.id)
             snapshot = await requestSharedModelConnections(
               `/v1/model-connections/${encodeURIComponent(item.id)}`,
               'PATCH',
@@ -256,10 +257,16 @@ export function useProviderSharedSynchronization(scope: Record<string, any>): vo
                 } : {})
               }
             )
-            const pendingName = pendingSharedProviderNames.current.get(item.id)
-            if (pendingName?.canonicalName === canonicalName) {
+            const currentProfile = pendingSharedProviderNames.current.get(item.id)
+            if (
+              pendingProfile &&
+              currentProfile?.generation === pendingProfile.generation &&
+              pendingProfile.canonicalName === canonicalName &&
+              pendingProfile.localBaseUrl === item.baseUrl &&
+              pendingProfile.localEndpointFormat === item.endpointFormat
+            ) {
               pendingSharedProviderNames.current.set(item.id, {
-                ...pendingName,
+                ...currentProfile,
                 committedRevision: snapshot.revision
               })
             }

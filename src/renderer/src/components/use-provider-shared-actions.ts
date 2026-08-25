@@ -45,7 +45,7 @@ export { sharedModelConnectionHasUsableCredential } from '../lib/provider-creden
 
 
 export function useProviderSharedActions(scope: Record<string, any>): Record<string, any> {
-  const { kun, update, provider, setSharedConnections, setSharedConnectionsError, pendingSharedProviderDeletions, pendingSharedProviderCatalogs, pendingSharedProviderCredentials, catalogMutationTimers, credentialMutationTimers, mutationOwner, mounted, drainCatalogRef, drainCredentialRef, enqueueSharedMutation, sharedProjectionInput, setAddMenuOpen, setAddProviderQuery, setSubscriptionRegion, providerProxy } = scope
+  const { kun, update, provider, setSharedConnections, setSharedConnectionsError, pendingSharedProviderDeletions, pendingSharedProviderNames, pendingSharedProviderCatalogs, pendingSharedProviderCredentials, catalogMutationTimers, credentialMutationTimers, mutationOwner, mounted, drainCatalogRef, drainCredentialRef, enqueueSharedMutation, sharedProjectionInput, setAddMenuOpen, setAddProviderQuery, setSubscriptionRegion, providerProxy } = scope
   const setCredentialDrafts = scope.setCredentialDrafts as Dispatch<SetStateAction<Record<string, string>>>
   const setExpandedCapabilities = scope.setExpandedCapabilities as Dispatch<SetStateAction<Set<ProviderCapability>>>
   const addProviderButtonRef = scope.addProviderButtonRef as RefObject<HTMLButtonElement | null>
@@ -179,26 +179,53 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
       if (!pending || pending.generation !== generation) return
       const latestProvider = (sharedProjectionInput.current.provider.providers as ModelProviderProfileV1[])
         .find((item) => item.id === providerId)
+      const providerForGeneration = latestProvider
+        ? {
+            ...latestProvider,
+            ...(pending.localProviderName !== undefined ? { name: pending.localProviderName } : {}),
+            ...(pending.localProviderBaseUrl !== undefined ? { baseUrl: pending.localProviderBaseUrl } : {}),
+            ...(pending.localProviderEndpointFormat !== undefined
+              ? { endpointFormat: pending.localProviderEndpointFormat }
+              : {}),
+            ...(pending.localProviderKind !== undefined ? { kind: pending.localProviderKind } : {})
+          }
+        : undefined
+      const pendingProfile = pendingSharedProviderNames.current.get(providerId)
       const pendingCredential = pendingSharedProviderCredentials.current.get(providerId)?.credential
       const snapshot = await commitSharedModelConnectionCatalog(
         providerId,
         pending,
         (id) => pendingSharedProviderDeletions.current.has(id),
-        latestProvider
+        providerForGeneration
           ? {
-              provider: latestProvider,
-              credential: pendingCredential ?? latestProvider.apiKey
+              provider: providerForGeneration,
+              credential: pendingCredential ?? providerForGeneration.apiKey
             }
           : undefined
       )
       const current = pendingSharedProviderCatalogs.current.get(providerId)
       const connection = snapshot.providers.find((item) => item.id === providerId)
+      const currentProfile = pendingSharedProviderNames.current.get(providerId)
+      if (
+        pendingProfile &&
+        currentProfile?.generation === pendingProfile.generation &&
+        connection &&
+        connection.name === pendingProfile.canonicalName &&
+        (pendingProfile.localBaseUrl === undefined || connection.baseUrl === pendingProfile.localBaseUrl) &&
+        (pendingProfile.localEndpointFormat === undefined ||
+          connection.endpointFormat === pendingProfile.localEndpointFormat)
+      ) {
+        pendingSharedProviderNames.current.set(providerId, {
+          ...currentProfile,
+          committedRevision: snapshot.revision
+        })
+      }
       if (current?.generation === generation) {
         pendingSharedProviderCatalogs.current.set(providerId, {
           ...current,
           ...(connection ? {
             localModels: [...connection.models],
-            localModelProfiles: sharedModelProfiles(connection, latestProvider)
+            localModelProfiles: sharedModelProfiles(connection, providerForGeneration)
           } : {}),
           committedRevision: snapshot.revision
         })
@@ -242,6 +269,10 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
     after: ModelProviderProfileV1
   ): void => {
     if (
+      before.name === after.name &&
+      before.baseUrl === after.baseUrl &&
+      before.endpointFormat === after.endpointFormat &&
+      before.kind === after.kind &&
       JSON.stringify(before.models) === JSON.stringify(after.models) &&
       JSON.stringify(before.modelProfiles) === JSON.stringify(after.modelProfiles)
     ) return
@@ -250,6 +281,10 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
     sharedProviderMutationCoordinator.catalogGeneration = generation
     pendingSharedProviderCatalogs.current.set(before.id, {
       generation,
+      localProviderName: after.name,
+      localProviderBaseUrl: after.baseUrl,
+      localProviderEndpointFormat: after.endpointFormat,
+      localProviderKind: after.kind,
       baseModels: [...(
         previous?.committedRevision === null
           ? previous.baseModels
@@ -275,11 +310,14 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
     catalogMutationTimers.current.set(before.id, { owner: mutationOwner.current, timer })
   }
 
-  const drainSharedProviderCredential = (providerId: string, generation: number): void => {
-    void drainSharedProviderCredentialMutation(
+  const drainSharedProviderCredential = (
+    providerId: string,
+    generation: number
+  ): Promise<void> => {
+    return drainSharedProviderCredentialMutation(
       providerId,
       generation,
-      (credential, operationToken, isCurrent) => {
+      (credential, operationToken, isCurrent, fenceInstalled) => {
         const latestProvider = (sharedProjectionInput.current.provider.providers as ModelProviderProfileV1[])
           .find((item) => item.id === providerId)
         if (!latestProvider) throw new Error(`Shared model connection ${providerId} is no longer available`)
@@ -287,7 +325,8 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
           ? connectOrReplaceSharedModelConnectionCredential(
               latestProvider,
               credential,
-              (id) => pendingSharedProviderDeletions.current.has(id)
+              (id) => pendingSharedProviderDeletions.current.has(id),
+              { operationToken, isCurrent, fenceInstalled }
             )
           : replaceSharedModelConnectionCredential(
               providerId,
@@ -321,13 +360,24 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
         setSharedConnections(snapshot)
         setSharedConnectionsError('')
       }
-    }).catch((error) => {
+    }).then(() => undefined).catch((error) => {
       if (!pendingSharedProviderCredentials.current.has(providerId)) return
       if (mounted.current) {
         if (error instanceof SharedModelConnectionConflictError) setSharedConnections(error.snapshot)
         setSharedConnectionsError(error instanceof Error ? error.message : String(error))
       }
     })
+  }
+
+  const flushSharedProviderCredential = async (providerId: string): Promise<void> => {
+    const pending = pendingSharedProviderCredentials.current.get(providerId)
+    if (!pending) return
+    const timer = credentialMutationTimers.current.get(providerId)
+    if (timer) {
+      clearTimeout(timer.timer)
+      credentialMutationTimers.current.delete(providerId)
+    }
+    await drainSharedProviderCredential(providerId, pending.generation)
   }
 
   const stageSharedProviderCredential = (providerId: string, credential: string): void => {
@@ -343,7 +393,7 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
       const record = credentialMutationTimers.current.get(providerId)
       if (record?.owner !== mutationOwner.current) return
       credentialMutationTimers.current.delete(providerId)
-      drainSharedProviderCredential(providerId, generation)
+      void drainSharedProviderCredential(providerId, generation)
     }, 450)
     credentialMutationTimers.current.set(providerId, { owner: mutationOwner.current, timer })
   }
@@ -371,7 +421,7 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
         const record = credentialMutationTimers.current.get(providerId)
         if (record?.owner !== mutationOwner.current) return
         credentialMutationTimers.current.delete(providerId)
-        drainCredentialRef.current(providerId, pending.generation)
+        void drainCredentialRef.current(providerId, pending.generation)
       }, 0)
       credentialMutationTimers.current.set(providerId, { owner: mutationOwner.current, timer })
     }
@@ -392,8 +442,8 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
       clearTimeout(record.timer)
       credentialMutationTimers.current.delete(providerId)
       const pending = pendingSharedProviderCredentials.current.get(providerId)
-      if (pending) drainCredentialRef.current(providerId, pending.generation)
+      if (pending) void drainCredentialRef.current(providerId, pending.generation)
     }
   }, [])
-  return { selectSharedModel, updateProviderProxy, setCapabilityExpanded, openAddProviderDialog, closeAddProviderDialog, handleAddProviderDialogKeyDown, handleSubscriptionRegionTabKeyDown, confirmAction, updateModelProviders, stageSharedProviderCatalog, flushSharedProviderCatalog, stageSharedProviderCredential }
+  return { selectSharedModel, updateProviderProxy, setCapabilityExpanded, openAddProviderDialog, closeAddProviderDialog, handleAddProviderDialogKeyDown, handleSubscriptionRegionTabKeyDown, confirmAction, updateModelProviders, stageSharedProviderCatalog, flushSharedProviderCatalog, stageSharedProviderCredential, flushSharedProviderCredential }
 }
