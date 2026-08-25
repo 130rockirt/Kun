@@ -289,6 +289,13 @@ export function registerRuntimeSseIpc(options: {
               for (const event of pendingEvents) {
                 if (typeof event.seq === 'number') {
                   batchMaxSeq = Math.max(batchMaxSeq, event.seq)
+                } else if (
+                  event.kind === 'replay_synchronized' &&
+                  typeof event.cursor === 'number' &&
+                  Number.isSafeInteger(event.cursor) &&
+                  event.cursor >= 0
+                ) {
+                  batchMaxSeq = Math.max(batchMaxSeq, event.cursor)
                 }
               }
 

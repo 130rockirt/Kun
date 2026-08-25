@@ -182,6 +182,48 @@ describe('runtime-sse-ipc', () => {
     expect(allEvents[2].text).toBe('bye')
   })
 
+  it('uses the replay synchronization cursor when reconnecting after an id-less marker', async () => {
+    registerRuntimeSseIpc({
+      ipcMain: mockIpcMain,
+      store: mockStore,
+      ensureRuntime: mockEnsureRuntime,
+      assertRendererRuntimeReady: () => undefined,
+      logError: mockLogError
+    })
+    const startHandler = handlers.get('runtime:sse:start')
+    expect(startHandler).toBeDefined()
+    mockFetch.mockImplementation(async () => {
+      if (mockFetch.mock.calls.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          body: mockReadableStream([
+            'event: replay_synchronized\ndata: {"kind":"replay_synchronized","threadId":"thread-sync","cursor":42}\n\n',
+            '__ERROR__'
+          ])
+        }
+      }
+      return { ok: false, status: 400, body: null }
+    })
+
+    const started = await startHandler!(mockEvent, {
+      threadId: 'thread-sync',
+      sinceSeq: 7
+    })
+    await vi.advanceTimersByTimeAsync(750)
+
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    expect(mockFetch.mock.calls[1][0].toString()).toContain('since_seq=42')
+    const marker = mockEvent.sender.send.mock.calls
+      .find((call: any) => call[0] === 'runtime:sse-event')?.[1]?.events?.[0]
+    expect(marker).toMatchObject({
+      kind: 'replay_synchronized',
+      threadId: 'thread-sync',
+      cursor: 42
+    })
+    await handlers.get('runtime:sse:stop')!(mockEvent, started.streamId)
+  })
+
   it('retries a bounded number of times on 404 before surfacing the error', async () => {
     registerRuntimeSseIpc({
       ipcMain: mockIpcMain,

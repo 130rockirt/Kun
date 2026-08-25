@@ -480,6 +480,8 @@ export type CoreUsageSnapshotJson = {
 export type CoreRuntimeEventJson = {
   kind?: string
   seq?: number
+  /** Transport-only replay_synchronized cursor; not a durable runtime event. */
+  cursor?: number
   /** UTF-16 offset of this incremental assistant delta within its item text. */
   deltaOffset?: number
   timestamp?: string

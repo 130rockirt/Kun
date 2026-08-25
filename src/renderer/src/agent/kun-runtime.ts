@@ -85,6 +85,7 @@ import {
   todosFromCore,
   threadFromCore
 } from './kun-mapper'
+import { restoredThreadLiveProjection } from './kun-runtime-thread-live-projection'
 import { rendererRuntimeClient } from './runtime-client'
 import type { ComposerContextAttachment } from '@kun/extension-api'
 import { KunRuntimeThreadServices } from './kun-runtime-thread-services'
@@ -386,7 +387,14 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
         workspaceCheckpointId: item.workspaceCheckpointId ?? turn.workspaceCheckpointId
       }))
     )
+    const latestTurn = thread.latestTurn ?? turns.at(-1)
+    const restoredLive = restoredThreadLiveProjection(
+      items,
+      latestTurn?.id,
+      latestTurn?.status
+    )
     const blocks = mergeChatBlocks(items.flatMap((item) => {
+      if (restoredLive.liveItemIds.has(item.id)) return []
       const block = chatBlockFromItem(item)
       return block ? [block] : []
     }))
@@ -420,7 +428,6 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
         }
       }
     }
-    const latestTurn = thread.latestTurn ?? turns.at(-1)
     const latestTurnId = latestTurn?.id
     // Prefer the active turn's opening user message: a long running turn may
     // push its own prompt to the front of the page (timeline anchor) while
@@ -437,6 +444,7 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
     return {
       blocks,
       latestSeq: thread.latestSeq ?? 0,
+      ...(restoredLive.liveProjection ? { liveProjection: restoredLive.liveProjection } : {}),
       threadStatus: thread.status ?? latestTurn?.status,
       latestTurnId: latestTurn?.id,
       latestTurnStatus: latestTurn?.status,

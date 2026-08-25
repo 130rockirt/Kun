@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { NormalizedThread } from '../agent/types'
+import type { NormalizedThread, ThreadEventSink } from '../agent/types'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import { clearThreadSnapshotCache, getThreadSnapshot } from './thread-snapshot-cache'
@@ -76,7 +76,12 @@ function buildHarness(): {
 
 describe('chat-store-thread-actions timeline user anchor', () => {
   it('hydrates a busy thread with the anchored user message as the current turn user', async () => {
-    const subscribeThreadEvents = vi.fn(async () => undefined)
+    let sink: ThreadEventSink | undefined
+    const subscribeThreadEvents = vi.fn(async (
+      _threadId: string,
+      _sinceSeq: number,
+      eventSink: ThreadEventSink
+    ) => { sink = eventSink })
     const getThreadDetail = vi.fn(async () => ({
       blocks: [
         { kind: 'user' as const, id: 'user-active', turnId: 'turn-active', text: 'fix the pipeline' },
@@ -97,7 +102,7 @@ describe('chat-store-thread-actions timeline user anchor', () => {
 
     await actions.selectThread('thr_busy')
 
-    expect(state.threadLoadingId).toBeNull()
+    expect(state.threadLoadingId).toBe('thr_busy')
     expect(state.busy).toBe(true)
     expect(state.currentTurnId).toBe('turn-active')
     expect(state.currentTurnUserId).toBe('user-active')
@@ -110,6 +115,8 @@ describe('chat-store-thread-actions timeline user anchor', () => {
     ])
     expect(state.lastSeq).toBe(42)
     expect(subscribeThreadEvents).toHaveBeenCalledWith('thr_busy', 42, expect.anything(), expect.anything())
+    sink!.onReplaySynchronized?.(42)
+    expect(state.threadLoadingId).toBeNull()
   })
 
   it('prepends older history and merges its turn durations', async () => {

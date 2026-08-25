@@ -97,9 +97,23 @@ export type ThreadRuntimeStateBatchResult =
       error: { code: 'not_found' | 'unavailable'; message: string }
     }
 
+export type ThreadLiveTextProjection = {
+  text: string
+  itemId: string
+  turnId: string
+  createdAt?: string
+}
+
+export type ThreadLiveProjection = {
+  reasoning?: ThreadLiveTextProjection
+  assistant?: ThreadLiveTextProjection
+}
+
 export type ThreadDetail = {
   blocks: ChatBlock[]
   latestSeq: number
+  /** Cumulative unfinished text restored separately from settled timeline blocks. */
+  liveProjection?: ThreadLiveProjection
   threadStatus?: string
   latestTurnId?: string
   latestTurnStatus?: string
@@ -122,6 +136,8 @@ export type ThreadDetail = {
 export type ThreadEventSink = {
   /** The HTTP/SSE stream is established, even when no replay or live event is pending. */
   onConnected?(): void
+  /** Persisted replay reached the server's fixed synchronization boundary. */
+  onReplaySynchronized?(cursor: number): void
   onSeq(seq: number): void
   onDeltas(deltas: ThreadDeltaEvent[]): void
   onAssistantItem?(item: AssistantItemSnapshotPayload): void

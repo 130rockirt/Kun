@@ -129,14 +129,13 @@ import {
   invalidateThreadSnapshot,
   snapshotThreadProjection
 } from './thread-snapshot-cache'
-import { copyLiveProjection, emptyLiveProjection } from './chat-store-live-projection'
+import { copyLiveProjection, emptyLiveProjection, restoredLiveProjection } from './chat-store-live-projection'
 import { getThreadPrewarmHandle, threadPrewarmHandleIsCurrent } from './thread-detail-prewarm'
 import {
   ensureRuntimeProviderForSend,
   fallbackComposerProviderIdForSend,
   subscribeThreadEventsWithRecovery
 } from './chat-store-thread-action-helpers'
-import { parkedThreadReplayHighWater } from './thread-presentation-readiness'
 import { resolveThreadComposerState } from './chat-store-thread-composer-state'
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
 import { readDesignThreadRegistry } from '../design/design-thread-registry'
@@ -245,13 +244,11 @@ export function createThreadSelectionActions(
       const composerState = resolveThreadComposerState(get(), targetThread, {
         hasUserMessages: cached.blocks.some((block) => block.kind === 'user')
       })
-      const replayHighWater = parkedThreadReplayHighWater(cached, targetThread)
       set((state) => ({
         watchTurnCompletion: nextWatch,
         unreadThreadIds: nextUnread,
         activeThreadId: id,
-        // Keep advanced parked content covered until replay reaches click-time high-water.
-        threadLoadingId: replayHighWater === undefined ? null : id,
+        threadLoadingId: cached.busy ? id : null,
         threadRefreshingId: null,
         threadHistoryCursor: cached.threadHistoryCursor,
         threadHasMoreHistory: cached.threadHasMoreHistory,
@@ -265,9 +262,6 @@ export function createThreadSelectionActions(
         ...copyLiveProjection(cached),
         error: null,
         busy: cached.busy,
-        // Preserve whether the parked projection already had live evidence.
-        // Confirmed running snapshots resume immediately from their cursor;
-        // unconfirmed persisted claims retain the settled-history safeguard.
         busyUnconfirmed: cached.busyUnconfirmed,
         currentTurnId: cached.currentTurnId,
         currentTurnOrchestration: cached.currentTurnOrchestration,
@@ -292,7 +286,7 @@ export function createThreadSelectionActions(
         threadId: id,
         signal: ac.signal,
         sinceSeq: cached.lastSeq,
-        ...(replayHighWater === undefined ? {} : { revealAfterSeq: replayHighWater })
+        awaitReplaySynchronization: cached.busy
       })
       subscribeThreadEventsWithRecovery(p, id, cached.lastSeq, sink, ac.signal, get)
       if (cached.busy) armBusyWatchdog(set, get)
@@ -359,6 +353,7 @@ export function createThreadSelectionActions(
       const {
         blocks: rawBlocks,
         latestSeq,
+        liveProjection,
         threadStatus,
         latestTurnId,
         latestTurnStatus,
@@ -440,7 +435,7 @@ export function createThreadSelectionActions(
               return next
             })(),
         activeThreadId: id,
-        threadLoadingId: null,
+        threadLoadingId: busy && (!refreshingActiveThread || get().threadLoadingId === id) ? id : null,
         threadRefreshingId: null,
         threadHistoryCursor: historyCursor ?? null,
         threadHasMoreHistory: hasMoreHistory,
@@ -451,11 +446,10 @@ export function createThreadSelectionActions(
         activeThreadTodos: todos ?? null,
         blocks,
         lastSeq: latestSeq,
-        ...emptyLiveProjection(latestSeq),
+        ...restoredLiveProjection(latestSeq, busy ? liveProjection : undefined),
         error: null,
         busy,
-        // The persisted snapshot's running claim may be stale (interrupted
-        // runtime); keep the timeline settled until live events confirm it.
+        // Replay synchronization confirms the restored running claim.
         busyUnconfirmed: busy,
         currentTurnId: busy ? latestTurnId ?? null : null,
         currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
@@ -483,7 +477,12 @@ export function createThreadSelectionActions(
       syncTurnCompletionPoll(set, get)
       const ac = new AbortController()
       sseAbortRef.current = ac
-      const sink = buildThreadEventSink(set, get, { threadId: id, signal: ac.signal, sinceSeq: latestSeq })
+      const sink = buildThreadEventSink(set, get, {
+        threadId: id,
+        signal: ac.signal,
+        sinceSeq: latestSeq,
+        awaitReplaySynchronization: busy
+      })
       subscribeThreadEventsWithRecovery(p, id, latestSeq, sink, ac.signal, get)
       if (busy) {
         armBusyWatchdog(set, get)
@@ -502,7 +501,6 @@ export function createThreadSelectionActions(
       })
     }
   },
-
   loadEarlierThreadHistory: async () => {
     const state = get()
     const threadId = state.activeThreadId
@@ -552,7 +550,6 @@ export function createThreadSelectionActions(
       return false
     }
   },
-
   subscribeThreadEventsLive: async (threadId) => {
     if (get().runtimeConnection !== 'ready') return
     const targetThreadId = threadId.trim()
@@ -578,7 +575,7 @@ export function createThreadSelectionActions(
     clearBusyWatchdog()
     set({
       activeThreadId: targetThreadId,
-      threadLoadingId: hydratingTarget ? targetThreadId : null,
+      threadLoadingId: hydratingTarget ? targetThreadId : prevState.threadLoadingId,
       threadHistoryCursor: keepExistingBlocks ? prevState.threadHistoryCursor : null,
       threadHasMoreHistory: keepExistingBlocks ? prevState.threadHasMoreHistory : false,
       threadHistoryLoading: false,
@@ -609,11 +606,12 @@ export function createThreadSelectionActions(
     })
     const ac = new AbortController()
     sseAbortRef.current = ac
-    const subscribeFrom = (sinceSeq: number): void => {
+    const subscribeFrom = (sinceSeq: number, awaitReplaySynchronization = false): void => {
       const sink = buildThreadEventSink(set, get, {
         threadId: targetThreadId,
         signal: ac.signal,
-        sinceSeq
+        sinceSeq,
+        awaitReplaySynchronization
       })
       subscribeThreadEventsWithRecovery(p, targetThreadId, sinceSeq, sink, ac.signal, get)
     }
@@ -621,6 +619,7 @@ export function createThreadSelectionActions(
       const {
         blocks: rawBlocks,
         latestSeq,
+        liveProjection,
         threadStatus,
         latestTurnId,
         latestTurnStatus,
@@ -649,15 +648,16 @@ export function createThreadSelectionActions(
       set({
         activeThreadGoal: goal ?? null,
         activeThreadTodos: todos ?? null,
-        threadLoadingId: get().threadLoadingId === targetThreadId ? null : get().threadLoadingId,
+        threadLoadingId: busy && (hydratingTarget || get().threadLoadingId === targetThreadId)
+          ? targetThreadId : null,
         threadHistoryCursor: historyCursor ?? null,
         threadHasMoreHistory: hasMoreHistory,
         threadHistoryLoading: false,
         blocks,
         lastSeq: latestSeq,
-        ...emptyLiveProjection(latestSeq),
+        ...restoredLiveProjection(latestSeq, busy ? liveProjection : undefined),
         busy,
-        // Persisted running claim is unconfirmed until live events arrive.
+        // Replay synchronization confirms the restored running claim.
         busyUnconfirmed: busy,
         currentTurnId: busy ? latestTurnId ?? null : null,
         currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
@@ -676,7 +676,7 @@ export function createThreadSelectionActions(
       saveQueuedMessagesForThread(targetThreadId, queuedMessages)
       // The server replays every event persisted after latestSeq, including
       // events committed while getThreadDetail was in flight.
-      subscribeFrom(latestSeq)
+      subscribeFrom(latestSeq, busy)
       if (busy) armBusyWatchdog(set, get)
       if (!busy && queuedMessages.some(isPendingQueuedMessage)) {
         void get().drainQueuedMessages()

@@ -123,7 +123,7 @@ describe('running thread parked projection resume', () => {
     vi.unstubAllGlobals()
   })
 
-  it('keeps an advanced parked thread covered until replay reaches click-time high-water', async () => {
+  it('keeps a parked running thread covered until replay is explicitly synchronized', async () => {
     const sinks = new Map<string, ThreadEventSink>()
     const subscribeThreadEvents = vi.fn(async (
       id: string,
@@ -174,6 +174,8 @@ describe('running thread parked projection resume', () => {
     }])
     expect(state.threadLoadingId).toBe('thr_a')
     resumedSink!.onSeq(15)
+    expect(state.threadLoadingId).toBe('thr_a')
+    resumedSink!.onReplaySynchronized?.(15)
     expect(state.threadLoadingId).toBeNull()
     expect(state.liveAssistant).toBe('Caught up')
     expect(state.liveAssistantItemId).toBe('assistant_a')
@@ -208,6 +210,7 @@ describe('running thread parked projection resume', () => {
     expect(getThreadDetail).toHaveBeenCalledTimes(1)
     expect(state.busy).toBe(true)
     expect(state.busyUnconfirmed).toBe(true)
+    expect(state.threadLoadingId).toBe('thr_a')
   })
 
   it('reveals the cached projection when catch-up replay must recover', async () => {
@@ -267,6 +270,7 @@ describe('running thread parked projection resume', () => {
       : candidate)
 
     await actions.selectThread('thr_b')
+    sinks.get('thr_b')!.onReplaySynchronized?.(22)
     sinks.get('thr_b')!.onDeltas([{
       kind: 'agent_message',
       text: 'B is working',
@@ -276,6 +280,7 @@ describe('running thread parked projection resume', () => {
     }])
 
     await actions.selectThread('thr_a')
+    sinks.get('thr_a')!.onReplaySynchronized?.(11)
     expect(state.liveReasoning).toBe('Still working')
     expect(state.liveReasoningItemId).toBe('reasoning_a')
     expect(state.liveReasoningTurnId).toBe('turn_a')
@@ -289,12 +294,14 @@ describe('running thread parked projection resume', () => {
       turnId: 'turn_a'
     }])
     await actions.selectThread('thr_b')
+    sinks.get('thr_b')!.onReplaySynchronized?.(23)
     expect(state.liveAssistant).toBe('B is working')
     expect(state.liveAssistantItemId).toBe('assistant_b')
     expect(state.liveAssistantTurnId).toBe('turn_b')
     expect(state.blocks.some((block) => block.turnId === 'turn_a')).toBe(false)
 
     await actions.selectThread('thr_a')
+    sinks.get('thr_a')!.onReplaySynchronized?.(12)
     expect(state.liveReasoning).toBe('Still working on A')
     expect(state.liveReasoningItemId).toBe('reasoning_a')
     expect(state.liveReasoningTurnId).toBe('turn_a')

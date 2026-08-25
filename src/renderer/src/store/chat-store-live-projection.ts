@@ -1,4 +1,5 @@
 import type { ChatState } from './chat-store-types'
+import type { ThreadLiveProjection } from '../agent/provider-types'
 
 export type LiveProjectionState = Pick<
   ChatState,
@@ -29,6 +30,23 @@ export function emptyLiveProjection(liveDeltaSeqFloor = 0): LiveProjectionState 
     liveAssistantItemId: undefined,
     liveAssistantTurnId: undefined,
     liveAssistantCreatedAt: undefined
+  }
+}
+
+export function restoredLiveProjection(
+  liveDeltaSeqFloor: number,
+  projection: ThreadLiveProjection | undefined
+): LiveProjectionState {
+  return {
+    liveDeltaSeqFloor,
+    liveReasoning: projection?.reasoning?.text ?? '',
+    liveReasoningItemId: projection?.reasoning?.itemId,
+    liveReasoningTurnId: projection?.reasoning?.turnId,
+    liveReasoningCreatedAt: projection?.reasoning?.createdAt,
+    liveAssistant: projection?.assistant?.text ?? '',
+    liveAssistantItemId: projection?.assistant?.itemId,
+    liveAssistantTurnId: projection?.assistant?.turnId,
+    liveAssistantCreatedAt: projection?.assistant?.createdAt
   }
 }
 

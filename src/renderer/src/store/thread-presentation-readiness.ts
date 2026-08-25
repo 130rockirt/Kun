@@ -6,44 +6,40 @@ export type ThreadEventSinkBinding = {
   signal?: AbortSignal
   /** Cursor already projected; replayed deltas at or below it are duplicates. */
   sinceSeq?: number
-  /** Keep a parked projection covered until replay reaches this cursor. */
-  revealAfterSeq?: number
+  /** Keep a running projection covered until the SSE replay sync marker arrives. */
+  awaitReplaySynchronization?: boolean
   getThreadDetail?: AgentProvider['getThreadDetail']
-}
-
-export function parkedThreadReplayHighWater(
-  snapshot: { busy: boolean; lastSeq: number },
-  thread: { latestSeq?: number } | null
-): number | undefined {
-  return snapshot.busy &&
-    typeof thread?.latestSeq === 'number' &&
-    thread.latestSeq > snapshot.lastSeq
-    ? thread.latestSeq
-    : undefined
 }
 
 export function replayCursorPatch(
   state: ChatState,
-  threadId: string,
-  revealAfterSeq: number | undefined,
   observedSeq: number
-): Pick<ChatState, 'lastSeq'> & Partial<Pick<ChatState, 'threadLoadingId'>> {
-  const lastSeq = Math.max(state.lastSeq, observedSeq)
-  const replayReady = Boolean(
-    threadId &&
-    typeof revealAfterSeq === 'number' &&
-    lastSeq >= revealAfterSeq &&
-    state.threadLoadingId === threadId
-  )
-  return { lastSeq, ...(replayReady ? { threadLoadingId: null } : {}) }
+): Pick<ChatState, 'lastSeq'> {
+  return { lastSeq: Math.max(state.lastSeq, observedSeq) }
+}
+
+export function replaySynchronizedPatch(
+  state: ChatState,
+  threadId: string,
+  awaitReplaySynchronization: boolean | undefined,
+  cursor: number
+): Pick<ChatState, 'lastSeq' | 'liveDeltaSeqFloor'> &
+  Partial<Pick<ChatState, 'threadLoadingId' | 'busyUnconfirmed'>> {
+  const synchronized = awaitReplaySynchronization === true && Boolean(threadId)
+  return {
+    lastSeq: Math.max(state.lastSeq, cursor),
+    liveDeltaSeqFloor: Math.max(state.liveDeltaSeqFloor, cursor),
+    ...(synchronized && state.busyUnconfirmed ? { busyUnconfirmed: false } : {}),
+    ...(synchronized && state.threadLoadingId === threadId ? { threadLoadingId: null } : {})
+  }
 }
 
 export function replayLoadingIsPending(
   state: ChatState,
   threadId: string,
-  revealAfterSeq: number | undefined
+  awaitReplaySynchronization: boolean | undefined
 ): boolean {
-  return typeof revealAfterSeq === 'number' &&
+  return awaitReplaySynchronization === true &&
     Boolean(threadId) &&
     state.threadLoadingId === threadId
 }

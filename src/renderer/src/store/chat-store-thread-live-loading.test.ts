@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ChatBlock, NormalizedThread } from '../agent/types'
+import type { ChatBlock, NormalizedThread, ThreadEventSink } from '../agent/types'
 import type { ThreadDetail } from '../agent/provider-types'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 
@@ -192,6 +192,51 @@ describe('live thread hydration loading', () => {
 
     expect(state.threadLoadingId).toBeNull()
     expect(state.blocks).toEqual(detail('thread-b').blocks)
+  })
+
+  it('restores running text immediately and reveals it only after replay synchronization', async () => {
+    const pending = deferred<ThreadDetail>()
+    let sink: ThreadEventSink | undefined
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(() => pending.promise),
+      subscribeThreadEvents: vi.fn(async (
+        _threadId: string,
+        _sinceSeq: number,
+        eventSink: ThreadEventSink
+      ) => { sink = eventSink })
+    })
+    const { actions, state } = buildHarness()
+
+    const hydration = actions.subscribeThreadEventsLive('thread-b')
+    pending.resolve({
+      blocks: [{ kind: 'user', id: 'thread-b-user', text: 'Run it' }],
+      latestSeq: 12,
+      threadStatus: 'running',
+      latestTurnId: 'turn-b',
+      latestTurnStatus: 'running',
+      liveProjection: {
+        assistant: {
+          text: 'Partial result',
+          itemId: 'thread-b-live',
+          turnId: 'turn-b',
+          createdAt: '2026-08-23T00:00:01.000Z'
+        }
+      }
+    })
+    await hydration
+
+    expect(state.threadLoadingId).toBe('thread-b')
+    expect(state.busy).toBe(true)
+    expect(state.busyUnconfirmed).toBe(true)
+    expect(state.liveAssistant).toBe('Partial result')
+    expect(state.liveAssistantItemId).toBe('thread-b-live')
+    sink!.onSeq(13)
+    expect(state.threadLoadingId).toBe('thread-b')
+
+    sink!.onReplaySynchronized?.(13)
+    expect(state.threadLoadingId).toBeNull()
+    expect(state.busyUnconfirmed).toBe(false)
+    expect(state.lastSeq).toBe(13)
   })
 
   it('clears only the current target loading state when live detail fails', async () => {

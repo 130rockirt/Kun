@@ -290,6 +290,66 @@ describe('KunRuntimeProvider', () => {
     expect(detail.latestTurnOrchestration).toBe(expected)
   })
 
+  it('restores unfinished latest-turn text as the live projection', async () => {
+    installDsGui({
+      runtimeRequest: vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        body: JSON.stringify({
+          id: 'thr_running',
+          title: 'Running',
+          workspace: '/tmp',
+          model: 'deepseek-chat',
+          mode: 'agent',
+          status: 'running',
+          createdAt: 't0',
+          updatedAt: 't3',
+          latestSeq: 17,
+          turns: [{
+            id: 'turn_running',
+            threadId: 'thr_running',
+            status: 'running',
+            prompt: 'continue',
+            createdAt: 't0',
+            items: [
+              {
+                id: 'item_user', turnId: 'turn_running', threadId: 'thr_running',
+                role: 'user', status: 'completed', createdAt: 't0',
+                kind: 'user_message', text: 'continue'
+              },
+              {
+                id: 'item_reasoning', turnId: 'turn_running', threadId: 'thr_running',
+                role: 'assistant', status: 'running', createdAt: 't1',
+                kind: 'assistant_reasoning', text: 'still reasoning'
+              },
+              {
+                id: 'item_answer', turnId: 'turn_running', threadId: 'thr_running',
+                role: 'assistant', status: 'running', createdAt: 't2',
+                kind: 'assistant_text', text: 'partial answer'
+              }
+            ]
+          }]
+        })
+      }))
+    })
+
+    const detail = await new KunRuntimeProvider().getThreadDetail('thr_running')
+
+    expect(detail.blocks).toEqual([
+      expect.objectContaining({ kind: 'user', id: 'item_user', text: 'continue' })
+    ])
+    expect(detail.liveProjection).toEqual({
+      reasoning: {
+        text: 'still reasoning', itemId: 'item_reasoning',
+        turnId: 'turn_running', createdAt: 't1'
+      },
+      assistant: {
+        text: 'partial answer', itemId: 'item_answer',
+        turnId: 'turn_running', createdAt: 't2'
+      }
+    })
+  })
+
   it('loads lightweight thread state without requesting full detail', async () => {
     const runtimeRequest = vi.fn(async (path: string) => ({
       ok: true,
@@ -466,11 +526,13 @@ describe('KunRuntimeProvider', () => {
     const detail = await new KunRuntimeProvider().getThreadDetail('thr_cursor')
 
     expect(detail.threadStatus).toBe('running')
-    expect(detail.blocks).toContainEqual(expect.objectContaining({
-      kind: 'assistant',
-      id: 'item_cursor_text',
+    expect(detail.blocks.some((block) => block.id === 'item_cursor_text')).toBe(false)
+    expect(detail.liveProjection?.assistant).toEqual({
+      itemId: 'item_cursor_text',
+      turnId: 'turn_cursor',
+      createdAt: 't1',
       text: 'partial Cursor response'
-    }))
+    })
   })
 
   it('flags user_input blocks live only when the runtime gate still awaits them (#606)', async () => {

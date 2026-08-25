@@ -120,6 +120,7 @@ import { loadThreadStates as loadProviderThreadStates } from '../agent/thread-st
 import {
   replayCursorPatch,
   replayLoadingIsPending,
+  replaySynchronizedPatch,
   type ThreadEventSinkBinding
 } from './thread-presentation-readiness'
 
@@ -381,21 +382,20 @@ export function buildThreadEventSink(
     onSeq: (seq) => {
       if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
-      // Re-arm the busy watchdog on every live tick so it behaves as an
-      // *inactivity* timer rather than an absolute one. onSeq fires for
-      // every SSE batch — both content events and the runtime's 15s
-      // heartbeat (kun events route) — so a healthy turn always keeps the
-      // watchdog postponed, even a long-running tool call that produces no
-      // output for minutes. Recovery ("正在恢复运行时事件流…") then only
-      // triggers after the heartbeat genuinely stops for BUSY_WATCHDOG_MS
-      // (a dead stream), instead of on any turn that simply runs past it.
+      // Every event/heartbeat postpones recovery; only stream inactivity
+      // should trip the busy watchdog during a long-running tool call.
       if (get().busy) armBusyWatchdog(set, get)
-      // Monotonic: heartbeats and replays must never rewind the cursor —
-      // a rewound lastSeq becomes the next subscription's since_seq and
-      // replays history.
       set((s) => ({
-        ...replayCursorPatch(s, boundThreadId, binding.revealAfterSeq, seq),
+        ...replayCursorPatch(s, seq),
         error: clearRuntimeStreamRecoveringError(s.error)
+      }))
+    },
+    onReplaySynchronized: (cursor) => {
+      if (!isCurrentStream()) return
+      resetBusyRecoveryAttempts()
+      set((state) => ({
+        ...replaySynchronizedPatch(state, boundThreadId, binding.awaitReplaySynchronization, cursor),
+        error: clearRuntimeStreamRecoveringError(state.error)
       }))
     },
     onUserMessage: (event) => {
@@ -636,7 +636,7 @@ export function buildThreadEventSink(
         error: err, options
       }
       set((current) => reduce(current, { type: 'turn_failed', payload }))
-      if (replayLoadingIsPending(get(), boundThreadId, binding.revealAfterSeq)) {
+      if (replayLoadingIsPending(get(), boundThreadId, binding.awaitReplaySynchronization)) {
         // Do not leave the conversation permanently covered when replay must
         // recover. The cached projection and recovery error remain usable.
         set({ threadLoadingId: null })
