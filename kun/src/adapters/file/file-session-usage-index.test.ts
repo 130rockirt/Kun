@@ -11,6 +11,29 @@ import {
   loadUsageRecordsFromIndex
 } from './file-session-usage-read.js'
 
+/** Records the start offset of every stream opened on usage-index.jsonl. */
+const indexReads = vi.hoisted(() => {
+  const state = { starts: [] as number[] }
+  return {
+    starts: () => state.starts,
+    reset: () => { state.starts = [] }
+  }
+})
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    createReadStream: (path: unknown, options: unknown) => {
+      const start = typeof options === 'object' && options !== null ? (options as { start?: number }).start : undefined
+      if (typeof path === 'string' && path.endsWith('usage-index.jsonl') && typeof start === 'number') {
+        indexReads.starts().push(start)
+      }
+      return actual.createReadStream(path as never, options as never)
+    }
+  }
+})
+
 function cumulative(promptTokens: number, completionTokens: number): UsageSnapshot {
   return {
     ...emptyUsageSnapshot(),
@@ -96,14 +119,36 @@ describe('FileSessionStore usage index', () => {
       version: number
       indexedBytes: number
       days: Record<string, number>
-      sha256: string
+      statSignature: string
+      segments: string[]
+      tailDigest: string
     }
 
-    expect(sidecar.version).toBe(1)
+    expect(sidecar.version).toBe(2)
     expect(sidecar.indexedBytes).toBe((await stat(indexPath)).size)
     expect(sidecar.days['2026-08-20']).toBe(0)
     expect(sidecar.days['2026-08-21']).toBeGreaterThan(sidecar.days['2026-08-20'])
-    expect(sidecar.sha256).toMatch(/^[a-f0-9]{64}$/)
+    expect(sidecar.statSignature).toMatch(/^\d+:/)
+    expect(sidecar.segments.length).toBeGreaterThan(0)
+    expect(sidecar.tailDigest).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('migrates a valid v1 sidecar to v2 without trusting its hash format', async () => {
+    const threadId = 'thread-v1-migration'
+    await store.appendEvent(threadId, usageEvent(threadId, 1, '2026-08-20T00:00:00.000Z', 100, 10))
+    const threadDir = join(root, 'threads', threadId)
+    const sidecarPath = join(threadDir, 'usage-index.state.json')
+    const indexPath = join(threadDir, 'usage-index.jsonl')
+    const current = JSON.parse(await readFile(sidecarPath, 'utf-8')) as Record<string, unknown>
+    await writeFile(sidecarPath, JSON.stringify({ ...current, version: 1, sha256: 'legacy' }), 'utf-8')
+
+    const migratedStore = new FileSessionStore({ dataDir: root })
+    await migratedStore.loadLatestUsageSnapshots({ threadIds: [threadId] })
+
+    const migrated = JSON.parse(await readFile(sidecarPath, 'utf-8')) as { version: number; segments: string[] }
+    expect(migrated.version).toBe(2)
+    expect(migrated.segments.length).toBeGreaterThan(0)
+    expect((await stat(indexPath)).size).toBeGreaterThan(0)
   })
 
   it('atomically rebuilds after the index is truncated behind its sidecar', async () => {
@@ -320,5 +365,38 @@ describe('FileSessionStore usage index', () => {
     store.clearThreadMemory(threadId)
     const records = await store.loadUsageRecords({ threadId })
     expect(records).toHaveLength(1)
+  })
+
+  it('keeps append-time index reads bounded to the tail segments', async () => {
+    const threadId = 'thread-append-bounded'
+    // Warm the in-memory snapshot with the first event.
+    await store.appendEvent(threadId, usageEvent(threadId, 1, '2026-08-20T00:00:00.000Z', 100, 10))
+    const indexPath = join(root, 'threads', threadId, 'usage-index.jsonl')
+    const sizeBefore = (await stat(indexPath)).size
+
+    indexReads.reset()
+    await store.appendEvent(threadId, usageEvent(threadId, 2, '2026-08-21T00:00:00.000Z', 250, 25))
+
+    const starts = indexReads.starts()
+    // The old full-file SHA256 rescan opened the index at offset 0 on every
+    // append; segment hashing must only touch the region around the old end.
+    expect(starts.length).toBeGreaterThan(0)
+    expect(starts.every((start) => start >= sizeBefore - 64 * 1024)).toBe(true)
+  })
+
+  it('detects an externally edited index and rebuilds it from events', async () => {
+    const threadId = 'thread-edited'
+    await store.appendEvent(threadId, usageEvent(threadId, 1, '2026-08-20T00:00:00.000Z', 100, 10))
+    await store.appendEvent(threadId, usageEvent(threadId, 2, '2026-08-21T00:00:00.000Z', 250, 25))
+    const indexPath = join(root, 'threads', threadId, 'usage-index.jsonl')
+    // Same-length, schema-valid edit that only hashing can notice.
+    const edited = (await readFile(indexPath, 'utf-8')).replace('"seq":2', '"seq":7')
+    expect(edited).toContain('"seq":7')
+    await writeFile(indexPath, edited, 'utf-8')
+
+    const records = await store.loadUsageRecords({ threadId })
+
+    expect(records.map((record) => record.usage.promptTokens)).toEqual([100, 150])
+    expect(await readFile(indexPath, 'utf-8')).not.toContain('"seq":7')
   })
 })

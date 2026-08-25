@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto'
 import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
+import type { Stats } from 'node:fs'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
@@ -13,9 +13,16 @@ import type {
   SessionUsageRecord
 } from '../../ports/session-store.js'
 import { atomicWriteFile } from './atomic-write.js'
+import {
+  appendUsageIndexHashes,
+  hashUsageIndexFile,
+  usageIndexStatSignature,
+  verifyUsageIndexHashes,
+  verifyUsageIndexTail,
+} from './file-session-usage-index-hashing.js'
 
 const DEFAULT_INDEX_MAX_RECORD_BYTES = 4 * 1024 * 1024
-const USAGE_INDEX_STATE_VERSION = 1
+const USAGE_INDEX_STATE_VERSION = 2
 
 type UsageIndexCorruptionKind = 'invalid-json' | 'invalid-schema' | 'record-too-large'
 
@@ -68,11 +75,23 @@ type UsageIndexMetadata = {
   days: Record<string, number>
   monotonicTimestamps: boolean
   lastTimestamp: string
-  sha256: string
+  statSignature: string
+  segments: string[]
+  tailDigest: string
 }
 
 type UsageIndexSidecar = UsageIndexMetadata & {
   version: typeof USAGE_INDEX_STATE_VERSION
+  state: UsageIndexState
+}
+
+type LegacyUsageIndexSidecar = {
+  version: 1
+  indexedBytes: number
+  days: Record<string, number>
+  monotonicTimestamps: boolean
+  lastTimestamp: string
+  sha256: string
   state: UsageIndexState
 }
 
@@ -92,7 +111,7 @@ export function emptyUsageIndexState(): UsageIndexState {
  * derived cursor, never a source of truth: events.jsonl remains authoritative.
  */
 export class FileSessionUsageIndex {
-  private readonly states = new Map<string, UsageIndexState>()
+  private readonly snapshots = new Map<string, { statSignature: string; snapshot: UsageIndexSnapshot }>()
   private readonly ensureQueues = new Map<string, Promise<unknown>>()
 
   constructor(
@@ -113,8 +132,8 @@ export class FileSessionUsageIndex {
       return
     }
     const next = appendRowsForEvent(event, state)
-    await this.appendRows(threadId, next.rows, next.state, snapshot.metadata)
-    this.states.set(threadId, next.state)
+    const metadata = await this.appendRows(threadId, next.rows, next.state, snapshot.metadata)
+    this.snapshots.set(threadId, { statSignature: await this.currentIndexSignature(threadId), snapshot: { state: next.state, metadata } })
   }
 
   async loadUsageRecords(
@@ -159,12 +178,12 @@ export class FileSessionUsageIndex {
 
   /** Drop in-memory state; the on-disk index and sidecar remain derived data. */
   clearThreadMemory(threadId: string): void {
-    this.states.delete(threadId)
+    this.snapshots.delete(threadId)
     this.ensureQueues.delete(threadId)
   }
 
   resetMemory(): void {
-    this.states.clear()
+    this.snapshots.clear()
     this.ensureQueues.clear()
   }
 
@@ -180,6 +199,18 @@ export class FileSessionUsageIndex {
     return join(this.indexDir(threadId), 'usage-index.state.json')
   }
 
+  private async indexStat(threadId: string): Promise<Stats | null> {
+    try { return await stat(this.indexPath(threadId)) } catch (error) {
+      if ((error as { code?: string }).code === 'ENOENT') return null
+      throw error
+    }
+  }
+
+  private async currentIndexSignature(threadId: string): Promise<string> {
+    const info = await this.indexStat(threadId)
+    return info ? usageIndexStatSignature(info) : 'missing'
+  }
+
   /** Serialize readers, rebuilds, and tail repairs for one thread. */
   private ensureCurrent(threadId: string): Promise<UsageIndexSnapshot> {
     const queued = this.ensureQueues.get(threadId) ?? Promise.resolve()
@@ -192,6 +223,11 @@ export class FileSessionUsageIndex {
   }
 
   private async ensureCurrentUnlocked(threadId: string): Promise<UsageIndexSnapshot> {
+    const info = await this.indexStat(threadId)
+    const statSignature = info ? usageIndexStatSignature(info) : 'missing'
+    const cached = this.snapshots.get(threadId)
+    if (cached?.statSignature === statSignature) return cached.snapshot
+
     let snapshot: UsageIndexSnapshot
     try {
       snapshot = await this.readIndexSnapshot(threadId)
@@ -206,14 +242,12 @@ export class FileSessionUsageIndex {
 
     const backfilled = await this.buildRowsFromEvents(threadId, snapshot.state)
     if (backfilled.rows.length === 0) {
-      this.states.set(threadId, snapshot.state)
+      this.snapshots.set(threadId, { statSignature, snapshot })
       return snapshot
     }
-    const rows = serializeRows(backfilled.rows)
-    const nextMetadata = metadataAfterAppend(snapshot.metadata, backfilled.rows, `${rows}\n`)
-    await this.appendRowsAndState(threadId, rows, backfilled.state, nextMetadata)
-    const current = { state: backfilled.state, metadata: nextMetadata }
-    this.states.set(threadId, current.state)
+    const metadata = await this.appendRows(threadId, backfilled.rows, backfilled.state, snapshot.metadata)
+    const current = { state: backfilled.state, metadata }
+    this.snapshots.set(threadId, { statSignature: await this.currentIndexSignature(threadId), snapshot: current })
     return current
   }
 
@@ -234,9 +268,10 @@ export class FileSessionUsageIndex {
   private async rebuildFromEvents(threadId: string): Promise<UsageIndexSnapshot> {
     const rebuilt = await this.buildRowsFromEvents(threadId, emptyUsageIndexState())
     const metadata = metadataFromRows(rebuilt.rows)
-    await this.replaceRowsAndState(threadId, rebuilt.rows, rebuilt.state, metadata)
-    this.states.set(threadId, rebuilt.state)
-    return { state: rebuilt.state, metadata }
+    const completeMetadata = await this.replaceRowsAndState(threadId, rebuilt.rows, rebuilt.state, metadata)
+    const snapshot = { state: rebuilt.state, metadata: completeMetadata }
+    this.snapshots.set(threadId, { statSignature: await this.currentIndexSignature(threadId), snapshot })
+    return snapshot
   }
 
   private async appendRows(
@@ -244,11 +279,10 @@ export class FileSessionUsageIndex {
     rows: UsageIndexRow[],
     state: UsageIndexState,
     metadata: UsageIndexMetadata
-  ): Promise<void> {
-    if (rows.length === 0) return
-    const serialized = serializeRows(rows)
-    const nextMetadata = metadataAfterAppend(metadata, rows, `${serialized}\n`)
-    await this.appendRowsAndState(threadId, serialized, state, nextMetadata)
+  ): Promise<UsageIndexMetadata> {
+    if (rows.length === 0) return metadata
+    const nextMetadata = metadataAfterAppend(metadata, rows, `${serializeRows(rows)}\n`)
+    return this.appendRowsAndState(threadId, serializeRows(rows), state, nextMetadata)
   }
 
   private async appendRowsAndState(
@@ -256,11 +290,14 @@ export class FileSessionUsageIndex {
     serialized: string,
     state: UsageIndexState,
     metadata: UsageIndexMetadata
-  ): Promise<void> {
+  ): Promise<UsageIndexMetadata> {
     await mkdir(this.indexDir(threadId), { recursive: true, mode: 0o700 })
     await appendFile(this.indexPath(threadId), `${serialized}\n`, { encoding: 'utf-8', mode: 0o600 })
-    const completeMetadata = { ...metadata, sha256: await sha256File(this.indexPath(threadId)) }
+    const info = await stat(this.indexPath(threadId))
+    const hashes = await appendUsageIndexHashes(this.indexPath(threadId), { segments: metadata.segments, tailDigest: metadata.tailDigest }, metadata.indexedBytes - Buffer.byteLength(`${serialized}\n`, 'utf-8'), info.size)
+    const completeMetadata = { ...metadata, indexedBytes: info.size, statSignature: usageIndexStatSignature(info), segments: hashes.segments, tailDigest: hashes.tailDigest }
     await writeSidecar(this.statePath(threadId), { ...completeMetadata, state, version: USAGE_INDEX_STATE_VERSION })
+    return completeMetadata
   }
 
   private async replaceRowsAndState(
@@ -268,46 +305,45 @@ export class FileSessionUsageIndex {
     rows: UsageIndexRow[],
     state: UsageIndexState,
     metadata: UsageIndexMetadata
-  ): Promise<void> {
+  ): Promise<UsageIndexMetadata> {
     await atomicWriteFile(this.indexPath(threadId), rows.length > 0 ? `${serializeRows(rows)}\n` : '', {
       allowDirectWriteFallback: false
     })
-    const completeMetadata = { ...metadata, sha256: await sha256File(this.indexPath(threadId)) }
+    const info = await stat(this.indexPath(threadId))
+    const hashes = await hashUsageIndexFile(this.indexPath(threadId), info.size)
+    const completeMetadata = { ...metadata, indexedBytes: info.size, statSignature: usageIndexStatSignature(info), segments: hashes.segments, tailDigest: hashes.tailDigest }
     await writeSidecar(this.statePath(threadId), { ...completeMetadata, state, version: USAGE_INDEX_STATE_VERSION })
+    return completeMetadata
   }
 
   private async readIndexSnapshot(threadId: string): Promise<UsageIndexSnapshot> {
     const path = this.indexPath(threadId)
-    let fileBytes = 0
-    try {
-      fileBytes = (await stat(path)).size
-    } catch (error) {
-      if ((error as { code?: string }).code === 'ENOENT') {
-        const empty = { state: emptyUsageIndexState(), metadata: emptyMetadata() }
-        return empty
-      }
-      throw error
-    }
-
+    const info = await this.indexStat(threadId)
+    if (!info) return { state: emptyUsageIndexState(), metadata: emptyMetadata() }
+    const fileBytes = info.size
     const sidecar = await readSidecar(this.statePath(threadId))
     if (sidecar && sidecar.indexedBytes > fileBytes) {
       throw new UsageIndexCorruptionError(path, 0, 'invalid-schema', 'sidecar points past truncated index')
     }
-    if (sidecar && sidecar.indexedBytes <= fileBytes && sidecar.sha256) {
-      if (await sha256File(path, sidecar.indexedBytes) !== sidecar.sha256) {
-        throw new UsageIndexCorruptionError(path, 0, 'invalid-schema', 'sidecar prefix hash does not match index')
-      }
-    }
-    if (sidecar && sidecar.indexedBytes === fileBytes && sidecar.sha256) {
-      if (await sha256File(path) !== sidecar.sha256) {
-        throw new UsageIndexCorruptionError(path, 0, 'invalid-schema', 'sidecar hash does not match index')
-      }
+
+    if (sidecar && sidecar.indexedBytes === fileBytes && sidecar.statSignature === usageIndexStatSignature(info)) {
+      const valid = await verifyUsageIndexTail(path, fileBytes, sidecar.tailDigest)
+      if (!valid) throw new UsageIndexCorruptionError(path, 0, 'invalid-schema', 'sidecar tail digest does not match index')
       return { state: sidecar.state, metadata: sidecar }
     }
 
-    // A missing/older sidecar is upgraded by one bounded full validation pass.
-    // A sidecar behind the file only parses the appended tail.
+    if (sidecar && sidecar.indexedBytes === fileBytes) {
+      const valid = await verifyUsageIndexHashes(path, fileBytes, { segments: sidecar.segments, tailDigest: sidecar.tailDigest })
+      if (!valid) throw new UsageIndexCorruptionError(path, 0, 'invalid-schema', 'segment hash does not match index')
+      const metadata = { ...sidecar, statSignature: usageIndexStatSignature(info) }
+      await writeSidecar(this.statePath(threadId), { ...metadata, version: USAGE_INDEX_STATE_VERSION })
+      return { state: sidecar.state, metadata }
+    }
+
     const start = sidecar?.indexedBytes ?? 0
+    if (sidecar && start > 0 && !(await verifyUsageIndexTail(path, start, sidecar.tailDigest))) {
+      throw new UsageIndexCorruptionError(path, 0, 'invalid-schema', 'sidecar tail digest does not match index')
+    }
     const parsed = await readRows(path, start)
     if (parsed.incompleteTrailingRecord) {
       throw new UsageIndexCorruptionError(path, parsed.line + 1, 'invalid-json', 'unterminated record')
@@ -316,10 +352,18 @@ export class FileSessionUsageIndex {
       ? metadataAfterAppend(sidecar, parsed.rows, parsed.serialized)
       : metadataFromRows(parsed.rows)
     const state = sidecar && start > 0 ? stateFromRows(parsed.rows, sidecar.state) : stateFromRows(parsed.rows)
-    const snapshot = { state, metadata }
-    const completeMetadata = { ...metadata, sha256: await sha256File(path) }
+    const hashes = sidecar && start > 0
+      ? await appendUsageIndexHashes(path, { segments: sidecar.segments, tailDigest: sidecar.tailDigest }, start, fileBytes)
+      : await hashUsageIndexFile(path, fileBytes)
+    const completeMetadata = {
+      ...metadata,
+      indexedBytes: fileBytes,
+      statSignature: usageIndexStatSignature(info),
+      segments: hashes.segments,
+      tailDigest: hashes.tailDigest
+    }
     await writeSidecar(this.statePath(threadId), { ...completeMetadata, state, version: USAGE_INDEX_STATE_VERSION })
-    return snapshot
+    return { state, metadata: completeMetadata }
   }
 
   private async streamRows(
@@ -430,7 +474,7 @@ function stateFromRows(rows: UsageIndexRow[], initial: UsageIndexState = emptyUs
 }
 
 function emptyMetadata(): UsageIndexMetadata {
-  return { indexedBytes: 0, days: {}, monotonicTimestamps: true, lastTimestamp: '', sha256: '' }
+  return { indexedBytes: 0, days: {}, monotonicTimestamps: true, lastTimestamp: '', statSignature: '', segments: [], tailDigest: '' }
 }
 
 function metadataFromRows(rows: UsageIndexRow[]): UsageIndexMetadata {
@@ -473,7 +517,9 @@ function metadataAfterAppend(
     days,
     monotonicTimestamps,
     lastTimestamp,
-    sha256: ''
+    statSignature: metadata.statSignature,
+    segments: metadata.segments,
+    tailDigest: metadata.tailDigest
   }
 }
 
@@ -545,28 +591,31 @@ async function readSidecar(path: string): Promise<UsageIndexSidecar | null> {
     throw error
   }
   try {
-    const value = JSON.parse(raw) as UsageIndexSidecar
-    if (
-      value.version !== USAGE_INDEX_STATE_VERSION ||
-      !Number.isSafeInteger(value.indexedBytes) || value.indexedBytes < 0 ||
-      !value.state || !Number.isSafeInteger(value.state.lastSeq) ||
-      !UsageSnapshotSchema.safeParse(value.state.cumulative).success ||
-      typeof value.state.lastDay !== 'string' || typeof value.days !== 'object' ||
-      Object.values(value.days).some((offset) => !Number.isSafeInteger(offset) || offset < 0) ||
-      (value.sha256 !== undefined && typeof value.sha256 !== 'string')
-    ) return null
-    return value
+    const value = JSON.parse(raw) as { version?: number; sha256?: string; [key: string]: unknown }
+    if (value.version === 2 && isValidV2Sidecar(value)) return value as UsageIndexSidecar
+    if (value.version === 1 && isValidLegacySidecar(value as Partial<LegacyUsageIndexSidecar>)) return null
+    return null
   } catch {
     return null
   }
 }
 
-async function sha256File(path: string, bytes?: number): Promise<string> {
-  const hash = createHash('sha256')
-  if (bytes === 0) return hash.digest('hex')
-  const stream = createReadStream(path, { start: 0, end: bytes === undefined ? undefined : bytes - 1 })
-  for await (const chunk of stream) hash.update(chunk)
-  return hash.digest('hex')
+function isValidV2Sidecar(value: { [key: string]: unknown; version?: number; indexedBytes?: unknown; state?: UsageIndexState; days?: unknown; statSignature?: unknown; segments?: unknown; tailDigest?: unknown }): boolean {
+  return Number.isSafeInteger(value.indexedBytes) && (value.indexedBytes as number) >= 0 &&
+    !!value.state && Number.isSafeInteger(value.state.lastSeq) &&
+    UsageSnapshotSchema.safeParse(value.state.cumulative).success && typeof value.state.lastDay === 'string' &&
+    typeof value.days === 'object' && value.days !== null &&
+    Object.values(value.days).every((offset) => Number.isSafeInteger(offset) && offset >= 0) &&
+    typeof value.statSignature === 'string' &&
+    Array.isArray(value.segments) && value.segments.every((hash) => typeof hash === 'string') &&
+    typeof value.tailDigest === 'string'
+}
+
+function isValidLegacySidecar(value: Partial<LegacyUsageIndexSidecar>): value is LegacyUsageIndexSidecar {
+  const state = value.state as UsageIndexState | undefined
+  return Number.isSafeInteger(value.indexedBytes) && (value.indexedBytes as number) >= 0 &&
+    typeof value.sha256 === 'string' && !!state && Number.isSafeInteger(state.lastSeq) &&
+    UsageSnapshotSchema.safeParse(state.cumulative).success && typeof state.lastDay === 'string'
 }
 
 async function writeSidecar(path: string, state: UsageIndexSidecar): Promise<void> {
