@@ -266,6 +266,51 @@ describe('shared model connection settings projection', () => {
       .toBe('legacy-plaintext')
   })
 
+  it('preserves pending connection profile edits against an older registry snapshot', () => {
+    const current = defaultModelProviderSettings()
+    current.providers[0] = {
+      ...current.providers[0]!,
+      name: 'Edited provider',
+      baseUrl: 'https://new.example/v1',
+      endpointFormat: 'responses'
+    }
+    const projected = projectSharedModelConnections(
+      current,
+      {
+        schemaVersion: 1,
+        revision: 7,
+        providers: [{
+          id: current.providers[0]!.id,
+          accountId: `account:${current.providers[0]!.id}`,
+          name: 'Old provider',
+          kind: 'http',
+          authType: 'api-key',
+          baseUrl: 'https://old.example/v1',
+          endpointFormat: 'chat_completions',
+          configured: true,
+          models: [...current.providers[0]!.models]
+        }]
+      },
+      new Map(),
+      new Map([[
+        current.providers[0]!.id,
+        {
+          localName: 'Edited provider',
+          canonicalName: 'Edited provider',
+          localBaseUrl: 'https://new.example/v1',
+          localEndpointFormat: 'responses',
+          committedRevision: null
+        }
+      ]])
+    )
+
+    expect(projected.provider.providers[0]).toMatchObject({
+      name: 'Edited provider',
+      baseUrl: 'https://new.example/v1',
+      endpointFormat: 'responses'
+    })
+  })
+
   it('clears an existing settings credential while applying shared registry metadata', () => {
     const current = defaultModelProviderSettings()
     current.providers.push({

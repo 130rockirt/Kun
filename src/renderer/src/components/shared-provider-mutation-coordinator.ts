@@ -1,8 +1,13 @@
-import type { ModelProviderModelProfileV1 } from '@shared/app-settings'
+import type {
+  ModelProviderModelProfileV1,
+  ModelProviderProfileV1
+} from '@shared/app-settings'
 
 export type PendingSharedProviderName = {
   localName: string
   canonicalName: string
+  localBaseUrl?: string
+  localEndpointFormat?: ModelProviderProfileV1['endpointFormat']
   committedRevision: number | null
 }
 

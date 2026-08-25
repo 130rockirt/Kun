@@ -23,7 +23,7 @@ export function mergeRuntimeConfigApplyOptions(
     endpointFormat: serve.endpointFormat ?? current.endpointFormat,
     retry: serve.retry ?? current.retry,
     headers: serve.headers ?? current.headers,
-    providers: serve.providers ?? current.providers,
+    providers: mergeRuntimeProviderCredentials(current.providers, serve.providers),
     routePools: serve.routePools ?? current.routePools,
     localModelGateway: serve.localModelGateway ?? current.localModelGateway,
     model: serve.model ?? current.model,
@@ -43,6 +43,22 @@ export function mergeRuntimeConfigApplyOptions(
     quality: request.quality ?? current.quality,
     lab: request.lab ?? current.lab
   }
+}
+
+function mergeRuntimeProviderCredentials(
+  current: KunServeRuntimeOptions['providers'],
+  next: KunServeRuntimeOptions['providers']
+): KunServeRuntimeOptions['providers'] {
+  if (!next) return current
+  return Object.fromEntries(Object.entries(next).map(([providerId, provider]) => {
+    const currentCredentialSourceId = current?.[providerId]?.credentialSourceId
+    return [providerId, {
+      ...provider,
+      ...(provider.credentialSourceId || !currentCredentialSourceId
+        ? {}
+        : { credentialSourceId: currentCredentialSourceId })
+    }]
+  }))
 }
 
 export function llmDebugCaptureEnabled(

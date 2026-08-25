@@ -70,10 +70,13 @@ export function reconcilePendingSharedProviderNames(
       next.delete(providerId)
       continue
     }
-    const canonicalNameObserved = connection.name === rename.canonicalName
+    const canonicalProfileObserved =
+      connection.name === rename.canonicalName &&
+      (rename.localBaseUrl === undefined || (connection.baseUrl ?? '') === rename.localBaseUrl) &&
+      (rename.localEndpointFormat === undefined || connection.endpointFormat === rename.localEndpointFormat)
     const committedRevisionPassed =
       rename.committedRevision !== null && snapshot.revision > rename.committedRevision
-    if (canonicalNameObserved || committedRevisionPassed) {
+    if (canonicalProfileObserved || committedRevisionPassed) {
       next.delete(providerId)
     }
   }
@@ -322,6 +325,7 @@ export async function replaceSharedModelConnectionCredential(
       throw new Error(`Shared model connection ${providerId} is pending deletion`)
     }
     if (!snapshot.providers.some((item) => item.id === providerId)) {
+      if (!credential.trim()) return snapshot
       throw new Error(`Shared model connection ${providerId} is no longer available`)
     }
     try {
@@ -546,8 +550,8 @@ export function projectSharedModelConnections(
       // Canonical connections expose only configured state. Secret material
       // stays in the protected Registry and the in-memory edit generation.
       apiKey: '',
-      baseUrl: connection.baseUrl ?? '',
-      endpointFormat: connection.endpointFormat,
+      baseUrl: pendingNames.get(connection.id)?.localBaseUrl ?? connection.baseUrl ?? '',
+      endpointFormat: pendingNames.get(connection.id)?.localEndpointFormat ?? connection.endpointFormat,
       kind: connection.kind,
       models: pendingCatalog ? [...pendingCatalog.localModels] : [...connection.models],
       modelProfiles: pendingCatalog

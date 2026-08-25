@@ -22,6 +22,7 @@ import {
   type SharedModelConnection
 } from './settings-section-providers-shared-api'
 import {
+  connectOrReplaceSharedModelConnectionCredential,
   commitSharedModelConnectionCatalog,
   fenceSharedModelConnectionCredential,
   rebasePendingSharedProviderCatalog,
@@ -278,12 +279,23 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
     void drainSharedProviderCredentialMutation(
       providerId,
       generation,
-      (credential, operationToken, isCurrent) => replaceSharedModelConnectionCredential(
-        providerId,
-        credential,
-        (id) => pendingSharedProviderDeletions.current.has(id),
-        { operationToken, isCurrent }
-      )
+      (credential, operationToken, isCurrent) => {
+        const latestProvider = (sharedProjectionInput.current.provider.providers as ModelProviderProfileV1[])
+          .find((item) => item.id === providerId)
+        if (!latestProvider) throw new Error(`Shared model connection ${providerId} is no longer available`)
+        return credential.trim()
+          ? connectOrReplaceSharedModelConnectionCredential(
+              latestProvider,
+              credential,
+              (id) => pendingSharedProviderDeletions.current.has(id)
+            )
+          : replaceSharedModelConnectionCredential(
+              providerId,
+              credential,
+              (id) => pendingSharedProviderDeletions.current.has(id),
+              { operationToken, isCurrent }
+            )
+      }
     ).then((result) => {
       if (!result) {
         if (!pendingSharedProviderCredentials.current.has(providerId) && mounted.current) {

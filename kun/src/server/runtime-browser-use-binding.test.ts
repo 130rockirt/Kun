@@ -123,6 +123,46 @@ describe('runtime Browser Use host binding', () => {
     expect(currentBrowserUseHostAuthority().binding).toBeUndefined()
   })
 
+  it('preserves protected provider credential bindings across secret-free hot applies', () => {
+    const current = {
+      host: '127.0.0.1',
+      port: 18899,
+      dataDir: '/tmp/kun',
+      runtimeToken: 'runtime-token',
+      apiKey: '',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-chat',
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      tokenEconomyMode: false,
+      insecure: false,
+      providers: {
+        custom: {
+          apiKey: '',
+          credentialSourceId: 'model-connection:custom',
+          baseUrl: 'https://old.example/v1',
+          models: ['model-a']
+        }
+      }
+    } as KunServeRuntimeOptions
+    const request = RuntimeConfigApplyRequest.parse({
+      serve: {
+        providers: {
+          custom: {
+            apiKey: '',
+            baseUrl: 'https://new.example/v1',
+            models: ['model-a']
+          }
+        }
+      }
+    })
+
+    expect(mergeRuntimeConfigApplyOptions(current, request).providers?.custom).toMatchObject({
+      baseUrl: 'https://new.example/v1',
+      credentialSourceId: 'model-connection:custom'
+    })
+  })
+
   it('keeps the ephemeral binding out of active and persistable runtime options', () => {
     const request = RuntimeConfigApplyRequest.parse({ browserUseHostBinding: binding })
     const activeOptions = mergeRuntimeConfigApplyOptions({
