@@ -17,6 +17,7 @@ import { requiresLegacyWorkThreadHydration } from './hybrid-thread-legacy-surfac
 import { HybridThreadIndexRepository } from './hybrid-thread-index.js'
 import { hybridThreadStoreListPage, summariesFromRows } from './hybrid-thread-list-page.js'
 import { HybridThreadBackfillCoordinator } from './hybrid-thread-backfill.js'
+import { insertUsageEventsChunked, markUsageBackfilled } from './hybrid-usage-backfill-sqlite.js'
 import { scanEventsForUsageBackfill } from './hybrid-thread-usage-scan.js'
 import {
   METADATA_COMPACT_MIN_BYTES,
@@ -334,7 +335,13 @@ export class HybridThreadStore implements ThreadStore {
         eventsPath: this.eventsPath(threadId)
       }), warnSqlite)
       this.backfill = new HybridThreadBackfillCoordinator({
-        indexedRows: () => this.db!.prepare('SELECT id, usage_backfilled FROM threads').all() as Array<{ id: string; usage_backfilled?: number }>,
+        indexedRows: () => this.db!.prepare(`
+          SELECT id, usage_backfilled, usage_backfill_high_water FROM threads
+        `).all() as Array<{
+          id: string
+          usage_backfilled?: number
+          usage_backfill_high_water?: number
+        }>,
         filesystemThreadIds: () => this.threadIdsFromFilesystem(),
         readMissingThread: async (threadId) => Boolean(await this.readThreadMetadataFromDisk(threadId)),
         scanEvents: (threadId) => this.scanEventsForBackfill(threadId),
@@ -343,8 +350,10 @@ export class HybridThreadStore implements ThreadStore {
           if (thread) this.upsertIndexBestEffort({ ...this.indexRecordForThread(thread), eventSeqHighWater: highWater })
         },
         noteExistingHighWater: (threadId, highWater) => this.noteEventHighWaterSync(threadId, highWater),
-        insertUsage: (threadId, usage) => this.insertUsageEventsChunked(threadId, usage),
-        markUsageBackfilled: (threadId) => this.markUsageBackfilled(threadId),
+        insertUsage: (threadId, usage, resumeAfterSeq) => insertUsageEventsChunked(
+          this.db!, threadId, usage, resumeAfterSeq, yieldToEventLoop
+        ),
+        markUsageBackfilled: (threadId) => markUsageBackfilled(this.db!, threadId),
         threadDirectoryExists: (threadId) => pathExists(this.threadDir(threadId)),
         deleteIndexRow: (threadId) => this.deleteIndexRow(threadId),
         yieldToEventLoop,
@@ -398,6 +407,8 @@ export class HybridThreadStore implements ThreadStore {
         preview TEXT,
         message_count INTEGER NOT NULL DEFAULT 0,
         event_seq_high_water INTEGER NOT NULL DEFAULT 0,
+        usage_backfilled INTEGER NOT NULL DEFAULT 0,
+        usage_backfill_high_water INTEGER NOT NULL DEFAULT 0,
         metadata_path TEXT NOT NULL,
         messages_path TEXT NOT NULL,
         events_path TEXT NOT NULL,
@@ -428,9 +439,29 @@ export class HybridThreadStore implements ThreadStore {
     addColumnIfMissing(this.db, 'threads', 'extension_metadata_json TEXT')
     addColumnIfMissing(this.db, 'threads', 'model_request_capture_enabled INTEGER NOT NULL DEFAULT 0')
     addColumnIfMissing(this.db, 'threads', "approval_reviewer TEXT NOT NULL DEFAULT 'user'")
-    addColumnIfMissing(this.db, 'threads', 'usage_backfilled INTEGER NOT NULL DEFAULT 0')
+    this.migrateUsageBackfillState()
     addColumnIfMissing(this.db, 'threads', 'agent_surface TEXT')
     addColumnIfMissing(this.db, 'usage_events', 'provider_id TEXT')
+  }
+
+  private migrateUsageBackfillState(): void {
+    if (!this.db) return
+    const columns = this.db.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>
+    const names = new Set(columns.map((column) => column.name))
+    const missingCompletion = !names.has('usage_backfilled')
+    const missingHighWater = !names.has('usage_backfill_high_water')
+    if (!missingCompletion && !missingHighWater) return
+    this.db.transaction(() => {
+      if (missingCompletion) {
+        this.db!.exec('ALTER TABLE threads ADD COLUMN usage_backfilled INTEGER NOT NULL DEFAULT 0')
+      }
+      if (missingHighWater) {
+        this.db!.exec('ALTER TABLE threads ADD COLUMN usage_backfill_high_water INTEGER NOT NULL DEFAULT 0')
+        // Earlier versions could mark partially written usage as complete.
+        // Reopen all rows exactly once when this recovery state is introduced.
+        this.db!.exec('UPDATE threads SET usage_backfilled = 0, usage_backfill_high_water = 0')
+      }
+    })()
   }
 
   private cachedStatement(sql: string): Statement {
@@ -448,47 +479,6 @@ export class HybridThreadStore implements ThreadStore {
     threadId: string
   ): Promise<{ highWater: number; usage: UsageRuntimeEvent[] }> {
     return scanEventsForUsageBackfill(this.eventsPath(threadId))
-  }
-
-  /**
-   * Inserts usage rows in small transactions, yielding between chunks.
-   * better-sqlite3 is synchronous: unchunked backfill of a large history
-   * starved the event loop long enough that the HTTP server never reported
-   * ready within the GUI's startup timeout.
-   */
-  private async insertUsageEventsChunked(threadId: string, events: UsageRuntimeEvent[]): Promise<void> {
-    if (!this.db || events.length === 0) return
-    const insert = this.cachedStatement(`
-      INSERT OR REPLACE INTO usage_events (
-        thread_id, seq, timestamp, turn_id, model, provider_id, usage_json
-      )
-      VALUES (
-        @thread_id, @seq, @timestamp, @turn_id, @model, @provider_id, @usage_json
-      )
-    `)
-    const insertChunk = this.db.transaction((chunk: UsageRow[]) => {
-      for (const row of chunk) insert.run(row)
-    })
-    const chunkSize = 200
-    for (let start = 0; start < events.length; start += chunkSize) {
-      const chunk = events.slice(start, start + chunkSize).map(usageRowFromEvent)
-      try {
-        insertChunk(chunk)
-      } catch (error) {
-        warnSqlite(`backfill usage events for ${threadId}`, error)
-        return
-      }
-      await yieldToEventLoop()
-    }
-  }
-
-  private markUsageBackfilled(threadId: string): void {
-    if (!this.db) return
-    try {
-      this.db.prepare('UPDATE threads SET usage_backfilled = 1 WHERE id = ?').run(threadId)
-    } catch (error) {
-      warnSqlite('mark usage backfilled', error)
-    }
   }
 
   private queryThreadRows(options: ThreadStoreListOptions): ThreadRow[] {
