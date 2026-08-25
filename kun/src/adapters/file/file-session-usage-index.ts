@@ -1,6 +1,7 @@
 import { appendFile, mkdir } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import { join } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
 import type { UsageEvent } from '../../contracts/events.js'
 import { emptyUsageSnapshot, UsageSnapshotSchema, type UsageSnapshot } from '../../contracts/usage.js'
@@ -92,12 +93,12 @@ export class FileSessionUsageIndex {
   async recordUsage(threadId: string, event: UsageEvent): Promise<void> {
     const snapshot = await this.ensureCurrent(threadId)
     const state = snapshot.state
-    if (event.seq <= state.lastSeq) {
-      this.states.set(threadId, {
-        lastSeq: state.lastSeq,
-        cumulative: event.usage,
-        lastDay: utcDayOf(event.timestamp) || state.lastDay
-      })
+    if (event.seq < state.lastSeq) return
+    if (event.seq === state.lastSeq) {
+      if (!sameUsageSnapshot(event.usage, state.cumulative)) {
+        console.error(`[kun] usage index cumulative mismatch for ${threadId} at seq ${event.seq}; rebuilding from events.jsonl`)
+        await this.rebuildFromEvents(threadId)
+      }
       return
     }
     const next = appendRowsForEvent(event, state)
@@ -215,6 +216,12 @@ export class FileSessionUsageIndex {
       state = appended.state
     }
     return { rows, state }
+  }
+
+  private async rebuildFromEvents(threadId: string): Promise<void> {
+    const rebuilt = await this.buildRowsFromEvents(threadId, emptyUsageIndexState())
+    await this.replaceRows(threadId, rebuilt.rows)
+    this.states.set(threadId, rebuilt.state)
   }
 
   private async appendRows(threadId: string, rows: UsageIndexRow[]): Promise<void> {
@@ -340,7 +347,7 @@ function appendRowsForEvent(
 function stateFromRows(rows: UsageIndexRow[]): UsageIndexState {
   let state = emptyUsageIndexState()
   for (const row of rows) {
-    if (row.type === 'delta' && row.seq >= state.lastSeq) {
+    if (row.type === 'delta' && row.seq > state.lastSeq) {
       state = {
         lastSeq: row.seq,
         cumulative: row.cumulative,
@@ -355,6 +362,10 @@ function stateFromRows(rows: UsageIndexRow[]): UsageIndexState {
     }
   }
   return state
+}
+
+function sameUsageSnapshot(left: UsageSnapshot, right: UsageSnapshot): boolean {
+  return isDeepStrictEqual(JSON.parse(JSON.stringify(left)), JSON.parse(JSON.stringify(right)))
 }
 
 function serializeRows(rows: UsageIndexRow[]): string {

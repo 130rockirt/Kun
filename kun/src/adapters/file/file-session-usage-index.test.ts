@@ -232,6 +232,32 @@ describe('FileSessionStore usage index', () => {
     expect((await readdir(join(root, 'threads', threadId))).filter((name) => name.endsWith('.tmp'))).toEqual([])
   })
 
+  it('ignores out-of-order usage without regressing the next delta', async () => {
+    const threadId = 'thread-out-of-order'
+    await store.appendEvent(threadId, usageEvent(threadId, 10, '2026-08-21T00:00:00.000Z', 100, 0))
+    await store.appendEvent(threadId, usageEvent(threadId, 5, '2026-08-20T00:00:00.000Z', 50, 0))
+    await store.appendEvent(threadId, usageEvent(threadId, 11, '2026-08-21T00:01:00.000Z', 110, 0))
+
+    expect((await store.loadUsageRecords({ threadId })).map((record) => record.usage.promptTokens))
+      .toEqual([100, 10])
+  })
+
+  it('rebuilds on conflicting duplicate usage without regressing the next delta', async () => {
+    const threadId = 'thread-conflict'
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await store.appendEvent(threadId, usageEvent(threadId, 10, '2026-08-21T00:00:00.000Z', 100, 0))
+      await store.appendEvent(threadId, usageEvent(threadId, 10, '2026-08-21T00:01:00.000Z', 50, 0))
+      await store.appendEvent(threadId, usageEvent(threadId, 11, '2026-08-21T00:02:00.000Z', 110, 0))
+
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('thread-conflict at seq 10'))
+      expect((await store.loadUsageRecords({ threadId })).map((record) => record.usage.promptTokens))
+        .toEqual([100, 10])
+    } finally {
+      error.mockRestore()
+    }
+  })
+
   it('ignores usage index state cleared with thread memory', async () => {
     const threadId = 'thread-clear'
     await store.appendEvent(threadId, usageEvent(threadId, 1, '2026-08-20T00:00:00.000Z', 100, 10))
