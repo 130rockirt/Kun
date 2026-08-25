@@ -1,11 +1,15 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyUsageSnapshot, type UsageSnapshot } from '../../contracts/usage.js'
 import type { UsageEvent } from '../../contracts/events.js'
+import type { SessionLatestUsageSnapshot, SessionUsageRecord } from '../../ports/session-store.js'
 import { FileSessionStore } from './file-session-store.js'
-import { readFile } from 'node:fs/promises'
+import {
+  loadLatestUsageSnapshotsFromIndex,
+  loadUsageRecordsFromIndex
+} from './file-session-usage-read.js'
 
 function cumulative(promptTokens: number, completionTokens: number): UsageSnapshot {
   return {
@@ -159,6 +163,73 @@ describe('FileSessionStore usage index', () => {
       turnId: 'turn-2',
       usage: { promptTokens: 200, completionTokens: 40, totalTokens: 240 }
     })
+  })
+
+  it('ignores an unterminated index tail and repairs it atomically', async () => {
+    const threadId = 'thread-tail'
+    await store.appendEvent(threadId, usageEvent(threadId, 1, '2026-08-20T00:00:00.000Z', 100, 10))
+    const indexPath = join(root, 'threads', threadId, 'usage-index.jsonl')
+    await appendFile(indexPath, '{"type":"delta"', 'utf-8')
+
+    expect(await store.loadUsageRecords({ threadId })).toHaveLength(1)
+    const repaired = await readFile(indexPath, 'utf-8')
+    expect(repaired).toMatch(/\n$/)
+    expect(repaired).not.toContain('{"type":"delta"\n{"type":"delta"')
+  })
+
+  it('isolates cross-thread usage failures and retains diagnostics', async () => {
+    const failure = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    const reader = {
+      async loadUsageRecords(threadId: string): Promise<SessionUsageRecord[]> {
+        if (threadId === 'thread-b') throw failure
+        return [{ threadId, completedAt: '2026-08-20T00:00:00.000Z', usage: cumulative(1, 1) }]
+      },
+      async loadLatestUsageSnapshot(threadId: string): Promise<SessionLatestUsageSnapshot | null> {
+        if (threadId === 'thread-b') throw failure
+        return { threadId, seq: 1, usage: cumulative(1, 1) }
+      }
+    }
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const records = await loadUsageRecordsFromIndex(reader, async () => ['thread-a', 'thread-b', 'thread-c'])
+      const snapshots = await loadLatestUsageSnapshotsFromIndex(reader, async () => ['thread-a', 'thread-b', 'thread-c'])
+      expect(records.map((record) => record.threadId)).toEqual(['thread-a', 'thread-c'])
+      expect(snapshots.map((snapshot) => snapshot.threadId)).toEqual(['thread-a', 'thread-c'])
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('thread-b (EACCES): permission denied'))
+      await expect(loadUsageRecordsFromIndex(reader, async () => [], { threadId: 'thread-b' }))
+        .rejects.toThrow('permission denied')
+    } finally {
+      warning.mockRestore()
+    }
+  })
+
+  it('keeps an absent threads directory distinct from a listing failure', async () => {
+    expect(await (await import('./file-session-usage-read.js')).listThreadDirs(join(root, 'missing'))).toEqual([])
+    await expect(loadUsageRecordsFromIndex({
+      loadUsageRecords: async () => [],
+      loadLatestUsageSnapshot: async () => null
+    }, async () => { throw Object.assign(new Error('I/O error'), { code: 'EIO' }) })).rejects.toThrow('I/O error')
+  })
+
+  it('rebuilds a corrupt middle row rather than trusting a later high seq', async () => {
+    const threadId = 'thread-middle-corrupt'
+    await store.appendEvent(threadId, usageEvent(threadId, 1, '2026-08-20T00:00:00.000Z', 100, 10))
+    await store.appendEvent(threadId, usageEvent(threadId, 2, '2026-08-21T00:00:00.000Z', 200, 20))
+    await store.appendEvent(threadId, usageEvent(threadId, 3, '2026-08-22T00:00:00.000Z', 350, 35))
+    const indexPath = join(root, 'threads', threadId, 'usage-index.jsonl')
+    const lines = (await readFile(indexPath, 'utf-8')).trimEnd().split('\n')
+    const deltaIndexes = lines.map((line, index) => line.includes('"type":"delta"') ? index : -1).filter((index) => index >= 0)
+    lines[deltaIndexes[1]] = 'not-json'
+    await writeFile(indexPath, `${lines.join('\n')}\n`, 'utf-8')
+
+    const records = await store.loadUsageRecords({ threadId })
+    expect(records.map((record) => record.usage.promptTokens)).toEqual([100, 100, 150])
+    expect(await store.loadLatestUsageSnapshots({ threadIds: [threadId] })).toEqual([
+      { threadId, seq: 3, usage: cumulative(350, 35) }
+    ])
+    const rebuilt = await readFile(indexPath, 'utf-8')
+    expect(rebuilt).not.toContain('not-json')
+    expect((await readdir(join(root, 'threads', threadId))).filter((name) => name.endsWith('.tmp'))).toEqual([])
   })
 
   it('ignores usage index state cleared with thread memory', async () => {

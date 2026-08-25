@@ -1,6 +1,6 @@
-import { appendFile, mkdir, rename } from 'node:fs/promises'
+import { appendFile, mkdir } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { z } from 'zod'
 import type { UsageEvent } from '../../contracts/events.js'
 import { emptyUsageSnapshot, UsageSnapshotSchema, type UsageSnapshot } from '../../contracts/usage.js'
@@ -10,8 +10,23 @@ import type {
   SessionUsageQueryOptions,
   SessionUsageRecord
 } from '../../ports/session-store.js'
+import { atomicWriteFile } from './atomic-write.js'
 
 const DEFAULT_INDEX_MAX_RECORD_BYTES = 4 * 1024 * 1024
+
+type UsageIndexCorruptionKind = 'invalid-json' | 'invalid-schema' | 'record-too-large'
+
+class UsageIndexCorruptionError extends Error {
+  constructor(
+    readonly path: string,
+    readonly line: number,
+    readonly kind: UsageIndexCorruptionKind,
+    detail: string
+  ) {
+    super(`usage index ${kind} at ${path}:${line}: ${detail}`)
+    this.name = 'UsageIndexCorruptionError'
+  }
+}
 
 /**
  * Per-thread usage index row. Delta rows carry the differential usage that
@@ -46,6 +61,12 @@ export type UsageIndexState = {
   lastDay: string
 }
 
+type UsageIndexSnapshot = {
+  rows: UsageIndexRow[]
+  state: UsageIndexState
+  incompleteTrailingRecord: boolean
+}
+
 type UsageEventSource = (threadId: string, sinceSeq: number) => AsyncIterable<UsageEvent>
 
 export function emptyUsageIndexState(): UsageIndexState {
@@ -53,11 +74,10 @@ export function emptyUsageIndexState(): UsageIndexState {
 }
 
 /**
- * Append-only per-thread usage index (`usage-index.jsonl`). events.jsonl
- * stays the source of truth; the index is derived data that self-heals from
- * the event tail when it lags, and rebuilds from seq 0 when its own log is
- * unusable. Ranged usage queries read this small file instead of replaying
- * the whole event history.
+ * Append-only per-thread usage index (`usage-index.jsonl`). events.jsonl stays
+ * the source of truth. A healthy index is backfilled from the event tail; an
+ * unterminated EOF tail is ignored until a later rewrite; any malformed
+ * newline-terminated record triggers a full atomic rebuild from seq 0.
  */
 export class FileSessionUsageIndex {
   private readonly states = new Map<string, UsageIndexState>()
@@ -68,15 +88,10 @@ export class FileSessionUsageIndex {
     private readonly eventsSince: UsageEventSource
   ) {}
 
-  /**
-   * Record one usage event. Must run inside the caller's per-thread write
-   * queue so appends never interleave.
-   */
+  /** Record one usage event inside the caller's per-thread write queue. */
   async recordUsage(threadId: string, event: UsageEvent): Promise<void> {
-    await this.ensureCurrent(threadId)
-    const state = this.states.get(threadId) ?? emptyUsageIndexState()
-    // Out-of-order or duplicate event: already covered by the indexed
-    // cumulative snapshot, so only refresh the in-memory high-water mark.
+    const snapshot = await this.ensureCurrent(threadId)
+    const state = snapshot.state
     if (event.seq <= state.lastSeq) {
       this.states.set(threadId, {
         lastSeq: state.lastSeq,
@@ -85,54 +100,21 @@ export class FileSessionUsageIndex {
       })
       return
     }
-    const day = utcDayOf(event.timestamp)
-    const delta = diffUsage(event.usage, state.cumulative)
-    const lines: string[] = []
-    if (state.lastSeq > 0 && day && day !== state.lastDay) {
-      lines.push(JSON.stringify({
-        type: 'checkpoint',
-        date: state.lastDay,
-        seq: state.lastSeq,
-        timestamp: state.lastDay,
-        cumulative: state.cumulative
-      } satisfies UsageIndexRow))
-    }
-    lines.push(JSON.stringify({
-      type: 'delta',
-      seq: event.seq,
-      timestamp: event.timestamp,
-      ...(event.turnId ? { turnId: event.turnId } : {}),
-      ...(event.model ? { model: event.model } : {}),
-      ...(event.providerId ? { providerId: event.providerId } : {}),
-      usage: delta,
-      cumulative: event.usage
-    } satisfies UsageIndexRow))
-    if (lines.length > 0) {
-      await mkdir(this.indexDir(threadId), { recursive: true, mode: 0o700 })
-      await appendFile(this.indexPath(threadId), `${lines.join('\n')}\n`, {
-        encoding: 'utf-8',
-        mode: 0o600
-      })
-    }
-    this.states.set(threadId, {
-      lastSeq: Math.max(state.lastSeq, event.seq),
-      cumulative: event.usage,
-      lastDay: day || state.lastDay
-    })
+    const next = appendRowsForEvent(event, state)
+    await this.appendRows(threadId, next.rows)
+    this.states.set(threadId, next.state)
   }
 
   async loadUsageRecords(
     threadId: string,
     options: SessionUsageQueryOptions = {}
   ): Promise<SessionUsageRecord[]> {
-    await this.ensureCurrent(threadId)
-    const rows = await this.readIndexRows(threadId)
+    const { rows } = await this.ensureCurrent(threadId)
     const fromMs = options.fromInclusive ? Date.parse(options.fromInclusive) : undefined
     const toMs = options.toExclusive ? Date.parse(options.toExclusive) : undefined
     const records: SessionUsageRecord[] = []
     for (const row of rows) {
-      if (row.type !== 'delta') continue
-      if (!hasUsage(row.usage)) continue
+      if (row.type !== 'delta' || !hasUsage(row.usage)) continue
       const atMs = Date.parse(row.timestamp)
       if (!Number.isFinite(atMs)) continue
       if (fromMs !== undefined && atMs < fromMs) continue
@@ -150,9 +132,8 @@ export class FileSessionUsageIndex {
   }
 
   async loadLatestUsageSnapshot(threadId: string): Promise<SessionLatestUsageSnapshot | null> {
-    await this.ensureCurrent(threadId)
-    const state = await this.loadStateFromIndex(threadId)
-    if (!state || state.lastSeq <= 0) return null
+    const { state } = await this.ensureCurrent(threadId)
+    if (state.lastSeq <= 0) return null
     return { threadId, seq: state.lastSeq, usage: state.cumulative }
   }
 
@@ -175,13 +156,8 @@ export class FileSessionUsageIndex {
     return join(this.indexDir(threadId), 'usage-index.jsonl')
   }
 
-  /**
-   * Bring the index up to date with events.jsonl. Missing or lagging index
-   * files are backfilled from the durable event tail; an index whose own log
-   * is unreadable is rebuilt from seq 0. Serialized per thread so concurrent
-   * readers do not race a rebuild against an append.
-   */
-  private ensureCurrent(threadId: string): Promise<void> {
+  /** Serialize readers, rebuilds, and tail repairs for one thread. */
+  private ensureCurrent(threadId: string): Promise<UsageIndexSnapshot> {
     const queued = this.ensureQueues.get(threadId) ?? Promise.resolve()
     const run = queued.catch(() => undefined).then(() => this.ensureCurrentUnlocked(threadId))
     const guard = run.then(() => undefined, () => undefined)
@@ -191,128 +167,198 @@ export class FileSessionUsageIndex {
     })
   }
 
-  private async ensureCurrentUnlocked(threadId: string): Promise<void> {
-    // In-memory state is only valid while the on-disk index still exists;
-    // an external removal (or a fresh process after a crash between the
-    // events.jsonl append and the index write) must trigger a rebuild.
-    let indexed = this.states.get(threadId) ?? null
-    if (!indexed) {
-      indexed = await this.loadStateFromIndex(threadId)
+  private async ensureCurrentUnlocked(threadId: string): Promise<UsageIndexSnapshot> {
+    let snapshot: UsageIndexSnapshot
+    try {
+      snapshot = await this.readIndexSnapshot(threadId)
+    } catch (error) {
+      if (!(error instanceof UsageIndexCorruptionError)) throw error
+      console.warn(
+        `[kun] rebuilding corrupt usage index for ${threadId} from events.jsonl ` +
+        `(line ${error.line}, ${error.kind})`
+      )
+      const rebuilt = await this.buildRowsFromEvents(threadId, emptyUsageIndexState())
+      await this.replaceRows(threadId, rebuilt.rows)
+      this.states.set(threadId, rebuilt.state)
+      return { ...rebuilt, incompleteTrailingRecord: false }
+    }
+
+    const backfilled = await this.buildRowsFromEvents(threadId, snapshot.state)
+    if (backfilled.rows.length === 0) {
+      if (snapshot.incompleteTrailingRecord) {
+        await this.replaceRows(threadId, snapshot.rows)
+        snapshot = { ...snapshot, incompleteTrailingRecord: false }
+      }
+      this.states.set(threadId, snapshot.state)
+      return snapshot
+    }
+    const rows = [...snapshot.rows, ...backfilled.rows]
+    if (snapshot.incompleteTrailingRecord) {
+      await this.replaceRows(threadId, rows)
     } else {
-      const onDisk = await this.loadStateFromIndex(threadId)
-      if (!onDisk || onDisk.lastSeq !== indexed.lastSeq) indexed = onDisk
+      await this.appendRows(threadId, backfilled.rows)
     }
-    const lastSeq = indexed?.lastSeq ?? 0
-    const cumulative = indexed?.cumulative ?? emptyUsageSnapshot()
-    const pending: UsageIndexRow[] = []
-    let latest = cumulative
-    let highestSeen = lastSeq
-    let lastDay = indexed?.lastDay ?? ''
-    for await (const event of this.eventsSince(threadId, lastSeq)) {
-      const day = utcDayOf(event.timestamp)
-      // Persist the day-boundary checkpoint that incremental recordUsage would
-      // have written, so a backfilled index keeps the same anchors.
-      if (highestSeen > 0 && day && day !== lastDay) {
-        pending.push({
-          type: 'checkpoint',
-          date: lastDay,
-          seq: highestSeen,
-          timestamp: lastDay,
-          cumulative: latest
-        })
-      }
-      const delta = diffUsage(event.usage, latest)
-      pending.push({
-        type: 'delta',
-        seq: event.seq,
-        timestamp: event.timestamp,
-        ...(event.turnId ? { turnId: event.turnId } : {}),
-        ...(event.model ? { model: event.model } : {}),
-        ...(event.providerId ? { providerId: event.providerId } : {}),
-        usage: delta,
-        cumulative: event.usage
-      })
-      latest = event.usage
-      highestSeen = Math.max(highestSeen, event.seq)
-      if (day) lastDay = day
-    }
-    if (pending.length > 0) {
-      await mkdir(this.indexDir(threadId), { recursive: true, mode: 0o700 })
-      const body = pending.map((row) => JSON.stringify(row)).join('\n')
-      await appendFile(this.indexPath(threadId), `${body}\n`, { encoding: 'utf-8', mode: 0o600 })
-    }
-    this.states.set(threadId, { lastSeq: highestSeen, cumulative: latest, lastDay })
+    const current = { rows, state: backfilled.state, incompleteTrailingRecord: false }
+    this.states.set(threadId, current.state)
+    return current
   }
 
-  /**
-   * Read only the index tail state. A truncated or corrupt file yields null
-   * so the caller rebuilds from the durable event log.
-   */
-  private async loadStateFromIndex(threadId: string): Promise<UsageIndexState | null> {
-    const rows = await this.readIndexRows(threadId)
-    if (rows.length === 0) return null
-    let state: UsageIndexState = { lastSeq: 0, cumulative: emptyUsageSnapshot(), lastDay: '' }
-    let seen = false
-    for (const row of rows) {
-      seen = true
-      if (row.type === 'delta' && row.seq >= state.lastSeq) {
-        state = {
-          lastSeq: row.seq,
-          cumulative: row.cumulative,
-          lastDay: utcDayOf(row.timestamp) || state.lastDay
-        }
-      } else if (row.type === 'checkpoint' && row.seq > state.lastSeq) {
-        state = {
-          lastSeq: row.seq,
-          cumulative: row.cumulative,
-          lastDay: row.date || state.lastDay
-        }
-      }
+  private async buildRowsFromEvents(
+    threadId: string,
+    initial: UsageIndexState
+  ): Promise<{ rows: UsageIndexRow[]; state: UsageIndexState }> {
+    const rows: UsageIndexRow[] = []
+    let state = initial
+    for await (const event of this.eventsSince(threadId, initial.lastSeq)) {
+      const appended = appendRowsForEvent(event, state)
+      rows.push(...appended.rows)
+      state = appended.state
     }
-    return seen ? state : null
+    return { rows, state }
   }
 
-  private async readIndexRows(threadId: string): Promise<UsageIndexRow[]> {
+  private async appendRows(threadId: string, rows: UsageIndexRow[]): Promise<void> {
+    if (rows.length === 0) return
+    await mkdir(this.indexDir(threadId), { recursive: true, mode: 0o700 })
+    await appendFile(this.indexPath(threadId), `${serializeRows(rows)}\n`, {
+      encoding: 'utf-8',
+      mode: 0o600
+    })
+  }
+
+  private async replaceRows(threadId: string, rows: UsageIndexRow[]): Promise<void> {
+    await atomicWriteFile(
+      this.indexPath(threadId),
+      rows.length > 0 ? `${serializeRows(rows)}\n` : '',
+      { allowDirectWriteFallback: false }
+    )
+  }
+
+  private async readIndexSnapshot(threadId: string): Promise<UsageIndexSnapshot> {
     const path = this.indexPath(threadId)
     const rows: UsageIndexRow[] = []
     let remainder = ''
+    let overflowedTrailingRecord = false
+    let line = 0
     try {
       const stream = createReadStream(path, { encoding: 'utf-8', highWaterMark: 64 * 1024 })
       for await (const chunk of stream) {
-        remainder += typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
+        let input = typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
+        if (overflowedTrailingRecord) {
+          const newline = input.indexOf('\n')
+          if (newline < 0) continue
+          throw new UsageIndexCorruptionError(path, line + 1, 'record-too-large', 'record exceeds limit')
+        }
+        remainder += input
         let newline = remainder.indexOf('\n')
         while (newline >= 0) {
-          const line = remainder.slice(0, newline)
+          const record = remainder.slice(0, newline)
           remainder = remainder.slice(newline + 1)
-          const row = parseUsageIndexRow(line)
-          if (row) rows.push(row)
+          line += 1
+          rows.push(parseUsageIndexRow(record, { path, line }))
           newline = remainder.indexOf('\n')
         }
         if (Buffer.byteLength(remainder, 'utf-8') > DEFAULT_INDEX_MAX_RECORD_BYTES) {
-          throw new Error(`usage index record exceeds ${DEFAULT_INDEX_MAX_RECORD_BYTES} bytes`)
+          // Do not retain an unbounded in-flight tail. If it is eventually
+          // newline-terminated, the next chunk marks it corrupt; EOF ignores it.
+          remainder = ''
+          overflowedTrailingRecord = true
         }
       }
-      if (remainder.trim()) {
-        const row = parseUsageIndexRow(remainder)
-        if (row) rows.push(row)
-      }
     } catch (error) {
-      if ((error as { code?: string }).code === 'ENOENT') return []
+      if ((error as { code?: string }).code === 'ENOENT') {
+        return { rows: [], state: emptyUsageIndexState(), incompleteTrailingRecord: false }
+      }
       throw error
     }
-    return rows
+    return {
+      rows,
+      state: stateFromRows(rows),
+      incompleteTrailingRecord: overflowedTrailingRecord || remainder.length > 0
+    }
   }
 }
 
-export function parseUsageIndexRow(line: string): UsageIndexRow | null {
-  if (!line.trim()) return null
-  if (Buffer.byteLength(line, 'utf-8') > DEFAULT_INDEX_MAX_RECORD_BYTES) return null
-  try {
-    const parsed = UsageIndexRowSchema.safeParse(JSON.parse(line))
-    return parsed.success ? parsed.data : null
-  } catch {
-    return null
+export function parseUsageIndexRow(
+  line: string,
+  context: { path?: string; line?: number } = {}
+): UsageIndexRow {
+  const path = context.path ?? 'usage-index.jsonl'
+  const lineNumber = context.line ?? 0
+  if (Buffer.byteLength(line, 'utf-8') > DEFAULT_INDEX_MAX_RECORD_BYTES) {
+    throw new UsageIndexCorruptionError(path, lineNumber, 'record-too-large', 'record exceeds limit')
   }
+  let value: unknown
+  try {
+    value = JSON.parse(line)
+  } catch {
+    throw new UsageIndexCorruptionError(path, lineNumber, 'invalid-json', 'cannot parse JSON')
+  }
+  const parsed = UsageIndexRowSchema.safeParse(value)
+  if (!parsed.success) {
+    throw new UsageIndexCorruptionError(path, lineNumber, 'invalid-schema', 'does not match usage index schema')
+  }
+  return parsed.data
+}
+
+function appendRowsForEvent(
+  event: UsageEvent,
+  state: UsageIndexState
+): { rows: UsageIndexRow[]; state: UsageIndexState } {
+  if (event.seq <= state.lastSeq) return { rows: [], state }
+  const day = utcDayOf(event.timestamp)
+  const rows: UsageIndexRow[] = []
+  if (state.lastSeq > 0 && day && day !== state.lastDay) {
+    rows.push({
+      type: 'checkpoint',
+      date: state.lastDay,
+      seq: state.lastSeq,
+      timestamp: state.lastDay,
+      cumulative: state.cumulative
+    })
+  }
+  rows.push({
+    type: 'delta',
+    seq: event.seq,
+    timestamp: event.timestamp,
+    ...(event.turnId ? { turnId: event.turnId } : {}),
+    ...(event.model ? { model: event.model } : {}),
+    ...(event.providerId ? { providerId: event.providerId } : {}),
+    usage: diffUsage(event.usage, state.cumulative),
+    cumulative: event.usage
+  })
+  return {
+    rows,
+    state: {
+      lastSeq: event.seq,
+      cumulative: event.usage,
+      lastDay: day || state.lastDay
+    }
+  }
+}
+
+function stateFromRows(rows: UsageIndexRow[]): UsageIndexState {
+  let state = emptyUsageIndexState()
+  for (const row of rows) {
+    if (row.type === 'delta' && row.seq >= state.lastSeq) {
+      state = {
+        lastSeq: row.seq,
+        cumulative: row.cumulative,
+        lastDay: utcDayOf(row.timestamp) || state.lastDay
+      }
+    } else if (row.type === 'checkpoint' && row.seq > state.lastSeq) {
+      state = {
+        lastSeq: row.seq,
+        cumulative: row.cumulative,
+        lastDay: row.date || state.lastDay
+      }
+    }
+  }
+  return state
+}
+
+function serializeRows(rows: UsageIndexRow[]): string {
+  return rows.map((row) => JSON.stringify(row)).join('\n')
 }
 
 function utcDayOf(timestamp: string): string {
