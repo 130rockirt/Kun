@@ -1,4 +1,10 @@
 import { createServer } from 'node:net'
+import type { RuntimeFlavor } from '../../kun/src/contracts/runtime-flavor.js'
+import {
+  readRuntimeHandoffDiscovery,
+  type RuntimeHandoffDiscoveryRecord
+} from '../../kun/src/server/runtime-discovery.js'
+import { identityMatchesExpectedRuntime } from './kun-process-identity'
 import { appendManagedLogLine } from './logger'
 import {
   execFileAsync,
@@ -8,19 +14,27 @@ import {
   sleep
 } from './kun-process-state'
 
+export type KunPortReclaimContext = {
+  dataDir: string
+  flavor?: RuntimeFlavor
+  expectedServeEntryPath?: string
+}
+
 export async function reclaimKunPort(
-  port: number
+  port: number,
+  context?: KunPortReclaimContext
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   if (port <= 0) return { ok: true }
   if (await canBindTcpPort(port, '127.0.0.1')) return { ok: true }
-  if (await killStaleKunOnPort(port) && await canBindTcpPort(port, '127.0.0.1')) {
+  if (await killStaleKunOnPort(port, context) && await canBindTcpPort(port, '127.0.0.1')) {
     return { ok: true }
   }
   return { ok: false, message: `port ${port} is in use` }
 }
 
 export async function resolveAvailableKunPort(
-  preferredPort: number
+  preferredPort: number,
+  context?: KunPortReclaimContext
 ): Promise<{ port: number; changed: boolean; message?: string }> {
   if (preferredPort > 0) {
     // A temporarily unresponsive managed child still owns its configured
@@ -35,7 +49,7 @@ export async function resolveAvailableKunPort(
     // Prefer reclaiming the configured port from a stale kun left by a
     // crashed previous app run over silently moving to a new port.
     if (
-      await killStaleKunOnPort(preferredPort) &&
+      await killStaleKunOnPort(preferredPort, context) &&
       await canBindTcpPort(preferredPort, '127.0.0.1')
     ) {
       return { port: preferredPort, changed: false }
@@ -68,25 +82,54 @@ export async function resolveAvailableKunPort(
  * identify the holder as our own serve-entry leaves it untouched and the
  * caller allocates a different port instead.
  */
-export async function killStaleKunOnPort(port: number): Promise<boolean> {
+export async function killStaleKunOnPort(
+  port: number,
+  context?: KunPortReclaimContext
+): Promise<boolean> {
+  // Generic port probes do not know a runtime owner, so they intentionally
+  // fail closed and let callers choose another available port.
+  if (!context) return false
   const pids = await listListeningPidsOnPort(port)
   let reclaimed = false
   for (const pid of pids) {
     if (processController.isCurrentPid(pid)) continue
-    let command = ''
-    try {
-      command = await processCommandLine(pid)
-    } catch {
+    const verifyTarget = async (): Promise<boolean> => {
+      const identity = await processIdentity(pid)
+      const discovery = await readKunPortOwner(context, port)
+      return Boolean(discovery && identityMatchesExpectedRuntime(
+        identity,
+        discovery,
+        context.dataDir,
+        context.flavor ?? 'production',
+        context.expectedServeEntryPath
+      ))
+    }
+    if (!(await verifyTarget())) {
+      void appendManagedLogLine(
+        'kun',
+        formatKunLogLine('lifecycle', pid, `skipped non-kun listener on port ${port}`)
+      )
       continue
     }
-    if (!command.includes('serve-entry')) continue
     void appendManagedLogLine(
       'kun',
       formatKunLogLine('lifecycle', pid, `killing stale kun process holding port ${port}`)
     )
-    if (await terminateStalePid(pid)) reclaimed = true
+    if (await terminateVerifiedPid(pid, verifyTarget)) reclaimed = true
   }
   return reclaimed
+}
+
+async function readKunPortOwner(
+  context: KunPortReclaimContext,
+  port: number
+): Promise<RuntimeHandoffDiscoveryRecord | null> {
+  try {
+    const discovery = await readRuntimeHandoffDiscovery(context.dataDir, context.flavor ?? 'production')
+    return discovery?.port === port ? discovery : null
+  } catch {
+    return null
+  }
 }
 
 /**

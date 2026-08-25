@@ -16,10 +16,13 @@ import { removeRuntimeDiscovery } from '../../../kun/src/server/runtime-discover
 import { withRuntimeDataDirAncillaryWriter } from '../../../kun/src/server/runtime-data-dir-lease.js'
 import { unregisterRuntimeWithManager } from '../../../kun/src/manager/manager-client.js'
 import {
+  identityMatchesExpectedRuntime,
+  sameRuntimeOwner as sameDiscoveryRuntimeOwner
+} from '../kun-process-identity'
+import {
   listListeningPidsOnPort,
   processCommandLine,
   processIdentity,
-  type ProcessIdentity,
   terminateVerifiedPid,
   waitForPidExit
 } from '../kun-process-ports'
@@ -210,39 +213,11 @@ async function targetStillMatches(
   )
 }
 
-const MAX_STARTED_AT_DIFFERENCE_MS = 60_000
-
-function identityMatchesExpectedRuntime(
-  identity: ProcessIdentity | null,
-  discovery: RuntimeHandoffDiscoveryRecord,
-  dataDir: string,
-  flavor: RuntimeFlavor
-): boolean {
-  if (!identity || identity.pid !== discovery.pid) return false
-  if (!commandLooksLikeExpectedServe(identity.commandLine, dataDir, flavor)) return false
-  if (process.platform === 'win32' && !looksLikeRuntimeExecutable(identity.executablePath)) return false
-  const discoveryStartedAtMs = Date.parse(discovery.startedAt)
-  return Number.isFinite(discoveryStartedAtMs) &&
-    identity.startedAtMs !== null &&
-    Math.abs(identity.startedAtMs - discoveryStartedAtMs) <= MAX_STARTED_AT_DIFFERENCE_MS
-}
-
-function looksLikeRuntimeExecutable(executablePath: string | null): boolean {
-  if (!executablePath) return false
-  return /(?:^|[/\\\\])(?:node|electron|kun[^/\\\\]*)\.exe$/iu.test(executablePath)
-}
-
 function sameRuntimeOwner(
   expected: SharedRuntimeReplacementInspection,
   current: SharedRuntimeReplacementInspection | null
 ): boolean {
-  if (!current) return false
-  return current.discovery.instanceId === expected.discovery.instanceId &&
-    current.discovery.pid === expected.discovery.pid &&
-    current.discovery.startedAt === expected.discovery.startedAt &&
-    current.discovery.baseUrl === expected.discovery.baseUrl &&
-    current.discovery.port === expected.discovery.port &&
-    current.discovery.runtimeToken === expected.discovery.runtimeToken
+  return Boolean(current && sameDiscoveryRuntimeOwner(expected.discovery, current.discovery))
 }
 
 async function settleChangedRuntimeOwner(
