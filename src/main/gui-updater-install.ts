@@ -15,7 +15,8 @@ import {
   readPendingUpdateResult,
   setPendingUpdateEnvironment,
   writeGuiUpdateRecovery,
-  writePendingUpdate
+  writePendingUpdate,
+  writePendingUpdateResult
 } from './gui-updater-pending'
 
 type InstallerDetails = {
@@ -44,6 +45,8 @@ export class GuiUpdateInstaller {
   private launchError: Error | null = null
   private recoveryScheduled = false
   private recoveryTriggered = false
+  private healthRetryTimer: ReturnType<typeof setTimeout> | null = null
+  private healthCheck?: () => Promise<boolean>
   private installerPath = ''
   private installerSha512 = ''
 
@@ -71,6 +74,7 @@ export class GuiUpdateInstaller {
   }
 
   onBeforeQuitForUpdate(): void {
+    this.clearHealthRetry()
     if (this.handoffPending) {
       this.handoffStarted = true
       this.handoffPending = false
@@ -91,59 +95,134 @@ export class GuiUpdateInstaller {
   }
 
   async reconcile(healthCheck?: () => Promise<boolean>): Promise<void> {
+    if (healthCheck) this.healthCheck = healthCheck
     let recovery = await readGuiUpdateRecovery()
     const pending = await readPendingUpdate()
     const result = await readPendingUpdateResult()
-    if (result?.outcome === 'aborted') {
-      const rollbackComplete = result.transactionState === 'rolled_back' &&
-        result.rollbackOutcome === 'succeeded'
-      if (rollbackComplete) {
-        await cleanupPendingUpdateBackup(result.backupDir)
-        await clearPendingUpdateResult()
-        await clearPendingUpdate()
+
+    if (pending && result?.outcome === 'success') {
+      const installed = app.getVersion() === pending.newVersion
+      const completedStates = new Set(['committed', 'cleanup_pending', 'payload_switched', 'awaiting_health'])
+      const committed = result.schemaVersion === 1 || completedStates.has(result.transactionState ?? '')
+      if (installed && committed) {
+        if (result.transactionState !== 'committed' && result.schemaVersion !== 1) {
+          console.warn('[kun-gui updater] reconciling incomplete installer cleanup:', result.transactionState)
+        }
+        recovery = await this.startHealthRecovery(pending, result.backupDir)
+        await this.removeTransactionRecords()
+      } else if (!installed) {
+        this.emitInstallFailure('The update installer reported success, but the running version does not match the update.')
+        return
       }
-      this.deps.emit({ status: 'error', info: this.deps.stateInfo(), code: 'install_failed',
-        message: result.message || `The update installer stopped during ${result.phase ?? result.code}.` })
+    }
+
+    if (result?.outcome === 'aborted') {
+      const rollbackComplete = result.transactionState === 'rolled_back' && result.rollbackOutcome === 'succeeded'
+      const oldVersionRunning = pending && app.getVersion() === pending.oldVersion
+      if (rollbackComplete || oldVersionRunning) {
+        await this.cleanupBackup(result.backupDir)
+        await this.removeTransactionRecords()
+      } else if (pending) {
+        const attempts = (result.recoveryAttempts ?? 0) + 1
+        const message = result.message || `The update installer stopped during ${result.phase ?? result.code}.`
+        if (attempts >= GUI_UPDATE_MAX_HEALTH_ATTEMPTS) {
+          await this.removeTransactionRecords()
+        } else {
+          await writePendingUpdateResult({ ...result, recoveryAttempts: attempts })
+        }
+        this.emitInstallFailure(message)
+        return
+      }
+      this.emitInstallFailure(result.message || `The update installer stopped during ${result.phase ?? result.code}.`)
       return
     }
-    if (pending) {
-      const installed = app.getVersion() === pending.newVersion
-      const transactionCommitted = result?.schemaVersion === 1 || result?.transactionState === 'committed'
-      if (installed && result?.outcome === 'success' && transactionCommitted) {
-        recovery = await writeGuiUpdateRecovery({
-          installedVersion: pending.newVersion,
-          channel: pending.channel,
-          verifiedAt: new Date().toISOString(),
-          healthAttempts: 0,
-          backupDir: result.backupDir,
-          backupExpiresAt: new Date(Date.now() + GUI_UPDATE_BACKUP_GRACE_MS).toISOString()
-        })
-        await clearPendingUpdateResult()
+
+    if (pending && !result) {
+      if (app.getVersion() === pending.oldVersion) {
+        await clearPendingUpdate()
+        this.emitInstallFailure('The update installer did not finish. The downloaded update can be retried.')
+        return
+      }
+      if (app.getVersion() === pending.newVersion) {
+        recovery = await this.startHealthRecovery(pending, pending.backupDir)
         await clearPendingUpdate()
       }
     }
+
     if (!recovery) return
     if (Date.now() >= Date.parse(recovery.backupExpiresAt)) {
-      await cleanupPendingUpdateBackup(recovery.backupDir)
+      this.clearHealthRetry()
+      await this.cleanupBackup(recovery.backupDir)
       await clearGuiUpdateRecovery()
       return
     }
     const retryAt = recovery.nextHealthCheckAt ? Date.parse(recovery.nextHealthCheckAt) : 0
-    if (recovery.healthAttempts >= GUI_UPDATE_MAX_HEALTH_ATTEMPTS || retryAt > Date.now()) {
+    if (recovery.healthAttempts >= GUI_UPDATE_MAX_HEALTH_ATTEMPTS) {
+      this.clearHealthRetry()
       this.emitDegraded(recovery.healthAttempts, recovery.lastError)
       return
     }
-    const healthy = await (healthCheck?.() ?? Promise.resolve(true)).catch(() => false)
+    if (retryAt > Date.now()) {
+      this.armHealthRetry(retryAt)
+      this.emitDegraded(recovery.healthAttempts, recovery.lastError)
+      return
+    }
+    const healthy = await (this.healthCheck?.() ?? Promise.resolve(true)).catch(() => false)
     if (healthy) {
-      await cleanupPendingUpdateBackup(recovery.backupDir)
+      this.clearHealthRetry()
+      await this.cleanupBackup(recovery.backupDir)
       await clearGuiUpdateRecovery()
       return
     }
     const attempts = recovery.healthAttempts + 1
     const message = 'GUI update installed, but Kun Runtime health checks are still failing.'
-    await writeGuiUpdateRecovery({ ...recovery, healthAttempts: attempts,
+    const nextRecovery = await writeGuiUpdateRecovery({ ...recovery, healthAttempts: attempts,
       nextHealthCheckAt: new Date(Date.now() + GUI_UPDATE_HEALTH_RETRY_MS).toISOString(), lastError: message })
+    if (attempts < GUI_UPDATE_MAX_HEALTH_ATTEMPTS) this.armHealthRetry(Date.parse(nextRecovery.nextHealthCheckAt ?? ''))
     this.emitDegraded(attempts, message)
+  }
+
+  private async startHealthRecovery(pending: { newVersion: string, channel: GuiUpdateChannel }, backupDir?: string) {
+    return writeGuiUpdateRecovery({
+      installedVersion: pending.newVersion,
+      channel: pending.channel,
+      verifiedAt: new Date().toISOString(),
+      healthAttempts: 0,
+      backupDir,
+      backupExpiresAt: new Date(Date.now() + GUI_UPDATE_BACKUP_GRACE_MS).toISOString()
+    })
+  }
+
+  private async removeTransactionRecords(): Promise<void> {
+    await clearPendingUpdateResult()
+    await clearPendingUpdate()
+  }
+
+  private async cleanupBackup(backupDir?: string): Promise<void> {
+    await cleanupPendingUpdateBackup(backupDir).catch((error) => {
+      console.warn('[kun-gui updater] could not clean update backup:', error)
+    })
+  }
+
+  private armHealthRetry(retryAt: number): void {
+    this.clearHealthRetry()
+    const delay = Math.max(0, retryAt - Date.now())
+    this.healthRetryTimer = setTimeout(() => {
+      this.healthRetryTimer = null
+      void this.reconcile().catch((error) => {
+        console.warn('[kun-gui updater] could not retry pending update health check:', error)
+      })
+    }, delay)
+    this.healthRetryTimer.unref?.()
+  }
+
+  private clearHealthRetry(): void {
+    if (this.healthRetryTimer) clearTimeout(this.healthRetryTimer)
+    this.healthRetryTimer = null
+  }
+
+  private emitInstallFailure(message: string): void {
+    this.deps.emit({ status: 'error', info: this.deps.stateInfo(), code: 'install_failed', message })
   }
 
   private emitDegraded(attempts: number, message?: string): void {
@@ -204,7 +283,7 @@ export class GuiUpdateInstaller {
     } catch (error) {
       const deferred = (error as { code?: unknown })?.code === 'install_deferred'
       restoreEnvironment()
-      this.reset(false)
+      this.reset()
       if (quittingMarked) {
         this.deps.clearPreparation()
         this.deps.setQuitting(false)
@@ -217,8 +296,7 @@ export class GuiUpdateInstaller {
     }
   }
 
-  private reset(clearPending: boolean): void {
-    if (clearPending) void clearPendingUpdate()
+  private reset(): void {
     this.attemptActive = false
     this.handoffPending = false
     this.handoffStarted = false
@@ -230,17 +308,24 @@ export class GuiUpdateInstaller {
     this.recoveryScheduled = true
     this.recoveryTriggered = true
     queueMicrotask(() => {
-      this.recoveryScheduled = false
-      this.reset(true)
-      this.deps.clearPreparation()
-      this.deps.setQuitting(false)
-      try {
-        app.relaunch()
-        app.exit(0)
-      } catch (error) {
-        console.error('[kun-gui updater] failed to relaunch after update install failure:', error)
-      }
+      void this.relaunchAfterClearingPending()
     })
+  }
+
+  private async relaunchAfterClearingPending(): Promise<void> {
+    this.recoveryScheduled = false
+    await clearPendingUpdate().catch((error) => {
+      console.warn('[kun-gui updater] could not clear pending update before relaunch:', error)
+    })
+    this.reset()
+    this.deps.clearPreparation()
+    this.deps.setQuitting(false)
+    try {
+      app.relaunch()
+      app.exit(0)
+    } catch (error) {
+      console.error('[kun-gui updater] failed to relaunch after update install failure:', error)
+    }
   }
 }
 

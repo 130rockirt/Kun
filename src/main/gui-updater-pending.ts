@@ -40,6 +40,7 @@ export type PendingUpdateResult = {
   backupDir?: string
   transactionState?: 'prepared' | 'payload_switched' | 'awaiting_health' | 'cleanup_pending' | 'committed' | 'rolling_back' | 'rolled_back' | 'rollback_incomplete' | ''
   rollbackOutcome?: 'not_started' | 'succeeded' | 'failed' | ''
+  recoveryAttempts?: number
 }
 
 export type GuiUpdateRecovery = {
