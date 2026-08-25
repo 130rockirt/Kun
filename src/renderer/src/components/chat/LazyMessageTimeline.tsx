@@ -1,12 +1,16 @@
 import {
   lazy,
   Suspense,
+  useEffect,
+  useState,
   type ComponentProps,
   type ReactElement,
   type ReactNode
 } from 'react'
 import type { MessageTimeline } from './MessageTimeline'
 import { useChatStore } from '../../store/chat-store'
+import { prepareAssistantMarkdownRenderer } from './AssistantMarkdown'
+import { ThreadHydrationGate } from './ThreadHydrationLoading'
 
 const LazyLoadedMessageTimeline = lazy(() =>
   import('./MessageTimeline').then((module) => ({ default: module.MessageTimeline }))
@@ -21,13 +25,36 @@ export function LazyMessageTimeline({
   ...props
 }: LazyMessageTimelineProps): ReactElement {
   const threadLoadingId = useChatStore((state) => state.threadLoadingId)
-  const timelinePhase = props.activeThreadId && threadLoadingId === props.activeThreadId
-    ? 'hydrating'
-    : 'ready'
-  const timelineKey = `${props.activeThreadId ?? 'empty'}:${timelinePhase}`
+  const activeThreadId = props.activeThreadId
+  const hydrating = Boolean(activeThreadId && threadLoadingId === activeThreadId)
+  const [preparedThreadId, setPreparedThreadId] = useState<string | null>(null)
+  const timelineKey = activeThreadId ?? 'empty'
+
+  useEffect(() => {
+    if (!activeThreadId) {
+      setPreparedThreadId(null)
+      return
+    }
+    let cancelled = false
+    void prepareAssistantMarkdownRenderer()
+      .catch(() => undefined)
+      .then(() => {
+        if (!cancelled) setPreparedThreadId(activeThreadId)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeThreadId])
+
+  const preparingRenderer = Boolean(activeThreadId && preparedThreadId !== activeThreadId)
   return (
-    <Suspense fallback={fallback}>
-      <LazyLoadedMessageTimeline key={timelineKey} {...props} />
-    </Suspense>
+    <ThreadHydrationGate
+      loading={hydrating || preparingRenderer}
+      presentationKey={activeThreadId}
+    >
+      <Suspense fallback={fallback}>
+        <LazyLoadedMessageTimeline key={timelineKey} {...props} />
+      </Suspense>
+    </ThreadHydrationGate>
   )
 }

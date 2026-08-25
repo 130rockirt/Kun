@@ -123,7 +123,7 @@ describe('running thread parked projection resume', () => {
     vi.unstubAllGlobals()
   })
 
-  it('restores immediately across sequence drift and replays from the parked cursor', async () => {
+  it('keeps an advanced parked thread covered until replay reaches click-time high-water', async () => {
     const sinks = new Map<string, ThreadEventSink>()
     const subscribeThreadEvents = vi.fn(async (
       id: string,
@@ -147,7 +147,7 @@ describe('running thread parked projection resume', () => {
     const selecting = actions.selectThread('thr_a')
 
     expect(state.activeThreadId).toBe('thr_a')
-    expect(state.threadLoadingId).toBeNull()
+    expect(state.threadLoadingId).toBe('thr_a')
     expect(state.blocks).toEqual([{ kind: 'user', id: 'a-user', text: 'Run the long task' }])
     expect(state.busy).toBe(true)
     expect(state.busyUnconfirmed).toBe(false)
@@ -168,21 +168,23 @@ describe('running thread parked projection resume', () => {
     resumedSink!.onDeltas([{
       kind: 'agent_message',
       text: 'Caught up',
-      seq: 12,
+      seq: 15,
       itemId: 'assistant_a',
       turnId: 'turn_a'
     }])
-    resumedSink!.onSeq(12)
+    expect(state.threadLoadingId).toBe('thr_a')
+    resumedSink!.onSeq(15)
+    expect(state.threadLoadingId).toBeNull()
     expect(state.liveAssistant).toBe('Caught up')
     expect(state.liveAssistantItemId).toBe('assistant_a')
     expect(state.liveAssistantTurnId).toBe('turn_a')
-    expect(state.lastSeq).toBe(12)
+    expect(state.lastSeq).toBe(15)
 
     resumedSink!.onTurnComplete({
       threadId: 'thr_a',
       turnId: 'turn_a',
       status: 'completed',
-      seq: 13
+      seq: 16
     })
     expect(state.busy).toBe(false)
     expect(state.busyUnconfirmed).toBe(false)
@@ -206,6 +208,31 @@ describe('running thread parked projection resume', () => {
     expect(getThreadDetail).toHaveBeenCalledTimes(1)
     expect(state.busy).toBe(true)
     expect(state.busyUnconfirmed).toBe(true)
+  })
+
+  it('reveals the cached projection when catch-up replay must recover', async () => {
+    let resumedSink: ThreadEventSink | undefined
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail: vi.fn(async (id: string) => {
+        if (id === 'thr_b') return settledDetail()
+        throw new Error(`unexpected detail request for ${id}`)
+      }),
+      subscribeThreadEvents: vi.fn(async (id: string, _sinceSeq: number, sink: ThreadEventSink) => {
+        if (id === 'thr_a') resumedSink = sink
+      })
+    })
+    const { actions, state } = buildHarness()
+
+    await actions.selectThread('thr_b')
+    state.threads = state.threads.map((candidate) => candidate.id === 'thr_a'
+      ? { ...candidate, updatedAt: '2026-08-23T00:01:00.000Z', latestSeq: 15 }
+      : candidate)
+    await actions.selectThread('thr_a')
+
+    expect(state.threadLoadingId).toBe('thr_a')
+    resumedSink!.onError(new Error('replay connection lost'))
+    expect(state.threadLoadingId).toBeNull()
+    expect(state.error).toContain('replay connection lost')
   })
 
   it('keeps live identity isolated while repeatedly switching running threads', async () => {

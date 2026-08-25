@@ -1,12 +1,55 @@
-import type { ReactElement, ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-export function ThreadHydrationGate({ loading, children }: {
+export function ThreadHydrationGate({ loading, presentationKey = null, children }: {
   loading: boolean
+  presentationKey?: string | null
   children: ReactNode
 }): ReactElement {
-  return loading ? <ThreadHydrationLoading /> : <>{children}</>
+  const [revealedKey, setRevealedKey] = useState<string | null>(() =>
+    loading ? null : presentationKey
+  )
+  const committedKeyRef = useRef(presentationKey)
+  const waitingForPaint = loading || Boolean(presentationKey && revealedKey !== presentationKey)
+
+  useLayoutEffect(() => {
+    const keyChanged = committedKeyRef.current !== presentationKey
+    committedKeyRef.current = presentationKey
+    if (!presentationKey) return
+    if (loading || keyChanged) setRevealedKey(null)
+    if (loading) return
+    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+      setRevealedKey(presentationKey)
+      return
+    }
+    let firstFrame: number | null = null
+    let secondFrame: number | null = null
+    firstFrame = window.requestAnimationFrame(() => {
+      firstFrame = null
+      secondFrame = window.requestAnimationFrame(() => {
+        secondFrame = null
+        setRevealedKey(presentationKey)
+      })
+    })
+    return () => {
+      if (firstFrame !== null) window.cancelAnimationFrame(firstFrame)
+      if (secondFrame !== null) window.cancelAnimationFrame(secondFrame)
+    }
+  }, [loading, presentationKey])
+
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        className={`flex min-h-0 flex-1 flex-col ${waitingForPaint ? 'pointer-events-none' : ''}`}
+        aria-hidden={waitingForPaint || undefined}
+        inert={waitingForPaint || undefined}
+      >
+        {children}
+      </div>
+      {waitingForPaint ? <ThreadHydrationLoading /> : null}
+    </div>
+  )
 }
 
 export function ThreadHydrationLoading(): ReactElement {

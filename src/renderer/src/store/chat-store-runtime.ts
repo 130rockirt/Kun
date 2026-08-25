@@ -1,5 +1,4 @@
 import type {
-  AgentProvider,
   ChatBlock,
   CompactionBlock,
   NormalizedThread,
@@ -117,8 +116,14 @@ import {
   upsertRuntimeErrorBlock
 } from './chat-store-runtime-projection-support'
 import { loadThreadStates as loadProviderThreadStates } from '../agent/thread-state-loader'
+import {
+  replayCursorPatch,
+  replayLoadingIsPending,
+  type ThreadEventSinkBinding
+} from './thread-presentation-readiness'
 
 export * from './chat-store-runtime-reexports'
+export type { ThreadEventSinkBinding } from './thread-presentation-readiness'
 
 export function armBusyWatchdog(
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
@@ -284,20 +289,6 @@ export function syncTurnCompletionPoll(
   })
 }
 
-export type ThreadEventSinkBinding = {
-  threadId?: string
-  signal?: AbortSignal
-  /**
-   * Seq the subscription replays from. Deltas at or below this floor are
-   * duplicates of text already in the timeline (a replayed backlog or a
-   * re-delivered live event) and are dropped instead of appended, so a
-   * stale cursor can no longer re-stream the whole conversation into the
-   * live bubble.
-   */
-  sinceSeq?: number
-  getThreadDetail?: AgentProvider['getThreadDetail']
-}
-
 export function buildThreadEventSink(
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
   get: () => ChatState,
@@ -402,7 +393,7 @@ export function buildThreadEventSink(
       // a rewound lastSeq becomes the next subscription's since_seq and
       // replays history.
       set((s) => ({
-        lastSeq: Math.max(s.lastSeq, seq),
+        ...replayCursorPatch(s, boundThreadId, binding.revealAfterSeq, seq),
         error: clearRuntimeStreamRecoveringError(s.error)
       }))
     },
@@ -642,6 +633,11 @@ export function buildThreadEventSink(
         error: err, options
       }
       set((current) => reduce(current, { type: 'turn_failed', payload }))
+      if (replayLoadingIsPending(get(), boundThreadId, binding.revealAfterSeq)) {
+        // Do not leave the conversation permanently covered when replay must
+        // recover. The cached projection and recovery error remain usable.
+        set({ threadLoadingId: null })
+      }
       if (terminal && state.activeThreadId) {
         set((current) => ({
           unreadThreadIds: completionIsCurrentlyVisible(current, state.activeThreadId!)

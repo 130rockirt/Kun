@@ -45,7 +45,6 @@ import {
 } from './message-timeline-jump-preview'
 import { MemoMessageTurn } from './message-timeline-conversation-turn'
 import type { MessageTimelineProps } from './message-timeline-props'
-import { ThreadHydrationGate } from './ThreadHydrationLoading'
 import { useTurnUsageState } from '../../hooks/use-turn-usage'
 
 export {
@@ -377,7 +376,6 @@ export function MessageTimeline({
     >
     <InjectedMemoryLookupProvider workspaceRoot={workspaceRoot} enabled={!activeThreadId || threadLoadingId !== activeThreadId}>
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-      <ThreadHydrationGate loading={Boolean(activeThreadId && threadLoadingId === activeThreadId)}>
       <div ref={containerRef} className="ds-no-drag relative flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
       {visibleTurnAnchors.length > 2 && jumpRailLayout ? (
         <div className="timeline-jump-rail-anchor">
@@ -690,7 +688,6 @@ export function MessageTimeline({
         />
       ) : null}
       </div>
-      </ThreadHydrationGate>
     </div>
     </InjectedMemoryLookupProvider>
     </TimelineFilePreviewWorkspaceProvider>

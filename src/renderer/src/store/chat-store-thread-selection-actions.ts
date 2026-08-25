@@ -136,6 +136,7 @@ import {
   fallbackComposerProviderIdForSend,
   subscribeThreadEventsWithRecovery
 } from './chat-store-thread-action-helpers'
+import { parkedThreadReplayHighWater } from './thread-presentation-readiness'
 import { resolveThreadComposerState } from './chat-store-thread-composer-state'
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
 import { readDesignThreadRegistry } from '../design/design-thread-registry'
@@ -244,11 +245,13 @@ export function createThreadSelectionActions(
       const composerState = resolveThreadComposerState(get(), targetThread, {
         hasUserMessages: cached.blocks.some((block) => block.kind === 'user')
       })
+      const replayHighWater = parkedThreadReplayHighWater(cached, targetThread)
       set((state) => ({
         watchTurnCompletion: nextWatch,
         unreadThreadIds: nextUnread,
         activeThreadId: id,
-        threadLoadingId: null,
+        // Keep advanced parked content covered until replay reaches click-time high-water.
+        threadLoadingId: replayHighWater === undefined ? null : id,
         threadRefreshingId: null,
         threadHistoryCursor: cached.threadHistoryCursor,
         threadHasMoreHistory: cached.threadHasMoreHistory,
@@ -285,7 +288,12 @@ export function createThreadSelectionActions(
       syncTurnCompletionPoll(set, get)
       const ac = new AbortController()
       sseAbortRef.current = ac
-      const sink = buildThreadEventSink(set, get, { threadId: id, signal: ac.signal, sinceSeq: cached.lastSeq })
+      const sink = buildThreadEventSink(set, get, {
+        threadId: id,
+        signal: ac.signal,
+        sinceSeq: cached.lastSeq,
+        ...(replayHighWater === undefined ? {} : { revealAfterSeq: replayHighWater })
+      })
       subscribeThreadEventsWithRecovery(p, id, cached.lastSeq, sink, ac.signal, get)
       if (cached.busy) armBusyWatchdog(set, get)
       else if (queuedMessages.some(isPendingQueuedMessage)) void get().drainQueuedMessages()

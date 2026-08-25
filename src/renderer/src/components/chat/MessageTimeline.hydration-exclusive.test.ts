@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NormalizedThread } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { MessageTimeline } from './MessageTimeline'
+import { ThreadHydrationGate } from './ThreadHydrationLoading'
 
 const activeThread: NormalizedThread = {
   id: 'thread-target',
@@ -74,31 +75,35 @@ describe('MessageTimeline hydration presentation', () => {
       body: JSON.stringify({ group_by: 'turn', thread_id: activeThread.id, buckets: [] })
     })
     Object.defineProperty(window, 'kunGui', { configurable: true, value: { runtimeRequest } })
-    const element = createElement(MessageTimeline, {
-      blocks: [{ kind: 'assistant', id: 'target-answer', text: 'target-ready-content' }],
-      liveReasoning: '',
-      live: '',
-      activeThreadId: activeThread.id,
-      runtimeConnection: 'ready',
-      onRetryConnection: () => undefined,
-      onOpenSettings: () => undefined
+    const element = (loading: boolean) => createElement(ThreadHydrationGate, {
+      loading,
+      presentationKey: activeThread.id,
+      children: createElement(MessageTimeline, {
+        blocks: [{ kind: 'assistant', id: 'target-answer', text: 'target-ready-content' }],
+        liveReasoning: '',
+        live: '',
+        activeThreadId: activeThread.id,
+        runtimeConnection: 'ready',
+        onRetryConnection: () => undefined,
+        onOpenSettings: () => undefined
+      })
     })
-    await act(async () => root!.render(element))
+    await act(async () => root!.render(element(true)))
 
     const messageNode = [...container.querySelectorAll('*')]
       .find((node) => node.textContent === 'target-ready-content')
     expect(container.querySelector('[data-testid="thread-hydration-loading"]')).not.toBeNull()
-    expect(container.textContent).not.toContain('target-ready-content')
-    expect(messageNode).toBeUndefined()
+    expect(messageNode?.closest('[aria-hidden="true"]')).not.toBeNull()
     expect(runtimeRequest).not.toHaveBeenCalled()
 
     await act(async () => {
       useChatStore.setState({ threadLoadingId: null })
+      root!.render(element(false))
       await Promise.resolve()
     })
 
     expect(container.querySelector('[data-testid="thread-hydration-loading"]')).toBeNull()
-    expect(container.textContent).toContain('target-ready-content')
+    expect(container.textContent, container.innerHTML).toContain('target-ready-content')
     expect(runtimeRequest).toHaveBeenCalledWith(
       '/v1/usage?group_by=turn&thread_id=thread-target',
       'GET'
