@@ -49,6 +49,7 @@ import { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import { ThreadService } from '../services/thread-service.js'
 import { isHostShutdownTurnSuspension, TurnService } from '../services/turn-service.js'
 import { UsageService } from '../services/usage-service.js'
+import { submittedDesignTaskProfile } from '../domain/design-task-profile.js'
 import type { ChildRunExecutor } from './delegation-runtime.js'
 import {
   ChildResultExecutionError,
@@ -371,6 +372,17 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
     if (input.resumeChild && (thread.relation !== 'side' || thread.parentThreadId !== input.parentThreadId)) {
       throw new Error(`child thread ${input.childId} is not a side thread of the expected parent`)
     }
+    const parentDesignProfile = agentSurface === 'design' && !thread.designProfile
+      ? (threadStore.getMetadata
+          ? await threadStore.getMetadata(input.parentThreadId)
+          : await threadStore.get(input.parentThreadId))?.designProfile
+      : undefined
+    const designAdmission = parentDesignProfile
+      ? {
+          designProfile: submittedDesignTaskProfile(parentDesignProfile),
+          designDocumentTarget: parentDesignProfile.documentTarget
+        }
+      : undefined
     // A profile preamble rides in the prompt body (not the system prompt) so
     // the cached stable prefix stays byte-identical to the main agent's.
     const promptBase = source
@@ -412,6 +424,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
         ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
         ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(agentSurface ? { agentSurface } : {}),
+        ...(designAdmission ?? {}),
         // Child runs have no independent interactive surface for structured prompts.
         disableUserInput: true
       }

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
+import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
 import { LocalToolHost, type LocalTool } from '../adapters/tool/local-tool-host.js'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
+import { createThreadRecord } from '../domain/thread.js'
 import type { ModelClient, ModelRequest, ModelStreamChunk } from '../ports/model-client.js'
 import type { ToolHostContext } from '../ports/tool-host.js'
 import { createChildAgentExecutor } from './child-agent-executor.js'
@@ -145,6 +147,56 @@ class ConcludeThenInjectErrorModel implements ModelClient {
 }
 
 describe('Fast Context child executor', () => {
+  it('inherits a locked parent profile when admitting the first Design child turn', async () => {
+    const model = new CatalogModel()
+    const threadStore = new InMemoryThreadStore()
+    const sessionStore = new InMemorySessionStore()
+    const documentTarget = { documentId: 'doc_design', boardArtifactId: 'board_design' }
+    const parentProfile = {
+      version: 1 as const,
+      documentTarget,
+      outputMedium: 'html' as const,
+      target: 'web' as const,
+      preset: 'geist' as const,
+      presetSource: 'explicit' as const,
+      context: { tone: ['technical'] },
+      lockedAtTurnId: 'turn_parent'
+    }
+    await threadStore.upsert(createThreadRecord({
+      id: 'parent', title: 'Unified workbench', workspace: '/workspace',
+      model: model.model, agentSurface: 'code', designProfile: parentProfile
+    }))
+    const executor = createChildAgentExecutor({
+      model,
+      toolHost: new LocalToolHost({ tools: [sourceTool('grep'), sourceTool('glob'), sourceTool('read')] }),
+      prefix: createImmutablePrefix({ systemPrompt: 'test' }), defaultModel: model.model,
+      threadStore, sessionStore
+    })
+
+    const result = await executor({ ...fastContextInput(model.model), agentSurface: 'design' })
+
+    expect(result).toMatchObject({ summary: 'Task 1: source found.', evidencePack: { version: 1 } })
+    expect(model.requests).toHaveLength(1)
+    expect(model.requests[0]?.tools.map((tool) => tool.name).sort()).toEqual(['glob', 'grep', 'read'])
+    const child = await threadStore.get('child_fast_context')
+    const firstTurn = child?.turns[0]
+    const firstUserItem = firstTurn?.items.find((item) => item.kind === 'user_message')
+    expect(child).toMatchObject({
+      agentSurface: 'design',
+      designProfile: { ...parentProfile, lockedAtTurnId: firstTurn?.id }
+    })
+    expect(firstTurn).toMatchObject({
+      agentSurface: 'design',
+      designProfile: { ...parentProfile, lockedAtTurnId: firstTurn?.id },
+      designDocumentTarget: documentTarget
+    })
+    expect(firstUserItem).toMatchObject({
+      designProfile: { ...parentProfile, lockedAtTurnId: firstTurn?.id },
+      designDocumentTarget: documentTarget
+    })
+    expect(firstTurn?.id).not.toBe(parentProfile.lockedAtTurnId)
+  })
+
   it('bypasses provider-native SDK composition and exposes only grep, glob, and read', async () => {
     const model = new CatalogModel()
     let nativeFactoryCalls = 0
