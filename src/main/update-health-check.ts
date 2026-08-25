@@ -1,9 +1,7 @@
 import { app } from 'electron'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { dirname, win32 as win32Path } from 'node:path'
-import { mainState } from './main-app-context'
-import { probeRuntimeApi } from './main-runtime-health'
-import { startMainApp } from './main-ready'
+import { runMinimalUpdateProbe } from './update-health-probe'
 
 const HEALTH_PATH_ARG = '--kun-update-health-check='
 const HEALTH_TOKEN_ARG = '--kun-update-health-token='
@@ -55,13 +53,8 @@ export async function runUpdateHealthCheck(request: UpdateHealthRequest): Promis
     if (win32Path.resolve(installDir).toLowerCase() !== win32Path.resolve(request.target).toLowerCase()) {
       throw new Error('The candidate executable is outside the committed install target.')
     }
-    await startMainApp()
-    const window = mainState.mainWindow
-    if (!window || window.isDestroyed()) throw new Error('The candidate workbench window did not initialize.')
-    const settings = await mainState.store.load()
-    const health = await probeRuntimeApi(settings)
-    if (!health.ok) throw new Error(health.message)
-    await writeHealthResult(request, true, 'Candidate application and runtime are healthy.')
+    await runMinimalUpdateProbe()
+    await writeHealthResult(request, true, 'Candidate application payload is healthy.')
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     await writeHealthResult(request, false, message)

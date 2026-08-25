@@ -15,6 +15,8 @@
 
 !macro KunCompleteAutomaticUpdate
   ${if} ${isUpdated}
+    ; The probe validates only the candidate payload. User-data migrations begin
+    ; on the first normal launch after CommitUpdateTransaction succeeds.
     Call KunRunAutomaticUpdateHealthCheck
     ${if} $KunInstallerHelperExitCode != 0
       StrCpy $KunInstallerAbortCode "health_check_failed"

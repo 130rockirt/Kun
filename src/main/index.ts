@@ -40,6 +40,7 @@ if (runningClawScheduleMcpServer) {
 } else {
   const updateHealthRequest = readUpdateHealthRequest()
   if (updateHealthRequest) {
+    mainState.updateHealthProbeOnly = true
     void runUpdateHealthCheck(updateHealthRequest).then(
       () => app.exit(0),
       (error) => {

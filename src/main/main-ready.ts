@@ -126,8 +126,7 @@ export function startMainApp(): Promise<void> {
     registerMainIpc(services)
 
     createWorkbenchWindow({
-      suppressInitialShow: shouldStartHidden(initial) ||
-      process.argv.some((argument) => argument.startsWith('--kun-update-health-check=')),
+      suppressInitialShow: shouldStartHidden(initial),
       useSystemTitleBar: initial.appBehavior.useSystemTitleBar
     })
     activation.windowAvailable()

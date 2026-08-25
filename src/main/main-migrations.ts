@@ -232,6 +232,9 @@ async function assertCanonicalRuntimeMigrationWritersStopped(dataDir: string): P
 }
 
 export async function runStartupLegacyMigrations(): Promise<RuntimeDataDirMigrationResult> {
+  if (mainState.updateHealthProbeOnly) {
+    throw new Error('Update health probes must not run user-data migrations.')
+  }
   const userDataPath = app.getPath('userData')
   const homeDir = homedir()
   const sourcePath = canonicalLegacyKunDataDir(homeDir, process.platform)

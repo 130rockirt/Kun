@@ -134,6 +134,9 @@ export interface MainServices {
 }
 
 export async function initializeMainServices(): Promise<MainServices | null> {
+    if (mainState.updateHealthProbeOnly) {
+      throw new Error('Update health probes must not initialize desktop services or migrate user data.')
+    }
     // A detached Runtime and its Service Manager are shared by GUI, TUI, and
     // other local clients. Desktop startup must attach through the Manager,
     // not terminate processes by name before their registrations can be

@@ -336,6 +336,7 @@ export const desktopStartupState: DesktopStartupState = new DesktopStartupState(
 
 export const mainState = {
   mainWindow: null as BrowserWindow | null,
+  updateHealthProbeOnly: false,
   store: undefined as unknown as JsonSettingsStore,
   logDir: '',
   clawRuntime: null as ClawRuntime | null,
