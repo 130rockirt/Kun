@@ -293,7 +293,7 @@ export async function commitSharedModelConnectionCatalog(
   return snapshot
 }
 
-function sharedConnectionProfilePatch(provider: ModelProviderProfileV1): Record<string, unknown> {
+export function sharedConnectionProfilePatch(provider: ModelProviderProfileV1): Record<string, unknown> {
   const baseUrlOptional = sharedConnectionBaseUrlOptional(provider.kind)
   return {
     name: provider.name.trim() || provider.id,

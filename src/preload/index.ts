@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import type { KunGuiApi } from '../shared/kun-gui-api'
+import type { ProviderMutationFlushRequestHandler } from '../shared/provider-mutation-barrier'
 import { normalizeDesktopTitleBarMode } from '../shared/desktop-title-bar'
 import { registerExtensionContentScriptPreload } from './extension-content-script'
 import { parseAppEnvironment } from './app-environment'
@@ -533,6 +534,13 @@ const api = {
     ) => handler(payload)
     ipcRenderer.on('gui:update-state', wrapped)
     return () => ipcRenderer.removeListener('gui:update-state', wrapped)
+  },
+  onProviderMutationFlushRequest: (handler: ProviderMutationFlushRequestHandler) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, request: Parameters<ProviderMutationFlushRequestHandler>[0]) => {
+      void handler(request).then((result) => ipcRenderer.invoke('provider-mutation:flush-ack', result))
+    }
+    ipcRenderer.on('provider-mutation:flush-request', wrapped)
+    return () => ipcRenderer.removeListener('provider-mutation:flush-request', wrapped)
   },
   logError: (category, message, detail) =>
     ipcRenderer.invoke('log:error', { category, message, detail }),

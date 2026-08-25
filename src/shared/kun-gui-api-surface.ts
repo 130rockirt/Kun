@@ -54,6 +54,7 @@ import type {
 import type { StorageRelocationApi } from './storage-relocation'
 import type { UninstallApi } from './uninstall'
 import type { RuntimeDataRecoveryApi } from './runtime-data-recovery'
+import type { ProviderMutationFlushRequestHandler } from './provider-mutation-barrier'
 import type {
   ClipboardImageReadResult,
   LocalPdfTextReadResult,
@@ -190,7 +191,6 @@ import type {
   DevPreviewCaptureRequest,
   DevPreviewCaptureResult
 } from './dev-preview-capture'
-
 import {
   AlertDialogOptions,
   AntigravitySubscriptionModelCatalog,
@@ -677,6 +677,7 @@ export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & {
   downloadGuiUpdate: (channel?: GuiUpdateChannel) => Promise<GuiUpdateDownloadResult>
   installGuiUpdate: () => Promise<GuiUpdateInstallResult>
   onGuiUpdateState: (handler: (payload: GuiUpdateState) => void) => () => void
+  onProviderMutationFlushRequest: (handler: ProviderMutationFlushRequestHandler) => () => void
   logError: (category: string, message: string, detail?: unknown) => Promise<void>
   getLogPath: () => Promise<string>
   openLogDir: () => Promise<{ ok: boolean; message?: string }>
@@ -687,7 +688,6 @@ export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & {
   onTerminalData: (handler: (payload: TerminalDataPayload) => void) => () => void
   onTerminalExit: (handler: (payload: TerminalExitPayload) => void) => () => void
 }
-
 export type KunProtectedApprovalRequest = {
   approvalId: string
   decision: 'allow' | 'deny'

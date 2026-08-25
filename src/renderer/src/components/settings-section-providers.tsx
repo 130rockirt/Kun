@@ -42,6 +42,7 @@ import { useProviderProfileMutations } from './use-provider-profile-mutations'
 import { useProviderSharedActions } from './use-provider-shared-actions'
 import { useProviderSharedSynchronization } from './use-provider-shared-synchronization'
 import { settingsSaveIssueMessage } from './settings-save-error'
+import { registerProviderMutationFlushOperations } from './provider-mutation-flush'
 
 export { sharedModelConnectionHasUsableCredential } from '../lib/provider-credential-readiness'
 export {
@@ -273,7 +274,8 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const { selectSharedModel, updateProviderProxy, setCapabilityExpanded, openAddProviderDialog,
     closeAddProviderDialog, handleAddProviderDialogKeyDown, handleSubscriptionRegionTabKeyDown,
     confirmAction, updateModelProviders, stageSharedProviderCatalog, flushSharedProviderCatalog,
-    stageSharedProviderCredential, flushSharedProviderCredential
+    stageSharedProviderCredential, flushSharedProviderCredential, drainSharedProviderProfile,
+    drainSharedProviderCatalog, drainSharedProviderCredential
   } = useProviderSharedActions({ kun, update, provider, setSharedConnections,
     setSharedConnectionsError, pendingSharedProviderDeletions, pendingSharedProviderNames,
     pendingSharedProviderCatalogs,
@@ -283,6 +285,13 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     enqueueSharedMutation, sharedProjectionInput, setAddMenuOpen, setAddProviderQuery,
     setSubscriptionRegion, setExpandedCapabilities, addProviderButtonRef, addProviderDialogRef,
     providerProxy })
+
+  useEffect(() => registerProviderMutationFlushOperations({
+    drainProfile: drainSharedProviderProfile,
+    drainCatalog: drainSharedProviderCatalog,
+    drainCredential: drainSharedProviderCredential,
+    drainDeletion: async () => undefined
+  }), [drainSharedProviderProfile, drainSharedProviderCatalog, drainSharedProviderCredential])
 
   const { patchProviderProfile, updateModelProvider, updateActiveProviderCredential,
     toggleActiveProviderCredentialVisibility, updateModelProviderImage, removeModelProviderImage,

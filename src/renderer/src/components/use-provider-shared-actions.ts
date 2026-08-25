@@ -37,6 +37,7 @@ import {
   sharedProviderMutationCoordinator,
   stageSharedProviderCredentialMutation
 } from './shared-provider-mutation-coordinator'
+import { commitSharedModelConnectionProfile } from './settings-section-providers-profile-reconcile'
 
 export { sharedModelConnectionHasUsableCredential } from '../lib/provider-credential-readiness'
 
@@ -171,6 +172,24 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
       kun: kunPatch,
       currentKun: kun
     }))
+  }
+
+  const drainSharedProviderProfile = async (providerId: string): Promise<void> => {
+    const pending = pendingSharedProviderNames.current.get(providerId)
+    if (!pending) return
+    const provider = (sharedProjectionInput.current.provider.providers as ModelProviderProfileV1[])
+      .find((item) => item.id === providerId)
+    if (!provider) return
+    const snapshot = await enqueueSharedMutation(() => commitSharedModelConnectionProfile(
+      provider,
+      pending,
+      (id) => pendingSharedProviderDeletions.current.has(id)
+    ))
+    const current = pendingSharedProviderNames.current.get(providerId)
+    if (current?.generation === pending.generation) {
+      pendingSharedProviderNames.current.set(providerId, { ...current, committedRevision: snapshot.revision })
+      setSharedConnections(snapshot)
+    }
   }
 
   const drainSharedProviderCatalog = async (
@@ -500,5 +519,5 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
       if (pending) void drainCredentialRef.current(providerId, pending.generation)
     }
   }, [])
-  return { selectSharedModel, updateProviderProxy, setCapabilityExpanded, openAddProviderDialog, closeAddProviderDialog, handleAddProviderDialogKeyDown, handleSubscriptionRegionTabKeyDown, confirmAction, updateModelProviders, stageSharedProviderCatalog, flushSharedProviderCatalog, stageSharedProviderCredential, flushSharedProviderCredential }
+  return { selectSharedModel, updateProviderProxy, setCapabilityExpanded, openAddProviderDialog, closeAddProviderDialog, handleAddProviderDialogKeyDown, handleSubscriptionRegionTabKeyDown, confirmAction, updateModelProviders, stageSharedProviderCatalog, flushSharedProviderCatalog, stageSharedProviderCredential, flushSharedProviderCredential, drainSharedProviderProfile, drainSharedProviderCatalog, drainSharedProviderCredential }
 }

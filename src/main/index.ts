@@ -16,6 +16,7 @@ import {
   stopManagedRuntimesForQuit
 } from './main-lifecycle'
 import { stopRuntimeWatchdog } from './main-runtime-health'
+import { requestProviderMutationFlush } from './provider-mutation-barrier'
 import { startMainApp } from './main-ready'
 import { readUpdateHealthRequest, runUpdateHealthCheck } from './update-health-check'
 import {
@@ -61,23 +62,37 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
+let quitBarrierPromise: Promise<void> | null = null
+let quitBarrierCompleted = false
+
 app.on('before-quit', (event) => {
-  try {
-    releaseRuntimeDataRecoveryMigrationLock()
-  } catch (error) {
-    console.error('[kun-gui] failed to release Runtime data recovery lock during quit:', error)
-  }
-  runtimeShutdown.requestQuit()
-  mainState.protectedCredentialSurface?.dispose()
-  stopRuntimeWatchdog()
-  stopCheckpointCleanupTimer()
-  if (runtimeShutdown.isStoppedForQuit) return
+  if (quitBarrierCompleted) return
   event.preventDefault()
-  void stopManagedRuntimesForQuit()
-    .catch((error) => {
-      console.warn('[kun-gui] failed to stop Kun runtime:', error)
-    })
-    .finally(() => {
-      app.quit()
-    })
+  if (quitBarrierPromise) return
+  quitBarrierPromise = (async () => {
+    try {
+      releaseRuntimeDataRecoveryMigrationLock()
+    } catch (error) {
+      console.error('[kun-gui] failed to release Runtime data recovery lock during quit:', error)
+    }
+    runtimeShutdown.requestQuit()
+    mainState.protectedCredentialSurface?.dispose()
+    const mutationFlush = await requestProviderMutationFlush(() => mainState.mainWindow)
+    if (!mutationFlush.ok) {
+      console.warn('[kun-gui] provider mutation flush did not complete before quit:', {
+        errorCode: mutationFlush.errorCode,
+        pendingProviderIds: mutationFlush.pendingProviderIds,
+        mutationKinds: mutationFlush.mutationKinds
+      })
+    }
+    stopRuntimeWatchdog()
+    stopCheckpointCleanupTimer()
+    if (!runtimeShutdown.isStoppedForQuit) {
+      await stopManagedRuntimesForQuit().catch((error) => {
+        console.warn('[kun-gui] failed to stop Kun runtime:', error)
+      })
+    }
+    quitBarrierCompleted = true
+    app.quit()
+  })()
 })

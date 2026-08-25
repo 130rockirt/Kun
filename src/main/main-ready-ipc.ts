@@ -107,8 +107,10 @@ import {
   syncTray
 } from './main-tray'
 import type { MainServices } from './main-ready-services'
+import { registerProviderMutationBarrierIpc } from './provider-mutation-barrier'
 
 export function registerMainIpc(services: MainServices): void {
+  registerProviderMutationBarrierIpc(() => mainState.mainWindow)
   const {
     browserUseManager,
     credentialMigration,
