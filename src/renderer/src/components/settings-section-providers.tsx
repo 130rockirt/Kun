@@ -116,7 +116,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
   const mutationOwner = useRef(Symbol('provider-settings-mutation-owner'))
   const mounted = useRef(false)
   const drainCatalogRef = useRef<(providerId: string, generation: number) => void>(() => undefined)
-  const drainCredentialRef = useRef<(providerId: string, generation: number) => void>(() => undefined)
+  const drainCredentialRef = useRef<(providerId: string, generation: number) => Promise<void>>(async () => undefined)
   const [credentialDrafts, setCredentialDrafts] = useState<Record<string, string>>(() =>
     Object.fromEntries(
       [...sharedProviderMutationCoordinator.pendingCredentials]
