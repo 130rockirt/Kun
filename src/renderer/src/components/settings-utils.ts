@@ -264,6 +264,8 @@ export function guiUpdateFailureMessage(
       return t('guiUpdateErrDownloadFailed', { message: info.message.trim() })
     case 'install_failed':
       return t('guiUpdateErrInstallFailed', { message: info.message.trim() })
+    case 'update_feed_unavailable':
+      return t('guiUpdateErrFeedUnavailable')
     case 'github_repo_not_found':
       return t('guiUpdateErrRepoNotFound', { repo: info.repo?.trim() || 'owner/repo' })
     case 'github_forbidden':

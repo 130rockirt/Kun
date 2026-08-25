@@ -610,8 +610,7 @@ describe('downloadGuiUpdate recovery', () => {
     await expect(module.checkGuiUpdate('stable')).resolves.toMatchObject({ ok: true, hasUpdate: true })
 
     const downloading = module.downloadGuiUpdate('stable')
-    for (let index = 0; index < 4; index += 1) await Promise.resolve()
-    expect(updater.downloadUpdate).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(updater.downloadUpdate).toHaveBeenCalledOnce())
     module.setGuiUpdateChannel('frontier')
     updater.emit('download-progress', { percent: 100 })
     updater.emit('update-downloaded', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
@@ -627,6 +626,7 @@ describe('downloadGuiUpdate recovery', () => {
     process.env.KUN_UPDATE_URL_STABLE = 'https://updates.example.test/stable/'
     process.env.KUN_UPDATE_URL_FRONTIER = 'https://updates.example.test/frontier/'
     process.env.DEEPSEEK_GUI_ALLOW_UNSIGNED_UPDATES = '1'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }))
     let finishCheck = (_value: unknown): void => undefined
     updater.checkForUpdates.mockImplementation(() => new Promise((resolve) => {
       finishCheck = resolve
@@ -635,8 +635,7 @@ describe('downloadGuiUpdate recovery', () => {
     module.initializeGuiUpdater(() => null, () => 'stable')
 
     const checking = module.checkGuiUpdate('stable')
-    for (let index = 0; index < 6; index += 1) await Promise.resolve()
-    expect(updater.checkForUpdates).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(updater.checkForUpdates).toHaveBeenCalledOnce())
     module.setGuiUpdateChannel('frontier')
     updater.emit('update-available', { version: '0.2.0', releaseDate: '2026-06-06T00:00:00.000Z' })
     finishCheck({ updateInfo: { version: '0.2.0' }, isUpdateAvailable: true })

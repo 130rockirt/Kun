@@ -21,6 +21,7 @@ import {
   downloadPageUrl,
   envWithLegacyFallback,
   isVersionGreater,
+  MANUAL_UPDATE_FETCH_TIMEOUT_MS,
   macAutoUpdateAllowed,
   parseYamlScalar,
   readGuiUpdateScheduleState,
@@ -169,23 +170,28 @@ function configureUpdaterChannel(
 async function resolveConfiguredUpdateChannel(
   channel: GuiUpdateChannel,
   requestGeneration: number
-): Promise<boolean> {
-  const feedUrl = await resolveUpdateFeedUrl(channel)
-  if (!operations.isGenerationCurrent(requestGeneration)) return false
-  configureUpdaterChannel(channel, feedUrl)
-  return true
+): Promise<'configured' | 'stale' | Extract<GuiUpdateInfo, { ok: false }>> {
+  const resolved = await resolveUpdateFeedUrl(channel)
+  if (!operations.isGenerationCurrent(requestGeneration)) return 'stale'
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      currentVersion: app.getVersion(),
+      channel,
+      code: resolved.code,
+      message: resolved.message,
+      releaseUrl: downloadPageUrl(channel)
+    }
+  }
+  configureUpdaterChannel(channel, resolved.url)
+  return 'configured'
 }
 export function setGuiUpdateChannel(channel: GuiUpdateChannel): void {
   if (DEVELOPMENT_APP_FLAVOR) return
   const nextChannel = normalizeGuiUpdateChannel(channel)
-  const nextFeedUrl = updateFeedUrl(nextChannel)
-  configureUpdaterChannel(nextChannel, nextFeedUrl, false)
-  void operations.run(async () => {
-    if (configuredChannel !== nextChannel || configuredFeedUrl !== nextFeedUrl) return
-    autoUpdater.allowPrerelease = nextChannel === 'frontier'
-    autoUpdater.allowDowngrade = false
-    autoUpdater.setFeedURL({ provider: 'generic', url: nextFeedUrl })
-  })
+  configureUpdaterChannel(nextChannel, updateFeedUrl(nextChannel), false)
+  autoUpdater.allowPrerelease = nextChannel === 'frontier'
+  autoUpdater.allowDowngrade = false
 }
 async function checkManualUpdate(
   channel: GuiUpdateChannel,
@@ -194,15 +200,19 @@ async function checkManualUpdate(
 ): Promise<GuiUpdateInfo> {
   const currentVersion = app.getVersion()
   try {
-    const feedUrl = configuredChannel === channel && configuredFeedUrl
-      ? configuredFeedUrl
+    const resolution = configuredChannel === channel && configuredFeedUrl
+      ? { ok: true as const, url: configuredFeedUrl }
       : await resolveUpdateFeedUrl(channel)
-    const url = updateFeedManifestUrl(feedUrl)
+    if (!resolution.ok) {
+      return { ok: false, currentVersion, code: resolution.code, message: resolution.message, channel }
+    }
+    const url = updateFeedManifestUrl(resolution.url)
     const res = await fetch(url, {
       headers: {
         Accept: 'application/x-yaml,text/yaml,text/plain,*/*',
         'User-Agent': `kun/${currentVersion}`
-      }
+      },
+      signal: AbortSignal.timeout(MANUAL_UPDATE_FETCH_TIMEOUT_MS)
     })
     if (!res.ok) {
       return {
@@ -279,7 +289,9 @@ export function initializeGuiUpdater(
   if (DEVELOPMENT_APP_FLAVOR) return
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
-  configureUpdaterChannel(configuredChannel)
+  configureUpdaterChannel(configuredChannel, updateFeedUrl(configuredChannel), false)
+  autoUpdater.allowPrerelease = configuredChannel === 'frontier'
+  autoUpdater.allowDowngrade = false
   eventOperation = null
   if (!app.isPackaged) {
     autoUpdater.forceDevUpdateConfig = true
@@ -355,7 +367,7 @@ export function initializeGuiUpdater(
   ;(app as unknown as { on?: (event: string, listener: () => void) => void }).on?.('session-end', () => {
     sessionEnding = true
   })
-  void updateInstaller.reconcile(pendingUpdateHealthCheck).catch((error) => {
+  void updateInstaller.reconcile(pendingUpdateHealthCheck ?? undefined).catch((error) => {
     console.warn('[kun-gui updater] could not reconcile a pending installer update:', error)
   })
   guiUpdateScheduler = createGuiUpdateScheduler({
@@ -407,7 +419,12 @@ export async function checkGuiUpdate(channel?: GuiUpdateChannel): Promise<GuiUpd
         message: 'The update channel changed before checking for updates.'
       }
     }
-    if (!await resolveConfiguredUpdateChannel(selectedChannel, requestGeneration)) {
+    const feedConfiguration = await resolveConfiguredUpdateChannel(selectedChannel, requestGeneration)
+    if (feedConfiguration !== 'configured') {
+      if (feedConfiguration !== 'stale') {
+        emitGuiUpdateState({ status: 'error', info: feedConfiguration, message: feedConfiguration.message, code: feedConfiguration.code })
+        return feedConfiguration
+      }
       return {
         ok: false,
         currentVersion: app.getVersion(),
@@ -491,7 +508,9 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
         message: 'The update channel changed before download.'
       }
     }
-    if (!await resolveConfiguredUpdateChannel(selectedChannel, requestGeneration)) {
+    const feedConfiguration = await resolveConfiguredUpdateChannel(selectedChannel, requestGeneration)
+    if (feedConfiguration !== 'configured') {
+      if (feedConfiguration !== 'stale') return feedConfiguration
       return {
         ok: false,
         currentVersion: app.getVersion(),
