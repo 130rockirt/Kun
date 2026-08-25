@@ -30,8 +30,10 @@ import {
   sharedModelProfiles
 } from './settings-section-providers-shared-reconcile'
 import {
+  credentialRetryDelayMs,
   drainSharedProviderCatalogMutation,
   drainSharedProviderCredentialMutation,
+  isCredentialRetryableError,
   sharedProviderMutationCoordinator,
   stageSharedProviderCredentialMutation
 } from './shared-provider-mutation-coordinator'
@@ -47,6 +49,8 @@ export { sharedModelConnectionHasUsableCredential } from '../lib/provider-creden
 export function useProviderSharedActions(scope: Record<string, any>): Record<string, any> {
   const { kun, update, provider, setSharedConnections, setSharedConnectionsError, pendingSharedProviderDeletions, pendingSharedProviderNames, pendingSharedProviderCatalogs, pendingSharedProviderCredentials, catalogMutationTimers, credentialMutationTimers, mutationOwner, mounted, drainCatalogRef, drainCredentialRef, enqueueSharedMutation, sharedProjectionInput, setAddMenuOpen, setAddProviderQuery, setSubscriptionRegion, providerProxy } = scope
   const setCredentialDrafts = scope.setCredentialDrafts as Dispatch<SetStateAction<Record<string, string>>>
+  const setCredentialSyncVersion = scope.setCredentialSyncVersion as Dispatch<SetStateAction<number>>
+  const refreshCredentialSyncState = (): void => setCredentialSyncVersion((version) => version + 1)
   const setExpandedCapabilities = scope.setExpandedCapabilities as Dispatch<SetStateAction<Set<ProviderCapability>>>
   const addProviderButtonRef = scope.addProviderButtonRef as RefObject<HTMLButtonElement | null>
   const addProviderDialogRef = scope.addProviderDialogRef as RefObject<HTMLElement | null>
@@ -310,6 +314,38 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
     catalogMutationTimers.current.set(before.id, { owner: mutationOwner.current, timer })
   }
 
+  const scheduleCredentialRetry = (providerId: string, generation: number, error: unknown): void => {
+    const pending = pendingSharedProviderCredentials.current.get(providerId)
+    if (!pending || pending.generation !== generation) return
+    if (!isCredentialRetryableError(error)) {
+      sharedProviderMutationCoordinator.credentialRetryStates.set(providerId, {
+        attempts: 0,
+        lastError: error instanceof Error ? error.message : String(error),
+        nextRetryAt: 0
+      })
+      refreshCredentialSyncState()
+      return
+    }
+    const previous = sharedProviderMutationCoordinator.credentialRetryStates.get(providerId)
+    const attempts = (previous?.attempts ?? 0) + 1
+    const delay = credentialRetryDelayMs(attempts)
+    sharedProviderMutationCoordinator.credentialRetryStates.set(providerId, {
+      attempts,
+      lastError: error instanceof Error ? error.message : String(error),
+      nextRetryAt: Date.now() + delay
+    })
+    const existing = credentialMutationTimers.current.get(providerId)
+    if (existing) clearTimeout(existing.timer)
+    const timer = setTimeout(() => {
+      const record = credentialMutationTimers.current.get(providerId)
+      if (record?.owner !== mutationOwner.current) return
+      credentialMutationTimers.current.delete(providerId)
+      void drainCredentialRef.current(providerId, generation).catch(() => undefined)
+    }, delay)
+    credentialMutationTimers.current.set(providerId, { owner: mutationOwner.current, timer })
+    refreshCredentialSyncState()
+  }
+
   const drainSharedProviderCredential = (
     providerId: string,
     generation: number
@@ -356,6 +392,7 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
           return next
         })
       }
+      if (result.committed) refreshCredentialSyncState()
       if (mounted.current) {
         setSharedConnections(snapshot)
         setSharedConnectionsError('')
@@ -366,6 +403,8 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
         if (error instanceof SharedModelConnectionConflictError) setSharedConnections(error.snapshot)
         setSharedConnectionsError(error instanceof Error ? error.message : String(error))
       }
+      scheduleCredentialRetry(providerId, generation, error)
+      throw error
     })
   }
 
@@ -387,6 +426,7 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
       (operationToken) => fenceSharedModelConnectionCredential(providerId, operationToken)
     )
     setCredentialDrafts((previous) => ({ ...previous, [providerId]: credential }))
+    refreshCredentialSyncState()
     const existingTimer = credentialMutationTimers.current.get(providerId)
     if (existingTimer) clearTimeout(existingTimer.timer)
     const timer = setTimeout(() => {
@@ -425,6 +465,21 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
       }, 0)
       credentialMutationTimers.current.set(providerId, { owner: mutationOwner.current, timer })
     }
+  }, [])
+
+  useEffect(() => {
+    const retryPendingCredentials = (): void => {
+      for (const [providerId, pending] of pendingSharedProviderCredentials.current) {
+        const timer = credentialMutationTimers.current.get(providerId)
+        if (timer?.owner === mutationOwner.current) {
+          clearTimeout(timer.timer)
+          credentialMutationTimers.current.delete(providerId)
+        }
+        void drainCredentialRef.current(providerId, pending.generation).catch(() => undefined)
+      }
+    }
+    window.addEventListener('online', retryPendingCredentials)
+    return () => window.removeEventListener('online', retryPendingCredentials)
   }, [])
 
   useEffect(() => () => {

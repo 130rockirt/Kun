@@ -123,6 +123,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
         .map(([providerId, pending]) => [providerId, pending.credential])
     )
   )
+  const [, setCredentialSyncVersion] = useState(0)
   const [revealedCredential, setRevealedCredential] = useState<{
     providerId: string
     credential: string
@@ -263,7 +264,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     sharedConnections, setSharedConnections, setSharedConnectionsError, sharedSyncFingerprint,
     sharedProjectionPending, pendingSharedProviderDeletions, pendingSharedProviderNames,
     pendingSharedProviderCatalogs, pendingSharedProviderCredentials, enqueueSharedMutation,
-    sharedProjectionInput })
+    sharedProjectionInput, onSharedSyncRecovered: () => {
+      for (const [providerId, pending] of pendingSharedProviderCredentials.current) {
+        void drainCredentialRef.current(providerId, pending.generation).catch(() => undefined)
+      }
+    } })
 
   const { selectSharedModel, updateProviderProxy, setCapabilityExpanded, openAddProviderDialog,
     closeAddProviderDialog, handleAddProviderDialogKeyDown, handleSubscriptionRegionTabKeyDown,
@@ -274,6 +279,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     pendingSharedProviderCatalogs,
     pendingSharedProviderCredentials, catalogMutationTimers, credentialMutationTimers,
     mutationOwner, mounted, drainCatalogRef, drainCredentialRef, setCredentialDrafts,
+    setCredentialSyncVersion,
     enqueueSharedMutation, sharedProjectionInput, setAddMenuOpen, setAddProviderQuery,
     setSubscriptionRegion, setExpandedCapabilities, addProviderButtonRef, addProviderDialogRef,
     providerProxy })

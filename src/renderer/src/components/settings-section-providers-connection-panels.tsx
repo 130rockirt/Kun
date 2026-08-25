@@ -47,6 +47,10 @@ import {
   type SharedModelConnection, type SharedModelConnectionsSnapshot
 } from './settings-section-providers-shared-api'
 
+import {
+  sharedProviderMutationCoordinator
+} from './shared-provider-mutation-coordinator'
+
 export { sharedModelConnectionHasUsableCredential } from '../lib/provider-credential-readiness'
 
 
@@ -60,6 +64,21 @@ export function ProviderConnectionAdvancedPanels({ view }: { view: Record<string
   const activeProviderNeedsApiKey = modelProviderRequiresApiKey(activeProvider)
   const activeTokenPlanRegions = view.activeTokenPlanRegions as ModelProviderTokenPlanRegion[]
   const sharedConnections = view.sharedConnections as SharedModelConnectionsSnapshot | null
+  const credentialRetry = sharedProviderMutationCoordinator.credentialRetryStates.get(activeProvider.id)
+  const credentialSyncNotice = credentialRetry ? (
+    <span className="text-[12px] font-normal text-amber-600 dark:text-amber-300">
+      {credentialRetry.nextRetryAt > 0
+        ? (zh ? `等待同步，将自动重试：${credentialRetry.lastError}` : `Waiting to sync; retrying automatically: ${credentialRetry.lastError}`)
+        : (zh ? `保存失败：${credentialRetry.lastError}` : `Save failed: ${credentialRetry.lastError}`)}
+      {credentialRetry.nextRetryAt === 0 ? (
+        <button type="button" className="ml-2 underline" onClick={() => {
+          void flushSharedProviderCredential(activeProvider.id).catch(() => undefined)
+        }}>
+          {zh ? '重试' : 'Retry'}
+        </button>
+      ) : null}
+    </span>
+  ) : null
   const selectSharedModel = view.selectSharedModel as (
     connection: SharedModelConnection,
     model: string
@@ -85,6 +104,7 @@ export function ProviderConnectionAdvancedPanels({ view }: { view: Record<string
                   </div>
                 </DetailSection>
                 <DetailSection title={t('modelProviderSectionConnection')}>
+                  {credentialSyncNotice}
                   {isCodexProvider(activeProvider) ? (
                     <CodexLoginSection
                       provider={activeProvider}
@@ -197,7 +217,7 @@ export function ProviderConnectionAdvancedPanels({ view }: { view: Record<string
                           className="min-h-11 !rounded-lg"
                           value={activeApiKeyValue}
                           onChange={updateActiveProviderCredential}
-                          onBlur={() => { void flushSharedProviderCredential(activeProvider.id) }}
+                          onBlur={() => { void flushSharedProviderCredential(activeProvider.id).catch(() => undefined) }}
                           visible={showApiKey}
                           onToggleVisibility={() => { void toggleActiveProviderCredentialVisibility() }}
                           toggleBusy={activeCredentialRevealBusy}

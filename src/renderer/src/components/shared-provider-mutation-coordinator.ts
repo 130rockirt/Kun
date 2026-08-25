@@ -30,6 +30,26 @@ export type PendingSharedProviderCredential = {
   operationToken: string
   credential: string
   fence?: Promise<boolean | void>
+  fenceOperation?: (operationToken: string) => Promise<boolean | void>
+}
+
+export type SharedProviderCredentialRetryState = {
+  attempts: number
+  lastError: string
+  nextRetryAt: number
+}
+
+export function credentialRetryDelayMs(attempts: number, random: () => number = Math.random): number {
+  const base = Math.min(1_000 * (2 ** Math.max(0, attempts - 1)), 30_000)
+  return Math.min(30_000, Math.round(base * (0.8 + (random() * 0.4))))
+}
+
+export function isCredentialRetryableError(error: unknown): boolean {
+  if (error instanceof TypeError) return true
+  const status = typeof error === 'object' && error !== null && 'status' in error
+    ? (error as { status?: unknown }).status
+    : undefined
+  return typeof status !== 'number' || status === 408 || status === 409 || status === 429 || status >= 500
 }
 
 export type PendingSharedProviderDeletion = {
@@ -49,6 +69,7 @@ export const sharedProviderMutationCoordinator = {
   pendingCredentials: new Map<string, PendingSharedProviderCredential>(),
   catalogTimers: new Map<string, SharedProviderMutationTimer>(),
   credentialTimers: new Map<string, SharedProviderMutationTimer>(),
+  credentialRetryStates: new Map<string, SharedProviderCredentialRetryState>(),
   profileGeneration: 0,
   deletionGeneration: 0,
   catalogGeneration: 0,
@@ -99,7 +120,9 @@ export function stageSharedProviderCredentialMutation(
   }
   sharedProviderMutationCoordinator.credentialGeneration = pending.generation
   sharedProviderMutationCoordinator.pendingCredentials.set(providerId, pending)
+  sharedProviderMutationCoordinator.credentialRetryStates.delete(providerId)
   if (fence) {
+    pending.fenceOperation = fence
     pending.fence = fence(operationToken)
     void pending.fence.catch(() => undefined)
   }
@@ -119,7 +142,15 @@ export async function drainSharedProviderCredentialMutation<T>(
   return enqueueSharedModelMutation(async () => {
     const pending = sharedProviderMutationCoordinator.pendingCredentials.get(providerId)
     if (!pending || pending.generation !== generation) return null
-    const fenceInstalled = await pending.fence
+    let fenceInstalled: boolean | void
+    try {
+      fenceInstalled = await pending.fence
+    } catch (error) {
+      if (!pending.fenceOperation) throw error
+      pending.fence = pending.fenceOperation(pending.operationToken)
+      void pending.fence.catch(() => undefined)
+      fenceInstalled = await pending.fence
+    }
     if (sharedProviderMutationCoordinator.pendingCredentials.get(providerId)?.generation !== generation) {
       return null
     }
@@ -133,7 +164,10 @@ export async function drainSharedProviderCredentialMutation<T>(
     )
     const current = sharedProviderMutationCoordinator.pendingCredentials.get(providerId)
     const committed = current?.generation === generation
-    if (committed) sharedProviderMutationCoordinator.pendingCredentials.delete(providerId)
+    if (committed) {
+      sharedProviderMutationCoordinator.pendingCredentials.delete(providerId)
+      sharedProviderMutationCoordinator.credentialRetryStates.delete(providerId)
+    }
     return { value, committed }
   })
 }
@@ -171,6 +205,7 @@ export function resetSharedProviderMutationCoordinatorForTests(): void {
   sharedProviderMutationCoordinator.pendingNames.clear()
   sharedProviderMutationCoordinator.pendingCatalogs.clear()
   sharedProviderMutationCoordinator.pendingCredentials.clear()
+  sharedProviderMutationCoordinator.credentialRetryStates.clear()
   sharedProviderMutationCoordinator.catalogTimers.clear()
   sharedProviderMutationCoordinator.credentialTimers.clear()
   sharedProviderMutationCoordinator.profileGeneration = 0

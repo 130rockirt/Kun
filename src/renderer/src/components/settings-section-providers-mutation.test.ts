@@ -13,8 +13,10 @@ import {
   sharedProvidersEligibleForSync
 } from './settings-section-providers'
 import {
+  credentialRetryDelayMs,
   drainSharedProviderCredentialMutation,
   enqueueSharedModelMutation,
+  isCredentialRetryableError,
   resetSharedProviderMutationCoordinatorForTests,
   sharedProviderMutationCoordinator,
   stageSharedProviderCredentialMutation
@@ -26,6 +28,21 @@ const textModelProfile: ModelProviderModelProfileV1 = {
   supportsToolCalling: true,
   messageParts: ['text']
 }
+
+describe('credential retry policy', () => {
+  it('uses capped exponential backoff with bounded jitter', () => {
+    expect(credentialRetryDelayMs(1, () => 0)).toBe(800)
+    expect(credentialRetryDelayMs(2, () => 0.5)).toBe(2_000)
+    expect(credentialRetryDelayMs(9, () => 1)).toBe(30_000)
+  })
+
+  it('retries transient failures but not credential validation failures', () => {
+    expect(isCredentialRetryableError(new TypeError('network unavailable'))).toBe(true)
+    expect(isCredentialRetryableError({ status: 409 })).toBe(true)
+    expect(isCredentialRetryableError({ status: 503 })).toBe(true)
+    expect(isCredentialRetryableError({ status: 400 })).toBe(false)
+  })
+})
 
 describe('pending provider profile metadata', () => {
   it('keeps the overlay until baseUrl and endpoint metadata reach the registry', () => {
