@@ -16,6 +16,7 @@ import {
   KunBrowserUseSettingsV1,
   KunComputerUseSettingsV1,
   KunDesignQualitySettingsV1,
+  KunFastContextSettingsV1,
   KunGraphSettingsPatchV1,
   KunInstructionSettingsV1,
   KunLabSettingsPatchV1,
@@ -272,7 +273,7 @@ export type KunTokenEconomySettingsPatchV1 = Partial<
 export type KunRuntimeSettingsPatchV1 = Partial<
   Omit<
     KunRuntimeSettingsV1,
-    'mcpSearch' | 'projectConfig' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'llmDebug' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'browserUse' | 'quality' | 'modelProfiles' | 'subagents' | 'graph' | 'planExecution' | 'lab'
+    'mcpSearch' | 'projectConfig' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'llmDebug' | 'tokenEconomy' | 'toolOutputLimits' | 'imageGeneration' | 'speechToText' | 'textToSpeech' | 'promptOptimization' | 'musicGeneration' | 'videoGeneration' | 'instructions' | 'computerUse' | 'browserUse' | 'quality' | 'modelProfiles' | 'subagents' | 'graph' | 'planExecution' | 'fastContext' | 'lab'
   >
 > & {
   mcpSearch?: Partial<KunMcpSearchSettingsV1>
@@ -297,6 +298,7 @@ export type KunRuntimeSettingsPatchV1 = Partial<
   subagents?: KunSubagentsSettingsPatchV1
   graph?: KunGraphSettingsPatchV1
   planExecution?: Partial<KunPlanExecutionSettingsV1>
+  fastContext?: Partial<KunFastContextSettingsV1>
   lab?: KunLabSettingsPatchV1
 }
 

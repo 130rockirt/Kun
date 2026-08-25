@@ -444,7 +444,7 @@ export function createRuntimeConfigController(
 	      ...buildDelegationToolProviders(nextDelegationRuntime, subagentRouter),
 	      ...buildFastContextToolProvider(
 	        nextDelegationRuntime,
-	        () => activeOptions.lab?.fastContext
+	        () => activeOptions.fastContext
 	      ),
 	      ...buildPptAgentToolProvider(
 	        nextDelegationRuntime,

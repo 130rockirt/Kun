@@ -6,6 +6,7 @@ import {
   KunConfigSchema,
   KunServeConfigSchema,
   LabConfigSchema,
+  FastContextConfigSchema,
   ModelConfigSchema,
   QualityConfigSchema,
   RolesConfigSchema,
@@ -42,6 +43,7 @@ import {
   resolveModelProviderProxyUrl,
   type AppSettingsV1,
   type KunLabSettingsV1,
+  type KunFastContextSettingsV1,
   type ModelReasoningEffort,
   type KunRuntimeSettingsV1
 } from '../../shared/app-settings'
@@ -179,6 +181,7 @@ export async function syncGuiManagedKunConfig(
     graph: graphConfigForRuntime(runtime.graph),
     quality: qualityConfigForRuntime(runtime.quality, objectValue(existing?.quality)),
     ...(Object.keys(roles).length ? { roles } : {}),
+    fastContext: fastContextConfigForRuntime(runtime.fastContext),
     lab: labConfigForRuntime(runtime.lab),
     capabilities: {
       ...capabilities,
@@ -236,9 +239,12 @@ export async function syncGuiManagedKunConfig(
   return parsed.data
 }
 
+function fastContextConfigForRuntime(fastContext: KunFastContextSettingsV1 | undefined): KunConfig['fastContext'] {
+  return labAgentConfigForRuntime(fastContext)
+}
+
 function labConfigForRuntime(lab: KunLabSettingsV1 | undefined): KunConfig['lab'] {
   return {
-    fastContext: labAgentConfigForRuntime(lab?.fastContext),
     pptAgent: {
       ...labAgentConfigForRuntime(lab?.pptAgent),
       imageFirst: lab?.pptAgent?.imageFirst !== false
@@ -288,7 +294,7 @@ type KunRuntimeConfigSettings = Pick<KunRuntimeSettingsV1,
   'tokenEconomy' | 'toolOutputLimits' | 'storage' | 'contextCompaction' |
   'runtimeTuning' | 'llmDebug' | 'imageGeneration' | 'textToSpeech' | 'musicGeneration' |
   'videoGeneration' | 'computerUse' | 'browserUse' | 'modelProfiles' | 'memoryEnabled' |
-  'instructions' | 'quality' | 'subagents' | 'graph' | 'lab' | 'smallModel' |
+  'instructions' | 'quality' | 'subagents' | 'graph' | 'fastContext' | 'lab' | 'smallModel' |
   'smallModelProviderId' | 'smallModelAccountId' |
   'titleModel' | 'titleProviderId' | 'titleAccountId' |
   'summaryModel' | 'summaryProviderId' | 'summaryAccountId' |
@@ -387,6 +393,7 @@ function sanitizeKunConfigSections(
     runtime: parseKunConfigSection(RuntimeTuningConfigSchema, existing.runtime),
     graph: parseKunConfigSection(GraphRuntimeConfigSchema, existing.graph),
     quality: parseKunConfigSection(QualityConfigSchema, existing.quality),
+    ...('fastContext' in existing ? { fastContext: parseKunConfigSection(FastContextConfigSchema, existing.fastContext) } : {}),
     ...('lab' in existing ? { lab: parseKunConfigSection(LabConfigSchema, existing.lab) } : {}),
     capabilities: sanitizeCapabilities(existing.capabilities),
     ...('roles' in existing ? { roles: parseKunConfigSection(RolesConfigSchema, existing.roles) } : {}),

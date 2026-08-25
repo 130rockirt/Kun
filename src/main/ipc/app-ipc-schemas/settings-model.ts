@@ -37,7 +37,7 @@ import { KEYBOARD_SHORTCUT_COMMANDS } from '../../../shared/keyboard-shortcuts'
 import { LOCAL_WHISPER_DOWNLOAD_SOURCES, LOCAL_WHISPER_MODELS } from '../../../shared/local-whisper'
 import type { LocalWhisperDownloadSourceId } from '../../../shared/local-whisper'
 import { kunGraphPatchSchema } from './settings-graph'
-import { kunLabPatchSchema } from './settings-lab'
+import { kunFastContextPatchSchema, kunLabPatchSchema } from './settings-lab'
 import {
   MAX_BODY_BYTES,
   MAX_CHANNEL_TEXT_LENGTH,
@@ -493,6 +493,7 @@ export const kunRuntimePatchSchema = z.object({
   summaryReasoningEffort: modelReasoningEffortSchema.optional(),
   codeReviewReasoningEffort: modelReasoningEffortSchema.optional(),
   graph: kunGraphPatchSchema.optional(),
+  fastContext: kunFastContextPatchSchema.optional(),
   planExecution: z.object({
     useWorktreeByDefault: z.boolean().optional()
   }).strict().optional(),
