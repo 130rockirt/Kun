@@ -470,7 +470,7 @@ export function createRuntimeConfigController(
 	    // model-connection APIs perform initialization and selection mutations.
 	    // Keeping this path read-only guarantees failed preflight cannot leave a
 	    // partially applied provider catalog/default behind.
-	    const materializedConnections = await modelConnections.materialize()
+	    const materializedConnections = await modelConnections.materializeReadOnly()
 	    if (materializedConnections.providers.size > 0) {
 	      const selected = materializedConnections.selected
 	      nextOptions = {

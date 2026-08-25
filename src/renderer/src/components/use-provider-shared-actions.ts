@@ -417,8 +417,7 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
         setSharedConnectionsError('')
       }
     }).then(() => undefined).catch((error) => {
-      if (!pendingSharedProviderCredentials.current.has(providerId)) return
-      if (mounted.current) {
+      if (pendingSharedProviderCredentials.current.has(providerId) && mounted.current) {
         if (error instanceof SharedModelConnectionConflictError) setSharedConnections(error.snapshot)
         setSharedConnectionsError(error instanceof Error ? error.message : String(error))
       }
@@ -452,7 +451,7 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
       const record = credentialMutationTimers.current.get(providerId)
       if (record?.owner !== mutationOwner.current) return
       credentialMutationTimers.current.delete(providerId)
-      void drainSharedProviderCredential(providerId, generation)
+      void drainSharedProviderCredential(providerId, generation).catch(() => undefined)
     }, 450)
     credentialMutationTimers.current.set(providerId, { owner: mutationOwner.current, timer })
   }
@@ -480,7 +479,7 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
         const record = credentialMutationTimers.current.get(providerId)
         if (record?.owner !== mutationOwner.current) return
         credentialMutationTimers.current.delete(providerId)
-        void drainCredentialRef.current(providerId, pending.generation)
+        void drainCredentialRef.current(providerId, pending.generation).catch(() => undefined)
       }, 0)
       credentialMutationTimers.current.set(providerId, { owner: mutationOwner.current, timer })
     }
@@ -516,7 +515,7 @@ export function useProviderSharedActions(scope: Record<string, any>): Record<str
       clearTimeout(record.timer)
       credentialMutationTimers.current.delete(providerId)
       const pending = pendingSharedProviderCredentials.current.get(providerId)
-      if (pending) void drainCredentialRef.current(providerId, pending.generation)
+      if (pending) void drainCredentialRef.current(providerId, pending.generation).catch(() => undefined)
     }
   }, [])
   return { selectSharedModel, updateProviderProxy, setCapabilityExpanded, openAddProviderDialog, closeAddProviderDialog, handleAddProviderDialogKeyDown, handleSubscriptionRegionTabKeyDown, confirmAction, updateModelProviders, stageSharedProviderCatalog, flushSharedProviderCatalog, stageSharedProviderCredential, flushSharedProviderCredential, drainSharedProviderProfile, drainSharedProviderCatalog, drainSharedProviderCredential }

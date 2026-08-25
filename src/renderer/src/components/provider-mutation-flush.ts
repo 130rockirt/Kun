@@ -62,23 +62,43 @@ export async function flushAllPendingProviderMutations(
     pendingProviderIds.add(providerId)
     mutationKinds.add(kind)
     await action()
-    pendingProviderIds.delete(providerId)
   }
-  try {
+  const collectOutstanding = (): void => {
+    pendingProviderIds.clear()
     for (const [providerId, pending] of sharedProviderMutationCoordinator.pendingNames) {
-      if (pending.committedRevision === null) await run(providerId, 'profile', () => operations.drainProfile(providerId))
+      if (pending.committedRevision === null) pendingProviderIds.add(providerId)
     }
     for (const [providerId, pending] of sharedProviderMutationCoordinator.pendingCatalogs) {
-      if (pending.committedRevision === null) await run(providerId, 'catalog', () => operations.drainCatalog(providerId, pending.generation))
+      if (pending.committedRevision === null) pendingProviderIds.add(providerId)
     }
-    for (const [providerId, pending] of sharedProviderMutationCoordinator.pendingCredentials) {
-      await run(providerId, 'credential', () => operations.drainCredential(providerId, pending.generation))
+    for (const providerId of sharedProviderMutationCoordinator.pendingCredentials.keys()) {
+      pendingProviderIds.add(providerId)
     }
     for (const [providerId, pending] of sharedProviderMutationCoordinator.pendingDeletions) {
-      if (pending.committedRevision === null) await run(providerId, 'deletion', () => operations.drainDeletion(providerId))
+      if (pending.committedRevision === null) pendingProviderIds.add(providerId)
     }
-    await enqueueSharedModelMutation(async () => undefined)
-    const timedOut = Date.now() >= deadline
+  }
+  try {
+    do {
+      for (const [providerId, pending] of [...sharedProviderMutationCoordinator.pendingNames]) {
+        if (pending.committedRevision === null) await run(providerId, 'profile', () => operations.drainProfile(providerId))
+      }
+      for (const [providerId, pending] of [...sharedProviderMutationCoordinator.pendingCatalogs]) {
+        if (pending.committedRevision === null) await run(providerId, 'catalog', () => operations.drainCatalog(providerId, pending.generation))
+      }
+      for (const [providerId, pending] of [...sharedProviderMutationCoordinator.pendingCredentials]) {
+        await run(providerId, 'credential', () => operations.drainCredential(providerId, pending.generation))
+      }
+      for (const [providerId, pending] of [...sharedProviderMutationCoordinator.pendingDeletions]) {
+        if (pending.committedRevision === null) await run(providerId, 'deletion', () => operations.drainDeletion(providerId))
+      }
+      await enqueueSharedModelMutation(async () => undefined)
+      collectOutstanding()
+      if (pendingProviderIds.size > 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+    } while (pendingProviderIds.size > 0 && Date.now() < deadline)
+    const timedOut = pendingProviderIds.size > 0
     return {
       requestId: request.requestId,
       ok: !timedOut && pendingProviderIds.size === 0,
