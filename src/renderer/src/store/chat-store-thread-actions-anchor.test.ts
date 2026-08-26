@@ -119,7 +119,7 @@ describe('chat-store-thread-actions timeline user anchor', () => {
     expect(state.threadLoadingId).toBeNull()
   })
 
-  it('prepends older history and merges its turn durations', async () => {
+  it('prepends older history without disrupting a busy turn', async () => {
     const getThreadDetail = vi.fn(async (_threadId: string, options?: { before?: string }) => ({
       blocks: [
         { kind: 'user' as const, id: 'user-older', text: 'older question' },
@@ -140,7 +140,10 @@ describe('chat-store-thread-actions timeline user anchor', () => {
     }))
     registryMock.getProvider.mockReturnValue({ getThreadDetail })
     const { actions, state } = buildHarness()
-    state.busy = false
+    state.busy = true
+    state.currentTurnId = 'turn-active'
+    state.currentTurnUserId = 'user-current'
+    state.lastSeq = 50
     state.activeThreadId = 'thr_existing'
     state.blocks = [
       { kind: 'assistant', id: 'assistant-current', text: 'current answer' },
@@ -177,6 +180,10 @@ describe('chat-store-thread-actions timeline user anchor', () => {
     expect(state.threadHistoryCursor).toBe('item_older_cursor')
     expect(state.threadHasMoreHistory).toBe(true)
     expect(state.threadHistoryLoading).toBe(false)
+    expect(state.busy).toBe(true)
+    expect(state.currentTurnId).toBe('turn-active')
+    expect(state.currentTurnUserId).toBe('user-current')
+    expect(state.lastSeq).toBe(50)
     expect(state.turnDurationByUserId).toEqual({
       'user-current': 8_000,
       'user-older': 101_000

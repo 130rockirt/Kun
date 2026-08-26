@@ -509,8 +509,7 @@ export function createThreadSelectionActions(
       !threadId ||
       !cursor ||
       !state.threadHasMoreHistory ||
-      state.threadHistoryLoading ||
-      state.busy
+      state.threadHistoryLoading
     ) return false
     set({ threadHistoryLoading: true })
     try {

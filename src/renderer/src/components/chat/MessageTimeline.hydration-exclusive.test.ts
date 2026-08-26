@@ -109,4 +109,29 @@ describe('MessageTimeline hydration presentation', () => {
       'GET'
     )
   })
+
+  it('keeps the earlier-history control visible while the active turn is busy', async () => {
+    const loadEarlierThreadHistory = vi.fn(async () => true)
+    useChatStore.setState({
+      busy: true,
+      threadHasMoreHistory: true,
+      threadHistoryLoading: false,
+      loadEarlierThreadHistory
+    })
+    await act(async () => root!.render(createElement(MessageTimeline, {
+      blocks: [{ kind: 'assistant', id: 'target-answer', text: 'target-ready-content' }],
+      liveReasoning: '',
+      live: '',
+      activeThreadId: activeThread.id,
+      runtimeConnection: 'ready',
+      onRetryConnection: () => undefined,
+      onOpenSettings: () => undefined
+    })))
+
+    const button = container.querySelector<HTMLButtonElement>('button.ds-chip')
+    expect(button).not.toBeNull()
+    expect(button?.disabled).toBe(false)
+    await act(async () => button?.click())
+    expect(loadEarlierThreadHistory).toHaveBeenCalledOnce()
+  })
 })
