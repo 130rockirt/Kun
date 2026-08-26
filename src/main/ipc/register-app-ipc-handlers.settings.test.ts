@@ -120,11 +120,14 @@ describe('registerAppIpcHandlers settings and approvals', () => {
   it('redacts plaintext model credentials from settings:get without mutating the Main snapshot', async () => {
     const current = settingsWithPlaintextModelCredentials()
     const original = JSON.stringify(current)
+    const mainFrame = { processId: 10, routingId: 20, url: 'http://127.0.0.1:5173/index.html' }
+    const contents = { id: 7, mainFrame }
     registerAppIpcHandlers(registerOptions({
-      store: { load: vi.fn(async () => current) } as never
+      store: { load: vi.fn(async () => current) } as never,
+      getMainWindow: () => ({ isDestroyed: () => false, webContents: contents }) as never
     }))
 
-    const result = await handlers.get('settings:get')?.({})
+    const result = await handlers.get('settings:get')?.({ sender: contents, senderFrame: mainFrame })
 
     expectRendererModelCredentialsRedacted(result)
     expect(JSON.stringify(current)).toBe(original)

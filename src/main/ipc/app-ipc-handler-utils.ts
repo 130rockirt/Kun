@@ -142,14 +142,14 @@ export function assertTrustedWorkbenchSender(
   }
 }
 
-/**
- * Renderer settings are an editable projection, not a Provider credential
- * transport. Standalone custom media credentials remain editable legacy
- * settings until they have their own protected-store migration; redacting
- * those values here would make the next adjacent settings edit erase them.
- */
+/** Renderer settings are an editable projection, never a credential transport. */
 export function withoutRendererPlaintextCredentials(settings: AppSettingsV1): AppSettingsV1 {
   const runtime = getKunRuntimeSettings(settings)
+  const redactMedia = <T extends { apiKey: string }>(media: T): T => ({
+    ...media,
+    apiKey: '',
+    ...(media.apiKey.trim() ? { apiKeyConfigured: true } : {})
+  } as T)
   return {
     ...settings,
     provider: {
@@ -164,7 +164,12 @@ export function withoutRendererPlaintextCredentials(settings: AppSettingsV1): Ap
       ...settings.agents,
       kun: {
         ...runtime,
-        apiKey: ''
+        apiKey: '',
+        imageGeneration: redactMedia(runtime.imageGeneration),
+        speechToText: redactMedia(runtime.speechToText),
+        textToSpeech: redactMedia(runtime.textToSpeech),
+        musicGeneration: redactMedia(runtime.musicGeneration),
+        videoGeneration: redactMedia(runtime.videoGeneration)
       }
     }
   }
