@@ -64,6 +64,7 @@ export function createServerRuntimeComposition(
     routePoolTests,
     providerQuotaService,
     modelConnectionOAuth,
+    officialProviderCli,
     officialProviderAuth,
     stopExtensionModelListener
   } = model
@@ -200,6 +201,7 @@ export function createServerRuntimeComposition(
 	    },
 	    modelConnections,
 	    modelConnectionOAuth,
+	    officialProviderCli,
 	    officialProviderAuth,
 	    providerQuotaService,
 	    get defaultModel() {

@@ -31,6 +31,7 @@ import {
   ModelConnectionOAuthService,
   ClaudeConnectionService,
   OfficialProviderAuthService,
+OfficialProviderCliService,
   type GeminiCodeAssistCredential
 } from './runtime-factory-dependencies.js'
 import type { KunServeRuntimeOptions } from './runtime-factory-types.js'
@@ -491,6 +492,9 @@ export async function createRuntimeModelComposition(
     registry: modelConnections,
     claude: claudeConnections
   })
+  const officialProviderCli = new OfficialProviderCliService({
+    dataDir: core.activeOptions.dataDir
+  })
   const officialProviderAuth = new OfficialProviderAuthService({
     dataDir: core.activeOptions.dataDir,
     registry: modelConnections
@@ -537,6 +541,7 @@ export async function createRuntimeModelComposition(
     providerQuotaService,
     claudeConnections,
     modelConnectionOAuth,
+    officialProviderCli,
     officialProviderAuth,
     stopExtensionModelListener,
     hasMcpOAuth,

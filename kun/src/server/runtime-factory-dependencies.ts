@@ -278,6 +278,7 @@ export { ModelConnectionOAuthService } from '../services/model-connection-oauth.
 export { ClaudeConnectionService } from '../services/claude-connection-service.js'
 export {
   OfficialProviderAuthService,
+  OfficialProviderCliService,
   resolveAntigravityCliCommand
 } from '../services/official-provider-cli.js'
 export type { LocalModelGatewayConfig, ModelRoutePoolConfig } from '../contracts/model-route-pool.js'

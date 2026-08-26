@@ -62,11 +62,10 @@ import {
   startAgentSdkInstall
 } from '../agent-sdk-installer'
 import {
-  antigravityCliDownloadState,
-  fetchAntigravityModels,
-  resolveAntigravityCliBinary,
-  startAntigravityCliInstall
-} from '../antigravity-cli'
+  requestOfficialProviderCliInstall,
+  requestOfficialProviderCliModels,
+  requestOfficialProviderCliStatus
+} from '../runtime-official-provider-cli'
 import {
   discoverCursorSubscription
 } from '../cursor-subscription-models'
@@ -315,26 +314,15 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
       binaryPath: claudeSubBinary()
     })
   )
-  const antigravityBinary = (): string | undefined =>
-    resolveAntigravityCliBinary(app.getPath('userData'))
-  ipcMain.handle('gemini-subscription:cli-status', async () => ({
-    installed: Boolean(antigravityBinary()),
-    ...(antigravityBinary() ? { path: antigravityBinary() } : {}),
-    download: antigravityCliDownloadState()
-  }))
-  ipcMain.handle('gemini-subscription:cli-install', async () =>
-    startAntigravityCliInstall(
-      { userDataDir: app.getPath('userData'), proxyUrl: resolveModelProviderProxyUrl(await store.load()) },
-      (state) => getMainWindow()?.webContents.send('gemini-subscription:cli-progress', state)
-    )
+  ipcMain.handle('gemini-subscription:cli-status', async () =>
+    requestOfficialProviderCliStatus(runtimeRequest)
   )
-  ipcMain.handle('gemini-subscription:models', async () => {
-    const binaryPath = antigravityBinary()
-    if (!binaryPath) {
-      throw new Error('Antigravity CLI is not installed. Install it from the Gemini subscription settings first.')
-    }
-    return fetchAntigravityModels({ binaryPath })
-  })
+  ipcMain.handle('gemini-subscription:cli-install', async () =>
+    requestOfficialProviderCliInstall(runtimeRequest)
+  )
+  ipcMain.handle('gemini-subscription:models', async () =>
+    requestOfficialProviderCliModels(runtimeRequest)
+  )
   ipcMain.handle('gemini-cli-subscription:status', async () =>
     geminiCliSubscriptionStatus()
   )

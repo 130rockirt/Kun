@@ -43,6 +43,11 @@ import {
   installClaudeSdk,
   updateModelConnectionGlobals
 } from './model-connections.js'
+import {
+  installOfficialProviderCli,
+  listOfficialProviderCliModels,
+  officialProviderCliStatus
+} from './official-provider-cli.js'
 import { applyRuntimeConfig } from './runtime-config.js'
 import { listSkills } from './skills.js'
 import { authorizeMcpOAuth, clearMcpOAuth, mcpOAuthDiagnostics } from './mcp-oauth.js'
@@ -146,6 +151,18 @@ export function registerCoreRoutes(router: Router, runtime: ServerRuntime): void
   router.add('POST', '/v1/model-connections/oauth/start', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return startModelConnectionOAuth(runtime.modelConnectionOAuth, request)
+  })
+  router.add('GET', '/v1/model-connections/official-cli/status', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return officialProviderCliStatus(runtime.officialProviderCli)
+  })
+  router.add('POST', '/v1/model-connections/official-cli/install', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return installOfficialProviderCli(runtime.officialProviderCli)
+  })
+  router.add('GET', '/v1/model-connections/official-cli/models', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listOfficialProviderCliModels(runtime.officialProviderCli)
   })
   router.add('POST', '/v1/model-connections/cli/complete', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
