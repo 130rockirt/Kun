@@ -150,7 +150,7 @@ windowsOnly('Windows automatic update transaction', () => {
     expect(readFileSync(join(input.source, 'notes.txt'), 'utf8')).toBe('preserved user file')
   })
 
-  it('replays cleanup_pending to committed after a cleanup crash', () => {
+  it('rolls back cleanup_pending after the candidate later fails its first full startup', () => {
     const input = fixture()
     expect(run(input, 'Prepare').status).toBe(0)
     payload(input.stage, 'Kun.exe')
@@ -164,11 +164,15 @@ windowsOnly('Windows automatic update transaction', () => {
       installDir: input.target,
       version: '0.2.0'
     }))
-    expect(run(input, 'CommitUpdateTransaction', 'commit.after_first_cleanup').status).not.toBe(0)
-    expect(transaction(input.transaction).Phase).toBe('cleanup_pending')
-    expect(readFileSync(join(input.source, 'notes.txt'), 'utf8')).toBe('preserved user file')
-    expect(run(input, 'RecoverUpdateTransaction').status).toBe(0)
+    expect(run(input, 'CommitUpdateTransaction').status).toBe(0)
     expect(transaction(input.transaction).Phase).toBe('committed')
+    expect(existsSync(input.transaction)).toBe(true)
+    expect(existsSync(state.BackupRoot)).toBe(true)
+
+    expect(run(input, 'RecoverUpdateTransaction').status).toBe(0)
+    expect(readFileSync(join(input.source, 'DeepSeek GUI.exe'), 'utf8')).toBe('executable')
+    expect(existsSync(input.target)).toBe(false)
+    expect(transaction(input.transaction)).toMatchObject({ Phase: 'rolled_back', RollbackOutcome: 'succeeded' })
   })
 
   it('rejects a health result from the wrong candidate version', () => {

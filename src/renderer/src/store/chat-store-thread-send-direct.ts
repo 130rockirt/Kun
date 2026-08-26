@@ -377,6 +377,16 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
       })
       runtimeTurnAccepted = true
       if (submittedMessageForQueue.waitForRuntimeAdmission) settleRuntimeTurnAdmission(clientRequestId, true)
+      if (currentTurnStartGeneration() !== sendGeneration) {
+        // A stop can race with admission; do not revive its projection.
+        try { await p.interruptTurn(activeThreadId, turnId, { discard: false }) } catch (error) {
+          console.warn('[kun-gui] failed to interrupt a turn accepted after stop:', error)
+        } finally {
+          set((state) => state.activeThreadId === activeThreadId ? { busy: false, busyUnconfirmed: false } : {})
+          void get().refreshThreads()
+        }
+        return true
+      }
       set((state) => ({
         threads: state.threads.map((thread) => thread.id === activeThreadId
           ? {
@@ -390,12 +400,6 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
             }
           : thread)
       }))
-      if (currentTurnStartGeneration() !== sendGeneration) {
-        // Stop was pressed while the POST was still pending. The accepted turn
-        // is real, but must not revive this renderer projection or its queue.
-        void p.interruptTurn(activeThreadId, turnId, { discard: false }).catch(() => undefined)
-        return true
-      }
       if (get().activeThreadId !== activeThreadId) {
         settleAcceptedTurnAfterNavigation({
           threadId: activeThreadId,

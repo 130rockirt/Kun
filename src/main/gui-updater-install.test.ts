@@ -36,6 +36,10 @@ vi.mock('./gui-updater-pending', () => ({
 }))
 
 vi.mock('./gui-updater-support', () => ({ setWindowsInstallerUpdateSource: vi.fn(() => () => undefined) }))
+vi.mock('./update-transaction-helper', () => ({
+  runUpdateTransactionHelper: vi.fn(async () => undefined),
+  scheduleUpdateRollbackAfterExit: vi.fn(async () => undefined)
+}))
 
 async function installer() {
   const { GuiUpdateInstaller } = await import('./gui-updater-install')

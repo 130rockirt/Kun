@@ -43,6 +43,7 @@ import { showStartupFailureWindow } from './startup-failure-window'
 import { sanitizeStartupFailureMessage } from './startup-failure-content'
 import { resolveManagedRuntimeStartupTarget } from './runtime/managed-runtime-startup-attach'
 import { prefetchCatalogPricing } from './catalog-prefetch'
+import { recoverUpdateBeforeRuntimeStart } from './update-bootstrap-recovery'
 
 export function startMainApp(): Promise<void> {
   mainState.createWindow = createWindow
@@ -119,6 +120,7 @@ export function startMainApp(): Promise<void> {
   return app.whenReady().then(async () => {
     traceStartup('app.whenReady:start')
     if (!gotSingleInstanceLock) return
+    if (await recoverUpdateBeforeRuntimeStart()) return
 
     const services = await initializeMainServices()
     if (!services) return

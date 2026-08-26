@@ -259,14 +259,13 @@ function Read-UpdateTransaction {
 function Recover-PendingUpdateTransaction {
   $transaction = Read-UpdateTransaction
   if ($null -eq $transaction) { return }
-  if (@('committed', 'rolled_back') -contains [string]$transaction.Phase) {
+  if ([string]$transaction.Phase -eq 'rolled_back') {
     Finalize-TerminalUpdateTransaction
     return
   }
-  if ([string]$transaction.Phase -eq 'cleanup_pending') {
-    Invoke-CommitUpdateTransaction
-    return
-  }
+  # A candidate can pass the installer probe yet fail before its first complete
+  # application startup. Keep recovery data rollback-capable until the app
+  # explicitly finalizes it after its runtime health check.
   Invoke-RollbackUpdateTransaction
 }
 
@@ -612,17 +611,9 @@ function Invoke-CommitUpdateTransaction {
     }
   }
   Remove-LegacyTransactionShortcuts
-  foreach ($path in @(
-    ([string]$transaction.OldPayloadRoot),
-    ([string]$transaction.FailedPayloadRoot),
-    ([string]$transaction.StageRoot),
-    ([string]$transaction.BackupRoot),
-    ([string]$transaction.AssetsRoot)
-  )) {
-    if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -LiteralPath $path)) {
-      Remove-Item -LiteralPath $path -Recurse -Force
-    }
-  }
+  # Retain payload, registry/PATH, shortcut and journal recovery artifacts
+  # through the first complete application startup. FinalizeUpdateTransaction
+  # performs this cleanup only after the runtime health handshake succeeds.
   Set-UpdateTransactionPhase $transaction 'committed' | Out-Null
 }
 
@@ -633,6 +624,9 @@ function Finalize-TerminalUpdateTransaction {
     throw 'The automatic update transaction is not terminal.'
   }
   foreach ($path in @(
+    ([string]$transaction.OldPayloadRoot),
+    ([string]$transaction.FailedPayloadRoot),
+    ([string]$transaction.StageRoot),
     ([string]$transaction.BackupRoot),
     ([string]$transaction.AssetsRoot),
     ([string]$transaction.HealthResult)
@@ -642,4 +636,5 @@ function Finalize-TerminalUpdateTransaction {
     }
   }
   Remove-Item -LiteralPath (Get-UpdateTransactionPath) -Force
+  Remove-Journal
 }

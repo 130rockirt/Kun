@@ -61,10 +61,8 @@
       DetailPrint "Kun could not record the automatic-update result: $KunInstallerHelperOutput"
       Return
     ${endif}
-    !insertmacro kunRunMigrationHelper FinalizeUpdateTransaction
-    ${if} $KunInstallerHelperExitCode != 0
-      DetailPrint "Kun retained terminal automatic-update recovery state: $KunInstallerHelperOutput"
-    ${endif}
+    ; The application owns FinalizeUpdateTransaction after its first complete
+    ; runtime health check. Until then, keep the rollback payload and journal.
   FunctionEnd
 
   Function KunSetAutomaticUpdateShellEnvironment

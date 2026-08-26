@@ -95,7 +95,7 @@ describe('gui updater pending state', () => {
       backupExpiresAt: '2026-09-01T00:00:00.000Z', lastError: 'runtime unavailable'
     }, directory)
     await expect(pending.readGuiUpdateRecovery(directory)).resolves.toMatchObject({
-      schemaVersion: 1, installedVersion: '0.2.0', healthAttempts: 2
+      schemaVersion: 2, installedVersion: '0.2.0', healthAttempts: 2
     })
     await expect(pending.readPendingUpdate(directory)).resolves.toBeNull()
     await pending.clearGuiUpdateRecovery(directory)

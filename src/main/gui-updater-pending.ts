@@ -17,6 +17,33 @@ export const KUN_INSTALLER_NEW_VERSION = 'KUN_INSTALLER_NEW_VERSION'
 export const PENDING_UPDATE_SCHEMA_VERSION = 1
 export const PENDING_UPDATE_RESULT_SCHEMA_VERSION = 2
 
+export const INSTALLER_RECOVERY_ENVIRONMENT_KEYS = [
+  'KUN_INSTALLER_APP_EXECUTABLE',
+  'KUN_INSTALLER_APP_GUID',
+  'KUN_INSTALLER_AUTOMATIC_UPDATE',
+  'KUN_INSTALLER_CANONICAL_LEAF',
+  'KUN_INSTALLER_COMMON_DESKTOP',
+  'KUN_INSTALLER_COMMON_PROGRAMS',
+  'KUN_INSTALLER_CURRENT_DESKTOP',
+  'KUN_INSTALLER_CURRENT_PROGRAMS',
+  'KUN_INSTALLER_INSTALL_MODE',
+  'KUN_INSTALLER_INSTALL_REGISTRY_KEY',
+  'KUN_INSTALLER_JOURNAL',
+  'KUN_INSTALLER_PAYLOAD_BACKUP',
+  'KUN_INSTALLER_PRESERVE_OTHER_SCOPE',
+  'KUN_INSTALLER_PRODUCT_NAME',
+  'KUN_INSTALLER_SECONDARY_SOURCE',
+  'KUN_INSTALLER_SOURCE',
+  'KUN_INSTALLER_TARGET',
+  'KUN_INSTALLER_TRANSACTION',
+  'KUN_INSTALLER_UNINSTALL_REGISTRY_KEY'
+] as const
+
+export type InstallerRecoveryEnvironment = Partial<Record<
+  typeof INSTALLER_RECOVERY_ENVIRONMENT_KEYS[number],
+  string
+>>
+
 export type PendingUpdate = {
   schemaVersion: typeof PENDING_UPDATE_SCHEMA_VERSION
   state: 'installing'
@@ -40,15 +67,21 @@ export type PendingUpdateResult = {
   backupDir?: string
   transactionState?: 'prepared' | 'payload_switched' | 'awaiting_health' | 'cleanup_pending' | 'committed' | 'rolling_back' | 'rolled_back' | 'rollback_incomplete' | ''
   rollbackOutcome?: 'not_started' | 'succeeded' | 'failed' | ''
+  recoveryEnvironment?: InstallerRecoveryEnvironment
   recoveryAttempts?: number
 }
 
 export type GuiUpdateRecovery = {
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   installedVersion: string
   channel: GuiUpdateChannel
   verifiedAt: string
   healthAttempts: number
+  bootAttempts?: number
+  oldVersion?: string
+  transactionRoot?: string
+  journalPath?: string
+  recoveryEnvironment?: InstallerRecoveryEnvironment
   nextHealthCheckAt?: string
   backupDir?: string
   backupExpiresAt: string
@@ -87,6 +120,14 @@ function isPendingUpdate(value: unknown): value is PendingUpdate {
     typeof record.writtenAt === 'string'
 }
 
+function isInstallerRecoveryEnvironment(value: unknown): value is InstallerRecoveryEnvironment {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  return Object.entries(value).every(([key, item]) =>
+    (INSTALLER_RECOVERY_ENVIRONMENT_KEYS as readonly string[]).includes(key) &&
+    typeof item === 'string' && !item.includes('\0')
+  )
+}
+
 function isPendingUpdateResult(value: unknown): value is PendingUpdateResult {
   if (!value || typeof value !== 'object') return false
   const record = value as Record<string, unknown>
@@ -95,13 +136,14 @@ function isPendingUpdateResult(value: unknown): value is PendingUpdateResult {
     (record.outcome === 'success' || record.outcome === 'aborted') &&
     typeof record.code === 'string' &&
     typeof record.message === 'string' &&
-    typeof record.at === 'string'
+    typeof record.at === 'string' &&
+    (record.recoveryEnvironment === undefined || isInstallerRecoveryEnvironment(record.recoveryEnvironment))
 }
 
 function isGuiUpdateRecovery(value: unknown): value is GuiUpdateRecovery {
   if (!value || typeof value !== 'object') return false
   const record = value as Record<string, unknown>
-  return record.schemaVersion === 1 && typeof record.installedVersion === 'string' &&
+  return (record.schemaVersion === 1 || record.schemaVersion === 2) && typeof record.installedVersion === 'string' &&
     (record.channel === 'stable' || record.channel === 'frontier') &&
     typeof record.verifiedAt === 'string' && typeof record.healthAttempts === 'number' &&
     typeof record.backupExpiresAt === 'string'
@@ -127,7 +169,7 @@ export async function writeGuiUpdateRecovery(
   recovery: Omit<GuiUpdateRecovery, 'schemaVersion'>,
   userDataPath?: string
 ): Promise<GuiUpdateRecovery> {
-  const value: GuiUpdateRecovery = { schemaVersion: 1, ...recovery }
+  const value: GuiUpdateRecovery = { schemaVersion: 2, ...recovery }
   await writeAtomically(guiUpdateRecoveryPath(userDataPath), value)
   return value
 }

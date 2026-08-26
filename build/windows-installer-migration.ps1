@@ -85,6 +85,31 @@ function Write-AutomaticUpdateResult {
   } else {
     [string]$transaction.RollbackOutcome
   }
+  $recoveryEnvironment = [ordered]@{}
+  foreach ($name in @(
+    'KUN_INSTALLER_APP_EXECUTABLE',
+    'KUN_INSTALLER_APP_GUID',
+    'KUN_INSTALLER_AUTOMATIC_UPDATE',
+    'KUN_INSTALLER_CANONICAL_LEAF',
+    'KUN_INSTALLER_COMMON_DESKTOP',
+    'KUN_INSTALLER_COMMON_PROGRAMS',
+    'KUN_INSTALLER_CURRENT_DESKTOP',
+    'KUN_INSTALLER_CURRENT_PROGRAMS',
+    'KUN_INSTALLER_INSTALL_MODE',
+    'KUN_INSTALLER_INSTALL_REGISTRY_KEY',
+    'KUN_INSTALLER_JOURNAL',
+    'KUN_INSTALLER_PAYLOAD_BACKUP',
+    'KUN_INSTALLER_PRESERVE_OTHER_SCOPE',
+    'KUN_INSTALLER_PRODUCT_NAME',
+    'KUN_INSTALLER_SECONDARY_SOURCE',
+    'KUN_INSTALLER_SOURCE',
+    'KUN_INSTALLER_TARGET',
+    'KUN_INSTALLER_TRANSACTION',
+    'KUN_INSTALLER_UNINSTALL_REGISTRY_KEY'
+  )) {
+    $value = Get-EnvironmentValue $name
+    if (-not [string]::IsNullOrWhiteSpace($value)) { $recoveryEnvironment[$name] = $value }
+  }
   $payload = [ordered]@{
     schemaVersion = 2
     outcome = $outcome
@@ -94,6 +119,7 @@ function Write-AutomaticUpdateResult {
     backupDir = (Get-EnvironmentValue 'KUN_INSTALLER_PAYLOAD_BACKUP')
     transactionState = $transactionState
     rollbackOutcome = $rollbackOutcome
+    recoveryEnvironment = $recoveryEnvironment
     at = [DateTime]::UtcNow.ToString('o')
   }
   $parent = Split-Path -Parent $path

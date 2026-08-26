@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { win32 as win32Path } from 'node:path'
 import type { GuiUpdateChannel, GuiUpdateInfo, GuiUpdateInstallResult, GuiUpdateState } from '../shared/gui-update'
 import { setWindowsInstallerUpdateSource } from './gui-updater-support'
+import { runUpdateTransactionHelper, scheduleUpdateRollbackAfterExit } from './update-transaction-helper'
 import {
   GUI_UPDATE_BACKUP_GRACE_MS,
   GUI_UPDATE_HEALTH_RETRY_MS,
@@ -108,8 +109,10 @@ export class GuiUpdateInstaller {
         if (result.transactionState !== 'committed' && result.schemaVersion !== 1) {
           console.warn('[kun-gui updater] reconciling incomplete installer cleanup:', result.transactionState)
         }
-        recovery = await this.startHealthRecovery(pending, result.backupDir)
-        await this.removeTransactionRecords()
+        recovery ??= await this.startHealthRecovery(pending, result)
+        // Keep both records through the first complete Runtime health check.
+        // Bootstrap needs the installer-authored recovery environment if the
+        // next startup crashes before this updater is initialized.
       } else if (!installed) {
         this.emitInstallFailure('The update installer reported success, but the running version does not match the update.')
         return
@@ -144,8 +147,10 @@ export class GuiUpdateInstaller {
         return
       }
       if (app.getVersion() === pending.newVersion) {
-        recovery = await this.startHealthRecovery(pending, pending.backupDir)
-        await clearPendingUpdate()
+        recovery ??= await this.startHealthRecovery(pending, {
+          backupDir: pending.backupDir,
+          recoveryEnvironment: undefined
+        })
       }
     }
 
@@ -159,7 +164,7 @@ export class GuiUpdateInstaller {
     const retryAt = recovery.nextHealthCheckAt ? Date.parse(recovery.nextHealthCheckAt) : 0
     if (recovery.healthAttempts >= GUI_UPDATE_MAX_HEALTH_ATTEMPTS) {
       this.clearHealthRetry()
-      this.emitDegraded(recovery.healthAttempts, recovery.lastError)
+      await this.rollbackAfterHealthFailure(recovery)
       return
     }
     if (retryAt > Date.now()) {
@@ -170,25 +175,56 @@ export class GuiUpdateInstaller {
     const healthy = await (this.healthCheck?.() ?? Promise.resolve(true)).catch(() => false)
     if (healthy) {
       this.clearHealthRetry()
+      if (recovery.recoveryEnvironment) {
+        await runUpdateTransactionHelper('FinalizeUpdateTransaction', recovery.recoveryEnvironment)
+      }
       await this.cleanupBackup(recovery.backupDir)
       await clearGuiUpdateRecovery()
+      await this.removeTransactionRecords()
       return
     }
     const attempts = recovery.healthAttempts + 1
     const message = 'GUI update installed, but Kun Runtime health checks are still failing.'
     const nextRecovery = await writeGuiUpdateRecovery({ ...recovery, healthAttempts: attempts,
       nextHealthCheckAt: new Date(Date.now() + GUI_UPDATE_HEALTH_RETRY_MS).toISOString(), lastError: message })
-    if (attempts < GUI_UPDATE_MAX_HEALTH_ATTEMPTS) this.armHealthRetry(Date.parse(nextRecovery.nextHealthCheckAt ?? ''))
+    if (attempts >= GUI_UPDATE_MAX_HEALTH_ATTEMPTS) {
+      this.clearHealthRetry()
+      await this.rollbackAfterHealthFailure(nextRecovery)
+      return
+    }
+    this.armHealthRetry(Date.parse(nextRecovery.nextHealthCheckAt ?? ''))
     this.emitDegraded(attempts, message)
   }
 
-  private async startHealthRecovery(pending: { newVersion: string, channel: GuiUpdateChannel }, backupDir?: string) {
+  private async rollbackAfterHealthFailure(recovery: import('./gui-updater-pending').GuiUpdateRecovery): Promise<void> {
+    if (!recovery.recoveryEnvironment) {
+      this.emitDegraded(recovery.healthAttempts, recovery.lastError)
+      return
+    }
+    try {
+      await scheduleUpdateRollbackAfterExit(recovery.recoveryEnvironment)
+      this.deps.emit({ status: 'error', info: this.deps.stateInfo(), code: 'install_failed',
+        message: 'Kun Runtime health checks failed repeatedly. Restoring the previous version.' })
+      app.exit(0)
+    } catch (error) {
+      console.error('[kun-gui updater] failed to schedule update rollback:', error)
+      this.emitDegraded(recovery.healthAttempts, recovery.lastError)
+    }
+  }
+
+  private async startHealthRecovery(
+    pending: { newVersion: string, oldVersion: string, channel: GuiUpdateChannel },
+    result: { backupDir?: string, recoveryEnvironment?: import('./gui-updater-pending').InstallerRecoveryEnvironment }
+  ) {
     return writeGuiUpdateRecovery({
       installedVersion: pending.newVersion,
+      oldVersion: pending.oldVersion,
       channel: pending.channel,
       verifiedAt: new Date().toISOString(),
       healthAttempts: 0,
-      backupDir,
+      bootAttempts: 0,
+      backupDir: result.backupDir,
+      recoveryEnvironment: result.recoveryEnvironment,
       backupExpiresAt: new Date(Date.now() + GUI_UPDATE_BACKUP_GRACE_MS).toISOString()
     })
   }
