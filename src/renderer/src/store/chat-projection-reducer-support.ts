@@ -180,11 +180,23 @@ export function updateProjectedThreadStatus(
 export function settleProjectedThreadStatus(
   threads: ChatState['threads'],
   threadId: string,
-  latestTurnStatus: 'completed' | 'failed' | 'aborted'
+  latestTurnStatus: 'completed' | 'failed' | 'aborted',
+  turnId?: string
 ): ChatState['threads'] {
   const thread = threads.find((candidate) => candidate.id === threadId)
-  if (!thread || thread.status?.trim().toLowerCase() !== 'running') return threads
-  return updateProjectedThreadStatus(threads, threadId, 'idle', latestTurnStatus)
+  if (!thread) return threads
+  const currentStatus = thread.status?.trim().toLowerCase()
+  const latestTurnId = thread.latestTurnId?.trim()
+  // Without a terminal turnId, keep the historical behavior: only a running
+  // thread may be settled. With a terminal turnId, the event is authoritative
+  // for that turn; settle when the projection tracks the same turn or has no
+  // latestTurnId yet. Only a different latestTurnId means a newer turn has
+  // superseded this terminal event and must not be overwritten.
+  const maySettle = turnId
+    ? currentStatus === 'running' || !latestTurnId || latestTurnId === turnId
+    : currentStatus === 'running'
+  if (!maySettle) return threads
+  return updateProjectedThreadStatus(threads, threadId, 'idle', latestTurnStatus, turnId)
 }
 
 export function runtimeEventStartedAt(createdAt: string | undefined, now: number): number {

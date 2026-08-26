@@ -4,8 +4,13 @@ import {
   canvasDurableTurnOutcome,
   canvasLiveTurnOutcome,
   canvasTurnAllowsContinuation,
+  canvasTurnContinuationDecision,
   normalizeCanvasTurnOutcome
 } from './canvas-turn-outcome'
+import {
+  clearCanvasTurnTerminalRegistry,
+  recordCanvasTurnTerminal
+} from './canvas-turn-terminal-registry'
 
 function thread(overrides: Partial<NormalizedThread> = {}): NormalizedThread {
   return {
@@ -58,5 +63,42 @@ describe('Canvas turn continuation outcome', () => {
     expect(canvasTurnAllowsContinuation('unknown')).toBe(true)
     expect(canvasTurnAllowsContinuation('aborted')).toBe(false)
     expect(canvasTurnAllowsContinuation('failed')).toBe(false)
+  })
+
+  it('maps continuation decisions for follow-up work', () => {
+    expect(canvasTurnContinuationDecision('completed')).toBe('continue')
+    expect(canvasTurnContinuationDecision('unknown')).toBe('wait')
+    expect(canvasTurnContinuationDecision('aborted')).toBe('stop')
+    expect(canvasTurnContinuationDecision('failed')).toBe('stop')
+  })
+
+  it('prefers the recorded terminal outcome over the thread projection', () => {
+    clearCanvasTurnTerminalRegistry()
+    recordCanvasTurnTerminal('turn-design', 'aborted', 'thread-design')
+    expect(canvasLiveTurnOutcome({
+      threads: [thread({ latestTurnStatus: 'completed' })],
+      threadId: 'thread-design',
+      turnId: 'turn-design'
+    })).toBe('aborted')
+    expect(canvasDurableTurnOutcome({
+      threads: [thread({ latestTurnStatus: 'completed' })],
+      threadId: 'thread-design',
+      turnId: 'turn-design'
+    })).toBe('aborted')
+    clearCanvasTurnTerminalRegistry()
+  })
+
+  it('returns unknown when the registry misses and the projection is not ready', () => {
+    clearCanvasTurnTerminalRegistry()
+    expect(canvasLiveTurnOutcome({
+      threads: [],
+      threadId: 'thread-design',
+      turnId: 'turn-design'
+    })).toBe('unknown')
+    expect(canvasLiveTurnOutcome({
+      threads: [thread({ latestTurnStatus: 'running' })],
+      threadId: 'thread-design',
+      turnId: 'turn-design'
+    })).toBe('unknown')
   })
 })

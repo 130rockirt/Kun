@@ -18,6 +18,11 @@ export function reduceEarlyChatProjection(
   if (terminal.threadId && state.activeThreadId && terminal.threadId !== state.activeThreadId) return {}
   if (state.currentTurnId && terminal.turnId && terminal.turnId !== state.currentTurnId) return {}
   if (!terminal.turnId) return {}
-  if (!state.currentTurnId) return {}
-  return undefined
+  if (state.currentTurnId) return undefined
+  // The active turn already cleared locally. The terminal event is still
+  // authoritative for the sidebar projection when it names the turn that the
+  // projection tracks; otherwise a newer turn must have superseded it.
+  const thread = state.threads.find((candidate) => candidate.id === state.activeThreadId)
+  if (thread?.latestTurnId && thread.latestTurnId === terminal.turnId) return undefined
+  return {}
 }

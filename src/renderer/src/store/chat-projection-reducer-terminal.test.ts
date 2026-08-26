@@ -125,3 +125,61 @@ describe('chat projection turn failure identity', () => {
     expect(projected.currentTurnId).toBeNull()
   })
 })
+
+describe('chat projection terminal settlement by turnId', () => {
+  it('repairs latestTurnId/latestTurnStatus when the local status is already idle', () => {
+    const projected = project({
+      ...state(),
+      threads: [{ ...state().threads[0]!, status: 'idle', latestTurnId: 'turn_old', latestTurnStatus: 'running' }]
+    }, [{
+      type: 'turn_aborted',
+      payload: { status: 'aborted', threadId: 'thread_1', turnId: 'turn_old' }
+    }])
+
+    expect(projected.threads[0]).toMatchObject({
+      status: 'idle',
+      latestTurnId: 'turn_old',
+      latestTurnStatus: 'aborted'
+    })
+  })
+
+  it('does not overwrite a newer turn that is already running', () => {
+    const projected = project({
+      ...state(),
+      threads: [{ ...state().threads[0]!, status: 'running', latestTurnId: 'turn_new', latestTurnStatus: 'running' }]
+    }, [{
+      type: 'turn_completed',
+      payload: { status: 'completed', threadId: 'thread_1', turnId: 'turn_old' }
+    }])
+
+    expect(projected.threads[0]).toMatchObject({
+      status: 'running',
+      latestTurnId: 'turn_new',
+      latestTurnStatus: 'running'
+    })
+  })
+
+  it('settles a failed terminal event by turnId even when the projection was idle', () => {
+    const projected = project({
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_1',
+      threads: [{ ...state().threads[0]!, status: 'idle', latestTurnId: 'turn_1', latestTurnStatus: 'running' }]
+    }, [{
+      type: 'turn_failed',
+      payload: {
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        seq: 13,
+        error: new Error('current turn failed'),
+        options: { terminal: true, scope: 'conversation' }
+      }
+    }])
+
+    expect(projected.threads[0]).toMatchObject({
+      status: 'idle',
+      latestTurnId: 'turn_1',
+      latestTurnStatus: 'failed'
+    })
+  })
+})

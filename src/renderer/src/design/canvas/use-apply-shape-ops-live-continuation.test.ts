@@ -14,6 +14,7 @@ import {
   useApplyShapeOpsLive,
   type CanvasScreenCreatedHandler
 } from './use-apply-shape-ops-live'
+import { recordCanvasTurnTerminal, clearCanvasTurnTerminalRegistry } from './canvas-turn-terminal-registry'
 
 const threadId = 'thread-design'
 const turnId = 'turn-design'
@@ -134,6 +135,7 @@ async function flushContinuationTimers(): Promise<void> {
 beforeEach(() => {
   vi.useFakeTimers()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  clearCanvasTurnTerminalRegistry()
   previousChat = useChatStore.getState()
   previousArtifacts = useDesignWorkspaceStore.getState().artifacts
   onScreenCreated = undefined
@@ -162,6 +164,7 @@ afterEach(async () => {
   })
   vi.unstubAllGlobals()
   vi.useRealTimers()
+  clearCanvasTurnTerminalRegistry()
 })
 
 describe('Design Canvas continuation terminal outcomes', () => {
@@ -258,6 +261,120 @@ describe('Design Canvas continuation terminal outcomes', () => {
     await mountHarness()
     await flushContinuationTimers()
     expect(callback).not.toHaveBeenCalled()
+  })
+
+  it.each(['aborted', 'failed'])('stops the follow-up when a late %s terminal arrives after currentTurnId cleared', async (status) => {
+    const frame = createHtmlFrameShape('Gateway 6', 0, 0, 'html-gateway', 'desktop')
+    useCanvasShapeStore.getState().addShape(frame)
+    useDesignWorkspaceStore.setState({ artifacts: [pendingHtmlArtifact('html-gateway')] })
+    const callback = vi.fn(() => true)
+    onScreenCreated = callback
+    useChatStore.setState({
+      activeThreadId: threadId,
+      currentTurnId: turnId,
+      currentTurnUserId: 'user-design',
+      busy: true,
+      blocks: screenTurnBlocks(frame.id),
+      threads: [designThread('running')],
+      liveAssistant: ''
+    })
+    await mountHarness()
+
+    // currentTurnId clears while the projection is still running: outcome is
+    // unknown and the gate must wait instead of enqueueing follow-up work.
+    await act(async () => {
+      useChatStore.setState({
+        currentTurnId: null,
+        currentTurnUserId: null,
+        busy: false,
+        threads: [designThread('running')]
+      })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120)
+    })
+    expect(callback).not.toHaveBeenCalled()
+
+    // The authoritative terminal event arrives late and suppresses the queued
+    // continuation before the wait window closes.
+    await act(async () => {
+      recordCanvasTurnTerminal(turnId, status, threadId)
+      useChatStore.setState({
+        threads: [designThread(status)]
+      })
+      await vi.runAllTimersAsync()
+    })
+
+    expect(callback).not.toHaveBeenCalled()
+    expect(useCanvasShapeStore.getState().document.rendererReplayWatermarkTurnId).toBe(turnId)
+  })
+
+  it('stops the follow-up when the outcome stays unknown past the wait window', async () => {
+    const frame = createHtmlFrameShape('Gateway 6', 0, 0, 'html-gateway', 'desktop')
+    useCanvasShapeStore.getState().addShape(frame)
+    useDesignWorkspaceStore.setState({ artifacts: [pendingHtmlArtifact('html-gateway')] })
+    const callback = vi.fn(() => true)
+    onScreenCreated = callback
+    useChatStore.setState({
+      activeThreadId: threadId,
+      currentTurnId: turnId,
+      currentTurnUserId: 'user-design',
+      busy: true,
+      blocks: screenTurnBlocks(frame.id),
+      threads: [designThread('running')],
+      liveAssistant: ''
+    })
+    await mountHarness()
+
+    await act(async () => {
+      useChatStore.setState({
+        currentTurnId: null,
+        currentTurnUserId: null,
+        busy: false,
+        threads: [designThread('running')]
+      })
+    })
+    await flushContinuationTimers()
+
+    expect(callback).not.toHaveBeenCalled()
+    expect(useCanvasShapeStore.getState().document.rendererReplayWatermarkTurnId).toBe(turnId)
+  })
+
+  it('continues the follow-up when a completed terminal arrives inside the wait window', async () => {
+    const frame = createHtmlFrameShape('Gateway 6', 0, 0, 'html-gateway', 'desktop')
+    useCanvasShapeStore.getState().addShape(frame)
+    useDesignWorkspaceStore.setState({ artifacts: [pendingHtmlArtifact('html-gateway')] })
+    const callback = vi.fn(() => true)
+    onScreenCreated = callback
+    useChatStore.setState({
+      activeThreadId: threadId,
+      currentTurnId: turnId,
+      currentTurnUserId: 'user-design',
+      busy: true,
+      blocks: screenTurnBlocks(frame.id),
+      threads: [designThread('running')],
+      liveAssistant: ''
+    })
+    await mountHarness()
+
+    await act(async () => {
+      useChatStore.setState({
+        currentTurnId: null,
+        currentTurnUserId: null,
+        busy: false,
+        threads: [designThread('running')]
+      })
+    })
+    await act(async () => {
+      recordCanvasTurnTerminal(turnId, 'completed', threadId)
+      useChatStore.setState({
+        threads: [designThread('completed')]
+      })
+      await vi.runAllTimersAsync()
+    })
+
+    expect(callback).toHaveBeenCalledTimes(1)
+    expect(callback).toHaveBeenCalledWith(frame.id, 'Build the Gateway page', undefined)
   })
 
   it.each([

@@ -315,7 +315,12 @@ export function reduceLateChatProjection(
       const aborted = action.type === 'turn_aborted'
       const threadId = state.activeThreadId
       const threads = threadId
-        ? settleProjectedThreadStatus(state.threads, threadId, aborted ? 'aborted' : 'completed')
+        ? settleProjectedThreadStatus(
+            state.threads,
+            threadId,
+            aborted ? 'aborted' : 'completed',
+            action.payload.turnId
+          )
         : state.threads
       const patch = flushLiveProjection(state, context.now, {
         ...finalizeTurnTimingAt(state, context.now),
@@ -365,7 +370,8 @@ export function reduceLateChatProjection(
         const threads = settleProjectedThreadStatus(
           state.threads,
           settleThreadId,
-          interrupted ? 'aborted' : 'failed'
+          interrupted ? 'aborted' : 'failed',
+          turnId
         )
         if (threads !== state.threads) patch.threads = threads
       }

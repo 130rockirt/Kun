@@ -74,6 +74,8 @@ export function recordReadyCanvasReplayWatermarks(options: {
   if (!options.disposed) commitReadyCanvasReplayBarriers(options.barriers, options.record)
 }
 
+export type CanvasReplayBarrierCollection = Map<string, CanvasReplayBarrierState>
+
 export function suppressPendingCanvasContinuations<T>(options: {
   pendingScreens: PendingScreenGeneration[]
   pendingSvgToolBlocks: Map<string, T>

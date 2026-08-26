@@ -63,6 +63,7 @@ import { readThreadWorktreeRegistry, saveThreadWorktreeRegistry, forgetThreadWor
 import { notifySddChatTranscriptMirror } from '../sdd/sdd-chat-transcript'
 import { notifyDesignChatTranscriptMirror } from '../design/design-chat-transcript'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
+import { recordCanvasTurnTerminal } from '../design/canvas/canvas-turn-terminal-registry'
 import {
   flushLiveProjection,
   mergeToolProjectionEvents,
@@ -545,6 +546,7 @@ export function buildThreadEventSink(
       // The mapper now preserves terminal identity. A child lifecycle event or
       // a replay for an older turn must never settle this stream's active turn.
       if (event.child) return
+      if (event.turnId) recordCanvasTurnTerminal(event.turnId, event.status, event.threadId)
       const activeState = get()
       if (event.threadId && event.threadId !== (boundThreadId || activeState.activeThreadId)) return
       if (!event.turnId) {
@@ -621,6 +623,7 @@ export function buildThreadEventSink(
       const active = get()
       if (options?.threadId && options.threadId !== (boundThreadId || active.activeThreadId)) return
       if (options?.turnId && active.currentTurnId && options.turnId !== active.currentTurnId) return
+      if (options?.terminal === true && options?.turnId) recordCanvasTurnTerminal(options.turnId, 'failed', options.threadId)
       resetBusyRecoveryAttempts()
       clearBusyWatchdog()
       const state = get()
