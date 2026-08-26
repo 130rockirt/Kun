@@ -98,13 +98,7 @@ export class ManagerRevisionedDocumentClient {
 }
 
 export class ManagerResourceLeaseClient {
-  private readonly resources = new Map<string, {
-    held: boolean
-    fence?: ManagerResourceFence
-    timer: ReturnType<typeof setInterval>
-    onAcquired: () => void | Promise<void>
-    onLost: () => void | Promise<void>
-  }>()
+  private readonly resources = new Map<string, ResourceLeaseState>()
 
   constructor(
     private readonly manager: ServiceManagerConnection,
@@ -118,9 +112,12 @@ export class ManagerResourceLeaseClient {
     onLost: () => void | Promise<void>
   }): Promise<boolean> {
     if (this.resources.has(input.resource)) throw new Error(`resource lease already maintained: ${input.resource}`)
-    const timer = setInterval(() => void this.tick(input.resource), 3_000)
-    timer.unref?.()
-    this.resources.set(input.resource, { held: false, timer, ...input })
+    this.resources.set(input.resource, {
+      held: false,
+      generation: 0,
+      inFlight: false,
+      ...input
+    })
     await this.tick(input.resource)
     return this.resources.get(input.resource)?.held === true
   }
@@ -129,28 +126,34 @@ export class ManagerResourceLeaseClient {
     const resources = [...this.resources.entries()]
     this.resources.clear()
     await Promise.all(resources.map(async ([resource, state]) => {
-      clearInterval(state.timer)
+      state.generation += 1
+      if (state.timer) clearTimeout(state.timer)
       if (state.held && state.fence) await this.release(resource, state.fence).catch(() => undefined)
     }))
   }
 
   private async tick(resource: string): Promise<void> {
     const state = this.resources.get(resource)
-    if (!state) return
+    if (!state || state.inFlight) return
+    const generation = ++state.generation
+    const fence = state.fence
+    state.inFlight = true
     try {
-      const endpoint = state.fence ? 'renew' : 'acquire'
+      const endpoint = fence ? 'renew' : 'acquire'
       const body = await requestManagerJson(
         this.manager,
         `/v1/leases/resources/${encodeURIComponent(resource)}/${endpoint}`,
         {
           method: 'POST',
-          body: state.fence ?? { ownerFlavor: this.flavor, ownerInstanceId: this.instanceId }
+          body: fence ?? { ownerFlavor: this.flavor, ownerInstanceId: this.instanceId }
         }
       )
-      const parsed = state.fence
+      if (!this.isCurrent(resource, state, generation)) return
+      const parsed = fence
         ? z.object({ lease: ManagerResourceLeaseSchema }).parse(body)
         : z.object({ acquired: z.boolean(), lease: ManagerResourceLeaseSchema }).parse(body)
       const acquired = 'acquired' in parsed ? parsed.acquired : true
+      if (acquired && state.fence && parsed.lease.fencingToken < state.fence.fencingToken) return
       if (acquired) state.fence = fenceOf(parsed.lease)
       if (acquired && !state.held) {
         state.held = true
@@ -161,12 +164,26 @@ export class ManagerResourceLeaseClient {
         await state.onLost()
       }
     } catch {
+      if (!this.isCurrent(resource, state, generation)) return
       if (state.held) {
         state.held = false
         state.fence = undefined
         await state.onLost()
       }
+    } finally {
+      state.inFlight = false
+      if (this.isCurrent(resource, state, generation)) this.scheduleTick(resource, state)
     }
+  }
+
+  private isCurrent(resource: string, state: ResourceLeaseState, generation: number): boolean {
+    return this.resources.get(resource) === state && state.generation === generation
+  }
+
+  private scheduleTick(resource: string, state: ResourceLeaseState): void {
+    if (state.timer) clearTimeout(state.timer)
+    state.timer = setTimeout(() => void this.tick(resource), 3_000)
+    state.timer.unref?.()
   }
 
   private async release(resource: string, fence: ManagerResourceFence): Promise<void> {
@@ -179,6 +196,16 @@ export class ManagerResourceLeaseClient {
       }
     )
   }
+}
+
+type ResourceLeaseState = {
+  held: boolean
+  fence?: ManagerResourceFence
+  timer?: ReturnType<typeof setTimeout>
+  generation: number
+  inFlight: boolean
+  onAcquired: () => void | Promise<void>
+  onLost: () => void | Promise<void>
 }
 
 function fenceOf(lease: z.infer<typeof ManagerResourceLeaseSchema>): ManagerResourceFence {
