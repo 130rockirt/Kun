@@ -50,20 +50,48 @@ describe('updater version correctness', () => {
 })
 
 describe('update feed resolution', () => {
-  it('probes candidates concurrently and chooses by priority', async () => {
+  it('probes candidates concurrently and selects the first successful source', async () => {
     const pending: Array<(value: Response) => void> = []
     const fetchMock = vi.fn(() => new Promise<Response>((resolve) => pending.push(resolve)))
     vi.stubGlobal('fetch', fetchMock)
     const { resolveUpdateFeedUrl } = await import('./gui-updater-support')
     const resolving = resolveUpdateFeedUrl('stable')
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
-    pending[2](new Response(null, { status: 200 }))
+    // 完成顺序决定胜出者：kun-agent 源最先成功。
     pending[1](new Response(null, { status: 200 }))
+    pending[2](new Response(null, { status: 200 }))
     pending[0](new Response(null, { status: 404 }))
     await expect(resolving).resolves.toEqual({
       ok: true,
       url: 'https://kun-agent.com/api/r2/deepseek-gui/channels/stable/latest/'
     })
+  })
+
+  it('returns the first success immediately without waiting for slow sources', async () => {
+    vi.useFakeTimers()
+    const aborts: AbortSignal[] = []
+    const fast: Array<(value: Response) => void> = []
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => {
+      aborts.push(init.signal!)
+      const url = String(_url)
+      return url.includes('www.kun-agent.com')
+        ? new Promise<Response>((resolve) => fast.push(resolve))
+        : new Promise<Response>(() => undefined)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { resolveUpdateFeedUrl, UPDATE_FEED_PROBE_TIMEOUT_MS } = await import('./gui-updater-support')
+    const resolving = resolveUpdateFeedUrl('stable')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    fast[0](new Response(null, { status: 200 }))
+    await vi.advanceTimersByTimeAsync(100)
+    await expect(resolving).resolves.toEqual({
+      ok: true,
+      url: 'https://www.kun-agent.com/api/r2/deepseek-gui/channels/stable/latest/'
+    })
+    // 未推进到全局 deadline 前就已返回，且剩余请求已被 abort。
+    vi.advanceTimersByTime(UPDATE_FEED_PROBE_TIMEOUT_MS)
+    expect(aborts.slice(1).every((signal) => signal.aborted)).toBe(true)
   })
 
   it('returns an explicit failure when every source fails', async () => {

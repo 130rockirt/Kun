@@ -182,22 +182,27 @@ export async function resolveUpdateFeedUrl(channel: GuiUpdateChannel): Promise<U
     }, UPDATE_FEED_PROBE_TIMEOUT_MS)
     clearDeadline = () => clearTimeout(timer)
   })
+  // 首个可达源立即胜出：慢源/无响应源不允许把已确认可用的更新源拖到
+  // 全局 deadline。全部候选失败时 Promise.any 才 reject。
+  const attempts = candidates.map(async (url) => {
+    if (!(await probeUpdateFeed(url, controller.signal))) {
+      throw new Error(`Update feed unavailable: ${url}`)
+    }
+    return { url }
+  })
   try {
-    const results = await Promise.race([
-      Promise.all(candidates.map(async (url) => ({ url, ok: await probeUpdateFeed(url, controller.signal) }))),
-      deadline
-    ])
-    if (!results) {
+    const selected = await Promise.race([Promise.any(attempts), deadline])
+    if (!selected) {
       return {
         ok: false,
         code: 'update_feed_unavailable',
         message: `The ${channel} update feed probe exceeded its ${UPDATE_FEED_PROBE_TIMEOUT_MS}ms deadline.`
       }
     }
-    const selected = results.find((item) => item.ok)
-    if (!selected) return { ok: false, code: 'update_feed_unavailable', message: `No reachable GUI update feed is available for the ${channel} channel.` }
     await writeFeedCache(channel, selected.url).catch(() => undefined)
     return { ok: true, url: selected.url }
+  } catch {
+    return { ok: false, code: 'update_feed_unavailable', message: `No reachable GUI update feed is available for the ${channel} channel.` }
   } finally {
     clearDeadline()
     controller.abort()

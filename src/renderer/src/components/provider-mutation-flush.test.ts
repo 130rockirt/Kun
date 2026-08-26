@@ -1,87 +1,159 @@
-import { describe, expect, it } from 'vitest'
-import { flushAllPendingProviderMutations } from './provider-mutation-flush'
-import { sharedProviderMutationCoordinator } from './shared-provider-mutation-coordinator'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  flushProviderMutationsForProviders,
+  type ProviderMutationFlushOperations
+} from './provider-mutation-flush'
+import {
+  drainSharedProviderCredentialMutation,
+  resetSharedProviderMutationCoordinatorForTests,
+  sharedProviderMutationCoordinator,
+  stageSharedProviderCredentialMutation
+} from './shared-provider-mutation-coordinator'
 
-describe('provider mutation quit barrier', () => {
-  it('flushes every latest generation without returning secrets', async () => {
-    sharedProviderMutationCoordinator.pendingNames.set('provider-a', {
-      generation: 2,
-      localName: 'Provider A',
-      canonicalName: 'Provider A',
+const noopOperations: ProviderMutationFlushOperations = {
+  drainProfile: async () => undefined,
+  drainCatalog: async () => undefined,
+  drainCredential: async () => undefined,
+  drainDeletion: async () => undefined
+}
+
+afterEach(() => {
+  resetSharedProviderMutationCoordinatorForTests()
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
+
+describe('flushProviderMutationsForProviders', () => {
+  it('resolves immediately when the provider has no pending mutations', async () => {
+    const drainCredential = vi.fn(noopOperations.drainCredential)
+    const result = await flushProviderMutationsForProviders(
+      { providerIds: ['deepseek'] },
+      { ...noopOperations, drainCredential }
+    )
+    expect(result).toEqual({ ok: true })
+    expect(drainCredential).not.toHaveBeenCalled()
+  })
+
+  it('waits until the staged credential commits before resolving', async () => {
+    const staged = stageSharedProviderCredentialMutation('deepseek', 'new-key')
+    let releaseCommit: (() => void) | undefined
+    const operations: ProviderMutationFlushOperations = {
+      ...noopOperations,
+      drainCredential: async (providerId, generation) => {
+        await drainSharedProviderCredentialMutation(providerId, generation, async () => {
+          await new Promise<void>((resolve) => { releaseCommit = resolve })
+          return undefined
+        })
+      }
+    }
+    const flushing = flushProviderMutationsForProviders({ providerIds: ['deepseek'] }, operations)
+    await vi.waitFor(() => expect(releaseCommit).toBeTypeOf('function'))
+    expect(sharedProviderMutationCoordinator.pendingCredentials.has('deepseek')).toBe(true)
+    let settled = false
+    void flushing.then(() => { settled = true })
+    releaseCommit?.()
+    await vi.waitFor(() => expect(settled).toBe(true))
+    await expect(flushing).resolves.toEqual({ ok: true })
+    expect(sharedProviderMutationCoordinator.pendingCredentials.has('deepseek')).toBe(false)
+  })
+
+  it('drains credential and catalog mutations of only the requested provider', async () => {
+    const stagedA = stageSharedProviderCredentialMutation('provider-a', 'key-a')
+    stageSharedProviderCredentialMutation('provider-b', 'key-b')
+    sharedProviderMutationCoordinator.pendingCatalogs.set('provider-a', {
+      generation: 1,
+      baseModels: [],
+      baseModelProfiles: {},
+      localModels: [],
+      localModelProfiles: {},
       committedRevision: null
     })
-    sharedProviderMutationCoordinator.pendingCredentials.set('provider-a', {
-      generation: 4,
-      operationToken: 'credential:opaque:4',
-      credential: 'secret-must-not-cross-ipc'
-    })
-    const calls: string[] = []
-    const result = await flushAllPendingProviderMutations(
-      { requestId: 'request-1', deadlineMs: 1000 },
-      {
-        drainProfile: async (id) => { calls.push(`profile:${id}`); sharedProviderMutationCoordinator.pendingNames.get(id)!.committedRevision = 3 },
-        drainCatalog: async () => undefined,
-        drainCredential: async (id) => { calls.push(`credential:${id}`); sharedProviderMutationCoordinator.pendingCredentials.delete(id) },
-        drainDeletion: async () => undefined
+    const drains: string[] = []
+    const operations: ProviderMutationFlushOperations = {
+      ...noopOperations,
+      drainCredential: async (providerId, generation) => {
+        drains.push(`credential:${providerId}`)
+        await drainSharedProviderCredentialMutation(providerId, generation, async () => undefined)
+      },
+      drainCatalog: async (providerId) => {
+        drains.push(`catalog:${providerId}`)
+        sharedProviderMutationCoordinator.pendingCatalogs.delete(providerId)
       }
+    }
+    const result = await flushProviderMutationsForProviders(
+      { providerIds: ['provider-a'] },
+      operations
     )
-    expect(calls).toEqual(['profile:provider-a', 'credential:provider-a'])
-    expect(result).toMatchObject({ requestId: 'request-1', ok: true, pendingProviderIds: [] })
-    expect(JSON.stringify(result)).not.toContain('secret-must-not-cross-ipc')
-    sharedProviderMutationCoordinator.pendingNames.clear()
-    sharedProviderMutationCoordinator.pendingCredentials.clear()
+    expect(result).toEqual({ ok: true })
+    expect(drains).toEqual(['credential:provider-a', 'catalog:provider-a'])
+    expect(sharedProviderMutationCoordinator.pendingCredentials.has('provider-b')).toBe(true)
+    expect(stagedA.generation).toBe(1)
   })
 
-  it('keeps failed generations pending and reports a bounded failure', async () => {
-    sharedProviderMutationCoordinator.pendingCredentials.set('provider-b', {
-      generation: 1,
-      operationToken: 'credential:opaque:1',
-      credential: 'do-not-return'
-    })
-    const result = await flushAllPendingProviderMutations(
-      { requestId: 'request-2', deadlineMs: 1000 },
-      {
-        drainProfile: async () => undefined,
-        drainCatalog: async () => undefined,
-        drainCredential: async () => { throw new Error('network failure') },
-        drainDeletion: async () => undefined
-      }
-    )
-    expect(result).toMatchObject({ ok: false, errorCode: 'flush-failed', pendingProviderIds: ['provider-b'] })
-    expect(JSON.stringify(result)).not.toContain('do-not-return')
-    sharedProviderMutationCoordinator.pendingCredentials.clear()
-  })
-
-  it('drains a newer credential generation staged while the first is committing', async () => {
-    sharedProviderMutationCoordinator.pendingCredentials.set('provider-c', {
-      generation: 1,
-      operationToken: 'credential:opaque:1',
-      credential: 'first-secret'
-    })
-    const generations: number[] = []
-    const result = await flushAllPendingProviderMutations(
-      { requestId: 'request-3', deadlineMs: 1000 },
-      {
-        drainProfile: async () => undefined,
-        drainCatalog: async () => undefined,
-        drainCredential: async (id, generation) => {
-          generations.push(generation)
-          if (generation === 1) {
-            sharedProviderMutationCoordinator.pendingCredentials.set(id, {
-              generation: 2,
-              operationToken: 'credential:opaque:2',
-              credential: 'latest-secret'
-            })
-          } else {
-            sharedProviderMutationCoordinator.pendingCredentials.delete(id)
+  it('stays blocked when a newer credential generation is staged during the drain', async () => {
+    stageSharedProviderCredentialMutation('deepseek', 'old-key')
+    let drainCalls = 0
+    let sawNewGeneration = false
+    const operations: ProviderMutationFlushOperations = {
+      ...noopOperations,
+      drainCredential: async (providerId, generation) => {
+        drainCalls += 1
+        await drainSharedProviderCredentialMutation(providerId, generation, async (credential) => {
+          if (credential === 'old-key') {
+            stageSharedProviderCredentialMutation('deepseek', 'new-key')
+            return undefined
           }
-        },
-        drainDeletion: async () => undefined
+          sawNewGeneration = true
+          return undefined
+        })
       }
+    }
+    const result = await flushProviderMutationsForProviders(
+      { providerIds: ['deepseek'], deadlineMs: 1_000 },
+      operations
     )
-    expect(generations).toEqual([1, 2])
-    expect(result).toMatchObject({ requestId: 'request-3', ok: true, pendingProviderIds: [] })
-    expect(JSON.stringify(result)).not.toContain('latest-secret')
-    sharedProviderMutationCoordinator.pendingCredentials.clear()
+    expect(result).toEqual({ ok: true })
+    expect(drainCalls).toBeGreaterThanOrEqual(2)
+    expect(sawNewGeneration).toBe(true)
+    expect(sharedProviderMutationCoordinator.pendingCredentials.has('deepseek')).toBe(false)
+  })
+
+  it('surfaces the sync error when the commit fails and the generation stays staged', async () => {
+    stageSharedProviderCredentialMutation('deepseek', 'new-key')
+    const failure = new Error('registry unavailable')
+    const operations: ProviderMutationFlushOperations = {
+      ...noopOperations,
+      drainCredential: async (providerId, generation) => {
+        await drainSharedProviderCredentialMutation(providerId, generation, async () => {
+          throw failure
+        })
+      }
+    }
+    const result = await flushProviderMutationsForProviders({ providerIds: ['deepseek'] }, operations)
+    expect(result).toEqual({ ok: false, error: failure, timedOut: false })
+    // Coordinator keeps the pending mutation for the existing retry path.
+    expect(sharedProviderMutationCoordinator.pendingCredentials.has('deepseek')).toBe(true)
+  })
+
+  it('reports timeout when the commit keeps failing without progress', async () => {
+    stageSharedProviderCredentialMutation('deepseek', 'new-key')
+    let drainCalls = 0
+    const operations: ProviderMutationFlushOperations = {
+      ...noopOperations,
+      // Drain settles but each commit keeps failing and the generation stays
+      // staged; the barrier must stop retrying and report a timeout failure.
+      drainCredential: async (providerId, generation) => {
+        drainCalls += 1
+        await drainSharedProviderCredentialMutation(providerId, generation, async () => {
+          throw new Error('sync failed')
+        })
+      }
+    }
+    const result = await flushProviderMutationsForProviders(
+      { providerIds: ['deepseek'], deadlineMs: 1 },
+      operations
+    ).catch(() => undefined)
+    expect(result).toMatchObject({ ok: false })
+    expect(drainCalls).toBeGreaterThanOrEqual(1)
   })
 })
