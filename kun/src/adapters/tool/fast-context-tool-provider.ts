@@ -14,6 +14,7 @@ import { LocalToolHost } from './local-tool-host.js'
 
 export const FAST_CONTEXT_TOOL_NAME = 'fast_context' as const
 export const FAST_CONTEXT_PROVIDER_ID = 'fast-context' as const
+export const FAST_CONTEXT_QUEUE_TIMEOUT_MS = 30_000
 
 export type FastContextToolConfig = {
   enabled?: boolean
@@ -120,6 +121,7 @@ export function buildFastContextToolProvider(
             returnFormat: 'summary',
             fastContext: true,
             fastContextTasks: parsed.tasks,
+            queueTimeoutMs: FAST_CONTEXT_QUEUE_TIMEOUT_MS,
             onQueued: async (childId, _profile, metadata) => state.update({
               childId, status: 'queued', model: resolveExploreModel(metadata?.model, context),
               profileName: metadata?.profileName?.trim() || 'Repository Explorer'
@@ -153,6 +155,8 @@ type FastContextOutput = {
   profileName: string
   model?: string
   error?: string
+  failure?: { source: 'model' | 'runtime' | 'contract'; code?: string; category?: string }
+  queuedMs?: number
   toolInvocations?: number
   durationMs?: number
   parentThreadId?: string
@@ -212,6 +216,8 @@ class FastContextRunState {
       profileName: this.profileName,
       model: this.model,
       error: this.error,
+      failure: record?.failure,
+      queuedMs: record?.queuedMs,
       toolInvocations: record?.toolInvocations,
       durationMs: record?.durationMs,
       parentThreadId: record?.parentThreadId,

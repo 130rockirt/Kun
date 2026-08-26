@@ -81,12 +81,12 @@ import {
   ChildResultExecutionError
 } from './child-result-materializer.js'
 
-export type SlotWaiter = {
-  resolve: () => void
-  reject: (error: unknown) => void
-  signal: AbortSignal
-  onAbort: () => void
-}
+import {
+  admitSlotWaiter,
+  ChildQueueTimeoutError,
+  enqueueSlotWaiter,
+  type SlotWaiter
+} from './delegation-slot-waiter.js'
 
 export type RunTurnFn = (threadId: string, turnId: string) => Promise<unknown>
 
@@ -177,27 +177,17 @@ export abstract class DelegationRuntimeBase {
   }
 
   /** Acquire a parallel slot, queueing (FIFO) when the runtime is saturated. */
-  protected acquireSlot(signal: AbortSignal): Promise<void> {
+  protected acquireSlot(signal: AbortSignal, queueTimeoutMs?: number): Promise<void> {
     if (signal.aborted) return Promise.reject(new Error('aborted while queued'))
     if (this.slotWaiters.length === 0 && this.active < this.parallelLimit) {
       this.active += 1
       return Promise.resolve()
     }
-    return new Promise<void>((resolve, reject) => {
-      const waiter: SlotWaiter = {
-        resolve,
-        reject,
-        signal,
-        onAbort: () => {
-          const index = this.slotWaiters.indexOf(waiter)
-          if (index >= 0) this.slotWaiters.splice(index, 1)
-          reject(new Error('aborted while queued'))
-          this.drainSlotWaiters()
-        }
-      }
-      signal.addEventListener('abort', waiter.onAbort, { once: true })
-      this.slotWaiters.push(waiter)
-      this.drainSlotWaiters()
+    return enqueueSlotWaiter({
+      waiters: this.slotWaiters,
+      signal,
+      queueTimeoutMs,
+      drain: () => this.drainSlotWaiters()
     })
   }
 
@@ -212,11 +202,7 @@ export abstract class DelegationRuntimeBase {
     while (this.enabled() && this.active < this.parallelLimit) {
       const next = this.slotWaiters.shift()
       if (!next) return
-      next.signal.removeEventListener('abort', next.onAbort)
-      if (next.signal.aborted) {
-        next.reject(new Error('aborted while queued'))
-        continue
-      }
+      if (!admitSlotWaiter(next)) continue
       this.active += 1
       next.resolve()
     }
@@ -485,6 +471,7 @@ export abstract class DelegationRuntimeBase {
     returnFormat: ChildReturnFormat
     fastContext: boolean
     fastContextTasks: readonly import('./fast-context-evidence.js').FastContextTask[] | undefined
+    queueTimeoutMs: number | undefined
     workspace: string | undefined
     security: ChildSecuritySnapshot | undefined
     onRunning: ((childId: string, profile?: string, metadata?: ChildRunLifecycleMetadata) => Promise<void> | void) | undefined
@@ -500,8 +487,22 @@ export abstract class DelegationRuntimeBase {
   }): Promise<ChildRunRecord> {
     let record = args.state.record
     try {
-      await this.acquireSlot(args.signal)
+      await this.acquireSlot(args.signal, args.queueTimeoutMs)
     } catch (error) {
+      if (error instanceof ChildQueueTimeoutError) {
+        const finishedAt = this.now()
+        record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
+          ...current,
+          status: 'failed',
+          terminationReason: 'child_error',
+          resumable: false,
+          failure: { source: 'runtime', code: error.code, category: 'timeout' },
+          queuedMs: elapsedMs(args.queuedAt, finishedAt),
+          error: error.message.slice(0, CHILD_RESULT_PREVIEW_CHARS),
+          updatedAt: finishedAt
+        }))
+        return record
+      }
       const abort = childAbortOutcome(args.signal, isHostShutdownTurnSuspension(args.signal), error)
       record = await this.commitChildState(args.state, (current) => ChildRunRecord.parse({
         ...current,

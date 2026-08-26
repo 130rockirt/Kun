@@ -147,6 +147,111 @@ describe('DelegationRuntime live concurrency reconfiguration', () => {
     expect(startOrder).toEqual(['first', 'second'])
   })
 
+  it('fails a queued child at its deadline without leaking the slot or FIFO waiter', async () => {
+    const firstGate = deferred<void>()
+    const started: string[] = []
+    const runtime = createRuntime({
+      maxParallel: 1,
+      executor: async ({ prompt }) => {
+        started.push(prompt)
+        if (prompt === 'first') await firstGate.promise
+        return { summary: prompt }
+      }
+    })
+    const signal = new AbortController().signal
+    const first = run(runtime, 'first', signal)
+    await waitFor(() => started.length === 1)
+
+    const timedOutPromise = run(runtime, 'timed-out', signal, 100)
+    await waitFor(async () => (await runtime.diagnostics()).childRuns.some(
+      (child) => child.prompt === 'timed-out' && child.status === 'queued'
+    ))
+    const afterTimeout = run(runtime, 'after-timeout', signal)
+    await waitFor(async () => (await runtime.diagnostics()).childRuns.some(
+      (child) => child.prompt === 'after-timeout' && child.status === 'queued'
+    ))
+
+    const timedOut = await timedOutPromise
+    expect(timedOut).toMatchObject({
+      status: 'failed',
+      terminationReason: 'child_error',
+      failure: { source: 'runtime', code: 'child_queue_timeout', category: 'timeout' }
+    })
+    expect(timedOut.queuedMs).toBeGreaterThanOrEqual(0)
+    expect(timedOut.error).toContain('could not start within 100ms')
+    expect(started).toEqual(['first'])
+    expect(await runtime.diagnostics()).toMatchObject({
+      active: 1,
+      childRuns: expect.arrayContaining([
+        expect.objectContaining({ prompt: 'timed-out', status: 'failed' })
+      ])
+    })
+
+    firstGate.resolve()
+    await first
+    await expect(afterTimeout).resolves.toMatchObject({ status: 'completed' })
+    expect(started).toEqual(['first', 'after-timeout'])
+    await expect(runtime.diagnostics()).resolves.toMatchObject({ active: 0 })
+  })
+
+  it('keeps user cancellation authoritative when it happens before the queue deadline', async () => {
+    const firstGate = deferred<void>()
+    const runtime = createRuntime({
+      maxParallel: 1,
+      executor: async ({ prompt }) => {
+        if (prompt === 'first') await firstGate.promise
+        return { summary: prompt }
+      }
+    })
+    const first = run(runtime, 'first', new AbortController().signal)
+    await waitFor(async () => (await runtime.diagnostics()).active === 1)
+    const controller = new AbortController()
+    const queued = run(runtime, 'cancelled', controller.signal, 1_000)
+    await waitFor(async () => (await runtime.diagnostics()).childRuns.some(
+      (child) => child.prompt === 'cancelled' && child.status === 'queued'
+    ))
+
+    controller.abort()
+    await expect(queued).resolves.toMatchObject({ status: 'aborted' })
+    expect((await runtime.diagnostics()).childRuns.find((child) => child.prompt === 'cancelled')?.failure)
+      .toBeUndefined()
+
+    firstGate.resolve()
+    await first
+  })
+
+  it('clears the queue deadline after admission so it cannot fail a running child', async () => {
+    const firstGate = deferred<void>()
+    const secondGate = deferred<void>()
+    const runtime = createRuntime({
+      maxParallel: 1,
+      executor: async ({ prompt }) => {
+        if (prompt === 'first') await firstGate.promise
+        if (prompt === 'second') await secondGate.promise
+        return { summary: prompt }
+      }
+    })
+    const signal = new AbortController().signal
+    const first = run(runtime, 'first', signal)
+    await waitFor(async () => (await runtime.diagnostics()).active === 1)
+    const second = run(runtime, 'second', signal, 100)
+    await waitFor(async () => (await runtime.diagnostics()).childRuns.some(
+      (child) => child.prompt === 'second' && child.status === 'queued'
+    ))
+
+    firstGate.resolve()
+    await first
+    await waitFor(async () => (await runtime.diagnostics()).childRuns.some(
+      (child) => child.prompt === 'second' && child.status === 'running'
+    ))
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect((await runtime.diagnostics()).childRuns.find((child) => child.prompt === 'second'))
+      .toMatchObject({ status: 'running' })
+
+    secondGate.resolve()
+    await expect(second).resolves.toMatchObject({ status: 'completed' })
+  })
+
   it('releases the slot when persisting the running transition fails', async () => {
     const store = new FailFirstRunningTransitionStore(join(directory, 'children'))
     let executions = 0
@@ -212,11 +317,17 @@ function subagentConfig(maxParallel: number): SubagentsCapabilityConfig {
   }).subagents
 }
 
-function run(runtime: DelegationRuntime, prompt: string, signal: AbortSignal): Promise<ChildRunRecord> {
+function run(
+  runtime: DelegationRuntime,
+  prompt: string,
+  signal: AbortSignal,
+  queueTimeoutMs?: number
+): Promise<ChildRunRecord> {
   return runtime.runChild({
     parentThreadId: 'parent',
     parentTurnId: `turn_${prompt}`,
     prompt,
+    ...(queueTimeoutMs !== undefined ? { queueTimeoutMs } : {}),
     signal
   })
 }
