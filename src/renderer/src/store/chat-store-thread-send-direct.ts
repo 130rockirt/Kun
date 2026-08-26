@@ -669,6 +669,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         busyUnconfirmed: false,
         ...emptyLiveProjection(state.lastSeq),
         currentTurnId: null,
+        currentTurnStartedAtMs: null,
         currentTurnOrchestration: null,
         queuedMessages: failQueuedSubmission(
           previousQueuedMessages,

@@ -133,6 +133,10 @@ export function reduceChatProjection(
         busyUnconfirmed: false,
         currentTurnId: event.turnId ?? state.currentTurnId,
         currentTurnUserId,
+        currentTurnStartedAtMs:
+          backgroundNotice || (event.turnId != null && event.turnId === state.currentTurnId)
+            ? state.currentTurnStartedAtMs
+            : startedAt,
         turnStartedAtByUserId: backgroundNotice
           ? state.turnStartedAtByUserId
           : {
