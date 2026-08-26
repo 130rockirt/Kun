@@ -1,6 +1,8 @@
 import type { NormalizedThread } from '../agent/types'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
+import { loadThreadStates } from '../agent/thread-state-loader'
+import type { ThreadRuntimeState } from '../agent/provider-types'
 import i18n from '../i18n'
 import {
   applyChatContentMaxWidth,
@@ -419,18 +421,16 @@ export function createNavigationWorkspaceActions(
         threadLooksRunning(thread) ||
         watchSnapshot[thread.id] === true
       )
-      const reconciledStateById = new Map<string, Awaited<ReturnType<typeof p.getThreadState>>>()
-      if (reconcileCandidates.length > 0 && typeof p.getThreadState === 'function') {
-        const results = await Promise.allSettled(
-          reconcileCandidates.map(async (thread) => ({
-            id: thread.id,
-            state: await p.getThreadState(thread.id)
-          }))
-        )
+      const reconciledStateById = new Map<string, ThreadRuntimeState>()
+      if (reconcileCandidates.length > 0 &&
+          (typeof p.getThreadState === 'function' || typeof p.getThreadStates === 'function')) {
+        // Bulk endpoint first (chunked + sequential inside the loader); bounded
+        // single reads keep older runtimes compatible.
+        const results = await loadThreadStates(p, reconcileCandidates.map((t) => t.id))
         for (const result of results) {
-          if (result.status !== 'fulfilled') continue
-          const localThread = localThreadById.get(result.value.id)
-          const latestTurnId = result.value.state.latestTurnId
+          if (!result.ok) continue
+          const localThread = localThreadById.get(result.id)
+          const latestTurnId = result.state.latestTurnId
           // Reject the response when the runtime reports a *newer* turn than
           // the one this refresh started from: the response is authoritative
           // for its own turn, but committing it here could regress local state
@@ -440,7 +440,7 @@ export function createNavigationWorkspaceActions(
             localThread?.latestTurnId &&
             localThread.latestTurnId !== latestTurnId
           ) continue
-          reconciledStateById.set(result.value.id, result.value.state)
+          reconciledStateById.set(result.id, result.state)
         }
         threads = threads.map((thread) => {
           const runtimeState = reconciledStateById.get(thread.id)

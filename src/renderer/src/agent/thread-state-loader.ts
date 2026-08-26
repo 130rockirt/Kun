@@ -5,11 +5,15 @@ import type {
 import { getRuntimeErrorCode } from '../lib/format-runtime-error'
 
 export const THREAD_STATE_FALLBACK_CONCURRENCY = 4
+// Mirrors THREAD_RUNTIME_STATE_BATCH_MAX_IDS in kun/src/contracts/threads.ts:
+// the runtime batch route rejects larger requests with a validation error.
+export const THREAD_STATE_BATCH_MAX_IDS = 200
 
 /**
- * Prefer the runtime's bounded bulk endpoint. Older runtimes transparently
- * fall back to single-state reads, still capped so background work cannot
- * saturate the renderer bridge.
+ * Prefer the runtime's bounded bulk endpoint, one sequential chunk at a time
+ * so a large reconciliation never turns into parallel batch bursts. Older
+ * runtimes transparently fall back to single-state reads, still capped so
+ * background work cannot saturate the renderer bridge.
  */
 export async function loadThreadStates(
   provider: Pick<AgentProvider, 'getThreadState' | 'getThreadStates'>,
@@ -20,7 +24,19 @@ export async function loadThreadStates(
 
   if (typeof provider.getThreadStates === 'function') {
     try {
-      return await provider.getThreadStates(threadIds)
+      const results: ThreadRuntimeStateBatchResult[] = []
+      for (
+        let offset = 0;
+        offset < threadIds.length;
+        offset += THREAD_STATE_BATCH_MAX_IDS
+      ) {
+        // Chunks run sequentially; the runtime already bounds inner work to
+        // THREAD_RUNTIME_STATE_BATCH_CONCURRENCY.
+        results.push(...await provider.getThreadStates(
+          threadIds.slice(offset, offset + THREAD_STATE_BATCH_MAX_IDS)
+        ))
+      }
+      return results
     } catch (error) {
       // A new renderer can connect to an older Kun runtime that has no batch
       // route. The bounded single-read path below preserves compatibility.
