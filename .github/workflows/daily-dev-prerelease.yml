@@ -224,12 +224,10 @@ jobs:
 
       - name: Smoke packaged update handoff (Linux x64)
         timeout-minutes: 20
-        env:
-          # ubuntu-latest cannot host unprivileged user namespaces, so the
-          # packaged Chromium sandbox cannot initialize there. Disable it for
-          # this smoke launch only; packaged builds keep the sandbox on.
-          KUN_SMOKE_DISABLE_SANDBOX: '1'
-        run: npm run smoke:packaged-update-handoff -- --resources dist/linux-unpacked/resources
+        run: |
+          # Exercise the packaged Chromium sandbox instead of bypassing it.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          npm run smoke:packaged-update-handoff -- --resources dist/linux-unpacked/resources
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
@@ -291,10 +289,9 @@ jobs:
 
       - name: Smoke packaged update handoff (Linux ARM64)
         timeout-minutes: 20
-        env:
-          # Same runner sandbox limitation as the x64 job above.
-          KUN_SMOKE_DISABLE_SANDBOX: '1'
-        run: npm run smoke:packaged-update-handoff -- --resources dist/linux-arm64-unpacked/resources
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          npm run smoke:packaged-update-handoff -- --resources dist/linux-arm64-unpacked/resources
 
       - name: Upload Linux ARM64 artifacts
         uses: actions/upload-artifact@v4

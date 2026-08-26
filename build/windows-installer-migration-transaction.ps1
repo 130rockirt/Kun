@@ -240,6 +240,52 @@ function Write-UpdateTransaction([hashtable]$Transaction) {
   Set-SecureJournalFileAcl $path (Get-NormalizedInstallMode)
 }
 
+function Assert-UpdateTransactionPaths($Transaction) {
+  $target = Get-JournalTarget
+  $transactionPath = Get-UpdateTransactionPath
+  $expected = @{
+    Source = Get-RecoveryPayloadSource
+    Target = $target
+    BackupRoot = Get-InPlacePayloadBackupPath
+    AssetsRoot = "$transactionPath.assets"
+    HealthResult = Get-UpdateHealthResultPath
+  }
+  foreach ($name in $expected.Keys) {
+    $actualPath = Normalize-FullPath ([string]$Transaction.$name)
+    $expectedPath = Normalize-FullPath ([string]$expected[$name])
+    if ([string]::IsNullOrWhiteSpace($actualPath) -or -not (Test-PathEqual $actualPath $expectedPath)) {
+      throw "The automatic update transaction $name path is not authorized: $actualPath"
+    }
+  }
+  $stage = Normalize-FullPath ([string]$Transaction.StageRoot)
+  if (-not (Test-PathEqual $stage (Get-UpdateStageRoot))) {
+    throw "The automatic update transaction StageRoot path is not authorized: $stage"
+  }
+  $targetParent = Split-Path -Parent $target
+  $targetLeaf = Split-Path -Leaf $target
+  foreach ($name in @('OldPayloadRoot', 'FailedPayloadRoot')) {
+    $actualPath = Normalize-FullPath ([string]$Transaction.$name)
+    $actualLeaf = Split-Path -Leaf $actualPath
+    $expectedLeaf = switch ($name) {
+      'OldPayloadRoot' { '^' + [Regex]::Escape($targetLeaf + '.kun-old-') + '[0-9]+$' }
+      'FailedPayloadRoot' { '^' + [Regex]::Escape($targetLeaf + '.kun-failed') + '$' }
+    }
+    $isAuthorized = (Test-PathEqual (Split-Path -Parent $actualPath) $targetParent) -and
+      $actualLeaf -match $expectedLeaf
+    if ([string]::IsNullOrWhiteSpace($actualPath) -or -not $isAuthorized) {
+      throw "The automatic update transaction $name path is not authorized: $actualPath"
+    }
+  }
+  foreach ($record in @($Transaction.Shortcuts)) {
+    $backup = Normalize-FullPath ([string]$record.Backup)
+    if (-not (Test-PathWithin $backup ([string]$expected.AssetsRoot)) -or
+        (Test-PathEqual $backup ([string]$expected.AssetsRoot))) {
+      throw "The shortcut recovery file is outside the transaction assets directory: $backup"
+    }
+    Assert-ShortcutPathAuthorized (Normalize-FullPath ([string]$record.Path))
+  }
+}
+
 function Read-UpdateTransaction {
   $path = Get-UpdateTransactionPath
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
@@ -253,6 +299,7 @@ function Read-UpdateTransaction {
   if (-not [string]::Equals([string]$transaction.InstallMode, (Get-NormalizedInstallMode), [StringComparison]::Ordinal)) {
     throw 'The automatic update transaction installation mode does not match.'
   }
+  Assert-UpdateTransactionPaths $transaction
   return $transaction
 }
 

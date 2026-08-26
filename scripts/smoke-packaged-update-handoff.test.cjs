@@ -1,6 +1,8 @@
 'use strict'
 
 const assert = require('node:assert/strict')
+const { readFileSync } = require('node:fs')
+const { join } = require('node:path')
 const test = require('node:test')
 const {
   NEGATIVE_SCENARIOS,
@@ -84,6 +86,18 @@ test('timeout parser rejects invalid release gate values', () => {
     assert.equal(positiveIntegerArgument('--timeout-ms', 100), 100)
   } finally {
     process.argv = original
+  }
+})
+
+test('Linux release handoff gates exercise the Chromium sandbox', () => {
+  for (const workflow of [
+    '.github/workflows/release.yml',
+    '.github/workflows/pr-checks.yml',
+    '.github/workflows/daily-dev-prerelease.yml'
+  ]) {
+    const source = readFileSync(join(process.cwd(), workflow), 'utf8')
+    assert.doesNotMatch(source, /KUN_SMOKE_DISABLE_SANDBOX/u)
+    assert.match(source, /kernel\.apparmor_restrict_unprivileged_userns=0/u)
   }
 })
 

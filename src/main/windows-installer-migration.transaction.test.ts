@@ -158,6 +158,22 @@ windowsOnly('Windows automatic update transaction', () => {
     expect(transaction(input.transaction)).toMatchObject({ Phase: 'rolled_back', RollbackOutcome: 'succeeded' })
   })
 
+  it('rejects transaction paths redirected outside the authorized installer roots', () => {
+    const input = fixture()
+    assertSucceeded(run(input, 'Prepare'), 'Prepare')
+    const state = JSON.parse(readFileSync(input.transaction, 'utf8').replace(/^\uFEFF/, ''))
+    const unrelated = join(input.root, 'unrelated')
+    mkdirSync(unrelated)
+    writeFileSync(join(unrelated, 'keep.txt'), 'do not delete')
+    state.FailedPayloadRoot = unrelated
+    writeFileSync(input.transaction, JSON.stringify(state))
+
+    const rollback = run(input, 'RollbackUpdateTransaction')
+    expect(rollback.status).not.toBe(0)
+    expect(`${rollback.stdout}\n${rollback.stderr}`).toContain('FailedPayloadRoot path is not authorized')
+    expect(readFileSync(join(unrelated, 'keep.txt'), 'utf8')).toBe('do not delete')
+  })
+
   it('restores a same-directory payload after cutover failure', () => {
     const input = fixture(true)
     assertSucceeded(run(input, 'Prepare'), 'Prepare')
