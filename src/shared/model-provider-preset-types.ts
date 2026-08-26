@@ -405,6 +405,7 @@ export const DOUBAO_REASONING: ModelProviderReasoningCapabilityV1 = {
 
 export const ZHIPU_CODING_PLAN_MODELS = [
   'glm-5.3',
+  'glm-5.3-flash',
   'glm-5.2',
   'glm-5.1',
   'glm-5-turbo',

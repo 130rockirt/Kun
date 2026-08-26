@@ -149,6 +149,7 @@ export const MODEL_CONTEXT_PROFILES: readonly ModelContextProfile[] = [
     'deepseek-chat',
     'deepseek-reasoner'
   ]),
+  glmReasoningProfile('glm-5.3-flash', 200_000),
   glmReasoningProfile('glm-5.2', 1_000_000),
   glmReasoningProfile('glm-5.1', 200_000),
   glmReasoningProfile('glm-5', 200_000),

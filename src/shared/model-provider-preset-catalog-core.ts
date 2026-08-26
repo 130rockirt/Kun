@@ -73,9 +73,14 @@ const OPENCODE_FREE_REASONING: ModelProviderReasoningCapabilityV1 = {
 }
 
 /** models.dev/kun-agent explicitly publish Coding Plan models as zero-cost. */
-function codingPlanProfile(contextWindowTokens: number): ModelProviderModelProfileV1 {
+function codingPlanProfile(
+  contextWindowTokens: number,
+  vision = false
+): ModelProviderModelProfileV1 {
   return {
-    ...textChatProfile(contextWindowTokens, GLM_REASONING),
+    ...(vision
+      ? visionChatProfile(contextWindowTokens, GLM_REASONING)
+      : textChatProfile(contextWindowTokens, GLM_REASONING)),
     pricing: {
       inputUsdPerMillion: 0,
       outputUsdPerMillion: 0,
@@ -223,6 +228,8 @@ export const MODEL_PROVIDER_PRESETS_CORE: ModelProviderPreset[] = [
     models: [...ZHIPU_CODING_PLAN_MODELS],
     modelProfiles: {
       'glm-5.3': codingPlanProfile(1_000_000),
+      // VLM variant per docs.bigmodel.cn (vlm/glm-5.3-flash); available in the GLM Coding Plan.
+      'glm-5.3-flash': codingPlanProfile(200_000, true),
       'glm-5.2': codingPlanProfile(1_000_000),
       'glm-5.1': codingPlanProfile(200_000),
       'glm-5-turbo': codingPlanProfile(200_000),

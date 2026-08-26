@@ -109,10 +109,16 @@ describe('provider presets', () => {
       name: 'Zhipu Coding Plan',
       baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4/chat/completions',
       endpointFormat: 'custom_endpoint',
-      models: ['glm-5.3', 'glm-5.2', 'glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4.5-air'],
+      models: ['glm-5.3', 'glm-5.3-flash', 'glm-5.2', 'glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4.5-air'],
       modelProfiles: {
         'glm-5.3': expect.objectContaining({
           contextWindowTokens: 1_000_000,
+          pricing: { inputUsdPerMillion: 0, outputUsdPerMillion: 0,
+            cacheReadUsdPerMillion: 0, cacheWriteUsdPerMillion: 0 }
+        }),
+        'glm-5.3-flash': expect.objectContaining({
+          contextWindowTokens: 200_000,
+          inputModalities: ['text', 'image'],
           pricing: { inputUsdPerMillion: 0, outputUsdPerMillion: 0,
             cacheReadUsdPerMillion: 0, cacheWriteUsdPerMillion: 0 }
         }),

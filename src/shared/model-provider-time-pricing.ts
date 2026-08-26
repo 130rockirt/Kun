@@ -21,7 +21,7 @@ export type ModelTimePricingRule = {
   matchesProvider: (provider: ModelProviderProfileV1) => boolean
 }
 
-const zhipuCodingPlanModels = ['glm-5.3', 'glm-5.2', 'glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4.5-air']
+const zhipuCodingPlanModels = ['glm-5.3', 'glm-5.3-flash', 'glm-5.2', 'glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4.5-air']
 const zaiCodingPlanModels = [...zhipuCodingPlanModels, 'glm-5']
 const codingPlanPeak: TimeWindow[] = [{ startMinute: 14 * 60, endMinute: 18 * 60, weekDays: [1, 2, 3, 4, 5] }]
 
