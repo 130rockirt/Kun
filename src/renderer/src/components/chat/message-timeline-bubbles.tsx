@@ -31,6 +31,18 @@ export { generatedMediaScrollAvailability } from './message-timeline-media-logic
 
 export const MessageBubble = memo(MessageBubbleImpl)
 
+export function shouldAnimateAssistantStream({
+  isLiveAssistant,
+  busyUnconfirmed,
+  catchingUpThread
+}: {
+  isLiveAssistant: boolean
+  busyUnconfirmed: boolean
+  catchingUpThread: boolean
+}): boolean {
+  return isLiveAssistant && !busyUnconfirmed && !catchingUpThread
+}
+
 type TurnMetricsLike = {
   avgTtftMs: number | null
   avgTokensPerSecond: number | null
@@ -74,6 +86,9 @@ function MessageBubbleImpl({
   const resolveApproval = useChatStore((s) => s.resolveApproval)
   const turnTimingMetrics = useChatStore((s) => s.turnTimingMetrics)
   const busyUnconfirmed = useChatStore((s) => s.busyUnconfirmed)
+  const catchingUpThread = useChatStore((s) =>
+    Boolean(s.activeThreadId && s.threadLoadingId === s.activeThreadId)
+  )
   if (block.kind === 'user' && isBackgroundShellNoticeBlock(block)) {
     return <BackgroundShellNoticeBubble block={block} nested={nested} />
   }
@@ -85,9 +100,13 @@ function MessageBubbleImpl({
   }
   if (block.kind === 'assistant') {
     const streaming = block.id === 'live-assistant'
-    // Gate the typewriter on busy confirmation: catch-up replay after
-    // reselecting a thread must render whole, not re-type.
-    const effectiveStreaming = streaming && !busyUnconfirmed
+    // Replayed events are folded into the hidden timeline at full speed.
+    // Typewriter pacing resumes only after the selected thread has caught up.
+    const effectiveStreaming = shouldAnimateAssistantStream({
+      isLiveAssistant: streaming,
+      busyUnconfirmed,
+      catchingUpThread
+    })
     const createdAtLabel = block.createdAt
       ? formatMessageDateTime(block.createdAt, i18n.language)
       : null

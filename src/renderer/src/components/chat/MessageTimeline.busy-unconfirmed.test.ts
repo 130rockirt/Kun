@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { timelineTurnIsProcessing } from './MessageTimeline'
+import { shouldAnimateAssistantStream } from './message-timeline-bubbles'
 
 describe('timelineTurnIsProcessing unconfirmed busy', () => {
   it('renders history settled while a hydrated running claim is unconfirmed', () => {
@@ -28,5 +29,28 @@ describe('timelineTurnIsProcessing unconfirmed busy', () => {
       turnPending: false,
       hasLiveStream: false
     })).toBe(true)
+  })
+})
+
+describe('assistant stream presentation', () => {
+  it('folds replayed output instantly while a selected thread catches up', () => {
+    expect(shouldAnimateAssistantStream({
+      isLiveAssistant: true,
+      busyUnconfirmed: false,
+      catchingUpThread: true
+    })).toBe(false)
+  })
+
+  it('animates only confirmed live output after catch-up completes', () => {
+    expect(shouldAnimateAssistantStream({
+      isLiveAssistant: true,
+      busyUnconfirmed: false,
+      catchingUpThread: false
+    })).toBe(true)
+    expect(shouldAnimateAssistantStream({
+      isLiveAssistant: true,
+      busyUnconfirmed: true,
+      catchingUpThread: false
+    })).toBe(false)
   })
 })

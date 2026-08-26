@@ -11,6 +11,7 @@ import type { MessageTimeline } from './MessageTimeline'
 import { useChatStore } from '../../store/chat-store'
 import { prepareAssistantMarkdownRenderer } from './AssistantMarkdown'
 import { ThreadHydrationGate } from './ThreadHydrationLoading'
+import { LiveAssistantStreamingProvider } from './live-assistant-streaming'
 
 const LazyLoadedMessageTimeline = lazy(() =>
   import('./MessageTimeline').then((module) => ({ default: module.MessageTimeline }))
@@ -52,9 +53,11 @@ export function LazyMessageTimeline({
       loading={hydrating || preparingRenderer}
       presentationKey={activeThreadId}
     >
-      <Suspense fallback={fallback}>
-        <LazyLoadedMessageTimeline key={timelineKey} {...props} />
-      </Suspense>
+      <LiveAssistantStreamingProvider streaming={!hydrating && !preparingRenderer}>
+        <Suspense fallback={fallback}>
+          <LazyLoadedMessageTimeline key={timelineKey} {...props} />
+        </Suspense>
+      </LiveAssistantStreamingProvider>
     </ThreadHydrationGate>
   )
 }

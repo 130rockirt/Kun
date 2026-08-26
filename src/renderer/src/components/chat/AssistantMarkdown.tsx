@@ -34,9 +34,8 @@ export function AssistantMarkdown({
   className?: string
   hideHtmlComments?: boolean
 }): ReactElement {
-  // An unconfirmed busy flag gates the typewriter off so catch-up replay
-  // (returning to a thread that ran while away) renders whole instead of
-  // re-typing text the user already watched settle.
+  // The bubble's presentation gate keeps catch-up replay out of the
+  // typewriter. The context also covers nested Markdown rendered by it.
   const liveStreaming = useLiveAssistantStreaming()
   const effectiveStreaming = streaming && liveStreaming
   const fallbackText = hideHtmlComments
@@ -52,6 +51,10 @@ export function AssistantMarkdown({
       }
     >
       <LazyStreamdownAssistant
+        // Switching from hidden catch-up to live output must establish a new
+        // typewriter baseline at the already-rendered text length. Otherwise
+        // the hook retains its pre-catch-up cursor and re-types the backlog.
+        key={effectiveStreaming ? 'streaming' : 'settled'}
         text={text}
         streaming={effectiveStreaming}
         className={className}
