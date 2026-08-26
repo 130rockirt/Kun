@@ -2,6 +2,12 @@ import type { ModelProviderSettingsV1 } from '@shared/app-settings'
 import type { GatewayCredentialStatus } from '@shared/kun-gui-api'
 import { useEffect, useState } from 'react'
 
+function gatewayCredentialBridge(): typeof window.kunGui.gatewayCredential | undefined {
+  if (typeof window === 'undefined') return undefined
+  const bridge = window.kunGui?.gatewayCredential
+  return typeof bridge === 'function' ? bridge.bind(window.kunGui) : undefined
+}
+
 export function useGatewayCredentialControls(
   settings: ModelProviderSettingsV1,
   onChange: (next: ModelProviderSettingsV1) => void,
@@ -19,7 +25,9 @@ export function useGatewayCredentialControls(
     setPending(true)
     onError('')
     try {
-      const result = await window.kunGui.gatewayCredential(action)
+      const bridge = gatewayCredentialBridge()
+      if (!bridge) throw new Error('Gateway credential controls are unavailable')
+      const result = await bridge(action)
       if (!result.ok) throw new Error(`Gateway credential ${action} failed (${result.status})`)
       setCredential(result.credential)
     } catch (error) {
@@ -33,7 +41,9 @@ export function useGatewayCredentialControls(
     if (enabled && !credential.configured) {
       setPending(true)
       try {
-        const result = await window.kunGui.gatewayCredential('ensure')
+        const bridge = gatewayCredentialBridge()
+        if (!bridge) throw new Error('Gateway credential controls are unavailable')
+        const result = await bridge('ensure')
         if (!result.ok) throw new Error(`Gateway credential ensure failed (${result.status})`)
         setCredential(result.credential)
       } catch (error) {
@@ -47,8 +57,10 @@ export function useGatewayCredentialControls(
   }
 
   useEffect(() => {
+    const bridge = gatewayCredentialBridge()
+    if (!bridge) return
     let mounted = true
-    void window.kunGui.gatewayCredential('status').then((result) => {
+    void bridge('status').then((result) => {
       if (mounted && result.ok) setCredential(result.credential)
     }).catch(() => undefined)
     return () => { mounted = false }
