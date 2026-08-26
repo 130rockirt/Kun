@@ -33,11 +33,14 @@ import {
   createStartupSettingsApply,
   runPostWindowRuntimeStartup
 } from './main-runtime-startup-flow'
+import { startWindowFirstStartup } from './main-startup-orchestrator'
 import { createWindow } from './main-window'
 import { MainWindowActivationCoordinator } from './main-window-activation'
 import { initializeMainServices } from './main-ready-services'
-import { registerMainIpc } from './main-ready-ipc'
-import { revealMainWindow } from './main-tray'
+import { initializeWindowShell } from './main-ready-shell'
+import { registerShellIpc } from './main-ready-ipc'
+import { registerMainIpc } from './main-ready-ipc-full'
+import { revealMainWindow, syncTray } from './main-tray'
 import { resolveLogDirectory } from './main-paths'
 import { showStartupFailureWindow } from './startup-failure-window'
 import { sanitizeStartupFailureMessage } from './startup-failure-content'
@@ -122,17 +125,43 @@ export function startMainApp(): Promise<void> {
     if (!gotSingleInstanceLock) return
     if (await recoverUpdateBeforeRuntimeStart()) return
 
-    const services = await initializeMainServices()
-    if (!services) return
-    const { initial } = services
-    registerMainIpc(services)
-
-    createWorkbenchWindow({
-      suppressInitialShow: shouldStartHidden(initial),
-      useSystemTitleBar: initial.appBehavior.useSystemTitleBar
+    const startup = await startWindowFirstStartup({
+      initializeShell: initializeWindowShell,
+      registerShellIpc,
+      transitionShellReady: () => mainState.startupState.transition('shell_ready'),
+      createWindow: (settings) => {
+        createWorkbenchWindow({
+          suppressInitialShow: shouldStartHidden(settings),
+          useSystemTitleBar: settings.appBehavior.useSystemTitleBar
+        })
+        traceStartup('createWindow:returned')
+      },
+      windowAvailable: () => activation.windowAvailable(),
+      syncTray,
+      startBackground: async (shell) => {
+        mainState.startupState.transition('services_starting', 'Checking for an existing Kun runtime...')
+        const attached = await kunRuntimeAdapter.resolveConnection(shell.shellSettings).catch(() => false)
+        if (attached) {
+          mainState.startupState.noteDetail(
+            'Connected to the existing Kun runtime; keeping active work available during startup.'
+          )
+        }
+        return initializeMainServices({
+          productionSettingsPath: shell.productionSettingsPath,
+          onPhase: (phase, detail) => {
+            try {
+              mainState.startupState.transition(phase, detail)
+            } catch {
+              // A later phase may already have been published; keep the latest.
+            }
+          }
+        })
+      }
     })
-    activation.windowAvailable()
-    traceStartup('createWindow:returned')
+    if (!startup?.background) return
+
+    const { initial } = startup.background
+    registerMainIpc(startup.background)
 
     void pruneOnStartup().catch((err) => {
       console.warn('[kun-gui] prune logs:', err)

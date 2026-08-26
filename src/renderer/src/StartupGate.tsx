@@ -1,5 +1,8 @@
 import React, { lazy, useCallback, useEffect, useRef, useState } from 'react'
-import type { DesktopStartupPhase } from '@shared/desktop-startup-state'
+import type {
+  DesktopStartupPhase,
+  DesktopStartupStatePayload
+} from '@shared/desktop-startup-state'
 import { requestApplicationReload } from './lib/application-reload'
 import {
   mergeStartupPhase,
@@ -93,6 +96,7 @@ export function StartupGate({
   runtimeMigrationRecoveryMode
 }: StartupGateProps): React.ReactElement {
   const [phase, setPhase] = useState<DesktopStartupPhase>('bootstrapping')
+  const [phaseDetail, setPhaseDetail] = useState<string | undefined>(undefined)
   const [startupHandshake, setStartupHandshake] = useState<StartupHandshakeState>({
     status: 'loading'
   })
@@ -123,7 +127,7 @@ export function StartupGate({
       if (timeout) clearTimeout(timeout)
       unsubscribe?.()
     }
-    const acceptPhase = (next: DesktopStartupPhase): void => {
+    const acceptPhase = (next: DesktopStartupPhase, detail?: string): void => {
       if (!active) return
       observedPhase = true
       if (timeout) {
@@ -131,7 +135,11 @@ export function StartupGate({
         timeout = null
       }
       setPhase((current) => mergeStartupPhase(current, next))
+      setPhaseDetail(detail)
       setStartupHandshake({ status: 'ready' })
+    }
+    const acceptPayload = (payload: DesktopStartupStatePayload): void => {
+      acceptPhase(payload.phase, payload.detail)
     }
     const fail = (error: unknown): void => {
       if (!active || observedPhase) return
@@ -140,7 +148,7 @@ export function StartupGate({
       setStartupHandshake({ status: 'error', message })
     }
     try {
-      unsubscribe = startup.onState(acceptPhase)
+      unsubscribe = startup.onState(acceptPayload)
     } catch (error) {
       fail(error)
       return dispose
@@ -151,7 +159,7 @@ export function StartupGate({
       }, STARTUP_STATE_TIMEOUT_MS)
     }
     try {
-      void startup.getState().then(acceptPhase, fail)
+      void startup.getState().then(acceptPayload, fail)
     } catch (error) {
       fail(error)
     }
@@ -255,12 +263,24 @@ export function StartupGate({
   }
   return (
     <main className="flex min-h-screen items-center justify-center bg-ds-canvas p-8 text-ds-ink">
-      <section className="flex items-center gap-3 rounded-full border border-ds-border bg-ds-surface px-5 py-3 shadow-sm">
+      <section className="flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-ds-border bg-ds-surface px-8 py-8 text-center shadow-sm">
         <span
           className={`h-2.5 w-2.5 rounded-full ${phase === 'recovery_required' ? 'bg-red-500' : 'animate-pulse bg-blue-500'}`}
           aria-hidden="true"
         />
-        <span className="text-sm font-medium">{startupPhaseLabel(phase)}</span>
+        <h1 className="text-base font-semibold">{startupPhaseLabel(phase)}</h1>
+        {phaseDetail ? (
+          <p className="text-sm text-ds-faint" role="status">{phaseDetail}</p>
+        ) : null}
+        <div
+          className="h-1 w-48 overflow-hidden rounded-full bg-ds-border motion-reduce:hidden"
+          aria-hidden="true"
+        >
+          <div className="h-full w-1/3 animate-pulse rounded-full bg-blue-500" />
+        </div>
+        <p className="text-xs text-ds-faint">
+          The window opened early; Kun keeps preparing in the background.
+        </p>
       </section>
     </main>
   )

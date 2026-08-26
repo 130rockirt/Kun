@@ -424,6 +424,8 @@ export async function runRuntimeDataRecoveryMaintenance(): Promise<void> {
       return
     }
 
+    const workbench = mainState.mainWindow
+    if (workbench && !workbench.isDestroyed()) workbench.destroy()
     const window = createRuntimeDataRecoveryWindow()
     window.on('closed', () => {
       try {

@@ -2,7 +2,10 @@
 import { act, createElement, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { DesktopStartupPhase } from '@shared/desktop-startup-state'
+import type {
+  DesktopStartupPhase,
+  DesktopStartupStatePayload
+} from '@shared/desktop-startup-state'
 import { StartupGate, STARTUP_STATE_TIMEOUT_MS } from './StartupGate'
 
 vi.mock('./components/StorageRelocationBootView', () => ({
@@ -29,7 +32,11 @@ async function flushAsync(rounds = 6): Promise<void> {
   })
 }
 
-type PhaseListener = (phase: DesktopStartupPhase) => void
+type PhaseListener = (payload: DesktopStartupStatePayload) => void
+
+function phasePayload(phase: DesktopStartupPhase, detail?: string): DesktopStartupStatePayload {
+  return detail === undefined ? { phase } : { phase, detail }
+}
 
 function deferredValue<T>(): {
   promise: Promise<T>
@@ -50,7 +57,7 @@ function installStartupApi(initial: DesktopStartupPhase): {
   onState: ReturnType<typeof vi.fn>
 } {
   const listeners = new Set<PhaseListener>()
-  const getState = vi.fn(async () => initial)
+  const getState = vi.fn(async () => phasePayload(initial))
   const onState = vi.fn((handler: PhaseListener) => {
     listeners.add(handler)
     return () => listeners.delete(handler)
@@ -107,7 +114,7 @@ describe('StartupGate', () => {
 
   it('subscribes before reading startup state and never regresses a ready event', async () => {
     const calls: string[] = []
-    const pending = deferredValue<DesktopStartupPhase>()
+    const pending = deferredValue<DesktopStartupStatePayload>()
     const listeners = new Set<PhaseListener>()
     ;(window as unknown as { kunGui: unknown }).kunGui = {
       startup: {
@@ -126,11 +133,11 @@ describe('StartupGate', () => {
     expect(calls[0]).toBe('subscribe')
     expect(calls[1]).toBe('getState')
 
-    await act(async () => listeners.forEach((listener) => listener('ready')))
+    await act(async () => listeners.forEach((listener) => listener(phasePayload('ready'))))
     await flushAsync()
     expect(container.querySelector('[data-testid="workbench-app"]')).not.toBeNull()
 
-    await act(async () => pending.resolve('runtime_starting'))
+    await act(async () => pending.resolve(phasePayload('runtime_starting')))
     await flushAsync()
     expect(container.querySelector('[data-testid="workbench-app"]')).not.toBeNull()
   })
@@ -146,7 +153,7 @@ describe('StartupGate', () => {
         },
         getState: () => shouldReject
           ? Promise.reject(new Error('startup IPC unavailable'))
-          : Promise.resolve('ready' as const)
+          : Promise.resolve(phasePayload('ready'))
       }
     }
     renderGate({})
@@ -163,7 +170,7 @@ describe('StartupGate', () => {
 
   it('times out a pending startup snapshot and ignores its late result', async () => {
     vi.useFakeTimers()
-    const pending = deferredValue<DesktopStartupPhase>()
+    const pending = deferredValue<DesktopStartupStatePayload>()
     const listeners = new Set<PhaseListener>()
     ;(window as unknown as { kunGui: unknown }).kunGui = {
       startup: {
@@ -178,7 +185,7 @@ describe('StartupGate', () => {
     await act(async () => vi.advanceTimersByTimeAsync(STARTUP_STATE_TIMEOUT_MS))
     expect(container.textContent).toContain('timed out')
 
-    await act(async () => pending.resolve('ready'))
+    await act(async () => pending.resolve(phasePayload('ready')))
     await flushAsync()
     expect(container.textContent).toContain('Failed to read Kun startup state')
     expect(container.querySelector('[data-testid="workbench-app"]')).toBeNull()
@@ -209,13 +216,13 @@ describe('StartupGate', () => {
     expect(container.textContent).toContain('Preparing Kun desktop...')
 
     await act(async () => {
-      api.listeners.forEach((listener) => listener('runtime_starting'))
+      api.listeners.forEach((listener) => listener(phasePayload('runtime_starting')))
     })
     expect(container.textContent).toContain('Starting Kun runtime...')
     expect(container.querySelector('[data-testid="workbench-app"]')).toBeNull()
 
     await act(async () => {
-      api.listeners.forEach((listener) => listener('ready'))
+      api.listeners.forEach((listener) => listener(phasePayload('ready')))
     })
     expect(container.querySelector('[data-testid="workbench-app"]')).not.toBeNull()
   })
@@ -250,7 +257,7 @@ describe('StartupGate', () => {
     expect(container.querySelector('[data-testid="workbench-app"]')).toBeNull()
 
     await act(async () => {
-      api.listeners.forEach((listener) => listener('ready'))
+      api.listeners.forEach((listener) => listener(phasePayload('ready')))
     })
     await flushAsync()
     expect(installSharedBusinessStorage).toHaveBeenCalledTimes(1)
@@ -285,7 +292,7 @@ describe('StartupGate', () => {
     expect(container.textContent).toContain('Failed to start Kun workbench')
 
     await act(async () => {
-      api.listeners.forEach((listener) => listener('ready'))
+      api.listeners.forEach((listener) => listener(phasePayload('ready')))
     })
     await flushAsync()
     expect(installSharedBusinessStorage).toHaveBeenCalledTimes(1)
@@ -297,7 +304,7 @@ describe('StartupGate', () => {
     renderGate({})
     await act(async () => undefined)
     act(() => {
-      api.listeners.forEach((listener) => listener('ready'))
+      api.listeners.forEach((listener) => listener(phasePayload('ready')))
     })
     // Before the async bootstrap (storage install + App import) resolves, the
     // shell must stay mounted showing the ready label instead of a blank page.
@@ -331,7 +338,7 @@ describe('StartupGate', () => {
     renderGate({})
     await act(async () => undefined)
     await act(async () => {
-      api.listeners.forEach((listener) => listener('recovery_required'))
+      api.listeners.forEach((listener) => listener(phasePayload('recovery_required')))
     })
     expect(container.textContent).toContain('Kun startup requires recovery.')
     expect(container.querySelector('.bg-red-500')).not.toBeNull()

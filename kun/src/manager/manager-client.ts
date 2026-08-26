@@ -227,7 +227,15 @@ export type EnsureServiceManagerInput = {
   dataDir: string
   settingsPath?: string
   launch?: ManagerLaunchOverride
+  /** Progress sink for the legacy production Runtime handover wait. */
+  onLegacyHandoverStatus?: (status: LegacyRuntimeHandoverStatus) => void
 }
+
+export type LegacyRuntimeHandoverStatus =
+  | { kind: 'idle' }
+  | { kind: 'waiting'; activeTurnCount: number }
+  | { kind: 'shutdown-requested' }
+  | { kind: 'released' }
 
 export async function ensureServiceManager(
   input: EnsureServiceManagerInput
@@ -279,7 +287,8 @@ export async function ensureServiceManagerWithStartLockHeld(
   await handoverLegacyProductionRuntime({
     dataDir: input.dataDir,
     fetch: fetchImpl,
-    timeoutMs: Math.max(input.timeoutMs ?? START_TIMEOUT_MS, LEGACY_HANDOVER_TIMEOUT_MS)
+    timeoutMs: Math.max(input.timeoutMs ?? START_TIMEOUT_MS, LEGACY_HANDOVER_TIMEOUT_MS),
+    ...(input.onLegacyHandoverStatus ? { onStatus: input.onLegacyHandoverStatus } : {})
   })
   const { child, logPath } = await launchServiceManagerProcess({
     controlDir,
@@ -326,11 +335,16 @@ async function handoverLegacyProductionRuntime(input: {
   dataDir: string
   fetch: typeof fetch
   timeoutMs: number
+  onStatus?: (status: LegacyRuntimeHandoverStatus) => void
 }): Promise<void> {
   const discovery = await readRuntimeDiscovery(input.dataDir, 'production').catch(() => null)
-  if (!discovery) return
+  if (!discovery) {
+    input.onStatus?.({ kind: 'idle' })
+    return
+  }
   if (!processIsAlive(discovery.pid)) {
     await removeLegacyProductionRuntimeDiscovery(input.dataDir, discovery.instanceId)
+    input.onStatus?.({ kind: 'released' })
     return
   }
   const deadline = Date.now() + input.timeoutMs
@@ -346,8 +360,12 @@ async function handoverLegacyProductionRuntime(input: {
         'the Service Manager will not open shared data until that process exits'
       )
     }
-    if (probe.managerProtocolVersion === KUN_MANAGER_PROTOCOL_VERSION) return
+    if (probe.managerProtocolVersion === KUN_MANAGER_PROTOCOL_VERSION) {
+      input.onStatus?.({ kind: 'released' })
+      return
+    }
     if (probe.activeTurnCount !== undefined && probe.activeTurnCount > 0) {
+      input.onStatus?.({ kind: 'waiting', activeTurnCount: probe.activeTurnCount })
       if (Date.now() >= deadline) {
         throw new Error(
           'Timed out waiting for the legacy production Runtime to finish its active turn; ' +
@@ -357,6 +375,7 @@ async function handoverLegacyProductionRuntime(input: {
       await delay(500)
       continue
     }
+    input.onStatus?.({ kind: 'shutdown-requested' })
     const response = await input.fetch(`${discovery.baseUrl.replace(/\/$/u, '')}/v1/runtime/shutdown`, {
       method: 'POST',
       headers: {

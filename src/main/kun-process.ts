@@ -114,6 +114,7 @@ import {
 import {
   ensureServiceManager,
   ensureServiceManagerWithStartLockHeld,
+  type LegacyRuntimeHandoverStatus,
   type ServiceManagerConnection
 } from '../../kun/src/manager/manager-client.js'
 import {
@@ -128,7 +129,10 @@ import {
   installedBuildProbeError,
   probeInstalledBuildHandoff
 } from './runtime/kun-installed-build-handoff'
-import { logKunHandoffEvent } from './runtime/kun-handoff-logging'
+import {
+  createHandoffEventReporter,
+  type HandoffEventListener
+} from './runtime/kun-handoff-events'
 
 import {
   appendTail,
@@ -175,6 +179,8 @@ export async function resolveKunManagerDataDirFromSettings(
 export async function ensureKunServiceManager(input: {
   dataDir?: string
   settingsPath: string
+  onLegacyHandoverStatus?: (status: LegacyRuntimeHandoverStatus) => void
+  onHandoffEvent?: HandoffEventListener
 }): Promise<ServiceManagerConnection> {
   serviceManagerSettingsPath = input.settingsPath
   const dataDir = input.dataDir ?? defaultKunDataDir()
@@ -204,7 +210,8 @@ export async function ensureKunServiceManager(input: {
       command: resolveNodeScriptCommand(process.execPath),
       args: [managerEntry],
       runAsNode: true
-    }
+    },
+    ...(input.onLegacyHandoverStatus ? { onLegacyHandoverStatus: input.onLegacyHandoverStatus } : {})
   }
   let manager: ServiceManagerConnection
   const handoffInput = {
@@ -212,7 +219,7 @@ export async function ensureKunServiceManager(input: {
     dataDirs: [dataDir],
     settingsPath: input.settingsPath,
     controlDir,
-    onEvent: logKunHandoffEvent,
+    onEvent: createHandoffEventReporter(input.onHandoffEvent),
     ...(buildId ? { targetBuildId: buildId } : {})
   }
   if (app.isPackaged && flavor === 'production') {
@@ -243,6 +250,7 @@ export async function ensureKunServiceManager(input: {
 export async function preparePackagedKunBuildHandoff(input: {
   dataDir: string
   settingsPath: string
+  onHandoffEvent?: HandoffEventListener
 }): Promise<boolean> {
   const flavor = resolveCliRuntimeFlavor({ env: process.env })
   if (!app.isPackaged || flavor !== 'production') return false
@@ -252,7 +260,7 @@ export async function preparePackagedKunBuildHandoff(input: {
     dataDirs: [input.dataDir],
     settingsPath: input.settingsPath,
     controlDir: defaultKunControlDir(),
-    onEvent: logKunHandoffEvent,
+    onEvent: createHandoffEventReporter(input.onHandoffEvent),
     ...(buildId ? { targetBuildId: buildId } : {})
   }
   const probe = await probeInstalledBuildHandoff(handoffInput)
@@ -329,11 +337,9 @@ function expandHomePath(path: string): string {
   }
   return path
 }
-
 export function isKunChildRunning(): boolean {
   return processController.isRunning()
 }
-
 function isCurrentKunChildPid(pid: number): boolean {
   return processController.isCurrentPid(pid)
 }

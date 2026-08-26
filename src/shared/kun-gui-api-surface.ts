@@ -26,7 +26,7 @@ import type {
   WorkflowRuntimeStatus
 } from './app-settings'
 import type { DesktopTitleBarMode } from './desktop-title-bar'
-import type { DesktopStartupPhase } from './desktop-startup-state'
+import type { DesktopStartupStatePayload } from './desktop-startup-state'
 import type { EditorListResult, EditorOpenResult, OpenEditorPathOptions } from './editor'
 import type { GitBranchesResult, GitBranchWorktreesResult, GitWorktreeCheckoutResult } from './git-branches'
 import type { GitCheckpointCreateResult, GitCheckpointRestoreResult } from './git-checkpoint'
@@ -263,8 +263,8 @@ export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & {
   appEnvironment: import('./app-environment').AppEnvironmentInfo
   /** Desktop startup phase exposed only to the trusted workbench shell. */
   startup: {
-    getState: () => Promise<DesktopStartupPhase>
-    onState: (handler: (phase: DesktopStartupPhase) => void) => () => void
+    getState: () => Promise<DesktopStartupStatePayload>
+    onState: (handler: (payload: DesktopStartupStatePayload) => void) => () => void
   }
   /** Manager-backed durable mappings shared by Kun and kun-dv profiles. */
   sharedClientState: {
