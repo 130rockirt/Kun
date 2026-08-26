@@ -38,12 +38,15 @@ import {
   type TurnItem
 } from '../../contracts/items.js'
 import { buildPublicItemHistoryPage } from '../../services/item-history-page.js'
+import type { DelegationRuntime } from '../../delegation/delegation-runtime.js'
 import {
+  hasDetachedDelegateTaskResult,
   healSessionItemsForFinishedTurns,
   hydrateThreadItemsFromSession,
   loadThreadMetadata,
   mergePendingApprovalItems,
   omitTurnItems,
+  overlayDetachedDelegateTaskResults,
   projectPublicThreadRecord,
   projectTimelineThread,
   projectTimelineTurn
@@ -311,7 +314,8 @@ export async function getThreadTimeline(
   request: Request,
   sessionStore: SessionStore,
   userInputGate?: UserInputGate,
-  approvalGate?: ApprovalGate
+  approvalGate?: ApprovalGate,
+  delegationRuntime?: DelegationRuntime
 ): Promise<JsonResponse> {
   const url = new URL(request.url)
   const parsedQuery = z.object({
@@ -362,6 +366,18 @@ export async function getThreadTimeline(
   // history and must not repeat the current approval card.
   if (!parsedQuery.data.before) {
     sessionItems = mergePendingApprovalItems(sessionItems, pendingApprovals)
+  }
+  // Detached delegate_task wrappers freeze their persisted output at detach
+  // time. Overlay the authoritative child-run terminal state so item-only
+  // timeline consumers see the settled subagent instead of a running one.
+  // Best-effort: diagnostics failure falls back to the persisted view.
+  if (delegationRuntime && hasDetachedDelegateTaskResult(sessionItems)) {
+    try {
+      const { childRuns } = await delegationRuntime.diagnostics(threadId)
+      sessionItems = overlayDetachedDelegateTaskResults(sessionItems, childRuns)
+    } catch {
+      // Keep the persisted projection on diagnostics failure.
+    }
   }
   // Re-apply the anchor after healing/merging so a newly materialized gate
   // item cannot push the active turn's user message back off the page.

@@ -3,9 +3,11 @@ import type { Turn } from '../../contracts/turns.js'
 import {
   isPublicTurnItem,
   type ApprovalTurnItem,
-  type TurnItem
+  type TurnItem,
+  type ToolResultTurnItem
 } from '../../contracts/items.js'
 import type { ApprovalRequest } from '../../domain/approval.js'
+import type { ChildRunRecord } from '../../delegation/delegation-runtime-contracts.js'
 import {
   type FinishedTurnStatus,
   finalizeOpenTurnItem
@@ -202,4 +204,88 @@ export function projectPublicThreadRecord(thread: ThreadRecord): ThreadRecord {
     items: turn.items.filter(isPublicTurnItem)
   }))
   return { ...publicThread, turns }
+}
+
+/**
+ * A detached delegate_task wrapper settles at detach time, so its persisted
+ * tool_result output freezes at `{ status: 'running', detached: true }` while
+ * the child run keeps evolving. Item-only timeline consumers would therefore
+ * rehydrate the subagent card as running forever after the child completed.
+ */
+export function hasDetachedDelegateTaskResult(items: readonly TurnItem[]): boolean {
+  return items.some(
+    (item) => item.kind === 'tool_result' &&
+      item.toolName === 'delegate_task' &&
+      detachedChildIdFromToolResult(item) !== undefined
+  )
+}
+
+/**
+ * Overlay the authoritative terminal child-run state onto those frozen
+ * outputs. Read-only: nothing is persisted and model-visible history stays
+ * untouched; only the timeline projection reflects the settled record so it
+ * matches what live child lifecycle events already told the renderer.
+ */
+export function overlayDetachedDelegateTaskResults(
+  items: TurnItem[],
+  childRuns: readonly ChildRunRecord[]
+): TurnItem[] {
+  const terminalRunsById = new Map<string, ChildRunRecord>()
+  for (const run of childRuns) {
+    if (run.status === 'completed' || run.status === 'failed' || run.status === 'aborted') {
+      terminalRunsById.set(run.id, run)
+    }
+  }
+  if (terminalRunsById.size === 0) return items
+  let changed = false
+  const next = items.map((item): TurnItem => {
+    if (item.kind !== 'tool_result' || item.toolName !== 'delegate_task') return item
+    const childId = detachedChildIdFromToolResult(item)
+    if (!childId) return item
+    const run = terminalRunsById.get(childId)
+    if (!run) return item
+    changed = true
+    return overlayChildRunOnToolResult(item, run)
+  })
+  return changed ? next : items
+}
+
+function detachedChildIdFromToolResult(item: ToolResultTurnItem): string | undefined {
+  const output = item.output
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return undefined
+  const record = output as Record<string, unknown>
+  if (record.detached !== true) return undefined
+  const childId = record.childId
+  return typeof childId === 'string' && childId.trim() ? childId : undefined
+}
+
+function overlayChildRunOnToolResult(
+  item: ToolResultTurnItem,
+  run: ChildRunRecord
+): ToolResultTurnItem {
+  const output = {
+    ...((item.output && typeof item.output === 'object' && !Array.isArray(item.output))
+      ? item.output as Record<string, unknown>
+      : {}),
+    status: run.status,
+    ...(run.terminationReason !== undefined ? { terminationReason: run.terminationReason } : {}),
+    ...(run.resumable !== undefined ? { resumable: run.resumable } : {}),
+    ...(run.resumeCount !== undefined ? { resumeCount: run.resumeCount } : {}),
+    ...(run.failure ? { failure: run.failure } : {}),
+    ...(run.summary !== undefined ? { summary: run.summary } : {}),
+    ...(run.summaryTruncated !== undefined ? { summaryTruncated: run.summaryTruncated } : {}),
+    ...(run.resultRef ? { resultRef: run.resultRef } : {}),
+    ...(run.resultUnavailableReason
+      ? { resultUnavailableReason: run.resultUnavailableReason }
+      : {}),
+    ...(run.error !== undefined ? { error: run.error } : {}),
+    ...(run.toolInvocations !== undefined ? { toolInvocations: run.toolInvocations } : {}),
+    ...(run.durationMs !== undefined ? { durationMs: run.durationMs } : {}),
+    ...(run.queuedMs !== undefined ? { queuedMs: run.queuedMs } : {})
+  }
+  return {
+    ...item,
+    output,
+    isError: run.status === 'failed' || run.status === 'aborted'
+  }
 }
