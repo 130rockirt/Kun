@@ -15,6 +15,7 @@ import {
   buildSkillToolProviders,
   buildDelegationToolProviders,
   buildComponentDesignToolProviders,
+  buildDiagramVisualizationToolProvider,
   buildConversationVisualizationToolProvider,
   buildWebToolProviders,
   buildImageGenToolProviders,
@@ -460,6 +461,10 @@ export function createRuntimeConfigController(
 	        turnService
 	      ),
 	      ...buildComponentDesignToolProviders(delegationRuntime),
+	      ...buildDiagramVisualizationToolProvider(
+	        () => activeOptions.lab?.conversationVisualization,
+	        delegationRuntime
+	      ),
 	      ...buildConversationVisualizationToolProvider(
 	        () => activeOptions.lab?.conversationVisualization
 	      )

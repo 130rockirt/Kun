@@ -223,6 +223,11 @@ module.exports = {
       filter: ['catalog.json', '*.kunx']
     },
     {
+      from: 'resources/bundled-skills',
+      to: 'bundled-skills',
+      filter: ['**/*']
+    },
+    {
       from: 'resources/whisper',
       to: 'whisper',
       filter: ['**/*']

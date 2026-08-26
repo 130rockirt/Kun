@@ -62,6 +62,21 @@ export type GeneratedFileReference = {
 
 export type ComponentPrototypeStatus = 'preparing' | 'running' | 'completed' | 'failed'
 export type ComponentPrototypeProducer = 'main-agent' | 'component-designer'
+export type DiagramPrototypeStatus = ComponentPrototypeStatus
+
+/** Durable `show_diagram` HTML result rendered as an inline conversation card. */
+export type DiagramPrototypeMetadata = {
+  version: 1
+  status: DiagramPrototypeStatus
+  artifactId: string
+  title: string
+  relativePath: string
+  viewport: { width: number; height: number }
+  byteSize?: number
+  contentHash?: string
+  summary?: string
+  error?: string
+}
 
 /** Durable `design_component` result rendered as an inline conversation card. */
 export type ComponentPrototypeMetadata = {

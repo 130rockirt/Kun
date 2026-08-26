@@ -10,6 +10,7 @@ import { presentationFileArtifactsForTurn } from './presentation-file-artifacts'
 import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
 import { ProcessSectionRow, groupProcessSections, summarizeToolBlock } from './message-timeline-process'
 import { ComponentPrototypeCard } from './ComponentPrototypeCard'
+import { DiagramPrototypeCard } from './DiagramPrototypeCard'
 import { ConversationVisualizationCard } from './ConversationVisualizationCard'
 import type { OpenChildThreadHandler } from './SubagentCallCard'
 import {
@@ -118,6 +119,7 @@ export function ConversationTurn({
     runtimeErrorsBeforeFinalContent,
     runtimeErrorsAfterFinalContent,
     componentPrototypeBlocks,
+    diagramPrototypeBlocks,
     conversationVisualizationBlocks,
     generatedFileBlocks,
     turnFileChanges
@@ -296,6 +298,14 @@ export function ConversationTurn({
           block={block}
           workspaceRoot={filePreviewWorkspaceRoot}
           onPrompt={onComponentPrototypePrompt}
+        />
+      ))}
+
+      {diagramPrototypeBlocks.map((block) => (
+        <DiagramPrototypeCard
+          key={block.id}
+          block={block}
+          workspaceRoot={filePreviewWorkspaceRoot}
         />
       ))}
 
