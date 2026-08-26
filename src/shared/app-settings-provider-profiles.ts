@@ -295,11 +295,19 @@ export function normalizeModelRequestRetrySettings(
   }
   const httpStatusCodes = normalizeRetryHttpStatusCodes(input?.httpStatusCodes, defaults.httpStatusCodes)
   const defaultsVersion = boundedNonNegativeInteger(input?.defaultsVersion, 0, 1_000)
+  const maxAttempts = boundedNonNegativeInteger(input?.maxAttempts, defaults.maxAttempts, 10)
+  const inheritedLegacyZeroRetryBudget =
+    defaultsVersion < MODEL_REQUEST_RETRY_DEFAULTS_VERSION && maxAttempts === 0
   const inheritedLegacyStatusList =
     defaultsVersion < MODEL_REQUEST_RETRY_DEFAULTS_VERSION &&
     sameRetryHttpStatusCodes(httpStatusCodes, [429, 503])
   return {
-    maxAttempts: boundedNonNegativeInteger(input?.maxAttempts, defaults.maxAttempts, 10),
+    // Retry settings originally shipped with a zero default. Re-enable the
+    // current five-retry default once for pre-v2 profiles; v2+ zero remains
+    // the user's explicit opt-out.
+    maxAttempts: inheritedLegacyZeroRetryBudget
+      ? DEFAULT_MODEL_REQUEST_RETRY_MAX_ATTEMPTS
+      : maxAttempts,
     initialDelayMs: boundedNonNegativeInteger(input?.initialDelayMs, defaults.initialDelayMs, 600_000),
     httpStatusCodes: inheritedLegacyStatusList ? [...defaults.httpStatusCodes] : httpStatusCodes,
     defaultsVersion: Math.max(defaultsVersion, MODEL_REQUEST_RETRY_DEFAULTS_VERSION)

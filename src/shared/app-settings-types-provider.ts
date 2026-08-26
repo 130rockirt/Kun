@@ -313,7 +313,7 @@ export const DEFAULT_MODEL_REQUEST_RETRY_INITIAL_DELAY_MS = 3_000
 
 export const DEFAULT_MODEL_REQUEST_RETRY_HTTP_STATUS_CODES = [429, 500, 502, 503, 504] as const
 
-export const MODEL_REQUEST_RETRY_DEFAULTS_VERSION = 1
+export const MODEL_REQUEST_RETRY_DEFAULTS_VERSION = 2
 
 export type ModelRequestRetrySettingsV1 = {
   maxAttempts: number
