@@ -1,7 +1,8 @@
 import { app } from 'electron'
-import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { readFile, realpath, rm } from 'node:fs/promises'
 import * as path from 'node:path'
 import { basename, dirname, join, resolve } from 'node:path'
+import { atomicWriteFile } from './atomic-json-file'
 import type { GuiUpdateChannel } from '../shared/gui-update'
 
 export const PENDING_UPDATE_FILE = 'pending-update.json'
@@ -101,10 +102,7 @@ export function pendingUpdateResultPath(userDataPath = app.getPath('userData')):
 }
 
 async function writeAtomically(path: string, value: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
-  const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`
-  await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
-  await rename(temporaryPath, path)
+  await atomicWriteFile(path, `${JSON.stringify(value, null, 2)}\n`)
 }
 
 function isPendingUpdate(value: unknown): value is PendingUpdate {

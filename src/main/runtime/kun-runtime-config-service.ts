@@ -1,5 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   ContextCompactionConfigSchema,
   GraphRuntimeConfigSchema,
@@ -91,6 +91,7 @@ import {
   stripGeneratedProjectMcpServers
 } from '../services/project-config-service'
 import { assertManagedKunDataDirIsCurrent } from '../kun-data-dir-paths'
+import { atomicWriteFile } from '../atomic-json-file'
 
 export type ManagedRuntimeHotApplyResult = 'applied' | 'restart_required' | 'failed'
 
@@ -106,10 +107,13 @@ export async function syncGuiManagedKunConfig(
     scheduleMcp?: { settings: AppSettingsV1; launch: ClawScheduleMcpLaunchConfig }
     mcpConfigPath?: string
     appSettings?: AppSettingsV1
+    /** Internal bounded retry after a concurrent config.json commit. */
+    retryAttempt?: number
   }
 ): Promise<KunConfig> {
   assertManagedKunDataDirIsCurrent(dataDir)
   const configPath = join(dataDir, 'config.json')
+  const baseText = readConfigText(configPath)
   const existing = sanitizeKunConfigSections(await readJsonObjectIfExists(configPath))
   const importedMcpServers = stripGeneratedProjectMcpServers(
     await readGuiManagedMcpServers(
@@ -234,9 +238,33 @@ export async function syncGuiManagedKunConfig(
   }
   const nextText = `${JSON.stringify(next, null, 2)}\n`
   if (existing && nextText === `${JSON.stringify(existing, null, 2)}\n`) return parsed.data
-  await mkdir(dirname(configPath), { recursive: true })
-  await writeFile(configPath, nextText, 'utf8')
+  try {
+    await atomicWriteFile(configPath, nextText, {
+      beforeCommit: () => {
+        if (readConfigText(configPath) !== baseText) throw new ConcurrentConfigWriteError()
+      }
+    })
+  } catch (error) {
+    if (error instanceof ConcurrentConfigWriteError && (options?.retryAttempt ?? 0) < 2) {
+      return syncGuiManagedKunConfig(dataDir, runtime, {
+        ...options,
+        retryAttempt: (options?.retryAttempt ?? 0) + 1
+      })
+    }
+    throw error
+  }
   return parsed.data
+}
+
+class ConcurrentConfigWriteError extends Error {
+  constructor() {
+    super('config.json changed while GUI settings were being synchronized')
+  }
+}
+
+function readConfigText(path: string): string | null {
+  if (!existsSync(path)) return null
+  return readFileSync(path, 'utf8')
 }
 
 function fastContextConfigForRuntime(fastContext: KunFastContextSettingsV1 | undefined): KunConfig['fastContext'] {
