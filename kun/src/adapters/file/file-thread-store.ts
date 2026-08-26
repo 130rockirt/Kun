@@ -152,6 +152,15 @@ export class FileThreadStore implements ThreadStore {
     return true
   }
 
+  async deleteByWorkspace(workspace: string): Promise<string[]> {
+    const summaries = await this.list({ workspace, includeArchived: true, includeSide: true })
+    const deleted: string[] = []
+    for (const summary of summaries) {
+      if (await this.delete(summary.id)) deleted.push(summary.id)
+    }
+    return deleted
+  }
+
   private async readIndexedSummaries(): Promise<ThreadSummary[]> {
     await this.ensureDir(this.dataDir)
     await this.ensureReconciled()

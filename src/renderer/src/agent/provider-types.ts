@@ -328,6 +328,7 @@ export interface AgentProvider {
   updateThreadPinned?(threadId: string, pinned: boolean): Promise<void>
   archiveThread?(threadId: string, archived: boolean): Promise<void>
   deleteThread(threadId: string): Promise<void>
+  deleteThreadsByWorkspace?(workspace: string): Promise<string[]>
   compactThread?(threadId: string, reason?: string): Promise<{ replacedTokens: number } | void>
   archiveThreadHistory?(threadId: string, cutoffTurnId: string): Promise<{
     replacedTokens: number

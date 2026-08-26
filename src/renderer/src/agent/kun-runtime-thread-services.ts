@@ -336,6 +336,24 @@ export class KunRuntimeThreadServices extends KunRuntimeProviderServices {
     }
   }
 
+  async deleteThreadsByWorkspace(workspace: string): Promise<string[]> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      '/v1/threads/bulk-delete',
+      'POST',
+      JSON.stringify({ workspace })
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'delete workspace threads failed'))
+    }
+    const body = readRuntimeJson<{ deletedIds?: unknown }>(
+      response.body,
+      'runtime returned an invalid workspace thread deletion response'
+    )
+    return Array.isArray(body.deletedIds)
+      ? body.deletedIds.filter((id): id is string => typeof id === 'string')
+      : []
+  }
+
   async compactThread(threadId: string, reason?: string): Promise<{ replacedTokens: number }> {
     const response = await rendererRuntimeClient.runtimeRequest(
       kunThreadCompactPath(threadId),

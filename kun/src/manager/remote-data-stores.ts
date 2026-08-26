@@ -217,6 +217,10 @@ export class ManagerRemoteThreadStore implements ThreadStore {
     return z.boolean().parse(await this.call('delete', { threadId }))
   }
 
+  async deleteByWorkspace(workspace: string) {
+    return z.string().array().parse(await this.call('deleteByWorkspace', { workspace }))
+  }
+
   private call(operation: string, value?: unknown): Promise<unknown> {
     return callManagerStore(this.manager, 'thread', operation, value)
   }

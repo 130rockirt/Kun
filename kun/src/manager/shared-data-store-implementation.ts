@@ -144,6 +144,10 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
         this.reservedSeqs.delete(threadId)
         return this.threadStore.delete(threadId)
       }
+      case 'deleteByWorkspace': {
+        const body = z.object({ workspace: z.string().min(1) }).strict().parse(value)
+        return this.threadStore.deleteByWorkspace?.(body.workspace) ?? []
+      }
     }
   }
 

@@ -62,4 +62,12 @@ export class InMemoryThreadStore implements ThreadStore {
   async delete(threadId: string): Promise<boolean> {
     return this.threads.delete(threadId)
   }
+
+  async deleteByWorkspace(workspace: string): Promise<string[]> {
+    const ids = [...this.threads.values()]
+      .filter((thread) => thread.workspace === workspace)
+      .map((thread) => thread.id)
+    for (const id of ids) this.threads.delete(id)
+    return ids
+  }
 }

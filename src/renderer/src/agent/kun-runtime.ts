@@ -239,8 +239,18 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
   }
 
   async listThreads(options: ThreadListOptions = {}): Promise<NormalizedThread[]> {
-    const page = await this.listThreadsPage(options)
-    return page.threads
+    const threads: NormalizedThread[] = []
+    let cursor = options.cursor
+    do {
+      const page = await this.listThreadsPage({
+        ...options,
+        limit: options.limit ?? 500,
+        ...(cursor ? { cursor } : {})
+      })
+      threads.push(...page.threads)
+      cursor = page.hasMore ? page.nextCursor : undefined
+    } while (cursor)
+    return threads
   }
 
   async listThreadsPage(options: ThreadListOptions = {}): Promise<ThreadListPage> {

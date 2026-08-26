@@ -64,6 +64,8 @@ function toThreadStoreListOptions(options: ListThreadsOptions): ThreadStoreListO
   return storeOptions
 }
 
+const DEFAULT_THREAD_PAGE_SIZE = 100
+
 export const threadServiceMetadataOperations = {
 updateRuntimeDefaults(this: ThreadService, input: {
     approvalPolicy: ApprovalPolicy
@@ -104,8 +106,11 @@ async listPage(this: ThreadService, options: ListThreadsOptions = {}): Promise<T
     // holds (hasMore + total) without breaking existing consumers.
     const store = this['threadStore']
     const storeListPage = store.listPage
-    const storeOptions = toThreadStoreListOptions(options)
-    if (typeof storeListPage === 'function' && (options.cursor || options.workspace || options.limit != null)) {
+    const storeOptions = toThreadStoreListOptions({
+      ...options,
+      limit: options.limit ?? DEFAULT_THREAD_PAGE_SIZE
+    })
+    if (typeof storeListPage === 'function') {
       return storeListPage.call(store, storeOptions)
     }
     const allThreads = await store.list({

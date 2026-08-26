@@ -50,4 +50,5 @@ export interface ThreadStore {
   /** Atomically replace a record only when its durable revision still matches. */
   upsertIfRevision?(thread: ThreadRecord, expectedRevision: number): Promise<ThreadStoreConditionalWrite>
   delete(threadId: string): Promise<boolean>
+  deleteByWorkspace?(workspace: string): Promise<string[]>
 }

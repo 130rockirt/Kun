@@ -129,7 +129,8 @@ export const MANAGER_THREAD_STORE_OPERATIONS = [
   'touch',
   'upsert',
   'upsertIfRevision',
-  'delete'
+  'delete',
+  'deleteByWorkspace'
 ] as const
 
 export type ManagerThreadStoreOperation = (typeof MANAGER_THREAD_STORE_OPERATIONS)[number]

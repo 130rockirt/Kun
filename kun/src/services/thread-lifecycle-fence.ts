@@ -138,6 +138,7 @@ export class ThreadLifecycleFence {
 export class LifecycleFencedThreadStore implements ThreadStore {
   readonly getMetadata?: (threadId: string) => Promise<ThreadRecord | null>
   readonly touch?: (threadId: string, updatedAt: string) => Promise<boolean>
+  readonly deleteByWorkspace?: (workspace: string) => Promise<string[]>
 
   constructor(
     readonly raw: ThreadStore,
@@ -149,6 +150,9 @@ export class LifecycleFencedThreadStore implements ThreadStore {
     if (raw.touch) {
       this.touch = (threadId, updatedAt) =>
         this.write(threadId, false, () => raw.touch!(threadId, updatedAt))
+    }
+    if (raw.deleteByWorkspace) {
+      this.deleteByWorkspace = (workspace) => raw.deleteByWorkspace!(workspace)
     }
   }
 

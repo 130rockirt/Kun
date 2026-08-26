@@ -109,7 +109,11 @@ import {
 } from './chat-store-schedulers'
 import { saveThreadListCache } from './thread-list-cache'
 import { scheduleRecentThreadPrewarm } from './thread-detail-prewarm'
-import { loadMoreThreads as loadMoreThreadsAction } from './chat-store-thread-pagination'
+import {
+  initialWorkspaceThreadPages,
+  loadMoreThreads as loadMoreThreadsAction,
+  THREAD_LIST_FIRST_PAGE_SIZE
+} from './chat-store-thread-pagination'
 import {
   collectRunningWatchTargets,
   normalizeListedThreadActivity
@@ -308,11 +312,14 @@ export function createNavigationWorkspaceActions(
       clearBusyWatchdog()
     }
     try {
-      for (const th of workspaceThreads) {
-        await p.deleteThread(th.id)
-        invalidateThreadSnapshot(th.id)
-      }
-      const removeIds = new Set(workspaceThreads.map((th) => th.id))
+      const deletedIds = typeof p.deleteThreadsByWorkspace === 'function'
+        ? await p.deleteThreadsByWorkspace(normalizedPath)
+        : await Promise.all(workspaceThreads.map(async (thread) => {
+          await p.deleteThread(thread.id)
+          return thread.id
+        }))
+      for (const threadId of deletedIds) invalidateThreadSnapshot(threadId)
+      const removeIds = new Set(deletedIds)
       const codeWorkspaceRoots = forgetCodeWorkspaceRoot(get().codeWorkspaceRoots, normalizedPath)
       set((s) => {
         const w = { ...s.watchTurnCompletion }
@@ -374,14 +381,17 @@ export function createNavigationWorkspaceActions(
     try {
       const p = getProvider()
       let rawThreads: NormalizedThread[]
+      let firstPageHasMore = false
       try {
         if (typeof p.listThreadsPage === 'function') {
           const page = await p.listThreadsPage({
+            limit: THREAD_LIST_FIRST_PAGE_SIZE,
             includeArchived: true,
             includeSide: true,
             lean: true
           })
           rawThreads = page.threads
+          firstPageHasMore = page.hasMore
         } else {
           rawThreads = await p.listThreads({
             includeArchived: true,
@@ -635,7 +645,12 @@ export function createNavigationWorkspaceActions(
           unreadThreadIds: u,
           threadListStatus: 'ready',
           threadListError: null,
-          threadListCursorByWorkspace: {},
+          threadListCursorByWorkspace: firstPageHasMore
+            ? initialWorkspaceThreadPages([
+              ...codeWorkspaceRoots,
+              ...threads.map((thread) => thread.workspace)
+            ])
+            : {},
           ...(staleCodeThreadMemory ? { lastCodeThreadId: null } : {}),
           ...(shouldClearSelection ? clearedThreadSelection() : {})
         }

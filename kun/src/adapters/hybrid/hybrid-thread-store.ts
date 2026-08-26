@@ -222,6 +222,8 @@ export class HybridThreadStore implements ThreadStore {
     return true
   }
 
+
+
   async noteEventSeq(threadId: string, seq: number): Promise<void> {
     await this.noteEventHighWater(threadId, seq)
   }

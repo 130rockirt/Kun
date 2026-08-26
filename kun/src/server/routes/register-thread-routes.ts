@@ -22,6 +22,7 @@ import {
   setThreadTodos,
   updateThread
 } from './threads.js'
+import { deleteThreadsByWorkspace } from './threads-bulk-delete.js'
 import { contentSearchThreads } from './thread-content-search.js'
 import { summarizeThread } from './threads-summarize.js'
 import {
@@ -73,6 +74,10 @@ export function registerThreadRoutes(
   router.add('POST', '/v1/threads', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return createThread(runtime.threadService, request)
+  })
+  router.add('POST', '/v1/threads/bulk-delete', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return deleteThreadsByWorkspace(runtime.threadService, request)
   })
   // Static content-search suffix must be registered before `/:id`.
   router.add('GET', '/v1/threads/content-search', async (request) => {
