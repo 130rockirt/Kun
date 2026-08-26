@@ -145,9 +145,15 @@ function Invoke-RestoreJournal {
   Remove-Journal
 }
 
+function Write-PrepareDiagnostic([string]$Phase) {
+  Write-InstallerDiagnostic "PREPARE phase=$Phase"
+}
+
 function Invoke-Prepare {
+  Write-PrepareDiagnostic 'restore-journal'
   Invoke-RestoreJournal
 
+  Write-PrepareDiagnostic 'resolve-paths'
   $primarySource = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
   $secondarySource = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SECONDARY_SOURCE')
   $registeredSources = @(Get-InstallSources $true $true)
@@ -158,6 +164,7 @@ function Invoke-Prepare {
     throw 'KUN_INSTALLER_TARGET is required.'
   }
 
+  Write-PrepareDiagnostic 'validate-sources'
   Assert-SafeInstallRoot $target 'Target'
   if ((Test-Path -LiteralPath $target) -and -not (Test-Path -LiteralPath $target -PathType Container)) {
     throw "The target exists but is not a directory: $target"
@@ -201,6 +208,7 @@ function Invoke-Prepare {
     }
   }
 
+  Write-PrepareDiagnostic 'inspect-payloads'
   $preparedSources = @()
   foreach ($source in $sources) {
     $entries = @(Get-ChildItem -LiteralPath $source -Force)
@@ -227,14 +235,17 @@ function Invoke-Prepare {
     }
   }
 
+  Write-PrepareDiagnostic 'stop-processes'
   $stopResult = Stop-AppProcesses @($sources + $target)
   if ($stopResult.Outcome -ne 'stopped') {
     throw 'Unable to stop verified application processes before migration.'
   }
   if (Test-AutomaticUpdateRequested) {
+    Write-PrepareDiagnostic 'initialize-transaction'
     Initialize-UpdateTransaction
   }
 
+  Write-PrepareDiagnostic 'preserve-user-files'
   $journal = @{
     SchemaVersion = 3
     Phase = 'preserving'

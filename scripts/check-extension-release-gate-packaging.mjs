@@ -187,11 +187,12 @@ for (const marker of [
 ]) {
   check(packagedDesktopSmoke.includes(marker), `Packaged desktop Chromium smoke omits assertion: ${marker}`)
 }
-// The smoke sources may mention --no-sandbox only inside the gated
-// KUN_SMOKE_DISABLE_SANDBOX branch, never as an unconditional argument.
+// The smoke sources may mention --no-sandbox only behind both the CI marker
+// and an explicit authorization flag, never as an unconditional argument.
 check(
   !packagedDesktopSmoke.includes("'--no-sandbox'") ||
-    /KUN_SMOKE_DISABLE_SANDBOX\s*===\s*'1'/.test(packagedDesktopSmoke),
+    (/process\.env\.CI\s*===\s*'true'/.test(packagedDesktopSmoke) &&
+      /KUN_CI_ALLOW_NO_SANDBOX\s*===\s*'1'/.test(packagedDesktopSmoke)),
   'Packaged desktop Chromium smoke must not disable the Chromium sandbox'
 )
 check(
@@ -203,9 +204,8 @@ check(
   'Packaged desktop Chromium smoke does not export its launch contract for release validation'
 )
 // The default Linux smoke launch keeps the Chromium sandbox enabled. The
-// KUN_SMOKE_DISABLE_SANDBOX escape hatch exists only for CI runners whose
-// kernel cannot host the setuid-less sandbox, so it must stay opt-in and
-// must never become part of the default argument set.
+// KUN_CI_ALLOW_NO_SANDBOX escape hatch exists only for explicitly authorized
+// CI runners whose SUID setup cannot be used. It never affects production.
 check(
   JSON.stringify(packagedDesktopSmokeModule.platformDesktopArguments?.('linux')) ===
     JSON.stringify(['--disable-gpu', '--disable-dev-shm-usage']) &&
@@ -216,21 +216,26 @@ check(
   'Packaged Linux desktop smoke must not inject sandbox flags that hide launcher defects'
 )
 {
-  const previous = process.env.KUN_SMOKE_DISABLE_SANDBOX
+  const previousCi = process.env.CI
+  const previousAuthorization = process.env.KUN_CI_ALLOW_NO_SANDBOX
   try {
-    process.env.KUN_SMOKE_DISABLE_SANDBOX = '1'
+    process.env.CI = 'true'
+    process.env.KUN_CI_ALLOW_NO_SANDBOX = '1'
     check(
       JSON.stringify(packagedDesktopSmokeModule.platformDesktopArguments?.('linux')) ===
         JSON.stringify(['--disable-gpu', '--disable-dev-shm-usage', '--no-sandbox']),
       'Packaged Linux desktop smoke escape hatch must add exactly --no-sandbox'
     )
   } finally {
-    if (previous === undefined) delete process.env.KUN_SMOKE_DISABLE_SANDBOX
-    else process.env.KUN_SMOKE_DISABLE_SANDBOX = previous
+    if (previousCi === undefined) delete process.env.CI
+    else process.env.CI = previousCi
+    if (previousAuthorization === undefined) delete process.env.KUN_CI_ALLOW_NO_SANDBOX
+    else process.env.KUN_CI_ALLOW_NO_SANDBOX = previousAuthorization
   }
 }
 check(
-  /KUN_SMOKE_DISABLE_SANDBOX\s*===\s*'1'/.test(packagedDesktopSmoke),
+  /process\.env\.CI\s*===\s*'true'/.test(packagedDesktopSmoke) &&
+    /KUN_CI_ALLOW_NO_SANDBOX\s*===\s*'1'/.test(packagedDesktopSmoke),
   'Packaged Linux desktop smoke sandbox escape hatch must stay behind an explicit CI flag'
 )
 check(
@@ -397,9 +402,8 @@ check(
   'Linux packaging and native smokes must retain user namespace and seccomp sandboxing'
 )
 check(
-  /KUN_SMOKE_DISABLE_SANDBOX\s*!==\s*'1'|KUN_SMOKE_DISABLE_SANDBOX\s*===\s*'1'/.test(
-    packagedDesktopSmoke
-  ) &&
+  /process\.env\.CI\s*===\s*'true'/.test(packagedDesktopSmoke) &&
+    /KUN_CI_ALLOW_NO_SANDBOX\s*===\s*'1'/.test(packagedDesktopSmoke) &&
     (packagedDesktopSmoke.match(/'--no-sandbox'/g) ?? []).length === 1,
   'Linux desktop smoke --no-sandbox may only appear behind the CI escape hatch'
 )

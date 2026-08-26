@@ -507,7 +507,10 @@ function createDesktopLaunchPlan({
 function platformDesktopArguments(platform = process.platform) {
   if (platform !== 'linux') return []
   const args = ['--disable-gpu', '--disable-dev-shm-usage']
-  if (process.env.KUN_SMOKE_DISABLE_SANDBOX === '1') {
+  if (
+    process.env.CI === 'true' &&
+    process.env.KUN_CI_ALLOW_NO_SANDBOX === '1'
+  ) {
     args.push('--no-sandbox')
   }
   return args

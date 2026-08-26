@@ -89,6 +89,12 @@ test('timeout parser rejects invalid release gate values', () => {
   }
 })
 
+test('handoff child early exit writes buffered output to stderr immediately', () => {
+  const source = readFileSync(join(process.cwd(), 'scripts/smoke-packaged-update-handoff.cjs'), 'utf8')
+  assert.match(source, /child\.once\('exit'/u)
+  assert.match(source, /process\.stderr\.write\([\s\S]*desktop\.output\(\)/u)
+})
+
 test('Linux release handoff gates exercise the Chromium sandbox', () => {
   for (const workflow of [
     '.github/workflows/release.yml',
@@ -96,7 +102,8 @@ test('Linux release handoff gates exercise the Chromium sandbox', () => {
     '.github/workflows/daily-dev-prerelease.yml'
   ]) {
     const source = readFileSync(join(process.cwd(), workflow), 'utf8')
-    assert.doesNotMatch(source, /KUN_SMOKE_DISABLE_SANDBOX/u)
+    assert.doesNotMatch(source, /KUN_CI_ALLOW_NO_SANDBOX/u)
+    assert.match(source, /configure-linux-chrome-sandbox\.cjs/u)
     assert.match(source, /kernel\.apparmor_restrict_unprivileged_userns=0/u)
   }
 })
@@ -106,9 +113,13 @@ test('linux desktop smoke keeps the sandbox on unless CI explicitly opts out', (
   assert.deepEqual(platformDesktopArguments('darwin'), [])
   assert.deepEqual(platformDesktopArguments('win32'), [])
 
-  const previous = process.env.KUN_SMOKE_DISABLE_SANDBOX
+  const previousCi = process.env.CI
+  const previousAuthorization = process.env.KUN_CI_ALLOW_NO_SANDBOX
   try {
-    process.env.KUN_SMOKE_DISABLE_SANDBOX = '1'
+    process.env.KUN_CI_ALLOW_NO_SANDBOX = '1'
+    delete process.env.CI
+    assert.deepEqual(platformDesktopArguments('linux'), ['--disable-gpu', '--disable-dev-shm-usage'])
+    process.env.CI = 'true'
     assert.deepEqual(platformDesktopArguments('linux'), [
       '--disable-gpu',
       '--disable-dev-shm-usage',
@@ -116,7 +127,9 @@ test('linux desktop smoke keeps the sandbox on unless CI explicitly opts out', (
     ])
     assert.deepEqual(platformDesktopArguments('darwin'), [])
   } finally {
-    if (previous === undefined) delete process.env.KUN_SMOKE_DISABLE_SANDBOX
-    else process.env.KUN_SMOKE_DISABLE_SANDBOX = previous
+    if (previousCi === undefined) delete process.env.CI
+    else process.env.CI = previousCi
+    if (previousAuthorization === undefined) delete process.env.KUN_CI_ALLOW_NO_SANDBOX
+    else process.env.KUN_CI_ALLOW_NO_SANDBOX = previousAuthorization
   }
 })

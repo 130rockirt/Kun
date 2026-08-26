@@ -400,8 +400,20 @@ function desktopExitGuard(child) {
 }
 
 function handoffExitGuard(desktop) {
-  return desktopExitGuard(desktop.child).catch((error) => {
-    throw new Error(`${error.message}\n${desktop.output()}`)
+  return new Promise((_, reject) => {
+    desktop.child.once('error', (error) => {
+      reject(new Error(`Tracked smoke process failed before discovery: ${error.message}\n${desktop.output()}`))
+    })
+    desktop.child.once('exit', (code, signal) => {
+      const output = desktop.output()
+      process.stderr.write(
+        `Tracked smoke process exited before discovery: code=${code}, signal=${signal}\n${output}\n`
+      )
+      reject(new Error(
+        `Tracked smoke process exited before its discovery completed: ` +
+        `code=${code}, signal=${signal}\n${output}`
+      ))
+    })
   })
 }
 

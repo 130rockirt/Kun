@@ -159,7 +159,23 @@ jobs:
         run: npm ci
 
       - name: Test Windows update rollback failpoints
+        env:
+          KUN_INSTALLER_TEST_ARTIFACT_ROOT: ${{ github.workspace }}\artifacts\windows-installer-transaction
         run: npx vitest run src/main/windows-installer-migration.transaction.test.ts
+
+      - name: Upload Windows transaction diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-windows-installer-transaction-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            artifacts/windows-installer-transaction/**/diagnostic.log
+            artifacts/windows-installer-transaction/**/journal.json
+            artifacts/windows-installer-transaction/**/transaction.json
+            artifacts/windows-installer-transaction/**/result-*.txt
+            artifacts/windows-installer-transaction/**/fixture-summary.json
 
       - name: Build Windows installer
         run: npm run dist:win
@@ -227,6 +243,7 @@ jobs:
         run: |
           # Exercise the packaged Chromium sandbox instead of bypassing it.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          node ./scripts/configure-linux-chrome-sandbox.cjs --resources dist/linux-unpacked/resources
           npm run smoke:packaged-update-handoff -- --resources dist/linux-unpacked/resources
 
       - name: Upload Linux artifacts
@@ -291,6 +308,7 @@ jobs:
         timeout-minutes: 20
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          node ./scripts/configure-linux-chrome-sandbox.cjs --resources dist/linux-arm64-unpacked/resources
           npm run smoke:packaged-update-handoff -- --resources dist/linux-arm64-unpacked/resources
 
       - name: Upload Linux ARM64 artifacts
