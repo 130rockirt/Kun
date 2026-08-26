@@ -336,7 +336,7 @@ export function ConversationTurn({
       ) : null}
 
       {allowMainThreadActions && !isProcessing && forkTurnId ? (
-        <div className="flex justify-end">
+        <div className="flex justify-end pt-6">
           <button
             type="button"
             disabled={archiving}
