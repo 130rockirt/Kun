@@ -14,6 +14,7 @@ import {
   useApplyShapeOpsLive,
   type CanvasScreenCreatedHandler
 } from './use-apply-shape-ops-live'
+import type { CanvasTurnTerminalStatus } from './canvas-turn-terminal-registry'
 import { recordCanvasTurnTerminal, clearCanvasTurnTerminalRegistry } from './canvas-turn-terminal-registry'
 
 const threadId = 'thread-design'
@@ -42,7 +43,7 @@ function Harness(): null {
   return null
 }
 
-function designThread(latestTurnStatus?: string): NormalizedThread {
+function designThread(latestTurnStatus?: CanvasTurnTerminalStatus | 'running'): NormalizedThread {
   return {
     id: threadId,
     title: 'Design thread',
@@ -168,7 +169,7 @@ afterEach(async () => {
 })
 
 describe('Design Canvas continuation terminal outcomes', () => {
-  it.each(['aborted', 'failed'])('keeps replayed output but suppresses a %s HTML follow-up', async (status) => {
+  it.each(['aborted', 'failed'] as const)('keeps replayed output but suppresses a %s HTML follow-up', async (status) => {
     const frame = createHtmlFrameShape('Gateway 6', 0, 0, 'html-gateway', 'desktop')
     useCanvasShapeStore.getState().addShape(frame)
     useDesignWorkspaceStore.setState({ artifacts: [pendingHtmlArtifact('html-gateway')] })
@@ -199,7 +200,7 @@ describe('Design Canvas continuation terminal outcomes', () => {
     expect(callback).not.toHaveBeenCalled()
   })
 
-  it.each(['completed', undefined])('keeps the existing follow-up behavior for %s history', async (status) => {
+  it.each(['completed', undefined] as const)('keeps the existing follow-up behavior for %s history', async (status) => {
     const frame = createHtmlFrameShape('Gateway 6', 0, 0, 'html-gateway', 'desktop')
     useCanvasShapeStore.getState().addShape(frame)
     useDesignWorkspaceStore.setState({ artifacts: [pendingHtmlArtifact('html-gateway')] })
@@ -263,7 +264,7 @@ describe('Design Canvas continuation terminal outcomes', () => {
     expect(callback).not.toHaveBeenCalled()
   })
 
-  it.each(['aborted', 'failed'])('stops the follow-up when a late %s terminal arrives after currentTurnId cleared', async (status) => {
+  it.each(['aborted', 'failed'] as const)('stops the follow-up when a late %s terminal arrives after currentTurnId cleared', async (status) => {
     const frame = createHtmlFrameShape('Gateway 6', 0, 0, 'html-gateway', 'desktop')
     useCanvasShapeStore.getState().addShape(frame)
     useDesignWorkspaceStore.setState({ artifacts: [pendingHtmlArtifact('html-gateway')] })

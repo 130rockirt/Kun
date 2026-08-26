@@ -14,13 +14,15 @@ import type { GeneratedImageFallbackTarget } from './canvas-generated-image-repl
 import { imageGenerationPlaceholderShapeId } from './canvas-image-generation-progress'
 import type { ExecuteOpsOptions, OpError } from './shape-ops'
 import type { useCanvasSelectionStore } from './canvas-selection-store'
-import type { useDesignAssistantStore } from '../design-assistant-store'
+import { useDesignAssistantStore } from '../design-assistant-store'
 import { applyCanvasOpsSince } from './apply-shape-ops'
 
 type SelectionStore = ReturnType<typeof useCanvasSelectionStore.getState>
 type DesignAssistantStore = ReturnType<typeof useDesignAssistantStore.getState>
 
 type StreamingChatState = {
+  currentTurnId: string | null
+  currentTurnUserId?: string | null
   blocks: ChatBlock[]
   liveAssistant: string
   activeThreadId: string | null
@@ -121,7 +123,7 @@ export function applyCanvasStreamFrom(
     context.getDesignAssistantStore().markAiAffected(affectedIds)
   } else {
     // Glow the freshly-touched shapes without yanking the camera mid-build.
-    context.getDesignAssistantStore().setState({
+    useDesignAssistantStore.setState({
       lastAiAffectedIds: affectedIds,
       lastAiActionAt: Date.now()
     })

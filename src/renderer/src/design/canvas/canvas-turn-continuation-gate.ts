@@ -1,5 +1,9 @@
 import type { ChatState } from '../../store/chat-store-types'
-import { suppressPendingCanvasContinuations } from './canvas-design-replay-support'
+import {
+  suppressPendingCanvasContinuations,
+  type CanvasReplayBarrierCollection,
+  type PendingScreenGeneration
+} from './canvas-design-replay-support'
 import {
   canvasLiveTurnOutcome,
   canvasTurnContinuationDecision
@@ -20,12 +24,12 @@ import {
 export const CANVAS_TURN_OUTCOME_WAIT_INTERVAL_MS = 250
 export const CANVAS_TURN_OUTCOME_WAIT_ATTEMPTS = 8
 
-type ContinuationQueues = {
-  pendingScreens: { sourceTurnId?: string }[]
+export type ContinuationQueues = {
+  pendingScreens: PendingScreenGeneration[]
   pendingSvgToolBlocks: Map<string, unknown>
   svgSourceTurnIds: Map<string, string>
   svgRetryCounts: Map<string, number>
-  barriers: Map<string, { pendingScreenIds: Set<string>; pendingSvgBlockIds: Set<string>; replayComplete: boolean }>
+  barriers: CanvasReplayBarrierCollection
 }
 
 export type CanvasTurnContinuationGateOptions = {

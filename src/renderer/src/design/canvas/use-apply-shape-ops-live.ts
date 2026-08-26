@@ -65,7 +65,10 @@ import {
   canvasTurnContinuationDecision,
   type CanvasTurnOutcome
 } from './canvas-turn-outcome'
-import { createCanvasTurnContinuationGate } from './canvas-turn-continuation-gate'
+import {
+  createCanvasTurnContinuationGate,
+  type ContinuationQueues
+} from './canvas-turn-continuation-gate'
 
 export {
   hasDispatchedSvgFollowup, shouldApplyDesignCanvasToolBlock,
