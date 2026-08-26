@@ -27,6 +27,7 @@ import {
 } from './manager-discovery.js'
 import { sameCanonicalPath } from './canonical-path.js'
 import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-lease.js'
+import { ManagerResourceLeaseSchema, type ManagerResourceFence } from './resource-lease-state.js'
 import type { ManagerRequestOptions } from './manager-client-support.js'
 import {
   resolveServiceManager
@@ -99,6 +100,7 @@ export class ManagerRevisionedDocumentClient {
 export class ManagerResourceLeaseClient {
   private readonly resources = new Map<string, {
     held: boolean
+    fence?: ManagerResourceFence
     timer: ReturnType<typeof setInterval>
     onAcquired: () => void | Promise<void>
     onLost: () => void | Promise<void>
@@ -128,7 +130,7 @@ export class ManagerResourceLeaseClient {
     this.resources.clear()
     await Promise.all(resources.map(async ([resource, state]) => {
       clearInterval(state.timer)
-      if (state.held) await this.release(resource).catch(() => undefined)
+      if (state.held && state.fence) await this.release(resource, state.fence).catch(() => undefined)
     }))
   }
 
@@ -136,39 +138,55 @@ export class ManagerResourceLeaseClient {
     const state = this.resources.get(resource)
     if (!state) return
     try {
+      const endpoint = state.fence ? 'renew' : 'acquire'
       const body = await requestManagerJson(
         this.manager,
-        `/v1/leases/resources/${encodeURIComponent(resource)}/acquire`,
+        `/v1/leases/resources/${encodeURIComponent(resource)}/${endpoint}`,
         {
           method: 'POST',
-          body: { ownerFlavor: this.flavor, ownerInstanceId: this.instanceId }
+          body: state.fence ?? { ownerFlavor: this.flavor, ownerInstanceId: this.instanceId }
         }
       )
-      const acquired = z.object({ acquired: z.boolean() }).parse(body).acquired
+      const parsed = state.fence
+        ? z.object({ lease: ManagerResourceLeaseSchema }).parse(body)
+        : z.object({ acquired: z.boolean(), lease: ManagerResourceLeaseSchema }).parse(body)
+      const acquired = 'acquired' in parsed ? parsed.acquired : true
+      if (acquired) state.fence = fenceOf(parsed.lease)
       if (acquired && !state.held) {
         state.held = true
         await state.onAcquired()
       } else if (!acquired && state.held) {
         state.held = false
+        state.fence = undefined
         await state.onLost()
       }
     } catch {
       if (state.held) {
         state.held = false
+        state.fence = undefined
         await state.onLost()
       }
     }
   }
 
-  private async release(resource: string): Promise<void> {
+  private async release(resource: string, fence: ManagerResourceFence): Promise<void> {
     await requestManagerJson(
       this.manager,
       `/v1/leases/resources/${encodeURIComponent(resource)}/release`,
       {
         method: 'POST',
-        body: { ownerFlavor: this.flavor, ownerInstanceId: this.instanceId }
+        body: fence
       }
     )
+  }
+}
+
+function fenceOf(lease: z.infer<typeof ManagerResourceLeaseSchema>): ManagerResourceFence {
+  return {
+    resource: lease.resource,
+    ownerFlavor: lease.ownerFlavor,
+    ownerInstanceId: lease.ownerInstanceId,
+    fencingToken: lease.fencingToken
   }
 }
 

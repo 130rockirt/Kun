@@ -49,6 +49,20 @@ import {
   type VerifiedForcedRuntimeOwner
 } from './forced-runtime-recovery.js'
 import { sameCanonicalPath } from './canonical-path.js'
+import {
+  LegacyManagerResourceLeaseSchema,
+  ManagerResourceLeaseRegistry,
+  ManagerResourceLeaseSchema,
+  ManagerResourceFenceSchema,
+  ResourceFenceStaleError,
+  RESOURCE_COMMIT_TTL_MS,
+  RESOURCE_LEASE_TTL_MS,
+  type ManagerResourceFence,
+  type ManagerResourceLease
+} from './resource-lease-state.js'
+
+export { RESOURCE_LEASE_TTL_MS }
+export type { ManagerResourceFence, ManagerResourceLease }
 
 export const KUN_MANAGER_CAPABILITIES = [
   'runtime-slots-v1',
@@ -90,33 +104,28 @@ export type RuntimeSlot = {
 
 export const RUNTIME_HEARTBEAT_TTL_MS = 20_000
 export const THREAD_EXECUTION_LEASE_TTL_MS = 15_000
-export const RESOURCE_LEASE_TTL_MS = 10_000
 
-export type ManagerResourceLease = {
-  resource: string
-  ownerFlavor: RuntimeFlavor
-  ownerInstanceId: string
-  acquiredAt: string
-  expiresAt: string
-}
-
-export const ManagerResourceLeaseSchema = z.object({
-  resource: z.string().min(1).max(512),
-  ownerFlavor: RuntimeFlavorSchema,
-  ownerInstanceId: z.string().min(1).max(256),
-  acquiredAt: z.string().datetime(),
-  expiresAt: z.string().datetime()
-}).strict()
-
-export const ServiceManagerStateSnapshotSchema = z.object({
-  version: z.literal(1),
+const StateSnapshotFields = {
   slots: z.array(z.object({
     registration: RuntimeRegistrationSchema,
     lastHeartbeatAt: z.string().datetime()
   }).strict()),
-  leases: z.array(ThreadExecutionLeaseSchema),
-  resourceLeases: z.array(ManagerResourceLeaseSchema)
-}).strict()
+  leases: z.array(ThreadExecutionLeaseSchema)
+}
+
+export const ServiceManagerStateSnapshotSchema = z.union([
+  z.object({
+    version: z.literal(1),
+    ...StateSnapshotFields,
+    resourceLeases: z.array(LegacyManagerResourceLeaseSchema)
+  }).strict(),
+  z.object({
+    version: z.literal(2),
+    ...StateSnapshotFields,
+    resourceLeases: z.array(ManagerResourceLeaseSchema),
+    resourceFenceHighWater: z.record(z.string(), z.number().int().nonnegative())
+  }).strict()
+])
 
 export type ServiceManagerStateSnapshot = z.infer<typeof ServiceManagerStateSnapshotSchema>
 
@@ -139,7 +148,7 @@ export class RuntimeRegistrationRequiredError extends Error {}
 export class ServiceManagerState {
   private readonly slots = new Map<RuntimeFlavor, RuntimeSlot>()
   private readonly leases = new Map<string, ThreadExecutionLease>()
-  private readonly resourceLeases = new Map<string, ManagerResourceLease>()
+  private resourceLeaseRegistry = new ManagerResourceLeaseRegistry()
   private mutationListener: (() => void) | undefined
 
   static restore(value: unknown): ServiceManagerState {
@@ -147,7 +156,10 @@ export class ServiceManagerState {
     const state = new ServiceManagerState()
     for (const slot of snapshot.slots) state.slots.set(slot.registration.flavor, slot)
     for (const lease of snapshot.leases) state.leases.set(lease.threadId, lease)
-    for (const lease of snapshot.resourceLeases) state.resourceLeases.set(lease.resource, lease)
+    state.resourceLeaseRegistry = ManagerResourceLeaseRegistry.restore({
+      leases: snapshot.resourceLeases,
+      ...(snapshot.version === 2 ? { highWater: snapshot.resourceFenceHighWater } : {})
+    })
     return state
   }
 
@@ -157,10 +169,11 @@ export class ServiceManagerState {
 
   durableSnapshot(): ServiceManagerStateSnapshot {
     return ServiceManagerStateSnapshotSchema.parse({
-      version: 1,
+      version: 2,
       slots: this.snapshot(),
       leases: [...this.leases.values()],
-      resourceLeases: [...this.resourceLeases.values()]
+      resourceLeases: this.resourceLeaseRegistry.snapshot(),
+      resourceFenceHighWater: this.resourceLeaseRegistry.highWaterSnapshot()
     })
   }
 
@@ -284,12 +297,7 @@ export class ServiceManagerState {
         changed = true
       }
     }
-    for (const [resource, lease] of this.resourceLeases) {
-      if (Date.parse(lease.expiresAt) <= now.getTime()) {
-        this.resourceLeases.delete(resource)
-        changed = true
-      }
-    }
+    if (this.resourceLeaseRegistry.expireStale(now)) changed = true
     const expired = this.expireLeases(now)
     if (changed && expired.length === 0) this.changed()
     return expired
@@ -315,11 +323,7 @@ export class ServiceManagerState {
       expired.push(lease)
       changed = true
     }
-    for (const [resource, lease] of this.resourceLeases) {
-      if (!ownerKeys.has(`${lease.ownerFlavor}:${lease.ownerInstanceId}`)) continue
-      this.resourceLeases.delete(resource)
-      changed = true
-    }
+    if (this.resourceLeaseRegistry.expireOwners(ownerKeys)) changed = true
     if (changed) this.changed()
     return expired
   }
@@ -329,36 +333,65 @@ export class ServiceManagerState {
     ownerFlavor: RuntimeFlavor
     ownerInstanceId: string
   }, now = new Date()): { acquired: boolean; lease: ManagerResourceLease } {
-    const existing = this.resourceLeases.get(input.resource)
-    const expired = existing && Date.parse(existing.expiresAt) <= now.getTime()
-    const sameOwner = existing?.ownerFlavor === input.ownerFlavor &&
-      existing.ownerInstanceId === input.ownerInstanceId
-    const productionPreemptsDevelopment =
-      (input.resource === 'desktop-host' || input.resource === 'desktop-background-services') &&
-      input.ownerFlavor === 'production' &&
-      existing?.ownerFlavor === 'development'
-    if (existing && !expired && !sameOwner && !productionPreemptsDevelopment) {
-      return { acquired: false, lease: existing }
-    }
-    const lease: ManagerResourceLease = {
-      ...input,
-      acquiredAt: sameOwner && existing ? existing.acquiredAt : now.toISOString(),
-      expiresAt: new Date(now.getTime() + RESOURCE_LEASE_TTL_MS).toISOString()
-    }
-    this.resourceLeases.set(input.resource, lease)
-    this.changed()
-    return { acquired: true, lease }
+    const result = this.resourceLeaseRegistry.acquire(input, now)
+    if (result.acquired) this.changed()
+    return result
   }
 
-  releaseResource(input: {
-    resource: string
-    ownerFlavor: RuntimeFlavor
-    ownerInstanceId: string
-  }): boolean {
-    const existing = this.resourceLeases.get(input.resource)
-    if (!existing || existing.ownerFlavor !== input.ownerFlavor ||
-      existing.ownerInstanceId !== input.ownerInstanceId) return false
-    const released = this.resourceLeases.delete(input.resource)
+  renewResource(input: ManagerResourceFence, now = new Date()): ManagerResourceLease | null {
+    const lease = this.resourceLeaseRegistry.renew(resourceFenceFrom(input), now)
+    if (lease) this.changed()
+    return lease
+  }
+
+  beginResourceCommit(
+    input: ManagerResourceFence,
+    commitId: string,
+    now = new Date()
+  ): ManagerResourceLease | null {
+    const commitExpiresAt = new Date(now.getTime() + RESOURCE_COMMIT_TTL_MS).toISOString()
+    const lease = this.resourceLeaseRegistry.beginCommit(
+      resourceFenceFrom(input), commitId, commitExpiresAt, now
+    )
+    if (lease) this.changed()
+    return lease
+  }
+
+  renewResourceCommit(
+    input: ManagerResourceFence,
+    commitId: string,
+    now = new Date()
+  ): ManagerResourceLease | null {
+    const commitExpiresAt = new Date(now.getTime() + RESOURCE_COMMIT_TTL_MS).toISOString()
+    const lease = this.resourceLeaseRegistry.renewCommit(
+      resourceFenceFrom(input), commitId, commitExpiresAt, now
+    )
+    if (lease) this.changed()
+    return lease
+  }
+
+  endResourceCommit(input: ManagerResourceFence, commitId: string): boolean {
+    const ended = this.resourceLeaseRegistry.endCommit(resourceFenceFrom(input), commitId)
+    if (ended) this.changed()
+    return ended
+  }
+
+  validateResource(input: ManagerResourceFence, now = new Date()): boolean {
+    return this.resourceLeaseRegistry.validate(resourceFenceFrom(input), now)
+  }
+
+  assertResource(input: ManagerResourceFence, now = new Date()): void {
+    if (!this.validateResource(input, now)) throw new ResourceFenceStaleError()
+  }
+
+  assertResourceCommit(input: ManagerResourceFence, commitId: string, now = new Date()): void {
+    if (!this.resourceLeaseRegistry.validateCommit(resourceFenceFrom(input), commitId, now)) {
+      throw new ResourceFenceStaleError()
+    }
+  }
+
+  releaseResource(input: ManagerResourceFence): boolean {
+    const released = this.resourceLeaseRegistry.release(resourceFenceFrom(input))
     if (released) this.changed()
     return released
   }
@@ -380,6 +413,15 @@ export class ServiceManagerState {
   private changed(): void {
     this.mutationListener?.()
   }
+}
+
+function resourceFenceFrom(input: ManagerResourceFence): ManagerResourceFence {
+  return ManagerResourceFenceSchema.parse({
+    resource: input.resource,
+    ownerFlavor: input.ownerFlavor,
+    ownerInstanceId: input.ownerInstanceId,
+    fencingToken: input.fencingToken
+  })
 }
 
 export type ServiceManagerHandle = NodeHttpServerHandle & {
@@ -472,20 +514,26 @@ export async function startServiceManager(input: {
     throw error
   }
   let statePersistence = Promise.resolve()
+  let statePersistenceError: unknown
   state.onMutation(() => {
+    if (statePersistenceError !== undefined) return
     const snapshot = state.durableSnapshot()
-    statePersistence = statePersistence
-      .catch(() => undefined)
-      .then(async () => {
-        await atomicWriteFile(managerStatePath, `${JSON.stringify(snapshot, null, 2)}\n`)
-        await chmod(managerStatePath, 0o600).catch((error) => {
-          if (process.platform !== 'win32') throw error
-        })
+    statePersistence = statePersistence.then(async () => {
+      await atomicWriteFile(managerStatePath, `${JSON.stringify(snapshot, null, 2)}\n`)
+      await chmod(managerStatePath, 0o600).catch((error) => {
+        if (process.platform !== 'win32') throw error
       })
-      .catch((error) => {
-        console.warn('[kun-manager] failed to persist manager lease state:', error)
-      })
+    }).catch((error) => {
+      statePersistenceError = error
+      console.error('[kun-manager] failed to persist manager lease state:', error)
+      throw error
+    })
+    void statePersistence.catch(() => undefined)
   })
+  const flushState = async () => {
+    await statePersistence
+    if (statePersistenceError !== undefined) throw statePersistenceError
+  }
   let sharedData: ManagerSharedDataStore
   try {
     sharedData = input.sharedData ?? await ManagerSharedDataStore.create(input.dataDir)
@@ -545,7 +593,8 @@ export async function startServiceManager(input: {
       state,
       sharedData,
       documents,
-      requestShutdown: deferShutdown
+      requestShutdown: deferShutdown,
+      flushState
     })
     server = await startNodeHttpServer({
       router,
@@ -568,9 +617,9 @@ export async function startServiceManager(input: {
     })
   } catch (error) {
     if (reconciliationTimer) clearInterval(reconciliationTimer)
-    state.onMutation(undefined)
-    await statePersistence.catch(() => undefined)
     await server?.close().catch(() => undefined)
+    await statePersistence.catch(() => undefined)
+    state.onMutation(undefined)
     await sharedData.close().catch(() => undefined)
     await dataDirLease.release().catch(() => undefined)
     throw error
@@ -596,8 +645,9 @@ export async function startServiceManager(input: {
           if (firstError === undefined) firstError = error
         }
       }
-      await settle(() => statePersistence)
       await settle(() => server.close())
+      await settle(() => statePersistence)
+      state.onMutation(undefined)
       await settle(() => sharedData.close())
       await settle(() => removeManagerDiscovery(input.controlDir, input.instanceId))
       await settle(() => dataDirLease.release())
@@ -610,9 +660,9 @@ export async function readPersistedManagerState(path: string): Promise<ServiceMa
   try {
     return ServiceManagerState.restore(JSON.parse(await readFile(path, 'utf8')))
   } catch (error) {
-    if (String((error as { code?: unknown })?.code ?? '') !== 'ENOENT') {
-      console.warn('[kun-manager] ignoring invalid persisted manager state:', error)
+    if (String((error as { code?: unknown })?.code ?? '') === 'ENOENT') {
+      return new ServiceManagerState()
     }
-    return new ServiceManagerState()
+    throw error
   }
 }

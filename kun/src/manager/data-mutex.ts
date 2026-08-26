@@ -1,110 +1,241 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { RuntimeFlavorSchema } from '../contracts/runtime-flavor.js'
+import { RuntimeFlavorSchema, type RuntimeFlavor } from '../contracts/runtime-flavor.js'
+import type { ManagerResourceFence } from './resource-lease-state.js'
+import {
+  currentManagerDataCommitId,
+  currentManagerDataMutexContext,
+  runWithManagerDataCommitId,
+  runWithManagerDataMutexContext,
+  type ManagerDataMutexOperationContext
+} from './data-mutex-context.js'
 
-const AcquireResultSchema = z.object({
-  acquired: z.boolean(),
-  lease: z.object({ expiresAt: z.string() }).passthrough().optional()
+export type { ManagerDataMutexOperationContext } from './data-mutex-context.js'
+
+const LeaseSchema = z.object({
+  resource: z.string(),
+  ownerFlavor: RuntimeFlavorSchema,
+  ownerInstanceId: z.string(),
+  fencingToken: z.number().int().positive(),
+  expiresAt: z.string(),
+  commitExpiresAt: z.string().optional()
 }).passthrough()
+const AcquireResultSchema = z.object({ acquired: z.boolean(), lease: LeaseSchema }).passthrough()
+const RenewResultSchema = z.object({ lease: LeaseSchema })
+const localQueues = new Map<string, Promise<void>>()
 
-/**
- * Serialize a shared-data mutation across production and development Runtime
- * processes. The state file itself is still written by Manager's atomic JSON
- * API; this lease keeps multi-step read/side-effect/write transactions intact.
- */
+/** Serialize a shared-data mutation across Runtime processes. */
 export async function withManagerDataMutex<T>(
   resource: string,
-  operation: () => Promise<T>
+  operation: (context: ManagerDataMutexOperationContext) => Promise<T>
+): Promise<T> {
+  const inherited = currentManagerDataMutexContext()
+  if (inherited?.resource === resource) return operation(inherited)
+  return enqueueLocal(resource, () => withManagerDataMutexLocked(resource, operation))
+}
+
+async function withManagerDataMutexLocked<T>(
+  resource: string,
+  operation: (context: ManagerDataMutexOperationContext) => Promise<T>
 ): Promise<T> {
   const manager = managerRuntimeIdentity()
-  if (!manager) return operation()
+  if (!manager) {
+    const context = localContext(resource)
+    return runWithManagerDataMutexContext(context, () => operation(context))
+  }
   const resourceId = `data:${createHash('sha256').update(resource).digest('hex').slice(0, 32)}`
   const leasePath = `${manager.baseUrl}/v1/leases/resources/${encodeURIComponent(resourceId)}`
-  const body = {
-    ownerFlavor: manager.flavor,
-    ownerInstanceId: manager.instanceId
-  }
+  const owner = { ownerFlavor: manager.flavor, ownerInstanceId: manager.instanceId }
   const acquireDeadline = Date.now() + 30_000
-  let lease: { expiresAt?: string } | undefined
+  let acquired: z.infer<typeof LeaseSchema>
   for (;;) {
     const result = AcquireResultSchema.parse(await managerRequest(
-      `${leasePath}/acquire`,
-      manager.token,
-      body
+      `${leasePath}/acquire`, manager.token, owner
     ))
     if (result.acquired) {
-      lease = result.lease
+      acquired = result.lease
       break
     }
     if (Date.now() >= acquireDeadline) throw new Error(`shared data resource is busy: ${resource}`)
     await delay(100)
   }
 
-  // Manager deletes the lease at expiresAt even while this runtime cannot
-  // reach it, and another runtime may then enter the critical section. Track
-  // expiresAt locally and fail the operation as soon as the lease is
-  // definitively lost instead of waiting for operation() to settle.
-  let finished = false
-  let renewalFailure: unknown
-  let rejectLeaseLost: (error: unknown) => void = () => undefined
+  const fence: ManagerResourceFence = {
+    resource: resourceId,
+    ownerFlavor: acquired.ownerFlavor,
+    ownerInstanceId: acquired.ownerInstanceId,
+    fencingToken: acquired.fencingToken
+  }
+  const controller = new AbortController()
+  let leaseLostError: Error | undefined
+  let rejectLeaseLost: (error: Error) => void = () => undefined
   const leaseLost = new Promise<never>((_, reject) => { rejectLeaseLost = reject })
+  leaseLost.catch(() => undefined)
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined
-  const fail = (error: unknown) => {
-    if (finished || renewalFailure) return
-    renewalFailure = error
+  let stopped = false
+  let renewalInFlight = false
+  const maintenance = new Set<Promise<void>>()
+
+  const fail = (error: Error) => {
+    if (stopped || leaseLostError) return
+    leaseLostError = error
+    controller.abort(error)
     rejectLeaseLost(error)
   }
-  const armDeadline = (expiresAt: string | undefined) => {
+  const armDeadline = (expiresAt: string) => {
     if (deadlineTimer) clearTimeout(deadlineTimer)
-    deadlineTimer = undefined
-    const expiresAtMs = expiresAt ? Date.parse(expiresAt) : Number.NaN
-    if (!Number.isFinite(expiresAtMs)) return
+    const expiresAtMs = Date.parse(expiresAt)
+    if (!Number.isFinite(expiresAtMs)) {
+      fail(new Error(`shared data resource lease has invalid deadline: ${resource}`))
+      return
+    }
     deadlineTimer = setTimeout(
       () => fail(new Error(`shared data resource lease expired: ${resource}`)),
       Math.max(0, expiresAtMs - Date.now())
     )
     deadlineTimer.unref?.()
   }
-  armDeadline(lease?.expiresAt)
-
-  const renew = setInterval(() => {
-    void managerRequest(`${leasePath}/acquire`, manager.token, body)
-      .then((value) => {
-        const result = AcquireResultSchema.parse(value)
-        if (!result.acquired) {
-          fail(new Error(`shared data resource lease was lost: ${resource}`))
-          return
+  const assertCurrent = async () => {
+    if (leaseLostError) throw leaseLostError
+    try {
+      await managerRequest(`${leasePath}/validate`, manager.token, fence)
+    } catch (error) {
+      const lost = new Error(`shared data resource lease was lost: ${resource}`, { cause: error })
+      fail(lost)
+      throw lost
+    }
+    if (leaseLostError) throw leaseLostError
+  }
+  const withCommit = async <R>(commit: (commitId?: string) => Promise<R>): Promise<R> => {
+    if (leaseLostError) throw leaseLostError
+    const inheritedCommitId = currentManagerDataCommitId()
+    if (inheritedCommitId) return commit(inheritedCommitId)
+    const commitId = randomUUID()
+    const begun = RenewResultSchema.parse(await managerRequest(
+      `${leasePath}/commits/${encodeURIComponent(commitId)}/begin`, manager.token, fence
+    )).lease
+    let commitRenewalInFlight = false
+    const commitMaintenance = new Set<Promise<void>>()
+    const commitTimer = setInterval(() => {
+      if (stopped || leaseLostError || commitRenewalInFlight) return
+      commitRenewalInFlight = true
+      const request = managerRequest(
+        `${leasePath}/commits/${encodeURIComponent(commitId)}/renew`, manager.token, fence
+      ).then((value) => {
+        const renewed = RenewResultSchema.parse(value).lease
+        if (renewed.commitExpiresAt) armDeadline(renewed.commitExpiresAt)
+      }).catch((error) => {
+        if (isManagerConflict(error)) {
+          fail(new Error(`shared data resource commit fence was lost: ${resource}`, { cause: error }))
         }
-        armDeadline(result.lease?.expiresAt)
+      }).finally(() => {
+        commitRenewalInFlight = false
+        commitMaintenance.delete(request)
+      })
+      commitMaintenance.add(request)
+    }, 3_000)
+    commitTimer.unref?.()
+    if (begun.commitExpiresAt) armDeadline(begun.commitExpiresAt)
+    try {
+      return await runWithManagerDataCommitId(commitId, () => commit(commitId))
+    } finally {
+      clearInterval(commitTimer)
+      await Promise.allSettled([...commitMaintenance])
+      await managerRequest(
+        `${leasePath}/commits/${encodeURIComponent(commitId)}/end`, manager.token, fence
+      ).catch(() => undefined)
+    }
+  }
+  const context: ManagerDataMutexOperationContext = {
+    resource,
+    signal: controller.signal,
+    fence,
+    assertCurrent,
+    withCommit
+  }
+  armDeadline(acquired.expiresAt)
+
+  const renewTimer = setInterval(() => {
+    if (stopped || leaseLostError || renewalInFlight) return
+    renewalInFlight = true
+    const request = managerRequest(`${leasePath}/renew`, manager.token, fence)
+      .then((value) => {
+        if (stopped || leaseLostError) return
+        armDeadline(RenewResultSchema.parse(value).lease.expiresAt)
       })
       .catch((error) => {
-        // Transient failure: the local deadline remains the hard limit.
+        if (isManagerConflict(error)) {
+          fail(new Error(`shared data resource lease was lost: ${resource}`, { cause: error }))
+          return
+        }
         console.warn(
           `[kun] shared data lease renewal delayed resource=${resource}: ` +
           `${error instanceof Error ? error.message : String(error)}`
         )
       })
+      .finally(() => {
+        renewalInFlight = false
+        maintenance.delete(request)
+      })
+    maintenance.add(request)
   }, 3_000)
-  renew.unref?.()
+  renewTimer.unref?.()
+
+  const operationPromise = Promise.resolve().then(() =>
+    runWithManagerDataMutexContext(context, () => operation(context)))
+  operationPromise.catch(() => undefined)
+
   try {
-    const operationPromise = operation()
-    // The race observes a rejection; this keeps it handled if lease loss wins.
-    operationPromise.catch(() => undefined)
-    const result = await Promise.race([operationPromise, leaseLost])
-    if (renewalFailure) throw renewalFailure
-    return result
+    let result: T | undefined
+    let operationRejected = false
+    let operationError: unknown
+    try {
+      result = await Promise.race([operationPromise, leaseLost])
+    } catch (error) {
+      if (leaseLostError) {
+        await operationPromise.catch(() => undefined)
+        throw leaseLostError
+      }
+      operationRejected = true
+      operationError = error
+    }
+    if (leaseLostError) throw leaseLostError
+    if (operationRejected) throw operationError
+    return result as T
   } finally {
-    finished = true
-    clearInterval(renew)
+    stopped = true
+    clearInterval(renewTimer)
     if (deadlineTimer) clearTimeout(deadlineTimer)
-    await managerRequest(`${leasePath}/release`, manager.token, body).catch(() => undefined)
+    await Promise.allSettled([...maintenance])
+    await managerRequest(`${leasePath}/release`, manager.token, fence).catch(() => undefined)
   }
+}
+
+function localContext(resource: string): ManagerDataMutexOperationContext {
+  const controller = new AbortController()
+  return {
+    resource,
+    signal: controller.signal,
+    assertCurrent: async () => undefined,
+    withCommit: async (commit) => commit()
+  }
+}
+
+function enqueueLocal<T>(resource: string, operation: () => Promise<T>): Promise<T> {
+  const previous = localQueues.get(resource) ?? Promise.resolve()
+  const run = previous.catch(() => undefined).then(operation)
+  const guard = run.then(() => undefined, () => undefined)
+  localQueues.set(resource, guard)
+  void guard.finally(() => {
+    if (localQueues.get(resource) === guard) localQueues.delete(resource)
+  })
+  return run
 }
 
 function managerRuntimeIdentity(): {
   baseUrl: string
   token: string
-  flavor: 'production' | 'development'
+  flavor: RuntimeFlavor
   instanceId: string
 } | null {
   const baseUrl = process.env.KUN_MANAGER_BASE_URL?.trim().replace(/\/+$/u, '')
@@ -114,6 +245,8 @@ function managerRuntimeIdentity(): {
   if (!baseUrl || !token || !instanceId || !flavor.success) return null
   return { baseUrl, token, instanceId, flavor: flavor.data }
 }
+
+class ManagerConflictError extends Error {}
 
 async function managerRequest(url: string, token: string, body: unknown): Promise<unknown> {
   const response = await fetch(url, {
@@ -127,9 +260,15 @@ async function managerRequest(url: string, token: string, body: unknown): Promis
   })
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
-    throw new Error(`Kun Service Manager data mutex failed with HTTP ${response.status}: ${detail.slice(0, 512)}`)
+    const message = `Kun Service Manager data mutex failed with HTTP ${response.status}: ${detail.slice(0, 512)}`
+    if (response.status === 409) throw new ManagerConflictError(message)
+    throw new Error(message)
   }
   return response.json()
+}
+
+function isManagerConflict(error: unknown): error is ManagerConflictError {
+  return error instanceof ManagerConflictError
 }
 
 function delay(ms: number): Promise<void> {

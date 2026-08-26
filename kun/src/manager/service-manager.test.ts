@@ -78,12 +78,55 @@ describe('service manager control plane', () => {
     expect(JSON.parse(text)).toMatchObject({
       status: 'ok',
       service: 'kun-service-manager',
-      protocolVersion: 1,
+      protocolVersion: 3,
       instanceId: 'manager-a',
       buildId: 'b'.repeat(64),
       capabilities: expect.arrayContaining(['item-page-v1'])
     })
     expect(text).not.toContain('manager-secret')
+  })
+
+  it('preserves resource fencing high-water across expiry, release, and v1 migration', () => {
+    const first = new ServiceManagerState()
+    const resource = 'data:state'
+    const leaseA = first.acquireResource({
+      resource,
+      ownerFlavor: 'production',
+      ownerInstanceId: 'runtime-a'
+    }, new Date('2026-08-01T00:00:00.000Z')).lease
+    expect(leaseA.fencingToken).toBe(1)
+    expect(first.renewResource(leaseA, new Date('2026-08-01T00:00:01.000Z'))?.fencingToken).toBe(1)
+    expect(first.releaseResource(leaseA)).toBe(true)
+    const leaseB = first.acquireResource({
+      resource,
+      ownerFlavor: 'development',
+      ownerInstanceId: 'runtime-b'
+    }, new Date('2026-08-01T00:00:02.000Z')).lease
+    expect(leaseB.fencingToken).toBe(2)
+    expect(first.releaseResource(leaseA)).toBe(false)
+    expect(first.validateResource(leaseB, new Date('2026-08-01T00:00:03.000Z'))).toBe(true)
+
+    const v1 = {
+      version: 1 as const,
+      slots: [],
+      leases: [],
+      resourceLeases: [{
+        resource: 'data:legacy',
+        ownerFlavor: 'production' as const,
+        ownerInstanceId: 'legacy',
+        acquiredAt: '2026-08-01T00:00:00.000Z',
+        expiresAt: '2026-08-01T00:00:10.000Z'
+      }]
+    }
+    const restored = ServiceManagerState.restore(v1)
+    const migrated = restored.durableSnapshot()
+    expect(migrated.version).toBe(2)
+    const next = restored.acquireResource({
+      resource: 'data:legacy',
+      ownerFlavor: 'development',
+      ownerInstanceId: 'runtime-new'
+    }, new Date('2026-08-01T00:00:11.000Z')).lease
+    expect(next.fencingToken).toBe(2)
   })
 
   it('keeps independent production and development runtime slots', async () => {
@@ -164,7 +207,7 @@ describe('service manager control plane', () => {
     const manager: ServiceManagerConnection = {
       discovery: {
         version: 1,
-        protocolVersion: 1,
+        protocolVersion: 3,
         instanceId: 'manager-a',
         pid: process.pid,
         startedAt: '2026-08-01T00:00:00.000Z',
@@ -214,7 +257,7 @@ describe('service manager control plane', () => {
     const manager: ServiceManagerConnection = {
       discovery: {
         version: 1,
-        protocolVersion: 1,
+        protocolVersion: 3,
         instanceId: 'manager-a',
         pid: process.pid,
         startedAt: '2026-08-01T00:00:00.000Z',
