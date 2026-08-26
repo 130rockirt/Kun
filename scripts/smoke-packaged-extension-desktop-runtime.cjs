@@ -506,7 +506,11 @@ function createDesktopLaunchPlan({
 
 function platformDesktopArguments(platform = process.platform) {
   if (platform !== 'linux') return []
-  return ['--disable-gpu', '--disable-dev-shm-usage']
+  const args = ['--disable-gpu', '--disable-dev-shm-usage']
+  if (process.env.KUN_SMOKE_DISABLE_SANDBOX === '1') {
+    args.push('--no-sandbox')
+  }
+  return args
 }
 
 function runPackagedKun(executable, runtimeEntry, args, environment, timeoutMs = DEFAULT_TIMEOUT_MS) {

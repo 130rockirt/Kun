@@ -245,12 +245,15 @@ async function runNegativeScenario(input) {
       '--build-id', 'a'.repeat(64)
     ], { cwd: profile.workspaceRoot, env: profile.environment })
     tracked.push(fixture)
-    const owner = await waitForJson(
-      join(profile.dataDir, 'runtime.json'),
-      (value) => value?.pid === fixture.child.pid,
-      input.timeoutMs,
-      () => childState(fixture.child, fixture.output())
-    )
+    const owner = await Promise.race([
+      waitForJson(
+        join(profile.dataDir, 'runtime.json'),
+        (value) => value?.pid === fixture.child.pid,
+        input.timeoutMs,
+        () => childState(fixture.child, fixture.output())
+      ),
+      desktopExitGuard(fixture.child)
+    ])
     const preflight = launchCandidate(input.desktop, profile, {
       preflight: true,
       denyInspection: input.scenario === 'inspection-denied',
@@ -384,22 +387,47 @@ function launchCandidate(desktop, profile, options = {}) {
   })
 }
 
+function desktopExitGuard(child) {
+  return new Promise((_, reject) => {
+    child.once('error', reject)
+    child.once('exit', (code, signal) => {
+      reject(new Error(
+        `Tracked smoke process exited before its discovery completed: ` +
+        `code=${code}, signal=${signal}`
+      ))
+    })
+  })
+}
+
+function handoffExitGuard(desktop) {
+  return desktopExitGuard(desktop.child).catch((error) => {
+    throw new Error(`${error.message}\n${desktop.output()}`)
+  })
+}
+
 async function waitForCurrentOwners(input) {
-  const manager = await waitForJson(
-    join(input.profile.controlDir, 'manager.json'),
-    (value) => value?.buildId === input.candidateBuildId &&
-      value?.pid !== input.oldOwners.manager.discovery.pid,
-    input.timeoutMs,
-    () => childState(input.desktop.child, input.desktop.output())
-  )
-  let runtime
-  if (input.autoStart) {
-    runtime = await waitForJson(
-      join(input.profile.dataDir, 'runtime.json'),
-      (value) => value?.buildId === runtimeBuildIdForFlavor(input.candidateBuildId, 'production'),
+  const processExit = handoffExitGuard(input.desktop)
+  const manager = await Promise.race([
+    waitForJson(
+      join(input.profile.controlDir, 'manager.json'),
+      (value) => value?.buildId === input.candidateBuildId &&
+        value?.pid !== input.oldOwners.manager.discovery.pid,
       input.timeoutMs,
       () => childState(input.desktop.child, input.desktop.output())
-    )
+    ),
+    processExit
+  ])
+  let runtime
+  if (input.autoStart) {
+    runtime = await Promise.race([
+      waitForJson(
+        join(input.profile.dataDir, 'runtime.json'),
+        (value) => value?.buildId === runtimeBuildIdForFlavor(input.candidateBuildId, 'production'),
+        input.timeoutMs,
+        () => childState(input.desktop.child, input.desktop.output())
+      ),
+      processExit
+    ])
     await runtimeJson(runtime, '/v1/runtime/info')
   } else {
     await poll(

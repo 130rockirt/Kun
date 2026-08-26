@@ -15,6 +15,9 @@ const {
   READY_PREFIX,
   positiveIntegerArgument
 } = require('./smoke-packaged-update-handoff.cjs')
+const {
+  platformDesktopArguments
+} = require('./smoke-packaged-extension-desktop-runtime.cjs')
 
 test('release matrix covers both update paths, active work, and auto-start off', () => {
   assert.deepEqual(POSITIVE_SCENARIOS.map((scenario) => scenario.name), [
@@ -81,5 +84,25 @@ test('timeout parser rejects invalid release gate values', () => {
     assert.equal(positiveIntegerArgument('--timeout-ms', 100), 100)
   } finally {
     process.argv = original
+  }
+})
+
+test('linux desktop smoke keeps the sandbox on unless CI explicitly opts out', () => {
+  assert.deepEqual(platformDesktopArguments('linux'), ['--disable-gpu', '--disable-dev-shm-usage'])
+  assert.deepEqual(platformDesktopArguments('darwin'), [])
+  assert.deepEqual(platformDesktopArguments('win32'), [])
+
+  const previous = process.env.KUN_SMOKE_DISABLE_SANDBOX
+  try {
+    process.env.KUN_SMOKE_DISABLE_SANDBOX = '1'
+    assert.deepEqual(platformDesktopArguments('linux'), [
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--no-sandbox'
+    ])
+    assert.deepEqual(platformDesktopArguments('darwin'), [])
+  } finally {
+    if (previous === undefined) delete process.env.KUN_SMOKE_DISABLE_SANDBOX
+    else process.env.KUN_SMOKE_DISABLE_SANDBOX = previous
   }
 })

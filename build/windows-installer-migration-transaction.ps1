@@ -298,7 +298,8 @@ function Initialize-UpdateTransaction {
   if (-not [string]::Equals([IO.Path]::GetPathRoot($stage), [IO.Path]::GetPathRoot($target), [StringComparison]::OrdinalIgnoreCase)) {
     throw 'The automatic update stage must be on the target volume.'
   }
-  $assets = Get-UpdateTransactionPath + '.assets'
+  $transactionPath = Get-UpdateTransactionPath
+  $assets = "$transactionPath.assets"
   foreach ($path in @($stage, ($target + '.kun-failed'), $assets)) {
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
   }
