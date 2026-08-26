@@ -103,6 +103,8 @@ export function makeModelContextItem(input: {
   blocks: ModelContextBlockState[]
   text: string
   createdAt?: string
+  /** Marks a squashed canonical baseline replacing all earlier deltas. */
+  baseline?: boolean
 }): TurnItem {
   const createdAt = input.createdAt ?? new Date().toISOString()
   return {
@@ -115,6 +117,7 @@ export function makeModelContextItem(input: {
     finishedAt: createdAt,
     kind: 'model_context',
     formatVersion: 1,
+    ...(input.baseline ? { baseline: true } : {}),
     stepIndex: input.stepIndex,
     contentDigest: input.contentDigest,
     blocks: input.blocks.map((block) => ({ ...block })),

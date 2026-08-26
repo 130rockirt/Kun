@@ -24,6 +24,8 @@ import {
   parseReplayEventRecord,
   readItemPageFromJsonl,
   readLatestItemsFromJsonl,
+  firstEventSeqFromJsonl,
+  trimEventsWithGuards,
   warnUsageCompaction
 } from './file-session-jsonl.js'
 import { ItemsCache } from './file-session-items-cache.js'
@@ -644,6 +646,32 @@ export class FileSessionStore implements SessionStore {
 
   private messagesPath(threadId: string): string {
     return join(this.threadDir(threadId), 'messages.jsonl')
+  }
+
+  async trimEventsFromSeq(threadId: string, fromSeqInclusive: number): Promise<{ afterBytes: number }> {
+    assertSafeThreadId(threadId)
+    const path = this.eventsPath(threadId)
+    const info = await stat(path).catch(() => null)
+    if (!info) return { afterBytes: 0 }
+    return trimEventsWithGuards({
+      path,
+      fromSeqInclusive,
+      maxRecordBytes: DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES,
+      info,
+      revisionBefore: this.eventHistoryRevision(threadId),
+      readRevision: () => this.eventHistoryRevision(threadId),
+      bumpRevision: () => this.bumpEventHistoryRevision(threadId),
+      invalidateCache: () => this.highestSeqCache.delete(threadId),
+      withWrite: (operation) => this.withThreadWrite(threadId, operation),
+      scheduleRetry: () => this.scheduleUsageEventCompaction(threadId)
+    })
+  }
+
+  async eventReplayFloorSeq(threadId: string): Promise<number> {
+    if (!isSafeThreadId(threadId)) return 0
+    // The first parseable event in the log defines the floor; trimming only
+    // ever removes a prefix, so a single head record is sufficient.
+    return firstEventSeqFromJsonl(this.eventsPath(threadId))
   }
 
   private async compactUsageEventsIfLarge(threadId: string): Promise<void> {

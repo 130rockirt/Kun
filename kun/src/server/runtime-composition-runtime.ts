@@ -132,6 +132,8 @@ export function createServerRuntimeComposition(
     }),
     startBackgroundMaintenance: () => backgroundMaintenance.start(),
     inspectThreadStore: () => services.threadStoreGuardian.run(),
+    sessionGuardian: services.sessionGuardian,
+    threadSnapshots: services.threadSnapshots,
     approvalGate,
 	    userInputGate,
 	    workspaceInspector,

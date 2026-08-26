@@ -75,6 +75,14 @@ export type ContextCompactionConfig = {
   /** Provider id paired with summaryModel. */
   summaryProviderId?: string
   /**
+   * Target post-compaction input ratio relative to the model context window
+   * (0 < ratio < 1). The verbatim tail is trimmed to complete turns that fit
+   * this budget so consecutive compactions actually reclaim capacity.
+   */
+  targetInputRatio?: number
+  /** Absolute post-compaction input target in tokens; overrides the ratio when set. */
+  targetInputTokens?: number
+  /**
    * @deprecated Model-specific context windows and compaction thresholds belong
    * in top-level models.profiles. This field is still read for compatibility.
    */

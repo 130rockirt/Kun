@@ -4,12 +4,16 @@ import { StartTurnRequest as StartTurnRequestSchema } from '../contracts/turns.j
 import type {
   CompactRequest,
   CompactResponse,
+  PrunePreviewRequest,
+  PrunePreviewResponse,
   PruneThreadRequest,
   PruneThreadResponse,
+  RestoreSnapshotResponse,
   RewindThreadResponse,
   StartTurnRequest,
   StartTurnResponse,
   SteeringEntry,
+  ThreadSnapshotsResponse,
   Turn,
   GraphPlanningLifecycle,
   TurnStatus
@@ -110,8 +114,19 @@ export interface TurnServiceOperations {
   }): Promise<CompactResponse>;
   pruneThread(input: {
     threadId: string
-    request: PruneThreadRequest
+    request: PruneThreadRequest & { expectedThreadRevision?: number }
   }): Promise<PruneThreadResponse>;
+  previewThreadPrune(input: {
+    threadId: string
+    request: PrunePreviewRequest
+  }): Promise<PrunePreviewResponse>;
+  listThreadSnapshots(input: {
+    threadId: string
+  }): Promise<ThreadSnapshotsResponse>;
+  restoreThreadSnapshot(input: {
+    threadId: string
+    snapshotId: string
+  }): Promise<RestoreSnapshotResponse>;
   finishTurn(input: {
     threadId: string
     turnId: string

@@ -170,6 +170,18 @@ export function buildEventStreamResponse(input: {
           sinceSeq,
           await input.sessionStore.highestSeq(input.threadId)
         )
+        // Prune/restore can drop the event prefix a client's cursor points
+        // into. Replaying silently from that cursor would hide the gap; emit
+        // an explicit reset marker so the client re-hydrates from /state and
+        // resubscribes from the new floor.
+        const replayFloor = await input.sessionStore.eventReplayFloorSeq?.(input.threadId) ?? 0
+        if (replayFloor > 0 && sinceSeq > 0 && sinceSeq < replayFloor - 1) {
+          controller.enqueue(encoder.encode(
+            `event: replay_reset_required\ndata: {"threadId":${JSON.stringify(input.threadId)},"floorSeq":${replayFloor}}\n\n`
+          ))
+          close()
+          return
+        }
         let replayEventCount = 0
         let replayBytes = 0
         let replayPageHasMore = false

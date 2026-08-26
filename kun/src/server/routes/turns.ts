@@ -1,7 +1,12 @@
 import {
   CompactRequest,
+  PruneCommitRequest,
+  PrunePreviewRequest,
+  PrunePreviewResponse,
   PruneThreadRequest,
   PruneThreadResponse,
+  RestoreSnapshotResponse,
+  ThreadSnapshotsResponse,
   CancelToolCallResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
@@ -222,7 +227,7 @@ export async function pruneThread(
 ): Promise<JsonResponse | Response> {
   const body = await readJsonBody(request)
   if (!body.ok) return body.response
-  const parsed = PruneThreadRequest.safeParse(body.value ?? {})
+  const parsed = PruneCommitRequest.safeParse(body.value ?? {})
   if (!parsed.success) return ERRORS.validation('invalid prune body', parsed.error.issues)
   try {
     return jsonResponse(PruneThreadResponse.parse(await turns.pruneThread({
@@ -232,6 +237,57 @@ export async function pruneThread(
   } catch (error) {
     if (error instanceof TurnConflictError) return ERRORS.conflict(error.message)
     if (error instanceof Error && /not found/i.test(error.message)) return ERRORS.notFound(error.message)
+    throw error
+  }
+}
+
+export async function previewThreadPrune(
+  turns: TurnService,
+  threadId: string,
+  request: Request
+): Promise<JsonResponse | Response> {
+  const body = await readJsonBody(request)
+  if (!body.ok) return body.response
+  const parsed = PrunePreviewRequest.safeParse(body.value ?? {})
+  if (!parsed.success) return ERRORS.validation('invalid prune preview body', parsed.error.issues)
+  try {
+    return jsonResponse(PrunePreviewResponse.parse(await turns.previewThreadPrune({
+      threadId,
+      request: parsed.data
+    })))
+  } catch (error) {
+    if (error instanceof Error && /not found/i.test(error.message)) return ERRORS.notFound(error.message)
+    throw error
+  }
+}
+
+export async function listThreadSnapshots(
+  turns: TurnService,
+  threadId: string
+): Promise<JsonResponse | Response> {
+  try {
+    return jsonResponse(ThreadSnapshotsResponse.parse(await turns.listThreadSnapshots({ threadId })))
+  } catch (error) {
+    if (error instanceof Error && /not found/i.test(error.message)) return ERRORS.notFound(error.message)
+    throw error
+  }
+}
+
+export async function restoreThreadSnapshot(
+  turns: TurnService,
+  threadId: string,
+  snapshotId: string
+): Promise<JsonResponse | Response> {
+  try {
+    return jsonResponse(RestoreSnapshotResponse.parse(await turns.restoreThreadSnapshot({
+      threadId,
+      snapshotId
+    })))
+  } catch (error) {
+    if (error instanceof TurnConflictError) return ERRORS.conflict(error.message)
+    if (error instanceof Error && /not found|verification failed/i.test(error.message)) {
+      return ERRORS.notFound(error.message)
+    }
     throw error
   }
 }

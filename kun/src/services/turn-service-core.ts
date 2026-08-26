@@ -59,6 +59,8 @@ import { installServiceOperations } from './service-operation-install.js'
 import { turnServiceAdmissionOperations } from './turn-service-admission-operations.js'
 import { turnServiceSteeringOperations } from './turn-service-steering-operations.js'
 import { turnServiceCompactionOperations } from './turn-service-compaction-operations.js'
+import { turnServicePruneOperations } from './turn-service-prune-operations.js'
+import type { ThreadSnapshotStore } from './thread-snapshot-store.js'
 import { turnServiceGraphOperations } from './turn-service-graph-operations.js'
 import { turnServiceRuntimeStateOperations } from './turn-service-runtime-state-operations.js'
 import { turnServiceItemPersistenceOperations } from './turn-service-item-persistence-operations.js'
@@ -122,6 +124,10 @@ export type TurnServiceDeps = {
     threadId: string
     sourceTurnId: string
   }) => Promise<void>
+  /** Runtime data directory; enables full pre-prune snapshots and previews. */
+  dataDir?: string
+  /** Snapshot store shared with the maintenance runtime; enables prune/restore. */
+  snapshots?: ThreadSnapshotStore
   ids: IdGenerator
   nowIso: () => string
 }
@@ -291,6 +297,7 @@ installServiceOperations(
   turnServiceAdmissionOperations,
   turnServiceSteeringOperations,
   turnServiceCompactionOperations,
+  turnServicePruneOperations,
   turnServiceGraphOperations,
   turnServiceRuntimeStateOperations,
   turnServiceItemPersistenceOperations

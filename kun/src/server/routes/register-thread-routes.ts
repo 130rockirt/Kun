@@ -27,6 +27,9 @@ import { summarizeThread } from './threads-summarize.js'
 import {
   compactTurn,
   pruneThread,
+  previewThreadPrune,
+  listThreadSnapshots,
+  restoreThreadSnapshot,
   cancelToolCall,
   getSteeringQueue,
   getTurn,
@@ -46,6 +49,7 @@ import { usageJsonResponse } from './usage.js'
 import { listProviderQuotas } from './provider-quotas.js'
 import { llmDebugRoundsResponse } from './debug-llm.js'
 import { modelRequestsResponse } from './model-requests.js'
+import { jsonResponse } from '../response.js'
 import { ERRORS } from './runtime-error.js'
 import type { ServerRuntime } from './server-runtime.js'
 import type { ApprovalConsentVerifier } from '../approval-consent.js'
@@ -267,6 +271,28 @@ export function registerThreadRoutes(
   router.add('POST', '/v1/threads/:id/prune', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return pruneThread(runtime.turnService, ctx.params.id, request)
+  })
+  router.add('POST', '/v1/threads/:id/prune/preview', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return previewThreadPrune(runtime.turnService, ctx.params.id, request)
+  })
+  router.add('GET', '/v1/threads/:id/snapshots', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return listThreadSnapshots(runtime.turnService, ctx.params.id)
+  })
+  router.add('GET', '/v1/threads/:id/health', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    if (!runtime.sessionGuardian) return ERRORS.unavailable('session guardian is not available')
+    return jsonResponse(await runtime.sessionGuardian.scanThread(ctx.params.id))
+  })
+  router.add('GET', '/v1/session-health', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    if (!runtime.sessionGuardian) return ERRORS.unavailable('session guardian is not available')
+    return jsonResponse({ threads: await runtime.sessionGuardian.scanAll() })
+  })
+  router.add('POST', '/v1/threads/:id/snapshots/:snapshotId/restore', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return restoreThreadSnapshot(runtime.turnService, ctx.params.id, ctx.params.snapshotId)
   })
   router.add('POST', '/v1/threads/:id/compact', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

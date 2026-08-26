@@ -163,6 +163,8 @@ export const ContextCompactionConfigSchema = z
     summaryInputMaxBytes: PositiveInt.optional(),
     summaryModel: z.string().min(1).optional(),
     summaryProviderId: z.string().min(1).optional(),
+    targetInputRatio: z.number().positive().max(1).optional(),
+    targetInputTokens: PositiveInt.optional(),
     modelProfiles: z.record(z.string().min(1), ModelContextProfileConfigSchema).optional()
   })
   .strict()

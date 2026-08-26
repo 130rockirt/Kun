@@ -43,6 +43,8 @@ import {
 export const RuntimeEventKind = z.enum([
   'thread_created',
   'thread_updated',
+  'thread_pruned',
+  'thread_restored',
   'turn_started',
   'turn_completed',
   'turn_failed',
@@ -203,7 +205,7 @@ export const ItemEvent = RuntimeEventBase.extend({
 export type ItemEvent = z.infer<typeof ItemEvent>
 
 export const ThreadLifecycleEvent = RuntimeEventBase.extend({
-  kind: z.enum(['thread_created', 'thread_updated']),
+  kind: z.enum(['thread_created', 'thread_updated', 'thread_pruned', 'thread_restored']),
   title: z.string().optional(),
   titleAuto: z.boolean().optional(),
   status: z.string().optional(),
@@ -396,7 +398,13 @@ export const CompactionEvent = RuntimeEventBase.extend({
   pinnedConstraints: z.array(z.string()).optional(),
   sourceDigest: z.string().min(1).optional(),
   digestMarker: z.string().min(1).optional(),
-  sourceItemIds: z.array(z.string().min(1)).optional()
+  sourceItemIds: z.array(z.string().min(1)).optional(),
+  /** Post-compaction estimated input tokens for the next request. */
+  contextEstimate: z.number().int().nonnegative().optional(),
+  /** Token budget the verbatim tail was trimmed to, when configured. */
+  tailTokenBudget: z.number().int().positive().optional(),
+  /** Number of model_context deltas folded into the canonical baseline. */
+  squashedContextItems: z.number().int().nonnegative().optional()
 })
 export type CompactionEvent = z.infer<typeof CompactionEvent>
 

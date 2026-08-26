@@ -123,6 +123,18 @@ export interface SessionStore {
   rewriteItems(threadId: string, items: TurnItem[]): Promise<void>
   /** Stage an atomic, human-readable archive before a conditional history rewrite. */
   archiveItems?(input: SessionArchiveInput): Promise<SessionArchiveResult>
+  /**
+   * Replace the persisted event log, keeping only events at or after
+   * `fromSeqInclusive`. Returns the new byte size; implementations must
+   * rewrite atomically and keep `highestSeq()` monotonic.
+   */
+  trimEventsFromSeq?(threadId: string, fromSeqInclusive: number): Promise<{ afterBytes: number }>
+  /**
+   * The earliest event sequence still present in the durable log. Stores
+   * that never trim return 0. SSE clients with cursors below this floor
+   * must re-sync from a fresh state fetch instead of replaying.
+   */
+  eventReplayFloorSeq?(threadId: string): Promise<number>
   /** Load item history and its opaque revision as one consistent snapshot. */
   loadItemSnapshot(threadId: string): Promise<ItemHistorySnapshot>
   /**

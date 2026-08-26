@@ -9,6 +9,12 @@ export function selectRetentionCutoff(
 ): string | undefined {
   const completed = thread.turns.filter((turn) => turn.status === 'completed')
   if (completed.length === 0) return undefined
+  if (policy.throughTurnId) {
+    // An explicit boundary must identify a completed turn; the cutoff is
+    // exactly that turn (its items are archived along with everything older).
+    const boundary = completed.find((turn) => turn.id === policy.throughTurnId)
+    return boundary?.id
+  }
   const retained = new Set<string>()
   if (policy.keepLastTurns !== undefined) {
     for (const turn of completed.slice(-policy.keepLastTurns)) retained.add(turn.id)
