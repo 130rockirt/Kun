@@ -1,5 +1,6 @@
 import {
   app,
+  clipboard,
   dialog,
   ipcMain,
   shell,
@@ -373,6 +374,44 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
     options.assertRendererRuntimeReady()
     const request = parseIpcPayload('runtime:request', runtimeRequestPayloadSchema, payload)
     return runtimeRequest(request.path, request.method, request.body)
+  })
+
+  ipcMain.handle('gateway:credential', async (event, action: unknown) => {
+    assertTrustedWorkbenchSender(event, getMainWindow)
+    options.assertRendererRuntimeReady()
+    if (!['status', 'ensure', 'copy', 'rotate', 'revoke'].includes(String(action))) {
+      throw new Error('gateway:credential received an invalid action')
+    }
+    const paths = {
+      status: ['/v1/model-gateway/credential/status', 'GET'],
+      ensure: ['/v1/model-gateway/credential/ensure', 'POST'],
+      copy: ['/v1/model-gateway/credential/reveal', 'POST'],
+      rotate: ['/v1/model-gateway/credential/rotate', 'POST'],
+      revoke: ['/v1/model-gateway/credential', 'DELETE']
+    } as const
+    const [path, method] = paths[action as keyof typeof paths]
+    const response = await runtimeRequest(path, method)
+    const parsed = JSON.parse(response.body) as {
+      key?: string
+      credential?: { configured?: boolean; createdAt?: string; rotatedAt?: string }
+    }
+    if (action === 'copy') {
+      if (!response.ok || typeof parsed.key !== 'string') {
+        return { ok: false, status: response.status, credential: { configured: false } }
+      }
+      clipboard.writeText(parsed.key)
+      return { ok: true, status: response.status, copied: true, credential: { configured: true } }
+    }
+    const credential = parsed.credential ?? { configured: false }
+    return {
+      ok: response.ok,
+      status: response.status,
+      credential: {
+        configured: credential.configured === true,
+        ...(credential.createdAt ? { createdAt: credential.createdAt } : {}),
+        ...(credential.rotatedAt ? { rotatedAt: credential.rotatedAt } : {})
+      }
+    }
   })
 
   ipcMain.handle('runtime:attachment:upload-image', async (event, payload: unknown) => {

@@ -122,6 +122,7 @@ export function createRuntimeConfigController(
     antigravityProviderIds,
     cursorSdkProviderIds,
     resolveCapabilityProviderCredential,
+    gatewayCredentials,
     oauthEncryptor
   } = model
   const {
@@ -284,11 +285,18 @@ export function createRuntimeConfigController(
 	      mergedOptions,
 	      legacyCredentialMigration
 	    )
+	    if (nextOptions.localModelGateway?.enabled && !gatewayCredentials.hasKey()) {
+	      return {
+	        ok: false,
+	        code: 'invalid_config',
+	        message: 'local model gateway requires an independent API key; ensure a key before enabling it'
+	      }
+	    }
 	    if (nextOptions.localModelGateway?.enabled && !isLoopbackHost(nextOptions.host)) {
 	      return {
 	        ok: false,
 	        code: 'invalid_config',
-	        message: 'unauthenticated local model gateway requires a loopback serve host'
+	        message: 'local model gateway requires a loopback serve host'
 	      }
 	    }
 	    const nextSubagentsEnabled = nextOptions.capabilities?.subagents.enabled === true

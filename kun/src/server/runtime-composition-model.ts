@@ -47,6 +47,7 @@ import {
 } from './runtime-factory-model.js'
 import { aggregateCodexProviderLocalCosts } from '../services/provider-local-cost.js'
 import { loadUsageHistory } from '../services/usage-history.js'
+import { GatewayCredentialService } from '../services/gateway-credential-service.js'
 
 export async function createRuntimeModelComposition(
   core: Awaited<ReturnType<typeof createRuntimeCore>>
@@ -503,6 +504,11 @@ export async function createRuntimeModelComposition(
   const hasMcpOAuth = Object.values(core.activeOptions.capabilities?.mcp?.servers ?? {}).some((server) =>
     server.oauth?.enabled !== false && Boolean(server.oauth) && server.transport !== 'stdio'
   )
+  const gatewayCredentials = new GatewayCredentialService(
+    core.activeOptions.dataDir,
+    extensionCredentialKeyProvider.encryptor
+  )
+  await gatewayCredentials.initialize()
   const oauthEncryptor = hasMcpOAuth
     ? extensionCredentialKeyProvider.encryptor
     : undefined
@@ -544,6 +550,7 @@ export async function createRuntimeModelComposition(
     officialProviderCli,
     officialProviderAuth,
     stopExtensionModelListener,
+    gatewayCredentials,
     hasMcpOAuth,
     oauthEncryptor,
     get refreshModelConnectionDelegatedDeps() {

@@ -4,11 +4,26 @@ import { LOCAL_MODEL_GATEWAY_PROVIDER_ID } from '../../contracts/model-route-poo
 import type { ModelRequest, ModelStreamChunk, ModelToolSpec } from '../../ports/model-client.js'
 import { readJsonBody } from '../read-json-body.js'
 import { jsonResponse, type JsonResponse } from '../response.js'
+import { GatewayRequestGuard, type GatewayLease } from './gateway-request-guard.js'
 import type { ServerRuntime } from './server-runtime.js'
 
-const MAX_GATEWAY_BODY_BYTES = 8 * 1024 * 1024
+const MAX_GATEWAY_BODY_BYTES = 2 * 1024 * 1024
+const GATEWAY_GUARDS = new WeakMap<object, GatewayRequestGuard>()
 
-export function gatewayModels(runtime: ServerRuntime): JsonResponse {
+function guardFor(runtime: ServerRuntime): GatewayRequestGuard | null {
+  const credentials = runtime.modelGateway?.credentials
+  if (!credentials) return null
+  let guard = GATEWAY_GUARDS.get(credentials)
+  if (!guard) {
+    guard = new GatewayRequestGuard(credentials)
+    GATEWAY_GUARDS.set(credentials, guard)
+  }
+  return guard
+}
+
+export function gatewayModels(runtime: ServerRuntime, request: Request): JsonResponse {
+  const rejected = authorizePublicGateway(runtime, request)
+  if (rejected) return rejected
   if (!runtime.modelGateway?.enabled()) return openAiError('Local model gateway is disabled.', 'gateway_disabled', 404)
   return jsonResponse({
     object: 'list',
@@ -42,6 +57,37 @@ export function routePoolStatus(runtime: ServerRuntime): JsonResponse {
   })
 }
 
+export function gatewayCredentialStatus(runtime: ServerRuntime): JsonResponse {
+  return jsonResponse({ credential: runtime.modelGateway?.credentials.status() ?? { configured: false } })
+}
+
+export async function ensureGatewayCredential(runtime: ServerRuntime): Promise<JsonResponse> {
+  const credentials = runtime.modelGateway?.credentials
+  if (!credentials) return openAiError('Gateway credential service is unavailable.', 'gateway_unavailable', 503)
+  const result = await credentials.ensure()
+  return jsonResponse({ credential: credentials.status(), created: result.created })
+}
+
+export async function rotateGatewayCredential(runtime: ServerRuntime): Promise<JsonResponse> {
+  const credentials = runtime.modelGateway?.credentials
+  if (!credentials) return openAiError('Gateway credential service is unavailable.', 'gateway_unavailable', 503)
+  await credentials.rotate()
+  return jsonResponse({ credential: credentials.status() })
+}
+
+export async function revokeGatewayCredential(runtime: ServerRuntime): Promise<JsonResponse> {
+  const credentials = runtime.modelGateway?.credentials
+  if (!credentials) return openAiError('Gateway credential service is unavailable.', 'gateway_unavailable', 503)
+  const revoked = await credentials.revoke()
+  return jsonResponse({ credential: credentials.status(), revoked })
+}
+
+export function revealGatewayCredential(runtime: ServerRuntime): JsonResponse {
+  const key = runtime.modelGateway?.credentials.reveal()
+  if (!key) return openAiError('Gateway API key is not configured.', 'gateway_key_missing', 404)
+  return jsonResponse({ key })
+}
+
 export function testRoutePool(runtime: ServerRuntime, poolId: string): JsonResponse {
   const gateway = runtime.modelGateway
   const test = gateway?.tests.start(poolId)
@@ -50,24 +96,46 @@ export function testRoutePool(runtime: ServerRuntime, poolId: string): JsonRespo
 }
 
 async function gatewayGenerate(runtime: ServerRuntime, request: Request, shape: 'chat' | 'responses'): Promise<Response | JsonResponse> {
+  const rejected = authorizePublicGateway(runtime, request)
+  if (rejected) return rejected
   if (!runtime.modelGateway?.enabled() || !runtime.modelClient) return openAiError('Local model gateway is disabled.', 'gateway_disabled', 404)
-  const body = await readJsonBody(request, MAX_GATEWAY_BODY_BYTES)
-  if (!body.ok) return openAiError(JSON.parse(body.response.body).message, 'invalid_request_error', body.response.status)
+  const guard = guardFor(runtime)!
+  const lease = guard.acquire(request.signal)
+  if (!lease) return openAiError('Too many concurrent gateway requests.', 'concurrency_limit', 429)
+  let body: Awaited<ReturnType<typeof readJsonBody>>
+  try {
+    body = await readJsonBody(request, MAX_GATEWAY_BODY_BYTES, lease.signal)
+  } catch (error) {
+    lease.release()
+    return openAiError(lease.timedOut() ? 'Gateway request timed out.' : errorMessage(error), lease.timedOut() ? 'timeout' : 'invalid_request_error', lease.timedOut() ? 504 : 400)
+  }
+  if (!body.ok) {
+    lease.release()
+    return openAiError(JSON.parse(body.response.body).message, 'invalid_request_error', body.response.status)
+  }
   const input = asRecord(body.value)
   const model = stringValue(input.model)
   if (!model || !runtime.modelGateway.pools().some((pool) => pool.enabled && pool.modelId === model)) {
+    lease.release()
     return openAiError(`The model '${model || '(missing)'}' does not exist.`, 'model_not_found', 404)
   }
   let modelRequest: ModelRequest
   try {
-    modelRequest = makeModelRequest(shape === 'chat' ? input : responsesToChatInput(input), request.signal)
+    modelRequest = makeModelRequest(shape === 'chat' ? input : responsesToChatInput(input), lease.signal)
   } catch (error) {
+    lease.release()
     return openAiError(error instanceof Error ? error.message : String(error), 'invalid_request_error', 400)
   }
   const stream = input.stream === true
-  return stream
-    ? streamingResponse(runtime.modelClient.stream(modelRequest), model, shape)
-    : nonStreamingResponse(runtime.modelClient.stream(modelRequest), model, shape)
+  try {
+    const chunks = runtime.modelClient.stream(modelRequest)
+    return stream
+      ? streamingResponse(chunks, model, shape, lease)
+      : nonStreamingResponse(chunks, model, shape, lease)
+  } catch (error) {
+    lease.release()
+    return openAiError(errorMessage(error), 'upstream_error', 502)
+  }
 }
 
 function makeModelRequest(input: Record<string, unknown>, signal: AbortSignal): ModelRequest {
@@ -145,17 +213,28 @@ function responsesToChatInput(input: Record<string, unknown>): Record<string, un
   return { ...input, messages, tools: input.tools, max_tokens: input.max_output_tokens }
 }
 
-async function nonStreamingResponse(chunks: AsyncIterable<ModelStreamChunk>, model: string, shape: 'chat' | 'responses'): Promise<JsonResponse> {
+async function nonStreamingResponse(chunks: AsyncIterable<ModelStreamChunk>, model: string, shape: 'chat' | 'responses', lease: GatewayLease): Promise<JsonResponse> {
   let text = ''
   let reasoning = ''
   let usage: unknown
   const toolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = []
-  for await (const chunk of chunks) {
-    if (chunk.kind === 'assistant_text_delta') text += chunk.text
-    else if (chunk.kind === 'assistant_reasoning_delta') reasoning += chunk.text
-    else if (chunk.kind === 'tool_call_complete') toolCalls.push({ id: chunk.callId, type: 'function', function: { name: chunk.toolName, arguments: JSON.stringify(chunk.arguments) } })
-    else if (chunk.kind === 'usage') usage = chunk.usage
-    else if (chunk.kind === 'error') return openAiError(chunk.message, chunk.code ?? 'upstream_error', errorStatus(chunk))
+  const iterator = chunks[Symbol.asyncIterator]()
+  try {
+    for (;;) {
+      const result = await nextGatewayChunk(iterator, lease.signal)
+      if (result.done) break
+      const chunk = result.value
+      if (chunk.kind === 'assistant_text_delta') text += chunk.text
+      else if (chunk.kind === 'assistant_reasoning_delta') reasoning += chunk.text
+      else if (chunk.kind === 'tool_call_complete') toolCalls.push({ id: chunk.callId, type: 'function', function: { name: chunk.toolName, arguments: JSON.stringify(chunk.arguments) } })
+      else if (chunk.kind === 'usage') usage = chunk.usage
+      else if (chunk.kind === 'error') return openAiError(chunk.message, chunk.code ?? 'upstream_error', errorStatus(chunk))
+    }
+  } catch (error) {
+    return openAiError(lease.timedOut() ? 'Gateway request timed out.' : errorMessage(error), lease.timedOut() ? 'timeout' : 'upstream_error', lease.timedOut() ? 504 : 502)
+  } finally {
+    if (lease.signal.aborted) void iterator.return?.().catch(() => undefined)
+    lease.release()
   }
   const id = `${shape === 'chat' ? 'chatcmpl' : 'resp'}_${randomUUID()}`
   if (shape === 'chat') {
@@ -164,15 +243,20 @@ async function nonStreamingResponse(chunks: AsyncIterable<ModelStreamChunk>, mod
   return jsonResponse({ id, object: 'response', created_at: Math.floor(Date.now() / 1000), status: 'completed', model, output: [{ id: `msg_${randomUUID()}`, type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text }] }, ...toolCalls.map((call) => ({ type: 'function_call', call_id: call.id, name: call.function.name, arguments: call.function.arguments }))], ...(usage ? { usage } : {}) })
 }
 
-function streamingResponse(chunks: AsyncIterable<ModelStreamChunk>, model: string, shape: 'chat' | 'responses'): Response {
+function streamingResponse(chunks: AsyncIterable<ModelStreamChunk>, model: string, shape: 'chat' | 'responses', lease: GatewayLease): Response {
   const encoder = new TextEncoder()
   const id = `${shape === 'chat' ? 'chatcmpl' : 'resp'}_${randomUUID()}`
+  const iterator = chunks[Symbol.asyncIterator]()
+  let cancelled = false
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (value: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`))
       try {
         if (shape === 'responses') send({ type: 'response.created', response: { id, object: 'response', status: 'in_progress', model } })
-        for await (const chunk of chunks) {
+        for (;;) {
+          const result = await nextGatewayChunk(iterator, lease.signal)
+          if (result.done) break
+          const chunk = result.value
           if (shape === 'chat') {
             if (chunk.kind === 'assistant_text_delta') send({ id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { content: chunk.text }, finish_reason: null }] })
             else if (chunk.kind === 'assistant_reasoning_delta') send({ id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { reasoning_content: chunk.text }, finish_reason: null }] })
@@ -190,10 +274,16 @@ function streamingResponse(chunks: AsyncIterable<ModelStreamChunk>, model: strin
           controller.enqueue(encoder.encode('data: [DONE]\n\n'))
         } else send({ type: 'response.completed', response: { id, object: 'response', status: 'completed', model } })
       } catch (error) {
-        send({ error: { message: error instanceof Error ? error.message : String(error), type: 'gateway_error', code: 'gateway_error' } })
+        if (!cancelled) send({ error: { message: lease.timedOut() ? 'Gateway request timed out.' : errorMessage(error), type: 'gateway_error', code: lease.timedOut() ? 'timeout' : 'gateway_error' } })
       } finally {
-        controller.close()
+        lease.release()
+        if (!cancelled) controller.close()
       }
+    },
+    cancel() {
+      cancelled = true
+      lease.cancel()
+      void iterator.return?.().catch(() => undefined)
     }
   })
   return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' } })
@@ -227,6 +317,33 @@ function messageContent(value: unknown, attachments: NonNullable<ModelRequest['a
   return text.join('\n')
 }
 
+async function nextGatewayChunk(
+  iterator: AsyncIterator<ModelStreamChunk>,
+  signal: AbortSignal
+): Promise<IteratorResult<ModelStreamChunk>> {
+  if (signal.aborted) throw signal.reason ?? new Error('gateway request aborted')
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      cleanup()
+      reject(signal.reason ?? new Error('gateway request aborted'))
+    }
+    const cleanup = () => signal.removeEventListener('abort', onAbort)
+    signal.addEventListener('abort', onAbort, { once: true })
+    iterator.next().then(
+      (result) => { cleanup(); resolve(result) },
+      (error) => { cleanup(); reject(error) }
+    )
+  })
+}
+
+function authorizePublicGateway(runtime: ServerRuntime, request: Request): JsonResponse | null {
+  const guard = guardFor(runtime)
+  if (!guard || !guard.authorize(request)) return openAiError('Invalid gateway API key.', 'invalid_api_key', 401)
+  if (!guard.consumeToken()) return openAiError('Gateway rate limit exceeded.', 'rate_limit_exceeded', 429)
+  return null
+}
+
+function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error) }
 function openAiError(message: string, code: string, status: number): JsonResponse {
   return jsonResponse({ error: { message, type: status >= 500 ? 'server_error' : 'invalid_request_error', param: null, code } }, status)
 }

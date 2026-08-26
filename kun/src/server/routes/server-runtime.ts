@@ -47,6 +47,7 @@ import type { DelegationRuntime } from '../../delegation/delegation-runtime.js'
 import type { BackgroundShellRuntime } from '../../services/background-shell-runtime.js'
 import type { ModelClient } from '../../ports/model-client.js'
 import type { ModelRoutePoolConfig } from '../../contracts/model-route-pool.js'
+import type { GatewayCredentialService } from '../../services/gateway-credential-service.js'
 import type { RoutePoolHealthStore } from '../../adapters/model/route-pool-model-client.js'
 import type { RoutePoolTestService } from '../../services/route-pool-test-service.js'
 import type { GraphRuntimeConfig, RolesConfig } from '../../config/kun-config.js'
@@ -236,6 +237,7 @@ export type ServerRuntime = {
     configuredPools(): ModelRoutePoolConfig[]
     health: RoutePoolHealthStore
     tests: RoutePoolTestService
+    credentials: GatewayCredentialService
   }
   defaultModel?: string
   /**
