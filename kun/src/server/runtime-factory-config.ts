@@ -38,6 +38,7 @@ export function mergeRuntimeConfigApplyOptions(
     runtime: request.runtime ?? current.runtime,
     graph: request.graph ?? current.graph,
     roles: request.roles ?? current.roles,
+    fastContext: request.fastContext ?? current.fastContext,
     capabilities: request.capabilities ?? current.capabilities,
     hooks: request.hooks ?? current.hooks,
     quality: request.quality ?? current.quality,

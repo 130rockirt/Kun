@@ -289,7 +289,8 @@ describe('runtime factory usage carryover', () => {
       tokenEconomyMode: false,
       insecure: false,
       storage: { backend: 'file' },
-      lab: { fastContext: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true }, conversationVisualization: { enabled: false } },
+      fastContext: { enabled: true, fast: false },
+      lab: { pptAgent: { enabled: true, fast: false, imageFirst: true }, conversationVisualization: { enabled: false } },
       capabilities: KunCapabilitiesConfig.parse({
         subagents: { enabled: true }
       })
@@ -327,12 +328,12 @@ describe('runtime factory usage carryover', () => {
       expect(await listExplore()).toBe(true)
 
       expect(await runtime.applyConfig({
-        lab: { fastContext: { enabled: false, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true }, conversationVisualization: { enabled: false } }
+        fastContext: { enabled: false, fast: false }
       })).toEqual({ ok: true })
       expect(await listExplore()).toBe(false)
 
       expect(await runtime.applyConfig({
-        lab: { fastContext: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true }, conversationVisualization: { enabled: false } }
+        fastContext: { enabled: true, fast: false }
       })).toEqual({ ok: true })
       expect(await listExplore()).toBe(true)
     } finally {
@@ -356,7 +357,8 @@ describe('runtime factory usage carryover', () => {
       tokenEconomyMode: false,
       insecure: false,
       storage: { backend: 'file' },
-      lab: { fastContext: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true }, conversationVisualization: { enabled: false } },
+      fastContext: { enabled: true, fast: false },
+      lab: { pptAgent: { enabled: true, fast: false, imageFirst: true }, conversationVisualization: { enabled: false } },
       capabilities: KunCapabilitiesConfig.parse({
         subagents: { enabled: true }
       })
@@ -394,12 +396,12 @@ describe('runtime factory usage carryover', () => {
       expect(await listPpt()).toBe(true)
 
       expect(await runtime.applyConfig({
-        lab: { fastContext: { enabled: true, fast: false }, pptAgent: { enabled: false, fast: false, imageFirst: true }, conversationVisualization: { enabled: false } }
+        lab: { pptAgent: { enabled: false, fast: false, imageFirst: true }, conversationVisualization: { enabled: false } }
       })).toEqual({ ok: true })
       expect(await listPpt()).toBe(false)
 
       expect(await runtime.applyConfig({
-        lab: { fastContext: { enabled: true, fast: false }, pptAgent: { enabled: true, fast: false, imageFirst: true }, conversationVisualization: { enabled: false } }
+        lab: { pptAgent: { enabled: true, fast: false, imageFirst: true }, conversationVisualization: { enabled: false } }
       })).toEqual({ ok: true })
       expect(await listPpt()).toBe(true)
     } finally {

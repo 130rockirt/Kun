@@ -163,6 +163,42 @@ describe('runtime Browser Use host binding', () => {
     })
   })
 
+  it('applies and preserves the dedicated Fast Context route during hot config merges', () => {
+    const current = {
+      host: '127.0.0.1',
+      port: 18899,
+      dataDir: '/tmp/kun',
+      runtimeToken: 'runtime-token',
+      apiKey: '',
+      baseUrl: 'https://api.example.com/v1',
+      model: 'main-model',
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      tokenEconomyMode: false,
+      insecure: false,
+      fastContext: {
+        enabled: true,
+        model: 'old-fast-context-model',
+        providerId: 'old-fast-context-provider',
+        fast: false
+      }
+    } as KunServeRuntimeOptions
+    const configured = {
+      enabled: true,
+      model: 'deepseek-v4-flash',
+      providerId: 'deepseek',
+      reasoningEffort: 'max' as const,
+      fast: false
+    }
+
+    const updated = mergeRuntimeConfigApplyOptions(current, RuntimeConfigApplyRequest.parse({
+      fastContext: configured
+    }))
+    expect(updated.fastContext).toEqual(configured)
+    expect(mergeRuntimeConfigApplyOptions(updated, RuntimeConfigApplyRequest.parse({})).fastContext)
+      .toEqual(configured)
+  })
+
   it('keeps the ephemeral binding out of active and persistable runtime options', () => {
     const request = RuntimeConfigApplyRequest.parse({ browserUseHostBinding: binding })
     const activeOptions = mergeRuntimeConfigApplyOptions({
