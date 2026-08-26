@@ -41,7 +41,11 @@ function createUserInputTool(name: string): LocalTool {
   }
   return LocalToolHost.defineTool({
     name,
-    description: 'Ask the user a structured question through the current interactive client and wait for the answer.',
+    description: [
+      'Ask the user a structured question only when an unanswered material choice blocks safe or correct progress, or when an active workflow explicitly requires structured confirmation.',
+      'Do not use this tool for greetings, status updates, optional follow-ups, offers of more help, information already available in context, or unnecessary repetitions or rephrasings of the same question.',
+      'Ask one concise round, then act on the answer. Ask again only when a material workflow state change explicitly requires a new confirmation.'
+    ].join(' '),
     toolKind: 'tool_call',
     inputSchema: {
       type: 'object',
@@ -164,6 +168,7 @@ function createUserInputTool(name: string): LocalTool {
 }
 
 export const userInputTool: LocalTool = createUserInputTool('user_input')
+/** Legacy executable alias; capability discovery prefers `user_input` when both exist. */
 export const requestUserInputTool: LocalTool = createUserInputTool('request_user_input')
 
 export const defaultLocalTools: LocalTool[] = [

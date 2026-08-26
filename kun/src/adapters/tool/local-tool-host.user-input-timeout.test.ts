@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { requestUserInputTool } from './local-tool-host.js'
+import { describe, expect, it } from 'vitest'
+import { requestUserInputTool, userInputTool } from './local-tool-host.js'
 
 type CapturedRequest = {
   id: string
@@ -19,6 +19,18 @@ function executeWithAwaitUserInput(
     tool.execute(args, { awaitUserInput } as never) as Promise<{ output: unknown; isError?: boolean }>
   )
 }
+
+describe('user_input tool aliases', () => {
+  it('shares one constrained description and schema across canonical and legacy names', () => {
+    expect(requestUserInputTool.description).toBe(userInputTool.description)
+    expect(requestUserInputTool.inputSchema).toEqual(userInputTool.inputSchema)
+    expect(userInputTool.description).toContain('material choice blocks safe or correct progress')
+    expect(userInputTool.description).toContain('active workflow explicitly requires structured confirmation')
+    expect(userInputTool.description).toContain('optional follow-ups')
+    expect(userInputTool.description).toContain('unnecessary repetitions or rephrasings')
+    expect(userInputTool.description).toContain('material workflow state change')
+  })
+})
 
 describe('user_input timeoutSeconds', () => {
   it('passes a normalized timeoutSeconds through awaitUserInput', async () => {
