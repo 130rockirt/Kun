@@ -34,6 +34,8 @@ import {
   renderFallbackCodeHtml
 } from '../../lib/code-highlighting'
 import { useTimelineFilePreviewWorkspaceRoot } from './timeline-file-preview-workspace'
+import { ChartRenderer } from './ChartRenderer'
+import { parseRendererChartSpec } from '../../agent/chart-spec-adapter'
 
 const LANGUAGE_REGEX = /language-([^\s]+)/
 const TRAILING_NEWLINES_REGEX = /\n+$/
@@ -383,6 +385,11 @@ function CodeComponent({ node, className, children, ...props }: CodeProps) {
 
   const match = className?.match(LANGUAGE_REGEX)
   const language = match?.[1] ?? ''
+
+  if (language === 'chart') {
+    const spec = parseRendererChartSpec(text.replace(TRAILING_NEWLINES_REGEX, ''))
+    return spec ? <ChartRenderer spec={spec} /> : <CodeBlock code={text} language="json" />
+  }
 
   if (language === 'shapeops' || language === 'design_canvas') {
     return <CanvasOpsChip code={text} language={language} />

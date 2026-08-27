@@ -11,6 +11,7 @@ import {
   buildComponentDesignToolProviders,
   buildDiagramVisualizationToolProvider,
   buildConversationVisualizationToolProvider,
+  buildChartToolProvider,
   protocolSupportsImageEdit,
   buildRuntimeCapabilityManifest,
   DEFAULT_APPROVAL_REVIEWER,
@@ -363,6 +364,9 @@ export function createRuntimeRegistry(
       delegationRuntime
     ),
     ...buildConversationVisualizationToolProvider(
+      () => core.activeOptions.lab?.conversationVisualization
+    ),
+    ...buildChartToolProvider(
       () => core.activeOptions.lab?.conversationVisualization
     )
   ])

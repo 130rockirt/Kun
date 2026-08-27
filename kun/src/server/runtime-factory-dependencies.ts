@@ -87,6 +87,7 @@ export { buildDelegationToolProviders } from '../adapters/tool/delegation-tool-p
 export { buildComponentDesignToolProviders } from '../adapters/tool/component-design-tool-provider.js'
 export { buildDiagramVisualizationToolProvider } from '../adapters/tool/diagram-visualization-tool-provider.js'
 export { buildConversationVisualizationToolProvider } from '../adapters/tool/conversation-visualization-tool-provider.js'
+export { buildChartToolProvider } from '../adapters/tool/chart-tool-provider.js'
 export { buildWebToolProviders } from '../adapters/tool/web-tool-provider.js'
 export { buildImageGenToolProviders, protocolSupportsImageEdit } from '../adapters/tool/image-gen-tool-provider.js'
 export { buildComputerUseToolProviders } from '../adapters/tool/computer-use-tool-provider.js'

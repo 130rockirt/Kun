@@ -11,6 +11,7 @@ import type {
   ThreadUsageSnapshot
 } from './thread-runtime-types'
 import type { ComposerContextAttachment } from '@kun/extension-api'
+import type { RendererChartSpec } from './chart-spec-adapter'
 
 export type ToolItemKind = 'tool_call' | 'command_execution' | 'file_change'
 export type RuntimeErrorSeverity = 'info' | 'warning' | 'error'
@@ -414,6 +415,14 @@ export type ReviewBlock = {
   output?: ReviewOutput
 }
 
+export type ChartBlock = {
+  kind: 'chart'
+  id: string
+  turnId?: string
+  createdAt?: string
+  spec: RendererChartSpec
+}
+
 export type ChatBlock =
   | {
       kind: 'user'
@@ -430,6 +439,7 @@ export type ChatBlock =
   | ToolBlock
   | CompactionBlock
   | ReviewBlock
+  | ChartBlock
   | {
       kind: 'system'
       id: string

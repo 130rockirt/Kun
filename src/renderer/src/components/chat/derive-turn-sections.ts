@@ -30,6 +30,7 @@ export type TurnSections = {
   runtimeErrorBlocks: TurnRuntimeErrorBlock[]
   runtimeErrorsBeforeFinalContent: TurnRuntimeErrorBlock[]
   runtimeErrorsAfterFinalContent: TurnRuntimeErrorBlock[]
+  chartBlocks: Extract<ChatBlock, { kind: 'chart' }>[]
   componentPrototypeBlocks: ToolBlock[]
   diagramPrototypeBlocks: ToolBlock[]
   conversationVisualizationBlocks: ToolBlock[]
@@ -274,6 +275,8 @@ export function deriveTurnSections({
     Boolean(block.meta.conversationVisualization)
   ))
 
+  const chartBlocks = turn.blocks.filter((block): block is Extract<ChatBlock, { kind: 'chart' }> => block.kind === 'chart')
+
   return {
     processBlocks,
     processTimelineBlocks,
@@ -285,6 +288,7 @@ export function deriveTurnSections({
     diagramPrototypeBlocks,
     conversationVisualizationBlocks,
     generatedFileBlocks,
-    turnFileChanges
+    turnFileChanges,
+    chartBlocks
   }
 }

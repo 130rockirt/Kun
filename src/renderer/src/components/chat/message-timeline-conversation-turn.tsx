@@ -12,6 +12,7 @@ import { ProcessSectionRow, groupProcessSections, summarizeToolBlock } from './m
 import { ComponentPrototypeCard } from './ComponentPrototypeCard'
 import { DiagramPrototypeCard } from './DiagramPrototypeCard'
 import { ConversationVisualizationCard } from './ConversationVisualizationCard'
+import { ChartRenderer } from './ChartRenderer'
 import type { OpenChildThreadHandler } from './SubagentCallCard'
 import {
   AnimatedWorkLogo,
@@ -122,7 +123,8 @@ export function ConversationTurn({
     diagramPrototypeBlocks,
     conversationVisualizationBlocks,
     generatedFileBlocks,
-    turnFileChanges
+    turnFileChanges,
+    chartBlocks
   } = useMemo(
     () =>
       deriveTurnSections({
@@ -311,6 +313,10 @@ export function ConversationTurn({
 
       {conversationVisualizationBlocks.map((block) => (
         <ConversationVisualizationCard key={block.id} block={block} />
+      ))}
+
+      {chartBlocks.map((block) => (
+        <ChartRenderer key={block.id} spec={block.spec} />
       ))}
 
       {assistantContentBlocks.map((block) => (

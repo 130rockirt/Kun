@@ -17,6 +17,7 @@ import {
   buildComponentDesignToolProviders,
   buildDiagramVisualizationToolProvider,
   buildConversationVisualizationToolProvider,
+  buildChartToolProvider,
   buildWebToolProviders,
   buildImageGenToolProviders,
   protocolSupportsImageEdit,
@@ -468,7 +469,8 @@ export function createRuntimeConfigController(
 	      ),
 	      ...buildConversationVisualizationToolProvider(
 	        () => activeOptions.lab?.conversationVisualization
-	      )
+	      ),
+	      ...buildChartToolProvider(() => activeOptions.lab?.conversationVisualization)
 	    ])
 
 	    // GUI/TUI own the live Registry through revisioned writes. Hot apply is
