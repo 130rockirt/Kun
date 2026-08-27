@@ -40,13 +40,13 @@ import {
 import { buildPublicItemHistoryPage } from '../../services/item-history-page.js'
 import type { DelegationRuntime } from '../../delegation/delegation-runtime.js'
 import {
-  hasDetachedDelegateTaskResult,
+  hasDelegateTaskChildResult,
   healSessionItemsForFinishedTurns,
   hydrateThreadItemsFromSession,
   loadThreadMetadata,
   mergePendingApprovalItems,
   omitTurnItems,
-  overlayDetachedDelegateTaskResults,
+  overlayDelegateTaskChildRuns,
   projectPublicThreadRecord,
   projectTimelineThread,
   projectTimelineTurn
@@ -335,6 +335,7 @@ export async function getThreadTimeline(
   // Freeze the replay floor before reading the item projection. Any event
   // appended afterwards is replayed by SSE from this sequence.
   const latestSeq = await sessionStore.highestSeq(threadId)
+  let replayFloor = latestSeq
   const thread = await loadThreadMetadata(service, threadId)
   if (!thread) {
     return jsonResponse(
@@ -367,16 +368,19 @@ export async function getThreadTimeline(
   if (!parsedQuery.data.before) {
     sessionItems = mergePendingApprovalItems(sessionItems, pendingApprovals)
   }
-  // Detached delegate_task wrappers freeze their persisted output at detach
-  // time. Overlay the authoritative child-run terminal state so item-only
-  // timeline consumers see the settled subagent instead of a running one.
-  // Best-effort: diagnostics failure falls back to the persisted view.
-  if (delegationRuntime && hasDetachedDelegateTaskResult(sessionItems)) {
+  // Persisted delegate_task progress can lag the child store because only the
+  // first queued update is durable. Reconcile every lifecycle state before
+  // returning the snapshot whose latestSeq becomes the renderer's SSE floor.
+  if (delegationRuntime && hasDelegateTaskChildResult(sessionItems)) {
     try {
       const { childRuns } = await delegationRuntime.diagnostics(threadId)
-      sessionItems = overlayDetachedDelegateTaskResults(sessionItems, childRuns)
+      const overlay = overlayDelegateTaskChildRuns(sessionItems, childRuns)
+      sessionItems = overlay.items
+      if (overlay.unresolved) replayFloor = 0
     } catch {
-      // Keep the persisted projection on diagnostics failure.
+      // Replaying from zero is safer than pairing stale queued progress with a
+      // cursor that has already consumed its authoritative lifecycle event.
+      replayFloor = 0
     }
   }
   // Re-apply the anchor after healing/merging so a newly materialized gate
@@ -409,7 +413,7 @@ export async function getThreadTimeline(
 
   return jsonResponse(ThreadTimelineResponseSchema.parse({
     ...ThreadSchemaReadable.parse(projectTimelineThread(pageThread)),
-    latestSeq,
+    latestSeq: replayFloor,
     latestTurn: latestTurnMetadata,
     pendingUserInputIds,
     ...(pendingApprovalIds ? { pendingApprovalIds } : {}),

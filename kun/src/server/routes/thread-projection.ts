@@ -206,57 +206,61 @@ export function projectPublicThreadRecord(thread: ThreadRecord): ThreadRecord {
   return { ...publicThread, turns }
 }
 
-/**
- * A detached delegate_task wrapper settles at detach time, so its persisted
- * tool_result output freezes at `{ status: 'running', detached: true }` while
- * the child run keeps evolving. Item-only timeline consumers would therefore
- * rehydrate the subagent card as running forever after the child completed.
- */
-export function hasDetachedDelegateTaskResult(items: readonly TurnItem[]): boolean {
+/** True when the page contains a delegate_task result linked to a child run. */
+export function hasDelegateTaskChildResult(items: readonly TurnItem[]): boolean {
   return items.some(
     (item) => item.kind === 'tool_result' &&
       item.toolName === 'delegate_task' &&
-      detachedChildIdFromToolResult(item) !== undefined
+      delegateTaskAttempt(item) !== undefined
   )
 }
 
 /**
- * Overlay the authoritative terminal child-run state onto those frozen
- * outputs. Read-only: nothing is persisted and model-visible history stays
- * untouched; only the timeline projection reflects the settled record so it
- * matches what live child lifecycle events already told the renderer.
+ * Overlay the authoritative child-run record onto persisted delegate_task
+ * progress. The first queued update is durable while later running updates can
+ * be transient, so a timeline snapshot must reconcile every lifecycle state,
+ * not only terminal detached children. This projection is read-only: canonical
+ * model history remains unchanged.
  */
-export function overlayDetachedDelegateTaskResults(
+export function overlayDelegateTaskChildRuns(
   items: TurnItem[],
   childRuns: readonly ChildRunRecord[]
-): TurnItem[] {
-  const terminalRunsById = new Map<string, ChildRunRecord>()
-  for (const run of childRuns) {
-    if (run.status === 'completed' || run.status === 'failed' || run.status === 'aborted') {
-      terminalRunsById.set(run.id, run)
-    }
-  }
-  if (terminalRunsById.size === 0) return items
+): { items: TurnItem[]; unresolved: boolean } {
+  const runsById = new Map(childRuns.map((run) => [run.id, run]))
   let changed = false
+  let unresolved = false
   const next = items.map((item): TurnItem => {
     if (item.kind !== 'tool_result' || item.toolName !== 'delegate_task') return item
-    const childId = detachedChildIdFromToolResult(item)
-    if (!childId) return item
-    const run = terminalRunsById.get(childId)
-    if (!run) return item
+    const attempt = delegateTaskAttempt(item)
+    if (!attempt) return item
+    const run = runsById.get(attempt.childId)
+    if (
+      !run ||
+      run.parentTurnId !== item.turnId ||
+      (run.resumeCount ?? 0) !== attempt.resumeCount
+    ) {
+      unresolved = true
+      return item
+    }
     changed = true
     return overlayChildRunOnToolResult(item, run)
   })
-  return changed ? next : items
+  return { items: changed ? next : items, unresolved }
 }
 
-function detachedChildIdFromToolResult(item: ToolResultTurnItem): string | undefined {
+function delegateTaskAttempt(
+  item: ToolResultTurnItem
+): { childId: string; resumeCount: number } | undefined {
   const output = item.output
   if (!output || typeof output !== 'object' || Array.isArray(output)) return undefined
   const record = output as Record<string, unknown>
-  if (record.detached !== true) return undefined
   const childId = record.childId
-  return typeof childId === 'string' && childId.trim() ? childId : undefined
+  if (typeof childId !== 'string' || !childId.trim()) return undefined
+  const resumeCount = typeof record.resumeCount === 'number' &&
+    Number.isSafeInteger(record.resumeCount) && record.resumeCount >= 0
+    ? record.resumeCount
+    : 0
+  return { childId: childId.trim(), resumeCount }
 }
 
 function overlayChildRunOnToolResult(
@@ -268,20 +272,21 @@ function overlayChildRunOnToolResult(
       ? item.output as Record<string, unknown>
       : {}),
     status: run.status,
-    ...(run.terminationReason !== undefined ? { terminationReason: run.terminationReason } : {}),
-    ...(run.resumable !== undefined ? { resumable: run.resumable } : {}),
-    ...(run.resumeCount !== undefined ? { resumeCount: run.resumeCount } : {}),
-    ...(run.failure ? { failure: run.failure } : {}),
-    ...(run.summary !== undefined ? { summary: run.summary } : {}),
-    ...(run.summaryTruncated !== undefined ? { summaryTruncated: run.summaryTruncated } : {}),
-    ...(run.resultRef ? { resultRef: run.resultRef } : {}),
-    ...(run.resultUnavailableReason
-      ? { resultUnavailableReason: run.resultUnavailableReason }
-      : {}),
-    ...(run.error !== undefined ? { error: run.error } : {}),
-    ...(run.toolInvocations !== undefined ? { toolInvocations: run.toolInvocations } : {}),
-    ...(run.durationMs !== undefined ? { durationMs: run.durationMs } : {}),
-    ...(run.queuedMs !== undefined ? { queuedMs: run.queuedMs } : {})
+    detached: run.detached === true,
+    terminationReason: run.terminationReason,
+    resumable: run.resumable === true,
+    resumeCount: run.resumeCount ?? 0,
+    failure: run.failure,
+    summary: run.summary,
+    evidence: run.evidence,
+    usage: run.usage,
+    summaryTruncated: run.summaryTruncated,
+    resultRef: run.resultRef,
+    resultUnavailableReason: run.resultUnavailableReason,
+    error: run.error,
+    toolInvocations: run.toolInvocations,
+    durationMs: run.durationMs,
+    queuedMs: run.queuedMs
   }
   return {
     ...item,
