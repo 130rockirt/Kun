@@ -20,10 +20,20 @@ export function createInitialWorkbenchPreparer(
     const preparation = (async () => {
       await deps.boot()
       const { route, initialSetupOpen } = deps.getSnapshot()
-      await Promise.all([
-        route === 'settings' ? deps.loadSettingsView() : deps.loadWorkbench(),
-        initialSetupOpen ? deps.loadInitialSetupDialog() : Promise.resolve()
-      ])
+      const routeComponent = route === 'settings'
+        ? deps.loadSettingsView()
+        : deps.loadWorkbench()
+      const setupComponent = initialSetupOpen
+        ? deps.loadInitialSetupDialog()
+        : Promise.resolve()
+      await Promise.all([routeComponent, setupComponent])
+      const finalSnapshot = deps.getSnapshot()
+      if (finalSnapshot.route !== route || finalSnapshot.initialSetupOpen !== initialSetupOpen) {
+        await Promise.all([
+          finalSnapshot.route === 'settings' ? deps.loadSettingsView() : deps.loadWorkbench(),
+          finalSnapshot.initialSetupOpen ? deps.loadInitialSetupDialog() : Promise.resolve()
+        ])
+      }
     })()
     activePreparation = preparation
     void preparation.catch(() => {

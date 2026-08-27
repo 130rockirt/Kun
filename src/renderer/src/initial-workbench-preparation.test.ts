@@ -14,9 +14,9 @@ function createDeps(overrides: { route?: string; initialSetupOpen?: boolean } = 
       route: overrides.route ?? 'chat',
       initialSetupOpen: overrides.initialSetupOpen ?? false
     })),
-    loadWorkbench: vi.fn(async () => undefined),
-    loadSettingsView: vi.fn(async () => undefined),
-    loadInitialSetupDialog: vi.fn(async () => undefined)
+    loadWorkbench: vi.fn<() => Promise<unknown>>(async () => undefined),
+    loadSettingsView: vi.fn<() => Promise<unknown>>(async () => undefined),
+    loadInitialSetupDialog: vi.fn<() => Promise<unknown>>(async () => undefined)
   }
 }
 
@@ -48,6 +48,26 @@ describe('initial workbench preparation', () => {
     expect(deps.loadSettingsView).toHaveBeenCalledTimes(1)
     expect(deps.loadInitialSetupDialog).toHaveBeenCalledTimes(1)
     expect(deps.loadWorkbench).not.toHaveBeenCalled()
+  })
+
+  it('preloads the final route and setup state after deferred imports', async () => {
+    let snapshot = { route: 'chat', initialSetupOpen: false }
+    const pendingWorkbench = deferred()
+    const deps = createDeps()
+    deps.getSnapshot.mockImplementation(() => snapshot)
+    deps.loadWorkbench.mockReturnValueOnce(pendingWorkbench.promise)
+    const prepare = createInitialWorkbenchPreparer(deps)
+
+    const preparation = prepare()
+    await Promise.resolve()
+    expect(deps.loadWorkbench).toHaveBeenCalledTimes(1)
+    snapshot = { route: 'settings', initialSetupOpen: true }
+    pendingWorkbench.resolve()
+    await preparation
+
+    expect(deps.loadSettingsView).toHaveBeenCalledTimes(1)
+    expect(deps.loadInitialSetupDialog).toHaveBeenCalledTimes(1)
+    expect(deps.loadWorkbench).toHaveBeenCalledTimes(1)
   })
 
   it('allows retry after a failed preparation', async () => {

@@ -351,7 +351,7 @@ describe('StartupGate', () => {
     expect(api.onState).not.toHaveBeenCalled()
   })
 
-  it('shows the recovery_required styling on the shell', async () => {
+  it('announces recovery_required as a terminal state with a reload action', async () => {
     const api = installStartupApi('bootstrapping')
     renderGate({})
     await act(async () => undefined)
@@ -360,7 +360,11 @@ describe('StartupGate', () => {
     })
     expect(container.textContent).toContain('Kun startup requires recovery.')
     expect(container.querySelector('.kun-startup')?.getAttribute('data-recovery')).toBe('true')
-    expect(container.querySelector('[role="progressbar"]')?.getAttribute('aria-label'))
-      .toBe('Kun startup requires recovery')
+    const alert = container.querySelector('[role="alert"]')
+    expect(alert).not.toBeNull()
+    expect(alert?.getAttribute('aria-busy')).toBeNull()
+    expect(container.querySelector('[role="progressbar"]')).toBeNull()
+    expect([...container.querySelectorAll('button')]
+      .some((button) => button.textContent === 'Reload Kun')).toBe(true)
   })
 })

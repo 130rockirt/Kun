@@ -270,11 +270,37 @@ export function StartupGate({
     )
   }
   const recovering = phase === 'recovery_required'
+  if (recovering) {
+    return (
+      <main className="kun-startup" data-recovery="true">
+        <section className="kun-startup__content" role="alert" aria-live="assertive">
+          <div className="kun-startup__artwork" aria-hidden="true">
+            <img
+              className="kun-startup__companions"
+              src={startupCompanionsUrl}
+              alt=""
+              data-testid="kun-startup-companions"
+            />
+          </div>
+          <div className="kun-startup__copy">
+            <h1 className="kun-startup__title">{startupPhaseLabel(phase)}</h1>
+            {phaseDetail ? <p className="kun-startup__detail">{phaseDetail}</p> : null}
+          </div>
+          <p className="kun-startup__hint">
+            Startup stopped before Kun could finish preparing the workspace.
+          </p>
+          <button type="button" className="secondary-button" onClick={() => requestApplicationReload()}>
+            Reload Kun
+          </button>
+        </section>
+      </main>
+    )
+  }
   const statusTitle = phase === 'ready'
     ? 'Opening your workspace...'
     : startupPhaseLabel(phase)
   return (
-    <main className="kun-startup" data-recovery={recovering ? 'true' : 'false'}>
+    <main className="kun-startup" data-recovery="false">
       <section
         className="kun-startup__content"
         role="status"
@@ -297,7 +323,7 @@ export function StartupGate({
         <div
           className="kun-startup__progress"
           role="progressbar"
-          aria-label={recovering ? 'Kun startup requires recovery' : 'Kun startup progress'}
+          aria-label="Kun startup progress"
         >
           <span className="kun-startup__progress-indicator" />
         </div>
