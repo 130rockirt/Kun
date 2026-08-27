@@ -35,9 +35,13 @@ const {
     TESSERACT_LSTM_CORE_FILES,
     BETTER_SQLITE_BUILD_PATHS,
     KUN_ROOT_HOISTED_DEPENDENCY_PATHS,
-    KUN_ROOT_HOISTED_VERSION_ANCHORS
+    KUN_ROOT_HOISTED_VERSION_ANCHORS,
+    validateRootHoistedDependencyClosure
   }
 } = require('./after-pack.cjs')
+const {
+  KUN_ROOT_HOISTED_SHARED_JS_PACKAGES
+} = require('./after-pack-hoisted-dependencies.cjs')
 
 test('requires the shared provider catalog in the packaged Kun runtime', () => {
   assert.equal(
@@ -223,6 +227,38 @@ test('rejects hoisting when a shared dependency version diverges between root an
   assert.throws(
     () => prunePackedApplicationPayload(context),
     /Cannot hoist pdfjs-dist: root=9\.9\.9, Kun=1\.0\.0/
+  )
+})
+
+test('requires every root-hoisted runtime dependency to exist outside the asar', (t) => {
+  const { root } = payloadFixture(t)
+  const modules = join(root, 'node_modules')
+  for (const packageName of KUN_ROOT_HOISTED_SHARED_JS_PACKAGES) {
+    const manifest = join(modules, ...packageName.split('/'), 'package.json')
+    writeFixture(manifest, JSON.stringify({ name: packageName, version: '1.0.0' }))
+  }
+  writeFixture(
+    join(modules, 'proxy-agent', 'package.json'),
+    JSON.stringify({
+      name: 'proxy-agent',
+      version: '8.0.2',
+      dependencies: { 'lru-cache': '^7.14.1' }
+    })
+  )
+  const lruManifest = join(
+    modules,
+    'proxy-agent',
+    'node_modules',
+    'lru-cache',
+    'package.json'
+  )
+  writeFixture(lruManifest, JSON.stringify({ name: 'lru-cache', version: '7.18.3' }))
+
+  assert.doesNotThrow(() => validateRootHoistedDependencyClosure(root))
+  rmSync(lruManifest)
+  assert.throws(
+    () => validateRootHoistedDependencyClosure(root),
+    /proxy-agent@8\.0\.2 -> lru-cache/
   )
 })
 

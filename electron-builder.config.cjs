@@ -3,6 +3,9 @@ const { join } = require('node:path')
 const {
   configureElectronNativeBuildEnvironment
 } = require('./scripts/electron-native-build-env.cjs')
+const {
+  KUN_ROOT_UNPACKED_SHARED_JS_PACKAGES
+} = require('./scripts/after-pack-hoisted-dependencies.cjs')
 
 // 品牌升级后构建环境变量改用 KUN_* 前缀;旧的 DEEPSEEK_GUI_* 仍然
 // 兼容读取,避免 CI / 本地发布脚本一刀切失效。
@@ -149,40 +152,9 @@ module.exports = {
     // Shared JS runtimes that the packaged Kun child process resolves upward
     // from kun/node_modules after after-pack removes its duplicate copies.
     // They must exist on disk under app.asar.unpacked/node_modules.
-    '**/node_modules/pdfjs-dist/**/*',
-    '**/node_modules/xlsx/**/*',
-    '**/node_modules/diff/**/*',
-    '**/node_modules/ipaddr.js/**/*',
-    '**/node_modules/proxy-agent/**/*',
-    '**/node_modules/agent-base/**/*',
-    '**/node_modules/http-proxy-agent/**/*',
-    '**/node_modules/https-proxy-agent/**/*',
-    '**/node_modules/pac-proxy-agent/**/*',
-    '**/node_modules/pac-resolver/**/*',
-    '**/node_modules/proxy-from-env/**/*',
-    '**/node_modules/socks-proxy-agent/**/*',
-    '**/node_modules/socks/**/*',
-    '**/node_modules/smart-buffer/**/*',
-    '**/node_modules/ip-address/**/*',
-    '**/node_modules/netmask/**/*',
-    '**/node_modules/degenerator/**/*',
-    '**/node_modules/ast-types/**/*',
-    '**/node_modules/escodegen/**/*',
-    '**/node_modules/esprima/**/*',
-    '**/node_modules/estraverse/**/*',
-    '**/node_modules/esutils/**/*',
-    '**/node_modules/get-uri/**/*',
-    '**/node_modules/data-uri-to-buffer/**/*',
-    '**/node_modules/basic-ftp/**/*',
-    '**/node_modules/debug/**/*',
-    '**/node_modules/ms/**/*',
-    '**/node_modules/semver/**/*',
-    '**/node_modules/yaml/**/*',
-    '**/node_modules/yauzl/**/*',
-    '**/node_modules/pend/**/*',
-    '**/node_modules/yazl/**/*',
-    '**/node_modules/buffer-crc32/**/*',
-    '**/node_modules/zod/**/*',
+    ...KUN_ROOT_UNPACKED_SHARED_JS_PACKAGES.map(
+      (packageName) => `**/node_modules/${packageName}/**/*`
+    ),
     // UI Plugin image validation uses Sharp's native binding and its separately
     // packaged libvips runtime; both must remain outside app.asar.
     '**/node_modules/sharp/**/*',

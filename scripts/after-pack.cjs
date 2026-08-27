@@ -120,6 +120,9 @@ const KUN_ROOT_HOISTED_DEPENDENCY_PATHS = [
   'quickjs-wasi',
   ...require('./after-pack-hoisted-dependencies.cjs').KUN_ROOT_HOISTED_SHARED_JS_PACKAGES
 ]
+const {
+  validateRootHoistedDependencyClosure
+} = require('./after-pack-hoisted-dependencies.cjs')
 const KUN_ROOT_HOISTED_VERSION_ANCHORS = [
   '@computer-use/nut-js',
   '@napi-rs/canvas',
@@ -374,6 +377,7 @@ function validatePackedApplicationPayload(context) {
     assertExists(join(modules, relativePath), `root-hoisted runtime dependency ${relativePath}`)
     assertMissing(join(kunModules, relativePath), `duplicate Kun dependency ${relativePath}`)
   }
+  validateRootHoistedDependencyClosure(root)
 }
 
 function validateBundledKunRuntime(context) {
@@ -671,6 +675,7 @@ exports._internals = {
   TESSERACT_LSTM_CORE_FILES,
   BETTER_SQLITE_BUILD_PATHS,
   KUN_ROOT_HOISTED_DEPENDENCY_PATHS,
-  KUN_ROOT_HOISTED_VERSION_ANCHORS
+  KUN_ROOT_HOISTED_VERSION_ANCHORS,
+  validateRootHoistedDependencyClosure
 }
 exports.default = afterPack

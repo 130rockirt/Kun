@@ -1,5 +1,8 @@
 'use strict'
 
+const { existsSync, readFileSync } = require('node:fs')
+const { dirname, join } = require('node:path')
+
 // Shared pure-JS runtimes that the root app and Kun resolve identically.
 // after-pack removes the Kun copy from app.asar.unpacked/kun/node_modules; the
 // packaged Kun child process then resolves these upward into
@@ -48,6 +51,75 @@ const KUN_ROOT_HOISTED_SHARED_JS_PACKAGES = [
   'zod'
 ]
 
+// These packages support the hoisted dependency graph but cannot themselves
+// be deduplicated by package name. lru-cache is nested under root proxy-agent,
+// while its Kun copy is top-level; buffer-crc32 and pend also have unrelated
+// root versions. They still need explicit asarUnpack patterns so a package
+// loaded from app.asar.unpacked never crosses back into app.asar for a child.
+const KUN_ROOT_HOISTED_SUPPORTING_JS_PACKAGES = [
+  'buffer-crc32',
+  'lru-cache',
+  'pend',
+  'proxy-agent-negotiate',
+  'tslib'
+]
+
+const KUN_ROOT_UNPACKED_SHARED_JS_PACKAGES = [
+  ...KUN_ROOT_HOISTED_SHARED_JS_PACKAGES,
+  ...KUN_ROOT_HOISTED_SUPPORTING_JS_PACKAGES
+]
+
+function resolveDependencyManifestOnDisk(root, issuerManifest, dependencyName) {
+  let current = dirname(issuerManifest)
+  while (true) {
+    const candidate = join(current, 'node_modules', ...dependencyName.split('/'), 'package.json')
+    if (existsSync(candidate)) return candidate
+    if (current === root) return undefined
+    const parent = dirname(current)
+    if (parent === current) return undefined
+    current = parent
+  }
+}
+
+// A Node child process starts from app.asar.unpacked/kun. Once one of its Kun
+// dependencies is hoisted to app.asar.unpacked/node_modules, every required
+// dependency reachable from that package must also exist on disk. Otherwise
+// Electron can leave the child inside app.asar and Node reports an apparently
+// missing package at runtime even though the archive contains it.
+function validateRootHoistedDependencyClosure(root) {
+  const modules = join(root, 'node_modules')
+  const pending = KUN_ROOT_HOISTED_SHARED_JS_PACKAGES.map((packageName) => ({
+    packageName,
+    manifest: join(modules, ...packageName.split('/'), 'package.json')
+  }))
+  const visited = new Set()
+
+  while (pending.length > 0) {
+    const current = pending.pop()
+    if (visited.has(current.manifest)) continue
+    if (!existsSync(current.manifest)) {
+      throw new Error(
+        `[after-pack] Missing unpacked root-hoisted package manifest ${current.packageName}`
+      )
+    }
+    visited.add(current.manifest)
+    const packageJson = JSON.parse(readFileSync(current.manifest, 'utf8'))
+    for (const dependencyName of Object.keys(packageJson.dependencies || {})) {
+      const manifest = resolveDependencyManifestOnDisk(root, current.manifest, dependencyName)
+      if (!manifest) {
+        throw new Error(
+          `[after-pack] Missing unpacked root-hoisted dependency ` +
+            `${packageJson.name || current.packageName}@${packageJson.version || 'unknown'} -> ${dependencyName}`
+        )
+      }
+      pending.push({ packageName: dependencyName, manifest })
+    }
+  }
+}
+
 module.exports = {
-  KUN_ROOT_HOISTED_SHARED_JS_PACKAGES
+  KUN_ROOT_HOISTED_SHARED_JS_PACKAGES,
+  KUN_ROOT_HOISTED_SUPPORTING_JS_PACKAGES,
+  KUN_ROOT_UNPACKED_SHARED_JS_PACKAGES,
+  validateRootHoistedDependencyClosure
 }
