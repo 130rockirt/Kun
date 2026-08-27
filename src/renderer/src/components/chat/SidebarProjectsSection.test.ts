@@ -215,36 +215,46 @@ describe('SidebarProjectsSection collapse memory', () => {
 
 describe('SidebarProjectsSection project expansion', () => {
   const expansionTranslation = (key: string, options?: Record<string, unknown>): string =>
-    key === 'sidebarWorkspaceShowMore'
-      ? `sidebarWorkspaceShowMore:${String(options?.count)}`
-      : key
+    key === 'sidebarWorkspaceShowMore' ? `sidebarWorkspaceShowMore:${String(options?.count)}` : key
+  const cindyThreads = (count: number) => Array.from({ length: count }, (_, index) => thread({
+    id: `cindy-${index + 1}`, title: `Cindy ${index + 1}`, workspace: '/Users/zxy/cindy',
+    updatedAt: `2026-06-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`
+  }))
 
   it('does not use a global thread total as a project remaining count', () => {
-    const cindyThreads = Array.from({ length: 6 }, (_, index) => thread({
-      id: `cindy-${index + 1}`,
-      title: `Cindy ${index + 1}`,
-      workspace: '/Users/zxy/cindy',
-      updatedAt: `2026-06-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`
-    }))
-
     const html = renderToStaticMarkup(createElement(SidebarProjectsSection, sidebarProjectProps({
-      threads: cindyThreads,
-      workspaceRoot: '/Users/zxy/cindy',
+      threads: cindyThreads(6), workspaceRoot: '/Users/zxy/cindy',
       workspaceRoots: ['/Users/zxy/cindy', '/Users/zxy/other'],
       threadListCursorByWorkspace: {
-        '/users/zxy/other': {
-          workspaceKey: '/users/zxy/other',
-          hasMore: false,
-          total: 1040
-        }
-      },
-      t: expansionTranslation
+        '/users/zxy/other': { workspaceKey: '/users/zxy/other', hasMore: false, total: 1040 }
+      }, t: expansionTranslation
     })))
-
     expect(html).toContain('sidebarWorkspaceShowMore:1')
     expect(html).not.toContain('sidebarWorkspaceShowMore:1034')
   })
 
+  it.each([[6, 'Cindy 6'], [5, null]])(
+    'expands %i loaded threads before requesting the remote page', async (count, newlyVisibleTitle) => {
+      const onLoadMoreThreads = vi.fn()
+      let renderer: ReactTestRenderer | null = null
+      await act(async () => { renderer = createRenderer(createElement(SidebarProjectsSection, sidebarProjectProps({
+        threads: cindyThreads(count), workspaceRoot: '/Users/zxy/cindy', workspaceRoots: ['/Users/zxy/cindy'],
+        onLoadMoreThreads, threadListCursorByWorkspace: {
+          '/users/zxy/cindy': { workspaceKey: '/users/zxy/cindy', hasMore: true }
+        }, t: expansionTranslation
+      }))) })
+      const showMore = () => renderer!.root.find((node) => node.type === 'button'
+        && String(node.props.children).startsWith('sidebarWorkspaceShowMore:'))
+      await act(async () => { showMore().props.onClick() })
+      expect(onLoadMoreThreads).toHaveBeenCalledTimes(newlyVisibleTitle ? 0 : 1)
+      if (newlyVisibleTitle) {
+        expect(JSON.stringify(renderer!.toJSON())).toContain(newlyVisibleTitle)
+        await act(async () => { showMore().props.onClick() })
+        expect(onLoadMoreThreads).toHaveBeenCalledTimes(1)
+      }
+      ;(renderer as ReactTestRenderer | null)?.unmount()
+    }
+  )
 })
 
 describe('SidebarProjectsSection groups', () => {

@@ -557,7 +557,7 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                       type="button"
                       data-cursor-spotlight-target
                       onClick={() => {
-                        if (workspaceCursor?.hasMore === true) {
+                        if (hiddenThreadCount === 0 && workspaceCursor?.hasMore === true) {
                           onLoadMoreThreads(workspacePath)
                           return
                         }
