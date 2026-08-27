@@ -271,6 +271,14 @@ describe('Windows installer migration ACL contract', () => {
     expect(script).not.toContain("@('--updated', '/currentuser')")
   })
 
+  it('hashes smoke payloads without relying on PowerShell module auto-loading', () => {
+    const script = readFileSync(smokePath, 'utf8')
+
+    expect(script).toContain('function Get-FileSha256')
+    expect(script).toContain('[Security.Cryptography.SHA256]::Create()')
+    expect(script).not.toContain('Get-FileHash')
+  })
+
   it('aborts an ambiguous dual-scope automatic update without a source marker', () => {
     const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8')
     const selectionStart = installerScript.indexOf('Function KunSelectAutomaticUpdateMode')

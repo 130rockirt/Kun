@@ -41,6 +41,20 @@ function Test-PathEqual([string]$Left, [string]$Right) {
   return [string]::Equals((Normalize-Path $Left), (Normalize-Path $Right), [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-FileSha256([string]$PathValue) {
+  $stream = [IO.File]::OpenRead($PathValue)
+  try {
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+      return ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '')
+    } finally {
+      $algorithm.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 function Show-InstallerDiagnostics([string]$Scenario) {
   if (-not (Test-Path -LiteralPath $script:diagnosticPath -PathType Leaf)) {
     return
@@ -485,14 +499,14 @@ try {
   $otherUserInstallRegistryPath = $script:installRegistryPath
   $otherUserUninstallRegistryPath = $script:uninstallRegistryPath
   $otherUserUninstallString = Get-ItemPropertyValue -LiteralPath $otherUserUninstallRegistryPath -Name UninstallString
-  $machineHashBeforeAmbiguousUpdate = (Get-FileHash -LiteralPath (Join-Path $machineTarget 'Kun.exe') -Algorithm SHA256).Hash
-  $otherUserHashBeforeAmbiguousUpdate = (Get-FileHash -LiteralPath (Join-Path $otherUserTarget 'Kun.exe') -Algorithm SHA256).Hash
+  $machineHashBeforeAmbiguousUpdate = Get-FileSha256 (Join-Path $machineTarget 'Kun.exe')
+  $otherUserHashBeforeAmbiguousUpdate = Get-FileSha256 (Join-Path $otherUserTarget 'Kun.exe')
   [Environment]::SetEnvironmentVariable('KUN_INSTALLER_UPDATE_SOURCE', '', 'Process')
   Invoke-Installer 'ambiguous automatic update scope rejection' @('--updated', '/S') 2
   Assert-True (Test-PathEqual (Get-ItemPropertyValue -LiteralPath $machineInstallRegistryPath -Name InstallLocation) $machineTarget) 'Ambiguous scope rejection changed the all-users registration.'
   Assert-True (Test-PathEqual (Get-ItemPropertyValue -LiteralPath $otherUserInstallRegistryPath -Name InstallLocation) $otherUserTarget) 'Ambiguous scope rejection changed the current-user registration.'
-  Assert-True ((Get-FileHash -LiteralPath (Join-Path $machineTarget 'Kun.exe') -Algorithm SHA256).Hash -eq $machineHashBeforeAmbiguousUpdate) 'Ambiguous scope rejection changed the all-users payload.'
-  Assert-True ((Get-FileHash -LiteralPath (Join-Path $otherUserTarget 'Kun.exe') -Algorithm SHA256).Hash -eq $otherUserHashBeforeAmbiguousUpdate) 'Ambiguous scope rejection changed the current-user payload.'
+  Assert-True ((Get-FileSha256 (Join-Path $machineTarget 'Kun.exe')) -eq $machineHashBeforeAmbiguousUpdate) 'Ambiguous scope rejection changed the all-users payload.'
+  Assert-True ((Get-FileSha256 (Join-Path $otherUserTarget 'Kun.exe')) -eq $otherUserHashBeforeAmbiguousUpdate) 'Ambiguous scope rejection changed the current-user payload.'
 
   $attackerPath = Join-Path $root 'tampered-uninstaller.exe'
   $attackerMarker = Join-Path $root 'tampered-uninstaller-ran.txt'
