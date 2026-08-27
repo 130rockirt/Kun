@@ -262,6 +262,10 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
     const installerScript = ['installer.nsh', 'installer-process-check.nsh'].map((fileName) =>
       readFileSync(join(process.cwd(), 'build', fileName), 'utf8').replace(/\r\n/g, '\n')
     ).join('\n')
+    const automaticUpdateScript = readFileSync(
+      join(process.cwd(), 'build', 'installer-automatic-update.nsh'),
+      'utf8'
+    ).replace(/\r\n/g, '\n')
     const migrationScript = [
       'windows-installer-migration.ps1',
       'windows-installer-migration-paths.ps1',
@@ -388,6 +392,10 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
     )
     expect(installerScript).toContain('KUN_INSTALLER_IN_PLACE_UPDATE')
     expect(installerScript).toContain('KUN_INSTALLER_AUTOMATIC_UPDATE')
+    expect(automaticUpdateScript).toContain('Function KunFinishAutomaticUpdateTransaction')
+    expect(automaticUpdateScript.indexOf('SetOutPath "$PLUGINSDIR"')).toBeLessThan(
+      automaticUpdateScript.indexOf('!insertmacro kunRunMigrationHelper SwitchUpdatePayload')
+    )
     expect(installerScript).toContain('Function KunSecureSelectedUninstallRegistration')
     expect(installerScript).toContain('Function KunSecureCurrentUserUninstallRegistration')
     expect(installerScript).toContain('!insertmacro kunRunMigrationHelper ResolveUninstaller')
