@@ -31,6 +31,35 @@ export async function requestOfficialProviderCliInstall(
   return requestJson(runtimeRequest, '/v1/model-connections/official-cli/install', 'POST')
 }
 
+export type OfficialProviderCliProgressEmitter = (state: SdkDownloadState) => void
+
+export function startOfficialProviderCliProgress(
+  runtimeRequest: RuntimeRequest,
+  emit: OfficialProviderCliProgressEmitter,
+  intervalMs = 1_000
+): () => void {
+  let stopped = false
+  let pending = false
+  const timer = setInterval(() => {
+    if (stopped || pending) return
+    pending = true
+    void requestOfficialProviderCliStatus(runtimeRequest)
+      .then((status) => {
+        if (stopped) return
+        if (status.download) emit(status.download)
+        if (status.download?.status === 'done' || status.download?.status === 'error') stop()
+      })
+      .catch(() => undefined)
+      .finally(() => { pending = false })
+  }, intervalMs)
+  timer.unref?.()
+  const stop = (): void => {
+    stopped = true
+    clearInterval(timer)
+  }
+  return stop
+}
+
 export async function requestOfficialProviderCliModels(
   runtimeRequest: RuntimeRequest
 ): Promise<AntigravitySubscriptionModelCatalog> {

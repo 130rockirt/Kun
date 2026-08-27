@@ -236,7 +236,7 @@ export async function verifyOfficialProviderLogin(options: {
     options.spawnFn
   )
   const catalog = parseAntigravityModelCatalog(output.stdout)
-  const models = catalog.models.map((model) => model.id)
+  const models: string[] = catalog.models.map((model) => model.id)
   if (models.length === 0) {
     throw new Error(output.stderr.trim() || 'Antigravity CLI login could not be verified')
   }

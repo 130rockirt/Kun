@@ -65,7 +65,8 @@ import {
 import {
   requestOfficialProviderCliInstall,
   requestOfficialProviderCliModels,
-  requestOfficialProviderCliStatus
+  requestOfficialProviderCliStatus,
+  startOfficialProviderCliProgress
 } from '../runtime-official-provider-cli'
 import {
   discoverCursorSubscription
@@ -318,9 +319,17 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
   ipcMain.handle('gemini-subscription:cli-status', async () =>
     requestOfficialProviderCliStatus(runtimeRequest)
   )
-  ipcMain.handle('gemini-subscription:cli-install', async () =>
-    requestOfficialProviderCliInstall(runtimeRequest)
-  )
+  let stopOfficialProviderCliProgress: (() => void) | undefined
+  ipcMain.handle('gemini-subscription:cli-install', async () => {
+    const state = await requestOfficialProviderCliInstall(runtimeRequest)
+    if (!stopOfficialProviderCliProgress) {
+      stopOfficialProviderCliProgress = startOfficialProviderCliProgress(
+        runtimeRequest,
+        (progress) => getMainWindow()?.webContents.send('gemini-subscription:cli-progress', progress)
+      )
+    }
+    return state
+  })
   ipcMain.handle('gemini-subscription:models', async () =>
     requestOfficialProviderCliModels(runtimeRequest)
   )

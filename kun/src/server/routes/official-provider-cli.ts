@@ -14,9 +14,10 @@ export async function officialProviderCliStatus(
 export async function installOfficialProviderCli(
   service: OfficialProviderCliService | undefined
 ): Promise<JsonResponse> {
-  return service
-    ? jsonResponse(await service.install())
-    : ERRORS.unavailable('official provider CLI is unavailable')
+  if (!service) return ERRORS.unavailable('official provider CLI is unavailable')
+  const state = service.install()
+  void state.catch(() => undefined)
+  return jsonResponse((await service.status()).download, 202)
 }
 
 export async function listOfficialProviderCliModels(

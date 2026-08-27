@@ -180,6 +180,7 @@ export function resolveActiveAgentSdkInstall(options: {
   platform: string
   arch: string
   binaryName: string
+  readBinaryHash?: (path: string) => string | undefined
 }): ValidAgentSdkInstall | undefined {
   if (!options.packageName) return undefined
   const root = agentSdkRoot(options.userDataDir)
@@ -214,15 +215,49 @@ export function resolveActiveAgentSdkInstall(options: {
   ) return undefined
   const binaryPath = join(dirname(manifestPath), manifest.binaryName)
   if (!hasNoSymlinkComponents(root, binaryPath)) return undefined
+  let stat
   try {
-    const stat = lstatSync(binaryPath)
+    stat = lstatSync(binaryPath)
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== manifest.binarySize) return undefined
   } catch {
     return undefined
   }
-  const actualBinaryHash = sha256FileSync(binaryPath)
-  if (!actualBinaryHash || actualBinaryHash !== manifest.binarySha256) return undefined
+  const binaryHash = readBinaryHashCached({
+    pointer,
+    manifest,
+    binaryPath,
+    stat,
+    readBinaryHash: options.readBinaryHash ?? sha256FileSync
+  })
+  if (!binaryHash) return undefined
   return { manifest, binaryPath, manifestPath }
+}
+
+type BinaryHashCacheInput = {
+  pointer: ActivePointer
+  manifest: AgentSdkInstallManifest
+  binaryPath: string
+  stat: { ino: number; mtimeMs: number; size: number }
+  readBinaryHash: (path: string) => string | undefined
+}
+
+let binaryHashCacheKey: string | undefined
+
+function readBinaryHashCached(input: BinaryHashCacheInput): string | undefined {
+  const key = JSON.stringify({
+    pointerManifestPath: input.pointer.manifestPath,
+    pointerManifestSha256: input.pointer.manifestSha256,
+    manifestSha256: input.manifest.binarySha256,
+    binaryPath: input.binaryPath,
+    ino: input.stat.ino,
+    mtimeMs: input.stat.mtimeMs,
+    size: input.stat.size
+  })
+  if (binaryHashCacheKey === key) return input.manifest.binarySha256
+  const actualBinaryHash = input.readBinaryHash(input.binaryPath)
+  if (!actualBinaryHash || actualBinaryHash !== input.manifest.binarySha256) return undefined
+  binaryHashCacheKey = key
+  return actualBinaryHash
 }
 
 export function isUnmanagedLegacyBinaryPresent(userDataDir: string, binaryName: string): boolean {

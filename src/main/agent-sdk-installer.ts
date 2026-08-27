@@ -34,14 +34,15 @@ export function platformBinaryPackage(): string | undefined {
   return arch && platform ? `@anthropic-ai/claude-agent-sdk-${platform}-${arch}` : undefined
 }
 
-function activeInstall(userDataDir: string): ReturnType<typeof resolveActiveAgentSdkInstall> {
+function activeInstall(userDataDir: string, readBinaryHash?: (path: string) => string | undefined): ReturnType<typeof resolveActiveAgentSdkInstall> {
   return resolveActiveAgentSdkInstall({
     userDataDir,
     sdkVersion: AGENT_SDK_VERSION,
     packageName: platformBinaryPackage(),
     platform: process.platform,
     arch: process.arch,
-    binaryName: claudeBinaryName()
+    binaryName: claudeBinaryName(),
+    readBinaryHash
   })
 }
 
@@ -78,10 +79,10 @@ export function resolveClaudeBinary(userDataDir: string, kunDirs: readonly strin
 
 export function agentSdkStatus(
   userDataDir: string,
-  _kunDirs: readonly string[]
+  kunDirs: readonly string[]
 ): { installed: boolean; path?: string } {
-  const active = activeInstall(userDataDir)
-  return active ? { installed: true, path: active.binaryPath } : { installed: false }
+  const path = resolveClaudeBinary(userDataDir, kunDirs)
+  return path ? { installed: true, path } : { installed: false }
 }
 
 export async function installClaudeBinary(options: {

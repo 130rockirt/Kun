@@ -9,9 +9,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { pack, type Header } from 'tar-stream'
 import {
   AGENT_SDK_INTEGRITY_BY_PACKAGE,
+  AGENT_SDK_VERSION,
   agentSdkStatus,
   claudeBinaryName,
-  installClaudeBinary
+  installClaudeBinary,
+  platformBinaryPackage,
+  resolveClaudeBinary
 } from './agent-sdk-installer'
 import {
   downloadArchive,
@@ -189,6 +192,37 @@ describe('Agent SDK manifest trust', () => {
     expect(resolveActiveAgentSdkInstall(installOptions(dir))?.binaryPath).toBe(managed.binary)
     await writeFile(managed.binary, 'tampered-binary')
     expect(resolveActiveAgentSdkInstall(installOptions(dir))).toBeUndefined()
+  })
+
+  it('reuses binary identity for repeated status checks and revalidates replacement files', async () => {
+    const dir = await tempDir()
+    const managed = await writeManagedInstall(dir)
+    let reads = 0
+    const options = {
+      ...installOptions(dir),
+      readBinaryHash: () => {
+        reads += 1
+        return managed.manifest.binarySha256
+      }
+    }
+    expect(resolveActiveAgentSdkInstall(options)?.binaryPath).toBe(managed.binary)
+    expect(resolveActiveAgentSdkInstall(options)?.binaryPath).toBe(managed.binary)
+    expect(reads).toBe(1)
+    await writeFile(managed.binary, 'replacement-binary')
+    expect(resolveActiveAgentSdkInstall(options)).toBeUndefined()
+  })
+
+  it('keeps status and resolver consistent for a bundled SDK binary', async () => {
+    const dir = await tempDir()
+    const packageRoot = join(dir, 'node_modules', platformBinaryPackage()!)
+    mkdirSync(packageRoot, { recursive: true })
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ version: AGENT_SDK_VERSION }))
+    writeFileSync(join(packageRoot, claudeBinaryName()), 'bundled-binary')
+    expect(resolveClaudeBinary(join(dir, 'user-data'), [dir])).toBe(join(packageRoot, claudeBinaryName()))
+    expect(agentSdkStatus(join(dir, 'user-data'), [dir])).toEqual({
+      installed: true,
+      path: join(packageRoot, claudeBinaryName())
+    })
   })
 
   it('does not treat an unmanaged legacy file as an installed runtime', async () => {
