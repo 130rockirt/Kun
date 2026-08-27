@@ -206,23 +206,24 @@ export function projectPublicThreadRecord(thread: ThreadRecord): ThreadRecord {
   return { ...publicThread, turns }
 }
 
-/** True when the page contains a delegate_task result linked to a child run. */
-export function hasDelegateTaskChildResult(items: readonly TurnItem[]): boolean {
+const CHILD_BACKED_TOOL_NAMES = new Set(['delegate_task', 'fast_context'])
+
+/** True when the page contains a child-backed tool result linked to a child run. */
+export function hasChildBackedToolResult(items: readonly TurnItem[]): boolean {
   return items.some(
     (item) => item.kind === 'tool_result' &&
-      item.toolName === 'delegate_task' &&
-      delegateTaskAttempt(item) !== undefined
+      CHILD_BACKED_TOOL_NAMES.has(item.toolName) &&
+      childBackedProgressNeedsOverlay(item)
   )
 }
 
 /**
- * Overlay the authoritative child-run record onto persisted delegate_task
+ * Overlay authoritative child-run records onto persisted child-backed tool
  * progress. The first queued update is durable while later running updates can
- * be transient, so a timeline snapshot must reconcile every lifecycle state,
- * not only terminal detached children. This projection is read-only: canonical
- * model history remains unchanged.
+ * be transient, so a timeline snapshot must reconcile every lifecycle state.
+ * This projection is read-only: canonical model history remains unchanged.
  */
-export function overlayDelegateTaskChildRuns(
+export function overlayChildRunsOnToolResults(
   items: TurnItem[],
   childRuns: readonly ChildRunRecord[]
 ): { items: TurnItem[]; unresolved: boolean } {
@@ -230,9 +231,12 @@ export function overlayDelegateTaskChildRuns(
   let changed = false
   let unresolved = false
   const next = items.map((item): TurnItem => {
-    if (item.kind !== 'tool_result' || item.toolName !== 'delegate_task') return item
-    const attempt = delegateTaskAttempt(item)
-    if (!attempt) return item
+    if (item.kind !== 'tool_result' || !CHILD_BACKED_TOOL_NAMES.has(item.toolName)) return item
+    const attempt = childBackedAttempt(item)
+    if (!attempt) {
+      if (childBackedProgressNeedsOverlay(item)) unresolved = true
+      return item
+    }
     const run = runsById.get(attempt.childId)
     if (
       !run ||
@@ -248,7 +252,15 @@ export function overlayDelegateTaskChildRuns(
   return { items: changed ? next : items, unresolved }
 }
 
-function delegateTaskAttempt(
+function childBackedProgressNeedsOverlay(item: ToolResultTurnItem): boolean {
+  if (childBackedAttempt(item)) return true
+  const output = item.output
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return false
+  const status = (output as Record<string, unknown>).status
+  return status === 'queued' || status === 'running'
+}
+
+function childBackedAttempt(
   item: ToolResultTurnItem
 ): { childId: string; resumeCount: number } | undefined {
   const output = item.output
@@ -267,18 +279,31 @@ function overlayChildRunOnToolResult(
   item: ToolResultTurnItem,
   run: ChildRunRecord
 ): ToolResultTurnItem {
-  const output = {
-    ...((item.output && typeof item.output === 'object' && !Array.isArray(item.output))
-      ? item.output as Record<string, unknown>
-      : {}),
+  const persistedOutput = (item.output && typeof item.output === 'object' && !Array.isArray(item.output))
+    ? item.output as Record<string, unknown>
+    : {}
+  const persistedChild = persistedOutput.child &&
+    typeof persistedOutput.child === 'object' &&
+    !Array.isArray(persistedOutput.child)
+    ? persistedOutput.child as Record<string, unknown>
+    : undefined
+  const launcher = run.launcher ?? persistedOutput.launcher
+  const output: Record<string, unknown> = {
+    ...persistedOutput,
+    childId: run.id,
+    parentThreadId: run.parentThreadId,
+    parentTurnId: run.parentTurnId,
     status: run.status,
     detached: run.detached === true,
+    ...(launcher ? { launcher } : {}),
+    ...(run.model ? { model: run.model } : {}),
     terminationReason: run.terminationReason,
     resumable: run.resumable === true,
     resumeCount: run.resumeCount ?? 0,
     failure: run.failure,
     summary: run.summary,
     evidence: run.evidence,
+    evidencePack: run.evidencePack ?? persistedOutput.evidencePack,
     usage: run.usage,
     summaryTruncated: run.summaryTruncated,
     resultRef: run.resultRef,
@@ -287,6 +312,22 @@ function overlayChildRunOnToolResult(
     toolInvocations: run.toolInvocations,
     durationMs: run.durationMs,
     queuedMs: run.queuedMs
+  }
+  if (item.toolName === 'fast_context' || persistedChild) {
+    output.child = {
+      ...(persistedChild ?? {}),
+      childId: run.id,
+      parentThreadId: run.parentThreadId,
+      parentTurnId: run.parentTurnId,
+      status: run.status,
+      detached: run.detached === true,
+      ...(launcher ? { launcher } : {}),
+      ...(run.model ? { model: run.model } : {}),
+      terminationReason: run.terminationReason,
+      resumable: run.resumable === true,
+      resumeCount: run.resumeCount ?? 0,
+      failure: run.failure
+    }
   }
   return {
     ...item,

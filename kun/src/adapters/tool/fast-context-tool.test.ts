@@ -124,6 +124,11 @@ describe('fast_context Fast Context provider', () => {
     expect(result.output as Record<string, unknown>).not.toHaveProperty('summary')
     expect(result.output as Record<string, unknown>).not.toHaveProperty('evidence')
     expect(typeof (result.output as { childId?: string }).childId).toBe('string')
+    expect(updates[0]).toMatchObject({
+      status: 'queued',
+      childId: expect.any(String),
+      child: { status: 'queued', childId: expect.any(String) }
+    })
     expect(updates.map((update) => update.status)).toContain('queued')
     expect(updates.map((update) => update.status)).toContain('running')
     // ChildRunExecutor receives the resolved child boundary rather than the

@@ -234,8 +234,8 @@ export function BackgroundShellOverlay({
           <X className="h-4 w-4" />
         </button>
       </div>
-      <div className="grid min-h-0 flex-1 grid-rows-[minmax(5rem,2fr)_minmax(8rem,3fr)] overflow-hidden">
-        <div className="min-h-0 overflow-y-auto border-b border-ds-border-muted">
+      <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(8rem,1fr)] overflow-hidden">
+        <div className="max-h-48 min-h-0 overflow-y-auto border-b border-ds-border-muted">
           {scopedSessions.length === 0 ? (
             <p className="px-4 py-5 text-[12px] text-ds-muted">{t('backgroundShells.empty')}</p>
           ) : scopedSessions.map((session) => {

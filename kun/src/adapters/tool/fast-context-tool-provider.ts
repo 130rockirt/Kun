@@ -97,7 +97,6 @@ export function buildFastContextToolProvider(
         // the immutable workspace captured by the parent tool context.
         const workspace = context.workspace
         const state = new FastContextRunState(parsed.tasks, onUpdate)
-        await state.emit()
         try {
           const record = await runtime.runChild({
             parentThreadId: context.threadId,

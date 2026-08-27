@@ -7,7 +7,7 @@ import type { ThreadService } from '../../services/thread-service.js'
 import type { DelegationRuntime } from '../../delegation/delegation-runtime.js'
 import { InMemorySessionStore } from '../../adapters/in-memory-session-store.js'
 
-describe('getThreadTimeline delegate_task child overlay', () => {
+describe('getThreadTimeline child-backed tool overlay', () => {
   async function timelineSetup(
     threadId: string,
     items: readonly TurnItem[],
@@ -77,6 +77,40 @@ describe('getThreadTimeline delegate_task child overlay', () => {
     }
   }
 
+  function fastContextResult(
+    threadId: string,
+    turnId: string,
+    status = 'queued'
+  ): TurnItem {
+    return {
+      id: 'item_fast_context_result',
+      turnId,
+      threadId,
+      role: 'tool',
+      status: 'running',
+      createdAt: '2026-08-27T03:26:43.157Z',
+      kind: 'tool_result',
+      toolName: 'fast_context',
+      callId: 'call_fast_context',
+      toolKind: 'tool_call',
+      output: {
+        childId: 'child_fast_context',
+        status,
+        label: 'Fast Context retrieval',
+        launcher: 'fast_context',
+        profile: 'explore',
+        evidencePack: { version: 1, tasks: [], uncertainties: ['pending'] },
+        child: {
+          childId: 'child_fast_context',
+          status,
+          launcher: 'fast_context',
+          profile: 'explore'
+        }
+      },
+      isError: false
+    }
+  }
+
   async function timelineItem(setup: Awaited<ReturnType<typeof timelineSetup>>) {
     const response = await getThreadTimeline(
       { get: async () => setup.record } as unknown as ThreadService,
@@ -130,6 +164,111 @@ describe('getThreadTimeline delegate_task child overlay', () => {
     const { body, item } = await timelineItem(setup)
     expect(body.latestSeq).toBe(7)
     expect(item.output.status).toBe('running')
+  })
+
+  it('hydrates Fast Context running state into both lifecycle projections', async () => {
+    const setup = await timelineSetup('thr_fast_context_running', [
+      fastContextResult('thr_fast_context_running', 'thr_fast_context_running_turn')
+    ], [childRun('thr_fast_context_running', 'running', {
+      id: 'child_fast_context',
+      launcher: 'fast_context',
+      fastContext: true,
+      model: 'retrieval-model'
+    })])
+    await setup.store.appendEvent('thr_fast_context_running', {
+      kind: 'turn_started',
+      seq: 7,
+      timestamp: '2026-08-27T03:26:44.157Z',
+      threadId: 'thr_fast_context_running',
+      turnId: 'thr_fast_context_running_turn',
+      status: 'running',
+      child: {
+        parentThreadId: 'thr_fast_context_running',
+        parentTurnId: 'thr_fast_context_running_turn',
+        childId: 'child_fast_context',
+        childStatus: 'running',
+        childSeq: 1,
+        childLauncher: 'fast_context'
+      }
+    })
+
+    const { body, item } = await timelineItem(setup)
+    expect(body.latestSeq).toBe(7)
+    expect(item.output).toMatchObject({
+      childId: 'child_fast_context',
+      status: 'running',
+      launcher: 'fast_context',
+      model: 'retrieval-model',
+      child: {
+        childId: 'child_fast_context',
+        status: 'running',
+        launcher: 'fast_context',
+        model: 'retrieval-model'
+      }
+    })
+    expect(item.isError).toBe(false)
+  })
+
+  it.each([
+    ['completed', false],
+    ['failed', true],
+    ['aborted', true]
+  ] as const)('hydrates authoritative Fast Context terminal state %s', async (status, isError) => {
+    const evidencePack = {
+      version: 1,
+      tasks: [{
+        index: 0,
+        title: 'Locate state',
+        query: 'Find the lifecycle owner',
+        evidence: [],
+        conclusion: 'Child store is authoritative.',
+        uncertainties: []
+      }],
+      uncertainties: []
+    }
+    const setup = await timelineSetup(`thr_fast_context_${status}`, [
+      fastContextResult(`thr_fast_context_${status}`, `thr_fast_context_${status}_turn`)
+    ], [childRun(`thr_fast_context_${status}`, status, {
+      id: 'child_fast_context',
+      launcher: 'fast_context',
+      fastContext: true,
+      evidencePack,
+      ...(status === 'failed'
+        ? { error: 'retrieval failed', failure: { source: 'runtime', code: 'retrieval_failed' } }
+        : {}),
+      ...(status === 'aborted' ? { error: 'retrieval stopped', terminationReason: 'user_stop' } : {})
+    })])
+
+    const { item } = await timelineItem(setup)
+    expect(item.output).toMatchObject({
+      status,
+      evidencePack,
+      child: { childId: 'child_fast_context', status }
+    })
+    expect(item.isError).toBe(isError)
+  })
+
+  it('widens replay for anonymous legacy Fast Context progress', async () => {
+    const result = fastContextResult('thr_fast_context_legacy', 'thr_fast_context_legacy_turn')
+    if (result.kind !== 'tool_result' || typeof result.output !== 'object' || !result.output) {
+      throw new Error('invalid Fast Context fixture')
+    }
+    delete (result.output as Record<string, unknown>).childId
+    const child = (result.output as { child?: Record<string, unknown> }).child
+    if (child) delete child.childId
+    const setup = await timelineSetup('thr_fast_context_legacy', [result], [])
+    await setup.store.appendEvent('thr_fast_context_legacy', {
+      kind: 'turn_started',
+      seq: 11,
+      timestamp: '2026-08-27T03:26:44.157Z',
+      threadId: 'thr_fast_context_legacy',
+      turnId: 'thr_fast_context_legacy_turn',
+      status: 'running'
+    })
+
+    const { body, item } = await timelineItem(setup)
+    expect(body.latestSeq).toBe(0)
+    expect(item.output).toMatchObject({ status: 'queued' })
   })
 
   it.each([

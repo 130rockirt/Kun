@@ -40,13 +40,13 @@ import {
 import { buildPublicItemHistoryPage } from '../../services/item-history-page.js'
 import type { DelegationRuntime } from '../../delegation/delegation-runtime.js'
 import {
-  hasDelegateTaskChildResult,
+  hasChildBackedToolResult,
   healSessionItemsForFinishedTurns,
   hydrateThreadItemsFromSession,
   loadThreadMetadata,
   mergePendingApprovalItems,
   omitTurnItems,
-  overlayDelegateTaskChildRuns,
+  overlayChildRunsOnToolResults,
   projectPublicThreadRecord,
   projectTimelineThread,
   projectTimelineTurn
@@ -368,13 +368,13 @@ export async function getThreadTimeline(
   if (!parsedQuery.data.before) {
     sessionItems = mergePendingApprovalItems(sessionItems, pendingApprovals)
   }
-  // Persisted delegate_task progress can lag the child store because only the
-  // first queued update is durable. Reconcile every lifecycle state before
+  // Persisted child-backed tool progress can lag the child store because only
+  // the first queued update is durable. Reconcile every lifecycle state before
   // returning the snapshot whose latestSeq becomes the renderer's SSE floor.
-  if (delegationRuntime && hasDelegateTaskChildResult(sessionItems)) {
+  if (delegationRuntime && hasChildBackedToolResult(sessionItems)) {
     try {
       const { childRuns } = await delegationRuntime.diagnostics(threadId)
-      const overlay = overlayDelegateTaskChildRuns(sessionItems, childRuns)
+      const overlay = overlayChildRunsOnToolResults(sessionItems, childRuns)
       sessionItems = overlay.items
       if (overlay.unresolved) replayFloor = 0
     } catch {
