@@ -72,12 +72,7 @@ export type SidebarProjectsContentProps = {
   threadListStatus: SidebarThreadListStatus; threadListError: string | null
   onRetryThreads: () => void
   onLoadMoreThreads: (workspacePath: string) => void
-  threadListCursorByWorkspace: Record<string, {
-    workspaceKey: string
-    nextCursor?: string
-    hasMore: boolean
-    total?: number
-  }>
+  threadListCursorByWorkspace: Record<string, import('../../store/chat-store-thread-pagination').WorkspaceThreadPageMeta>
   activeView: 'chat' | 'write' | 'claw'; activeThreadId: string | null; locale: string
   displayGroups: SidebarWorkspaceGroup[]
   sidebarCollapse: SidebarCollapseRegistry; sidebarOrder: SidebarOrderRegistry; sidebarFolders: SidebarFolderRegistry
@@ -321,12 +316,13 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
           const visibleThreads = visibleSelection.items
           const hiddenThreadCount = visibleSelection.hiddenCount
           const workspaceCursor = threadListCursorByWorkspace[workspaceRootIdentityKey(workspacePath)]
-          const hasWorkspaceRemoteMore = workspaceCursor?.hasMore === true
-          const knownWorkspaceRemoteCount = Math.max(
-            0,
-            (workspaceCursor?.total ?? rootThreads.length) - rootThreads.length
-          )
-          const hasMoreProjectThreads = hiddenThreadCount > 0 || hasWorkspaceRemoteMore
+          const workspacePageLoading = workspaceCursor?.status === 'loading'
+          const canLoadWorkspacePage = workspaceCursor?.status === 'unknown'
+            || (workspaceCursor?.status === 'ready' && workspaceCursor.hasMore)
+          const showExpansionControl = hiddenThreadCount > 0
+            || canLoadWorkspacePage
+            || workspacePageLoading
+            || rootThreads.length > 5
           return (
             <div
               key={workspacePath}
@@ -516,7 +512,7 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                     return renderFolder(folder)
                   })}
                   {rootThreads.length === 0 && rootFolders.length === 0 ? (
-                    threadListStatus === 'ready' ? (
+                    threadListStatus === 'ready' || threadListStatus === 'refreshing' ? (
                       <div className="flex items-center justify-between gap-2 px-2.5 py-1.5">
                         <div className="text-[12.5px] leading-5 text-ds-faint">
                           {searchQuery.trim()
@@ -552,12 +548,14 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                       <SidebarThreadSkeleton />
                     )
                   ) : visibleThreads.map((thread) => renderThreadRow(thread, workspacePath, null))}
-                  {hasMoreProjectThreads || rootThreads.length > 5 ? (
+                  {showExpansionControl ? (
                     <button
                       type="button"
                       data-cursor-spotlight-target
+                      disabled={workspacePageLoading}
+                      aria-busy={workspacePageLoading}
                       onClick={() => {
-                        if (hiddenThreadCount === 0 && workspaceCursor?.hasMore === true) {
+                        if (hiddenThreadCount === 0 && canLoadWorkspacePage) {
                           onLoadMoreThreads(workspacePath)
                           return
                         }
@@ -569,16 +567,15 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                           )
                         }))
                       }}
-                      className="ml-1 mt-1 rounded-md px-2.5 py-1.5 text-[12.5px] text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
+                      className="ml-1 mt-1 rounded-md px-2.5 py-1.5 text-[12.5px] text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
                     >
-                      {hasMoreProjectThreads
-                        ? t('sidebarWorkspaceShowMore', {
-                            count: Math.max(
-                              hiddenThreadCount,
-                              knownWorkspaceRemoteCount
-                            )
-                          })
-                        : t('sidebarWorkspaceShowLess')}
+                      {hiddenThreadCount > 0
+                        ? t('sidebarWorkspaceShowMore', { count: hiddenThreadCount })
+                        : workspacePageLoading
+                          ? t('sidebarWorkspaceLoading')
+                          : canLoadWorkspacePage
+                            ? t('sidebarWorkspaceLoadMore')
+                            : t('sidebarWorkspaceShowLess')}
                     </button>
                   ) : null}
                 </div>

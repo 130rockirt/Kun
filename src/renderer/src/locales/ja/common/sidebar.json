@@ -1,6 +1,7 @@
 {
   "threadRefreshing": "更新中…",
   "sidebarWorkspaceLoading": "スレッドを読み込み中…",
+  "sidebarWorkspaceLoadMore": "さらに読み込む",
   "sidebarWorkspaceLoadError": "スレッドを読み込めませんでした。",
   "threadHydrationLoadingTitle": "会話を読み込み中…",
   "threadHydrationLoadingDescription": "メッセージを読み込み、最新の会話状態を復元しています。",

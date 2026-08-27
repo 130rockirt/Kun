@@ -240,18 +240,20 @@ describe('SidebarProjectsSection project expansion', () => {
       await act(async () => { renderer = createRenderer(createElement(SidebarProjectsSection, sidebarProjectProps({
         threads: cindyThreads(count), workspaceRoot: '/Users/zxy/cindy', workspaceRoots: ['/Users/zxy/cindy'],
         onLoadMoreThreads, threadListCursorByWorkspace: {
-          '/users/zxy/cindy': { workspaceKey: '/users/zxy/cindy', hasMore: true }
+          '/users/zxy/cindy': {
+            workspaceKey: '/users/zxy/cindy', mode: 'active', status: 'unknown', hasMore: true
+          }
         }, t: expansionTranslation
       }))) })
-      const showMore = () => renderer!.root.find((node) => node.type === 'button'
-        && String(node.props.children).startsWith('sidebarWorkspaceShowMore:'))
-      await act(async () => { showMore().props.onClick() })
-      expect(onLoadMoreThreads).toHaveBeenCalledTimes(newlyVisibleTitle ? 0 : 1)
+      const findButton = (prefix: string) => renderer!.root.find((node) => node.type === 'button'
+        && String(node.props.children).startsWith(prefix))
       if (newlyVisibleTitle) {
+        await act(async () => { findButton('sidebarWorkspaceShowMore:').props.onClick() })
+        expect(onLoadMoreThreads).not.toHaveBeenCalled()
         expect(JSON.stringify(renderer!.toJSON())).toContain(newlyVisibleTitle)
-        await act(async () => { showMore().props.onClick() })
-        expect(onLoadMoreThreads).toHaveBeenCalledTimes(1)
       }
+      await act(async () => { findButton('sidebarWorkspaceLoadMore').props.onClick() })
+      expect(onLoadMoreThreads).toHaveBeenCalledTimes(1)
       ;(renderer as ReactTestRenderer | null)?.unmount()
     }
   )

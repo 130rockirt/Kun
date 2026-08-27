@@ -1,6 +1,7 @@
 {
   "threadRefreshing": "새로고침 중…",
   "sidebarWorkspaceLoading": "스레드 불러오는 중…",
+  "sidebarWorkspaceLoadMore": "더 불러오기",
   "sidebarWorkspaceLoadError": "스레드를 불러오지 못했습니다.",
   "threadHydrationLoadingTitle": "대화 불러오는 중…",
   "threadHydrationLoadingDescription": "메시지를 읽고 최신 대화 상태를 복원하고 있습니다.",

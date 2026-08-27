@@ -1,6 +1,7 @@
 {
   "threadRefreshing": "กำลังรีเฟรช…",
   "sidebarWorkspaceLoading": "กำลังโหลดเธรด…",
+  "sidebarWorkspaceLoadMore": "โหลดเพิ่มเติม",
   "sidebarWorkspaceLoadError": "โหลดเธรดไม่สำเร็จ",
   "threadHydrationLoadingTitle": "กำลังโหลดบทสนทนา…",
   "threadHydrationLoadingDescription": "กำลังอ่านข้อความและกู้คืนสถานะบทสนทนาล่าสุด",
