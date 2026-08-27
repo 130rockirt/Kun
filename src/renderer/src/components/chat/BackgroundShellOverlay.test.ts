@@ -64,6 +64,36 @@ describe('BackgroundShellOverlay', () => {
     vi.unstubAllGlobals()
   })
 
+  it('renders localized shell controls in English and Chinese', async () => {
+    const runtimeRequest = vi.fn(async () => response([
+      backgroundShell('shell-a', 'thread-a', 'npm run test')
+    ]))
+    vi.stubGlobal('window', {
+      clearInterval,
+      setInterval,
+      kunGui: { runtimeRequest }
+    })
+
+    for (const [locale, expected] of [
+      ['en', 'Background shells'],
+      ['zh', '后台 Shell']
+    ] as const) {
+      await i18n.changeLanguage(locale)
+      let renderer!: ReactTestRenderer
+      await act(async () => {
+        renderer = create(createElement(BackgroundShellOverlay, {
+          runtimeReady: true,
+          threadId: 'thread-a'
+        }))
+        await Promise.resolve()
+      })
+      await openOverlay(renderer)
+      expect(renderedText(renderer)).toContain(expected)
+      expect(renderedText(renderer)).not.toContain('backgroundShells.')
+      act(() => renderer.unmount())
+    }
+  })
+
   it('requests and displays background shells only for the active thread', async () => {
     const runtimeRequest = vi.fn(async () => response([
       backgroundShell('shell-a', 'thread-a', 'npm run test:a'),

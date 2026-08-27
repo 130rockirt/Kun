@@ -55,7 +55,7 @@ export function BackgroundShellOverlay({
   threadId,
   runtimeReady = true
 }: BackgroundShellOverlayProps): ReactElement | null {
-  const { t } = useTranslation('chat')
+  const { t } = useTranslation('common')
   const [open, setOpen] = useState(false)
   const [sessions, setSessions] = useState<BackgroundShellSession[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -123,19 +123,16 @@ export function BackgroundShellOverlay({
           <div className="flex items-center justify-between border-b border-ds-border-muted px-3 py-2">
             <div className="min-w-0">
               <p className="truncate text-[13px] font-medium text-ds-text">
-                {t('backgroundShells.title', { defaultValue: 'Background shells' })}
+                {t('backgroundShells.title')}
               </p>
               <p className="text-[11px] text-ds-muted">
-                {t('backgroundShells.runningCount', {
-                  defaultValue: '{{count}} running',
-                  count: runningCount
-                })}
+                {t('backgroundShells.runningCount', { count: runningCount })}
               </p>
             </div>
             <button
               type="button"
               className="rounded-md p-1 text-ds-muted hover:bg-ds-hover hover:text-ds-text"
-              aria-label={t('backgroundShells.close', { defaultValue: 'Close panel' })}
+              aria-label={t('backgroundShells.close')}
               onClick={() => setOpen(false)}
             >
               <X className="h-4 w-4" />
@@ -144,7 +141,7 @@ export function BackgroundShellOverlay({
           <div className="max-h-72 overflow-y-auto">
             {scopedSessions.length === 0 ? (
               <p className="px-3 py-4 text-[12px] text-ds-muted">
-                {t('backgroundShells.empty', { defaultValue: 'No background shells.' })}
+                {t('backgroundShells.empty')}
               </p>
             ) : (
               scopedSessions.map((session) => {
@@ -168,8 +165,10 @@ export function BackgroundShellOverlay({
                     <span className="min-w-0 flex-1">
                       <span className="block truncate font-mono text-[11px] text-ds-text">{session.command}</span>
                       <span className="block truncate text-[10px] text-ds-muted">
-                        {session.id} · {session.status}
-                        {session.exitCode !== null ? ` · exit ${session.exitCode}` : ''}
+                        {session.id} · {t(`backgroundShells.status.${session.status}`)}
+                        {session.exitCode !== null
+                          ? ` · ${t('backgroundShells.exitCode', { code: session.exitCode })}`
+                          : ''}
                       </span>
                     </span>
                   </button>
@@ -187,19 +186,17 @@ export function BackgroundShellOverlay({
                     className="shrink-0 rounded-md border border-ds-border-muted px-2 py-1 text-[11px] text-ds-text hover:bg-ds-hover"
                     onClick={() => void handleStop(selected.id)}
                   >
-                    {t('backgroundShells.stop', { defaultValue: 'Stop' })}
+                    {t('backgroundShells.stop')}
                   </button>
                 ) : null}
               </div>
               <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-ds-main/80 p-2 font-mono text-[11px] leading-5 text-ds-text">
-                {selected.output.trim() || t('backgroundShells.noOutput', { defaultValue: '(no output yet)' })}
+                {selected.output.trim() || t('backgroundShells.noOutput')}
               </pre>
               {selected.outputFilePath ? (
                 <p className="mt-2 truncate font-mono text-[10px] text-ds-muted" title={selected.outputFilePath}>
-                  {t('backgroundShells.outputFile', { defaultValue: 'Full output' })}: {selected.outputFilePath}
-                  {selected.outputTruncated
-                    ? ` · ${t('backgroundShells.outputTruncated', { defaultValue: 'preview truncated' })}`
-                    : ''}
+                  {t('backgroundShells.outputFile')}: {selected.outputFilePath}
+                  {selected.outputTruncated ? ` · ${t('backgroundShells.outputTruncated')}` : ''}
                 </p>
               ) : null}
             </div>
@@ -214,10 +211,7 @@ export function BackgroundShellOverlay({
       >
         <SquareTerminal className="h-3.5 w-3.5 text-accent" />
         <span>
-          {t('backgroundShells.badge', {
-            defaultValue: '{{count}} background shell(s)',
-            count: runningCount
-          })}
+          {t('backgroundShells.badge', { count: runningCount })}
         </span>
         {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
       </button>

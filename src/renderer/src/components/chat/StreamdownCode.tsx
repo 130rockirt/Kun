@@ -206,6 +206,7 @@ function CodeBlock({
   code: string
   language: string
 }): ReactNode {
+  const { t } = useTranslation('common')
   const { isAnimating } = useContext(StreamdownContext)
   const trimmedCode = useMemo(() => code.replace(TRAILING_NEWLINES_REGEX, ''), [code])
   const [html, setHtml] = useState(() => renderFallbackCodeHtml(trimmedCode))
@@ -284,8 +285,8 @@ function CodeBlock({
           <button
             type="button"
             className="ds-code-block-action"
-            title="Download code"
-            aria-label="Download code"
+            title={t('codeActionDownload')}
+            aria-label={t('codeActionDownload')}
             onClick={() => downloadCode(trimmedCode, language)}
             disabled={isAnimating}
           >
@@ -294,8 +295,8 @@ function CodeBlock({
           <button
             type="button"
             className="ds-code-block-action"
-            title="Copy code"
-            aria-label="Copy code"
+            title={t('codeActionCopy')}
+            aria-label={t('codeActionCopy')}
             onClick={() => void handleCopy()}
             disabled={isAnimating}
           >
@@ -309,8 +310,8 @@ function CodeBlock({
             <button
               type="button"
               className="ds-code-block-action"
-              title={expanded ? 'Collapse code' : 'Expand code'}
-              aria-label={expanded ? 'Collapse code' : 'Expand code'}
+              title={expanded ? t('codeActionCollapse') : t('codeActionExpand')}
+              aria-label={expanded ? t('codeActionCollapse') : t('codeActionExpand')}
               onClick={() => setExpanded((value) => !value)}
             >
               {expanded ? (
@@ -335,7 +336,7 @@ function CodeBlock({
           <button
             type="button"
             className="ds-code-block-fade"
-            aria-label="Expand code"
+            aria-label={t('codeActionExpand')}
             onClick={() => setExpanded(true)}
           />
         ) : null}
