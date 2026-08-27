@@ -35,11 +35,14 @@ const KUN_RUNTIME_REQUIRED_PATHS = [
   'kun/dist/tui/graph-mode.js',
   'kun/package.json',
   'kun/package-lock.json',
-  'kun/node_modules/zod/package.json',
-  'kun/node_modules/diff/package.json',
-  'kun/node_modules/semver/package.json',
-  'kun/node_modules/yauzl/package.json',
-  'kun/node_modules/yazl/package.json',
+  // zod/diff/semver/yauzl/yazl were hoisted to the shared root node_modules
+  // (KUN_ROOT_HOISTED_DEPENDENCY_PATHS); kun resolves them upward at runtime,
+  // so only the root copies are asserted here.
+  'node_modules/zod/package.json',
+  'node_modules/diff/package.json',
+  'node_modules/semver/package.json',
+  'node_modules/yauzl/package.json',
+  'node_modules/yazl/package.json',
   'kun/node_modules/typescript/package.json',
   'kun/node_modules/typescript/lib/typescript.js',
   'kun/node_modules/typescript-language-server/package.json',
@@ -114,12 +117,14 @@ const BETTER_SQLITE_BUILD_PATHS = [
 const KUN_ROOT_HOISTED_DEPENDENCY_PATHS = [
   '@computer-use',
   '@napi-rs',
-  'quickjs-wasi'
+  'quickjs-wasi',
+  ...require('./after-pack-hoisted-dependencies.cjs').KUN_ROOT_HOISTED_SHARED_JS_PACKAGES
 ]
 const KUN_ROOT_HOISTED_VERSION_ANCHORS = [
   '@computer-use/nut-js',
   '@napi-rs/canvas',
-  'quickjs-wasi'
+  'quickjs-wasi',
+  ...require('./after-pack-hoisted-dependencies.cjs').KUN_ROOT_HOISTED_SHARED_JS_PACKAGES
 ]
 const REQUIRED_BUNDLED_EXTENSION_IDS = [
   'kun-examples.social-media-sidebar'

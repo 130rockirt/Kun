@@ -146,6 +146,43 @@ module.exports = {
     // OCR fallback loads native canvas bindings plus Tesseract worker/core
     // wasm and language data by filesystem path at runtime.
     '**/node_modules/@napi-rs/canvas*/**/*',
+    // Shared JS runtimes that the packaged Kun child process resolves upward
+    // from kun/node_modules after after-pack removes its duplicate copies.
+    // They must exist on disk under app.asar.unpacked/node_modules.
+    '**/node_modules/pdfjs-dist/**/*',
+    '**/node_modules/xlsx/**/*',
+    '**/node_modules/diff/**/*',
+    '**/node_modules/ipaddr.js/**/*',
+    '**/node_modules/proxy-agent/**/*',
+    '**/node_modules/agent-base/**/*',
+    '**/node_modules/http-proxy-agent/**/*',
+    '**/node_modules/https-proxy-agent/**/*',
+    '**/node_modules/pac-proxy-agent/**/*',
+    '**/node_modules/pac-resolver/**/*',
+    '**/node_modules/proxy-from-env/**/*',
+    '**/node_modules/socks-proxy-agent/**/*',
+    '**/node_modules/socks/**/*',
+    '**/node_modules/smart-buffer/**/*',
+    '**/node_modules/ip-address/**/*',
+    '**/node_modules/netmask/**/*',
+    '**/node_modules/degenerator/**/*',
+    '**/node_modules/ast-types/**/*',
+    '**/node_modules/escodegen/**/*',
+    '**/node_modules/esprima/**/*',
+    '**/node_modules/estraverse/**/*',
+    '**/node_modules/esutils/**/*',
+    '**/node_modules/get-uri/**/*',
+    '**/node_modules/data-uri-to-buffer/**/*',
+    '**/node_modules/basic-ftp/**/*',
+    '**/node_modules/debug/**/*',
+    '**/node_modules/ms/**/*',
+    '**/node_modules/semver/**/*',
+    '**/node_modules/yaml/**/*',
+    '**/node_modules/yauzl/**/*',
+    '**/node_modules/pend/**/*',
+    '**/node_modules/yazl/**/*',
+    '**/node_modules/buffer-crc32/**/*',
+    '**/node_modules/zod/**/*',
     // UI Plugin image validation uses Sharp's native binding and its separately
     // packaged libvips runtime; both must remain outside app.asar.
     '**/node_modules/sharp/**/*',

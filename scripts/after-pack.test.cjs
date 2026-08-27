@@ -208,6 +208,24 @@ test('removes only regenerable or on-demand payload from packaged applications',
   )
 })
 
+test('rejects hoisting when a shared dependency version diverges between root and Kun', (t) => {
+  const { context, root } = payloadFixture(t)
+  const modules = join(root, 'node_modules')
+  const kunModules = join(root, 'kun', 'node_modules')
+  for (const packageName of KUN_ROOT_HOISTED_VERSION_ANCHORS) {
+    const relativeManifest = join(...packageName.split('/'), 'package.json')
+    writeFixture(join(modules, relativeManifest), JSON.stringify({ version: '1.0.0' }))
+    writeFixture(join(kunModules, relativeManifest), JSON.stringify({ version: '1.0.0' }))
+  }
+  const diverged = join(modules, 'pdfjs-dist', 'package.json')
+  writeFileSync(diverged, JSON.stringify({ version: '9.9.9' }))
+
+  assert.throws(
+    () => prunePackedApplicationPayload(context),
+    /Cannot hoist pdfjs-dist: root=9\.9\.9, Kun=1\.0\.0/
+  )
+})
+
 test('installs an executable Linux product launcher over a preserved ELF payload', {
   skip: process.platform === 'win32' && 'requires POSIX executable modes'
 }, (t) => {
