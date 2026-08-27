@@ -196,6 +196,7 @@ function Assert-ShortcutPathAuthorized([string]$PathValue) {
 function Restore-ShortcutSnapshot($Records) {
   Remove-TransactionShortcuts
   foreach ($record in @($Records)) {
+    if (@($record.PSObject.Properties).Count -eq 0) { continue }
     $path = Normalize-FullPath ([string]$record.Path)
     Assert-ShortcutPathAuthorized $path
     $backup = Normalize-FullPath ([string]$record.Backup)
@@ -277,6 +278,7 @@ function Assert-UpdateTransactionPaths($Transaction) {
     }
   }
   foreach ($record in @($Transaction.Shortcuts)) {
+    if (@($record.PSObject.Properties).Count -eq 0) { continue }
     $backup = Normalize-FullPath ([string]$record.Backup)
     if (-not (Test-PathWithin $backup ([string]$expected.AssetsRoot)) -or
         (Test-PathEqual $backup ([string]$expected.AssetsRoot))) {
@@ -384,7 +386,7 @@ function Initialize-UpdateTransaction {
     RecoveryAppAsar = Join-Path $backup 'resources\app.asar'
     Registry = $registry
     UserPath = Get-UserPathSnapshot
-    Shortcuts = Get-ShortcutSnapshot $assets
+    Shortcuts = @(Get-ShortcutSnapshot $assets)
     HealthResult = Get-UpdateHealthResultPath
     HealthToken = [Guid]::NewGuid().ToString('N')
     CompletedMutations = @()

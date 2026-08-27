@@ -155,6 +155,7 @@ windowsOnly('Windows automatic update transaction', () => {
     assertSucceeded(run(input, 'Prepare'), 'Prepare')
     expect(statSync(input.transaction).isFile()).toBe(true)
     expect(statSync(`${input.transaction}.assets`).isDirectory()).toBe(true)
+    expect(JSON.parse(readFileSync(input.transaction, 'utf8').replace(/^\uFEFF/, '')).Shortcuts).toEqual([])
     payload(input.stage, 'Kun.exe')
     const switched = run(input, 'SwitchUpdatePayload', 'validate.before_check')
     assertExpectedFailure(switched, 'SwitchUpdatePayload')
@@ -312,4 +313,3 @@ windowsOnly('Windows automatic update transaction', () => {
     expect(existsSync(join(input.source, 'DeepSeek GUI.exe'))).toBe(true)
   })
 })
-
