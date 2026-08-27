@@ -27,10 +27,14 @@ function Convert-RegistryValueForJson($Value) {
 
 function Convert-RegistryValueFromJson($Record) {
   if ([string]::Equals([string]$Record.Encoding, 'base64', [StringComparison]::Ordinal)) {
-    return [Convert]::FromBase64String([string]$Record.Value)
+    # PowerShell enumerates arrays returned from functions. Preserve the typed
+    # array object required by RegistryKey.SetValue for binary registry data.
+    return ,([Convert]::FromBase64String([string]$Record.Value))
   }
   if ([string]$Record.Kind -eq 'MultiString') {
-    return [string[]]@($Record.Value)
+    # REG_MULTI_SZ requires String[], not the Object[] PowerShell would build
+    # after enumerating a normal function return value.
+    return ,([string[]]@($Record.Value))
   }
   if ([string]$Record.Kind -eq 'DWord') { return [int]$Record.Value }
   if ([string]$Record.Kind -eq 'QWord') { return [long]$Record.Value }
