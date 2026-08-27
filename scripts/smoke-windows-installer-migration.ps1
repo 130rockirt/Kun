@@ -331,7 +331,9 @@ try {
   Convert-ShortcutsToLegacy
   Set-ItemProperty -LiteralPath $script:installRegistryPath -Name InstallLocation -Value ''
   Set-Content -LiteralPath (Join-Path $legacySource 'legacy-note.txt') -Value 'keep legacy note'
-  Invoke-Installer 'legacy uninstall-source recovery' @('--updated', '/currentuser')
+  # Match the production quitAndInstall(true, true) command line as well as the
+  # installer's own --updated silent-mode detection.
+  Invoke-Installer 'legacy uninstall-source recovery' @('--updated', '/S', '/currentuser')
   Assert-RegisteredLocation $legacyTarget
   Assert-True ((Get-Content -LiteralPath (Join-Path $legacySource 'legacy-note.txt') -Raw).Trim() -eq 'keep legacy note') 'Legacy unknown content was not preserved.'
   Assert-True (-not (Test-Path -LiteralPath (Join-Path $legacyTarget 'legacy-note.txt'))) 'Legacy unknown content leaked into the canonical target.'

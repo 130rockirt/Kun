@@ -312,7 +312,7 @@ function Read-UpdateTransaction {
 function Recover-PendingUpdateTransaction {
   $transaction = Read-UpdateTransaction
   if ($null -eq $transaction) { return }
-  if ([string]$transaction.Phase -eq 'rolled_back') {
+  if (@('rolled_back', 'finalizing') -contains [string]$transaction.Phase) {
     Finalize-TerminalUpdateTransaction
     return
   }
@@ -358,7 +358,12 @@ function Initialize-UpdateTransaction {
   }
   [IO.Directory]::CreateDirectory($assets) | Out-Null
 
-  Backup-InPlacePayload
+  $inPlace = [bool](Test-PathEqual $source $target)
+  $recoveryRoot = $source
+  if ($inPlace) {
+    Backup-InPlacePayload
+    $recoveryRoot = $backup
+  }
   $registry = @()
   $hive = Get-TransactionRegistryHive
   $hiveName = if ((Get-NormalizedInstallMode) -eq 'all') { 'LocalMachine' } else { 'CurrentUser' }
@@ -385,9 +390,9 @@ function Initialize-UpdateTransaction {
     FailedPayloadRoot = $target + '.kun-failed'
     BackupRoot = $backup
     AssetsRoot = $assets
-    InPlace = [bool](Test-PathEqual $source $target)
-    RecoveryExecutable = Find-RecoveryPayloadExecutable $backup
-    RecoveryAppAsar = Join-Path $backup 'resources\app.asar'
+    InPlace = $inPlace
+    RecoveryExecutable = Find-RecoveryPayloadExecutable $recoveryRoot
+    RecoveryAppAsar = Join-Path $recoveryRoot 'resources\app.asar'
     Registry = $registry
     UserPath = Get-UserPathSnapshot
     Shortcuts = @(Get-ShortcutSnapshot $assets)
@@ -547,19 +552,27 @@ function Invoke-RollbackUpdateTransaction {
     if ([bool]$transaction.InPlace -and (Test-Path -LiteralPath $old)) {
       Move-Item -LiteralPath $old -Destination $target
     }
-    Restore-TransactionPayloadBackup $transaction
+    if ([bool]$transaction.InPlace) {
+      Restore-TransactionPayloadBackup $transaction
+    } else {
+      Assert-RecoveryPayload (Normalize-FullPath ([string]$transaction.Source))
+    }
     $previousTarget = Get-EnvironmentValue 'KUN_INSTALLER_TARGET'
     [Environment]::SetEnvironmentVariable('KUN_INSTALLER_TARGET', [string]$transaction.Target, 'Process')
     try {
-      $unknownJournal = Read-Journal
-      if ($null -ne $unknownJournal) {
-        foreach ($record in @(Get-JournalRecords $unknownJournal)) {
-          $validated = Get-ValidatedJournalRecord $record
-          if (Test-Path -LiteralPath $validated.Stash) {
-            Remove-Item -LiteralPath $validated.Stash -Recurse -Force
+      if ([bool]$transaction.InPlace) {
+        $unknownJournal = Read-Journal
+        if ($null -ne $unknownJournal) {
+          foreach ($record in @(Get-JournalRecords $unknownJournal)) {
+            $validated = Get-ValidatedJournalRecord $record
+            if (Test-Path -LiteralPath $validated.Stash) {
+              Remove-Item -LiteralPath $validated.Stash -Recurse -Force
+            }
           }
+          Remove-Journal
         }
-        Remove-Journal
+      } else {
+        Invoke-RestoreJournal
       }
     } finally {
       [Environment]::SetEnvironmentVariable('KUN_INSTALLER_TARGET', $previousTarget, 'Process')
@@ -648,22 +661,6 @@ function Invoke-CommitUpdateTransaction {
     $transaction = Set-UpdateTransactionPhase $transaction 'cleanup_pending'
     Invoke-InstallerFaultPoint 'commit.after_journal'
   }
-  $source = Normalize-FullPath ([string]$transaction.Source)
-  $target = Normalize-FullPath ([string]$transaction.Target)
-  if (-not (Test-PathEqual $source $target) -and (Test-Path -LiteralPath $source -PathType Container)) {
-    $cleanupCount = 0
-    foreach ($entry in @(Get-ChildItem -LiteralPath $source -Force | Where-Object { Test-KnownApplicationEntry $_ })) {
-      if ($entry.PSIsContainer) { Assert-NoReparsePointsInTree $entry 'Retired application directory' }
-      Remove-KnownApplicationEntry $entry
-      $cleanupCount += 1
-      if ($cleanupCount -eq 1) {
-        Invoke-InstallerFaultPoint 'commit.after_first_cleanup'
-      }
-    }
-    if (@(Get-ChildItem -LiteralPath $source -Force).Count -eq 0) {
-      Remove-Item -LiteralPath $source -Force
-    }
-  }
   Remove-LegacyTransactionShortcuts
   # Retain payload, registry/PATH, shortcut and journal recovery artifacts
   # through the first complete application startup. FinalizeUpdateTransaction
@@ -674,8 +671,14 @@ function Invoke-CommitUpdateTransaction {
 function Finalize-TerminalUpdateTransaction {
   $transaction = Read-UpdateTransaction
   if ($null -eq $transaction) { return }
-  if (@('committed', 'rolled_back') -notcontains [string]$transaction.Phase) {
+  if (@('committed', 'finalizing', 'rolled_back') -notcontains [string]$transaction.Phase) {
     throw 'The automatic update transaction is not terminal.'
+  }
+  if ([string]$transaction.Phase -eq 'committed') {
+    $transaction = Set-UpdateTransactionPhase $transaction 'finalizing'
+  }
+  if ([string]$transaction.Phase -eq 'finalizing' -and -not [bool]$transaction.InPlace) {
+    Remove-RetiredApplicationPayload (Normalize-FullPath ([string]$transaction.Source))
   }
   foreach ($path in @(
     ([string]$transaction.OldPayloadRoot),

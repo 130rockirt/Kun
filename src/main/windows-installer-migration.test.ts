@@ -257,6 +257,15 @@ describe('Windows installer migration ACL contract', () => {
     expect(script).toContain('retrying once after 2 seconds')
   })
 
+  it('runs automatic-update migration smoke scenarios through the production silent path', () => {
+    const script = readFileSync(smokePath, 'utf8')
+
+    expect(script).toContain(
+      "Invoke-Installer 'legacy uninstall-source recovery' @('--updated', '/S', '/currentuser')"
+    )
+    expect(script).not.toContain("@('--updated', '/currentuser')")
+  })
+
   it('aborts an ambiguous dual-scope automatic update without a source marker', () => {
     const installerScript = readFileSync(join(process.cwd(), 'build/installer.nsh'), 'utf8')
     const selectionStart = installerScript.indexOf('Function KunSelectAutomaticUpdateMode')

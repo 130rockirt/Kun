@@ -197,10 +197,10 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
 
     expect(() => afterPack._internals.validateBundledKunRuntime(context)).not.toThrow()
 
-    rmSync(join(unpackedRoot, 'kun/node_modules/zod'), { recursive: true, force: true })
+    rmSync(join(unpackedRoot, 'node_modules/zod'), { recursive: true, force: true })
 
     expect(() => afterPack._internals.validateBundledKunRuntime(context)).toThrow(
-      /kun\/node_modules\/zod\/package\.json/
+      /node_modules\/zod\/package\.json/
     )
   })
 
