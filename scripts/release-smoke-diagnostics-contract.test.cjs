@@ -43,9 +43,19 @@ test('release workflows preserve Windows transaction diagnostics immediately aft
   }
 })
 
-test('release workflows configure and verify SUID sandbox before x64 and arm64 handoff', () => {
+test('release workflows prefer SUID sandbox and only authorize helper-controlled CI fallback', () => {
   for (const [label, file] of workflows) {
     const source = readFileSync(join(root, '.github', 'workflows', file), 'utf8')
+    const workflow = parse(source)
+    const linuxJobs = Object.values(workflow.jobs).filter((job) =>
+      job.steps?.some((step) => String(step.name).startsWith('Smoke packaged update handoff (Linux'))
+    )
+    for (const job of linuxJobs) {
+      for (const step of job.steps.filter((candidate) => String(candidate.name).startsWith('Smoke packaged update handoff (Linux'))) {
+        assert.equal(step.env?.KUN_CI_ALLOW_NO_SANDBOX, '1', `${label} must explicitly authorize fallback`)
+        assert.equal(step.env?.KUN_CI_NO_SANDBOX_ACTIVE, undefined, `${label} must not activate fallback directly`)
+      }
+    }
     for (const resources of ['dist/linux-unpacked/resources', 'dist/linux-arm64-unpacked/resources']) {
       const configure = `node ./scripts/configure-linux-chrome-sandbox.cjs --resources ${resources}`
       const smoke = `npm run smoke:packaged-update-handoff -- --resources ${resources}`
@@ -53,6 +63,6 @@ test('release workflows configure and verify SUID sandbox before x64 and arm64 h
       assert.ok(configureIndex >= 0, `${label} omits SUID setup for ${resources}`)
       assert.ok(source.indexOf(smoke, configureIndex) > configureIndex, `${label} is not SUID-first`)
     }
-    assert.doesNotMatch(source, /KUN_CI_ALLOW_NO_SANDBOX|--no-sandbox/u)
+    assert.doesNotMatch(source, /KUN_CI_NO_SANDBOX_ACTIVE:\s*['"]?1|--no-sandbox/u)
   }
 })

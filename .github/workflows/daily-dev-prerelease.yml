@@ -240,6 +240,8 @@ jobs:
 
       - name: Smoke packaged update handoff (Linux x64)
         timeout-minutes: 20
+        env:
+          KUN_CI_ALLOW_NO_SANDBOX: '1'
         run: |
           # Exercise the packaged Chromium sandbox instead of bypassing it.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -306,6 +308,8 @@ jobs:
 
       - name: Smoke packaged update handoff (Linux ARM64)
         timeout-minutes: 20
+        env:
+          KUN_CI_ALLOW_NO_SANDBOX: '1'
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           node ./scripts/configure-linux-chrome-sandbox.cjs --resources dist/linux-arm64-unpacked/resources

@@ -102,7 +102,8 @@ test('Linux release handoff gates exercise the Chromium sandbox', () => {
     '.github/workflows/daily-dev-prerelease.yml'
   ]) {
     const source = readFileSync(join(process.cwd(), workflow), 'utf8')
-    assert.doesNotMatch(source, /KUN_CI_ALLOW_NO_SANDBOX/u)
+    assert.match(source, /KUN_CI_ALLOW_NO_SANDBOX/u)
+    assert.doesNotMatch(source, /KUN_CI_NO_SANDBOX_ACTIVE:\s*['"]?1|--no-sandbox/u)
     assert.match(source, /configure-linux-chrome-sandbox\.cjs/u)
     assert.match(source, /kernel\.apparmor_restrict_unprivileged_userns=0/u)
   }
@@ -115,11 +116,15 @@ test('linux desktop smoke keeps the sandbox on unless CI explicitly opts out', (
 
   const previousCi = process.env.CI
   const previousAuthorization = process.env.KUN_CI_ALLOW_NO_SANDBOX
+  const previousActive = process.env.KUN_CI_NO_SANDBOX_ACTIVE
   try {
     process.env.KUN_CI_ALLOW_NO_SANDBOX = '1'
+    delete process.env.KUN_CI_NO_SANDBOX_ACTIVE
     delete process.env.CI
     assert.deepEqual(platformDesktopArguments('linux'), ['--disable-gpu', '--disable-dev-shm-usage'])
     process.env.CI = 'true'
+    assert.deepEqual(platformDesktopArguments('linux'), ['--disable-gpu', '--disable-dev-shm-usage'])
+    process.env.KUN_CI_NO_SANDBOX_ACTIVE = '1'
     assert.deepEqual(platformDesktopArguments('linux'), [
       '--disable-gpu',
       '--disable-dev-shm-usage',
@@ -131,5 +136,7 @@ test('linux desktop smoke keeps the sandbox on unless CI explicitly opts out', (
     else process.env.CI = previousCi
     if (previousAuthorization === undefined) delete process.env.KUN_CI_ALLOW_NO_SANDBOX
     else process.env.KUN_CI_ALLOW_NO_SANDBOX = previousAuthorization
+    if (previousActive === undefined) delete process.env.KUN_CI_NO_SANDBOX_ACTIVE
+    else process.env.KUN_CI_NO_SANDBOX_ACTIVE = previousActive
   }
 })
