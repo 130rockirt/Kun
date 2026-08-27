@@ -219,10 +219,14 @@ async function nonStreamingResponse(chunks: AsyncIterable<ModelStreamChunk>, mod
   let usage: unknown
   const toolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = []
   const iterator = chunks[Symbol.asyncIterator]()
+  let completed = false
   try {
     for (;;) {
       const result = await nextGatewayChunk(iterator, lease.signal)
-      if (result.done) break
+      if (result.done) {
+        completed = true
+        break
+      }
       const chunk = result.value
       if (chunk.kind === 'assistant_text_delta') text += chunk.text
       else if (chunk.kind === 'assistant_reasoning_delta') reasoning += chunk.text
@@ -233,7 +237,7 @@ async function nonStreamingResponse(chunks: AsyncIterable<ModelStreamChunk>, mod
   } catch (error) {
     return openAiError(lease.timedOut() ? 'Gateway request timed out.' : errorMessage(error), lease.timedOut() ? 'timeout' : 'upstream_error', lease.timedOut() ? 504 : 502)
   } finally {
-    if (lease.signal.aborted) void iterator.return?.().catch(() => undefined)
+    if (!completed) await iterator.return?.().catch(() => undefined)
     lease.release()
   }
   const id = `${shape === 'chat' ? 'chatcmpl' : 'resp'}_${randomUUID()}`
@@ -248,42 +252,84 @@ function streamingResponse(chunks: AsyncIterable<ModelStreamChunk>, model: strin
   const id = `${shape === 'chat' ? 'chatcmpl' : 'resp'}_${randomUUID()}`
   const iterator = chunks[Symbol.asyncIterator]()
   let cancelled = false
+  let finished = false
+  let iteratorClosed = false
+  let responseStarted = false
+  const closeIterator = async (): Promise<void> => {
+    if (iteratorClosed) return
+    iteratorClosed = true
+    await iterator.return?.().catch(() => undefined)
+  }
+  const finish = async (controller: ReadableStreamDefaultController<Uint8Array>, closeUpstream: boolean): Promise<void> => {
+    if (finished) return
+    finished = true
+    if (closeUpstream) await closeIterator()
+    lease.release()
+    if (!cancelled) controller.close()
+  }
+  const send = (controller: ReadableStreamDefaultController<Uint8Array>, value: unknown): void => {
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`))
+  }
   const body = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const send = (value: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`))
+    async pull(controller) {
+      if (finished || cancelled) return
       try {
-        if (shape === 'responses') send({ type: 'response.created', response: { id, object: 'response', status: 'in_progress', model } })
-        for (;;) {
-          const result = await nextGatewayChunk(iterator, lease.signal)
-          if (result.done) break
-          const chunk = result.value
+        if (shape === 'responses' && !responseStarted) {
+          responseStarted = true
+          send(controller, { type: 'response.created', response: { id, object: 'response', status: 'in_progress', model } })
+          return
+        }
+        const result = await nextGatewayChunk(iterator, lease.signal)
+        if (result.done) {
+          iteratorClosed = true
           if (shape === 'chat') {
-            if (chunk.kind === 'assistant_text_delta') send({ id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { content: chunk.text }, finish_reason: null }] })
-            else if (chunk.kind === 'assistant_reasoning_delta') send({ id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { reasoning_content: chunk.text }, finish_reason: null }] })
-            else if (chunk.kind === 'tool_call_complete') send({ id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: chunk.callId, type: 'function', function: { name: chunk.toolName, arguments: JSON.stringify(chunk.arguments) } }] }, finish_reason: null }] })
-            else if (chunk.kind === 'error') send({ error: { message: chunk.message, type: 'upstream_error', code: chunk.code ?? 'upstream_error' } })
+            send(controller, { id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'))
           } else {
-            if (chunk.kind === 'assistant_text_delta') send({ type: 'response.output_text.delta', response_id: id, delta: chunk.text })
-            else if (chunk.kind === 'assistant_reasoning_delta') send({ type: 'response.reasoning_text.delta', response_id: id, delta: chunk.text })
-            else if (chunk.kind === 'tool_call_complete') send({ type: 'response.function_call_arguments.done', response_id: id, item_id: chunk.callId, name: chunk.toolName, arguments: JSON.stringify(chunk.arguments) })
-            else if (chunk.kind === 'error') send({ type: 'error', error: { message: chunk.message, type: 'upstream_error', code: chunk.code ?? 'upstream_error' } })
+            send(controller, { type: 'response.completed', response: { id, object: 'response', status: 'completed', model } })
           }
+          await finish(controller, false)
+          return
+        }
+        const chunk = result.value
+        if (chunk.kind === 'completed') {
+          if (shape === 'chat') {
+            send(controller, { id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+          } else {
+            send(controller, { type: 'response.completed', response: { id, object: 'response', status: 'completed', model } })
+          }
+          await finish(controller, true)
+          return
+        }
+        if (chunk.kind === 'error') {
+          if (shape === 'chat') send(controller, { error: { message: chunk.message, type: 'upstream_error', code: chunk.code ?? 'upstream_error' } })
+          else send(controller, { type: 'error', error: { message: chunk.message, type: 'upstream_error', code: chunk.code ?? 'upstream_error' } })
+          await finish(controller, true)
+          return
         }
         if (shape === 'chat') {
-          send({ id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
-          controller.enqueue(encoder.encode('data: [DONE]\n\n'))
-        } else send({ type: 'response.completed', response: { id, object: 'response', status: 'completed', model } })
+          if (chunk.kind === 'assistant_text_delta') send(controller, { id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { content: chunk.text }, finish_reason: null }] })
+          else if (chunk.kind === 'assistant_reasoning_delta') send(controller, { id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { reasoning_content: chunk.text }, finish_reason: null }] })
+          else if (chunk.kind === 'tool_call_complete') send(controller, { id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: chunk.callId, type: 'function', function: { name: chunk.toolName, arguments: JSON.stringify(chunk.arguments) } }] }, finish_reason: null }] })
+        } else {
+          if (chunk.kind === 'assistant_text_delta') send(controller, { type: 'response.output_text.delta', response_id: id, delta: chunk.text })
+          else if (chunk.kind === 'assistant_reasoning_delta') send(controller, { type: 'response.reasoning_text.delta', response_id: id, delta: chunk.text })
+          else if (chunk.kind === 'tool_call_complete') send(controller, { type: 'response.function_call_arguments.done', response_id: id, item_id: chunk.callId, name: chunk.toolName, arguments: JSON.stringify(chunk.arguments) })
+        }
       } catch (error) {
-        if (!cancelled) send({ error: { message: lease.timedOut() ? 'Gateway request timed out.' : errorMessage(error), type: 'gateway_error', code: lease.timedOut() ? 'timeout' : 'gateway_error' } })
-      } finally {
-        lease.release()
-        if (!cancelled) controller.close()
+        if (!cancelled) send(controller, { error: { message: lease.timedOut() ? 'Gateway request timed out.' : errorMessage(error), type: 'gateway_error', code: lease.timedOut() ? 'timeout' : 'gateway_error' } })
+        await finish(controller, true)
       }
     },
-    cancel() {
+    async cancel() {
       cancelled = true
       lease.cancel()
-      void iterator.return?.().catch(() => undefined)
+      await closeIterator()
+      if (!finished) {
+        finished = true
+        lease.release()
+      }
     }
   })
   return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' } })

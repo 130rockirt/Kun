@@ -32,6 +32,22 @@ class HangingGatewayModel implements ModelClient {
   }
 }
 
+class ErrorGatewayModel implements ModelClient {
+  provider = 'test'
+  model = 'default'
+  returned = 0
+  stream(): AsyncIterable<ModelStreamChunk> {
+    const owner = this
+    let emitted = false
+    return { [Symbol.asyncIterator]: () => ({
+      next: async () => emitted
+        ? new Promise<IteratorResult<ModelStreamChunk>>(() => undefined)
+        : (emitted = true, { done: false, value: { kind: 'error', message: 'upstream failed' } }),
+      return: async () => { owner.returned += 1; return { done: true, value: undefined } }
+    }) }
+  }
+}
+
 function authorizedRequest(path: string, init: RequestInit = {}): Request {
   return new Request(`http://localhost${path}`, {
     ...init,
@@ -185,14 +201,32 @@ describe('local OpenAI model gateway', () => {
   it('returns 504 at 120 seconds even when the upstream iterator ignores abort', async () => {
     vi.useFakeTimers()
     try {
-      const pending = gatewayChatCompletions(runtime(true, new HangingGatewayModel()), authorizedRequest('/v1/chat/completions', {
+      const model = new HangingGatewayModel()
+      const pending = gatewayChatCompletions(runtime(true, model), authorizedRequest('/v1/chat/completions', {
         method: 'POST', body: JSON.stringify({ model: 'local-model', messages: [{ role: 'user', content: 'hi' }] })
       }))
       await vi.advanceTimersByTimeAsync(120_000)
       await expect(pending).resolves.toMatchObject({ status: 504 })
+      expect(model.returned).toBe(1)
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('closes upstream iterators after non-streaming and streaming error chunks', async () => {
+    const nonStreaming = new ErrorGatewayModel()
+    const nonStreamingResponse = await gatewayChatCompletions(runtime(true, nonStreaming), authorizedRequest('/v1/chat/completions', {
+      method: 'POST', body: JSON.stringify({ model: 'local-model', messages: [{ role: 'user', content: 'hi' }], stream: false })
+    }))
+    expect(nonStreamingResponse.status).toBe(502)
+    expect(nonStreaming.returned).toBe(1)
+
+    const streaming = new ErrorGatewayModel()
+    const streamingResponse = await gatewayChatCompletions(runtime(true, streaming), authorizedRequest('/v1/chat/completions', {
+      method: 'POST', body: JSON.stringify({ model: 'local-model', messages: [{ role: 'user', content: 'hi' }], stream: true })
+    })) as Response
+    expect(await streamingResponse.text()).toContain('upstream failed')
+    expect(streaming.returned).toBe(1)
   })
 
   it('cancels a stream and releases its concurrency slot', async () => {
