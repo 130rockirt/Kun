@@ -1,4 +1,4 @@
-import { createElement } from 'react'
+import { createElement, type ReactElement } from 'react'
 import { act, create as createRenderer, type ReactTestRenderer } from 'react-test-renderer'
 import { describe, expect, it, vi } from 'vitest'
 import type { NormalizedThread } from '../../agent/types'
@@ -61,7 +61,7 @@ function sidebarProjectProps(overrides: Record<string, unknown> = {}) {
   }
 }
 
-type TestRenderer = { root: ReactTestRenderer['root']; unmount: () => void; toJSON: () => unknown }
+type TestRenderer = { root: ReactTestRenderer['root']; unmount: () => void; toJSON: () => unknown; update: (node: ReactElement) => void }
 
 let activeRenderer: TestRenderer | null = null
 
@@ -72,6 +72,13 @@ async function renderSidebar(props: Record<string, unknown>): Promise<void> {
       SidebarProjectsSection,
       sidebarProjectProps(props)
     )) as unknown as TestRenderer
+  })
+}
+
+async function rerenderSidebar(props: Record<string, unknown>): Promise<void> {
+  if (!activeRenderer) throw new Error('sidebar not rendered')
+  await act(async () => {
+    activeRenderer?.update(createElement(SidebarProjectsSection, sidebarProjectProps(props)))
   })
 }
 
@@ -118,6 +125,44 @@ function outputJson(): string {
   if (!activeRenderer) throw new Error('sidebar not rendered')
   return JSON.stringify(activeRenderer.toJSON())
 }
+
+describe('SidebarProjectsSection project page auto-load', () => {
+  const unknownCursor = {
+    '/users/zxy/cindy': {
+      workspaceKey: '/users/zxy/cindy', mode: 'active' as const, status: 'unknown' as const, hasMore: true
+    }
+  }
+
+  it('loads an expanded empty project once', async () => {
+    const onLoadMoreThreads = vi.fn()
+    await renderSidebar({ workspaceRoot: '/Users/zxy/cindy', workspaceRoots: ['/Users/zxy/cindy'], threadListCursorByWorkspace: unknownCursor, onLoadMoreThreads })
+    expect(onLoadMoreThreads).toHaveBeenCalledTimes(1)
+    expect(onLoadMoreThreads).toHaveBeenCalledWith('/Users/zxy/cindy')
+    await rerenderSidebar({ workspaceRoot: '/Users/zxy/cindy', workspaceRoots: ['/Users/zxy/cindy'], threadListCursorByWorkspace: { ...unknownCursor }, onLoadMoreThreads })
+    expect(onLoadMoreThreads).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not load projects with local threads, complete pages, searches, or an unsettled list', async () => {
+    const onLoadMoreThreads = vi.fn()
+    await renderSidebar({ threads: projectThreads(3), workspaceRoot: '/Users/zxy/cindy', workspaceRoots: ['/Users/zxy/cindy'], threadListCursorByWorkspace: unknownCursor, onLoadMoreThreads })
+    expect(onLoadMoreThreads).not.toHaveBeenCalled()
+    await renderSidebar({ workspaceRoot: '/Users/zxy/cindy', workspaceRoots: ['/Users/zxy/cindy'], threadListCursorByWorkspace: { '/users/zxy/cindy': { ...unknownCursor['/users/zxy/cindy'], status: 'complete', hasMore: false } }, onLoadMoreThreads })
+    expect(onLoadMoreThreads).not.toHaveBeenCalled()
+    await renderSidebar({ workspaceRoot: '/Users/zxy/cindy', workspaceRoots: ['/Users/zxy/cindy'], searchQuery: 'cindy', threadListCursorByWorkspace: unknownCursor, onLoadMoreThreads })
+    expect(onLoadMoreThreads).not.toHaveBeenCalled()
+    await renderSidebar({ workspaceRoot: '/Users/zxy/cindy', workspaceRoots: ['/Users/zxy/cindy'], threadListStatus: 'loading', threadListCursorByWorkspace: unknownCursor, onLoadMoreThreads })
+    expect(onLoadMoreThreads).not.toHaveBeenCalled()
+  })
+
+  it('retries after the project is collapsed and expanded again', async () => {
+    const onLoadMoreThreads = vi.fn()
+    await renderSidebar({ workspaceRoot: '/Users/zxy/cindy', workspaceRoots: ['/Users/zxy/cindy'], threadListCursorByWorkspace: unknownCursor, onLoadMoreThreads })
+    const projectButton = findButtonsByLabel('/Users/zxy/cindy')[0]
+    await act(async () => { (projectButton as { props: { onClick: () => void } }).props.onClick() })
+    await act(async () => { (findButtonsByLabel('/Users/zxy/cindy')[0] as { props: { onClick: () => void } }).props.onClick() })
+    expect(onLoadMoreThreads).toHaveBeenCalledTimes(2)
+  })
+})
 
 describe('SidebarProjectsSection expansion collapse integration', () => {
   it('collapses mid-expansion without loading the remote page', async () => {
