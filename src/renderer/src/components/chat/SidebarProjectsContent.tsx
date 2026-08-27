@@ -345,11 +345,12 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
               <SidebarTreeRow
                 title={workspacePath}
                 ariaLabel={workspacePath}
-                onClick={() =>
+                onClick={() => {
+                  if (!isCollapsed) collapseExpansion()
                   persistSidebarCollapse((current) =>
                     setSidebarWorkspaceCollapsed(current, workspacePath, !isCollapsed)
                   )
-                }
+                }}
                 onContextMenu={(event) => openWorkspaceContextMenu(event, workspacePath)}
                 draggable
                 onDragStart={(event) => handleWorkspaceDragStart(event, workspacePath)}

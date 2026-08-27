@@ -213,6 +213,23 @@ describe('SidebarProjectsSection expansion collapse integration', () => {
     expect(onLoadMoreThreads).not.toHaveBeenCalled()
   })
 
+  it('resets to the newest five threads after collapsing and reopening a project', async () => {
+    await renderSidebar({
+      threads: projectThreads(11),
+      workspaceRoot: '/Users/zxy/cindy',
+      workspaceRoots: ['/Users/zxy/cindy']
+    })
+
+    await clickButton('sidebarWorkspaceShowMore:6')
+    expect(outputJson()).toContain('Cindy 10')
+    await clickButton('/Users/zxy/cindy')
+    await clickButton('/Users/zxy/cindy')
+
+    expect(outputJson()).toContain('Cindy 5')
+    expect(outputJson()).not.toContain('Cindy 6')
+    expect(outputJson()).not.toContain('Cindy 10')
+  })
+
   it('collapses only the clicked project in a multi-project sidebar', async () => {
     await renderSidebar({
       threads: [
