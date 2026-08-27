@@ -318,7 +318,7 @@ windowsOnly('Windows automatic update transaction', () => {
 
     const result = run(input, 'ValidateHealthResult')
     assertExpectedFailure(result, 'ValidateHealthResult')
-    expect(processError(result)).toContain('runtime adapter failed to load')
+    expect(String(result.stderr ?? '')).toContain('runtime adapter failed to load')
     expect(readFileSync(input.diagnostic, 'utf8')).toContain(
       'HEALTH_RESULT ok=False version=0.2.0 message=runtime adapter failed to load'
     )

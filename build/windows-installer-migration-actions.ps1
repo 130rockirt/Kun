@@ -360,3 +360,23 @@ function Remove-EmptyLegacyContainers {
     }
   }
 }
+
+function Assert-UpdateHealthResult {
+  $transaction = Read-UpdateTransaction
+  if ($null -eq $transaction) { throw 'The automatic update transaction is unavailable.' }
+  $path = Normalize-FullPath ([string]$transaction.HealthResult)
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'The candidate application did not report update health.' }
+  $result = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+  $messageProperty = $result.PSObject.Properties['message']
+  $healthMessage = if ($null -eq $messageProperty) { '' } else { ([string]$messageProperty.Value -replace '[\r\n]+', ' ').Trim() }
+  Write-InstallerDiagnostic "HEALTH_RESULT ok=$([bool]$result.ok) version=$([string]$result.version) message=$healthMessage"
+  $versionMismatch = -not [string]::IsNullOrWhiteSpace([string]$transaction.NewVersion) -and
+    -not [string]::Equals([string]$result.version, [string]$transaction.NewVersion, [StringComparison]::OrdinalIgnoreCase)
+  if (-not [bool]$result.ok -or
+      $versionMismatch -or
+      -not [string]::Equals([string]$result.token, [string]$transaction.HealthToken, [StringComparison]::Ordinal) -or
+      -not (Test-PathEqual ([string]$result.installDir) ([string]$transaction.Target))) {
+    $detail = if ([string]::IsNullOrWhiteSpace($healthMessage)) { '' } else { " $healthMessage" }
+    throw "The candidate application failed the update health handshake.$detail"
+  }
+}
