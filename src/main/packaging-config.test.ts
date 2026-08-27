@@ -239,6 +239,17 @@ describe('electron-builder Kun packaging', () => {
     )
   })
 
+  it('avoids the upstream NSIS per-user System::Store crash', () => {
+    const multiUserTemplate = readFileSync(
+      require.resolve('app-builder-lib/templates/nsis/multiUser.nsh'),
+      'utf8'
+    )
+
+    expect(rootPackage.devDependencies?.['electron-builder']).toBe('26.15.7')
+    expect(multiUserTemplate).not.toContain('System::Store')
+    expect(multiUserTemplate).toContain('KERNEL32::lstrcpynW')
+  })
+
   it('includes Kun runtime dependencies in the packaged app', () => {
     expect(builderConfig.files).toEqual(expect.arrayContaining([
       'kun/dist/**/*',

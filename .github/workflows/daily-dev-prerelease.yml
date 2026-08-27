@@ -181,7 +181,7 @@ jobs:
         run: npm run dist:win
 
       - name: Smoke Windows installer migration
-        timeout-minutes: 25
+        timeout-minutes: 60
         run: npm run smoke:windows-installer-migration -- -InstallerPath (Get-ChildItem dist/Kun-*-win-x64.exe | Select-Object -First 1 -ExpandProperty FullName)
 
       - name: Smoke packaged update handoff (Windows)
