@@ -179,6 +179,8 @@ export type WebCitationSource = {
 }
 export type RuntimeDisclosureMetadata = {
   displayText?: string
+  /** Effective per-turn mode used to gate live guidance after hydration. */
+  mode?: 'agent' | 'plan'
   /** Durable per-turn intent used by mixed Code/Design timeline consumers. */
   agentSurface?: 'code' | 'write' | 'design'
   /** Persisted turn routing hint so edit/resend can rebuild live canvas context. */

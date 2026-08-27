@@ -390,6 +390,7 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
         skillInjectionBytes: turn.skillInjectionBytes,
         injectedInstructionSources: turn.injectedInstructionSources,
         instructionInjectionBytes: turn.instructionInjectionBytes,
+        mode: turn.mode === 'plan' || turn.mode === 'agent' ? turn.mode : undefined,
         guiDesignCanvas: turn.guiDesignCanvas,
         guiDesignMode: turn.guiDesignMode,
         designProfile: item.designProfile ?? turn.designProfile,
