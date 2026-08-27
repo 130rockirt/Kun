@@ -461,7 +461,7 @@
   "sidebarFolderDeleteConfirmButton": "删除目录",
   "sidebarFolderAriaLabel": "{{name}}，{{count}} 个会话",
   "sidebarFolderEmpty": "将会话拖到这里",
-  "sidebarWorkspaceShowMore": "展开显示（还有 {{count}} 条）",
+  "sidebarWorkspaceShowMore": "展开显示（后 {{count}} 条）",
   "sidebarWorkspaceShowLess": "收起",
   "sidebarWorkspaceArchiveThreads": "归档当前项目中的所有会话",
   "sidebarWorkspaceArchiveDialogTitle": "归档 {{name}} 中的会话？",

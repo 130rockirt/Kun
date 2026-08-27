@@ -449,7 +449,7 @@
   "sidebarFolderDeleteConfirmButton": "Удалить папку",
   "sidebarFolderAriaLabel": "{{name}}, потоков: {{count}}",
   "sidebarFolderEmpty": "Перетащите потоки сюда",
-  "sidebarWorkspaceShowMore": "Показать больше (еще {{count}})",
+  "sidebarWorkspaceShowMore": "Показать следующие {{count}}",
   "sidebarWorkspaceShowLess": "Показать меньше",
   "sidebarWorkspaceArchiveThreads": "Архивировать все темы в этом проекте",
   "sidebarWorkspaceArchiveDialogTitle": "Архивировать темы в {{name}}?",

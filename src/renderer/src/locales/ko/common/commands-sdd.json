@@ -449,7 +449,7 @@
   "sidebarFolderDeleteConfirmButton": "폴더 삭제",
   "sidebarFolderAriaLabel": "{{name}}, 스레드 {{count}}개",
   "sidebarFolderEmpty": "스레드를 여기로 드래그",
-  "sidebarWorkspaceShowMore": "더보기 ({{count}}개 더 보기)",
+  "sidebarWorkspaceShowMore": "다음 {{count}}개 표시",
   "sidebarWorkspaceShowLess": "간략히 보기",
   "sidebarWorkspaceArchiveThreads": "이 프로젝트의 모든 스레드 보관",
   "sidebarWorkspaceArchiveDialogTitle": "{{name}}의 스레드를 보관하시겠습니까?",

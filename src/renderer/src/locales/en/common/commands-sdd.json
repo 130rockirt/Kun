@@ -462,7 +462,7 @@
   "sidebarFolderDeleteConfirmButton": "Delete folder",
   "sidebarFolderAriaLabel": "{{name}}, {{count}} thread(s)",
   "sidebarFolderEmpty": "Drag threads here",
-  "sidebarWorkspaceShowMore": "Show more ({{count}} more)",
+  "sidebarWorkspaceShowMore": "Show next {{count}}",
   "sidebarWorkspaceShowLess": "Show less",
   "sidebarWorkspaceArchiveThreads": "Archive all threads in this project",
   "sidebarWorkspaceArchiveDialogTitle": "Archive threads in {{name}}?",

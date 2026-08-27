@@ -449,7 +449,7 @@
   "sidebarFolderDeleteConfirmButton": "フォルダーを削除",
   "sidebarFolderAriaLabel": "{{name}}、{{count}} 件のスレッド",
   "sidebarFolderEmpty": "スレッドをここにドラッグ",
-  "sidebarWorkspaceShowMore": "もっと見る (あと {{count}} 件)",
+  "sidebarWorkspaceShowMore": "次の {{count}} 件を表示",
   "sidebarWorkspaceShowLess": "表示を少なくする",
   "sidebarWorkspaceArchiveThreads": "このプロジェクト内のすべてのスレッドをアーカイブする",
   "sidebarWorkspaceArchiveDialogTitle": "{{name}} のスレッドをアーカイブしますか?",

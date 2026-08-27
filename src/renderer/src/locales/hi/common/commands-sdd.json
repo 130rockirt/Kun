@@ -449,7 +449,7 @@
   "sidebarFolderDeleteConfirmButton": "फ़ोल्डर हटाएँ",
   "sidebarFolderAriaLabel": "{{name}}, {{count}} थ्रेड",
   "sidebarFolderEmpty": "थ्रेड यहाँ खींचें",
-  "sidebarWorkspaceShowMore": "Show more ({{count}} more)",
+  "sidebarWorkspaceShowMore": "और {{count}} दिखाएँ",
   "sidebarWorkspaceShowLess": "कम दिखाओ",
   "sidebarWorkspaceArchiveThreads": "इस प्रोजेक्ट में सभी थ्रेड्स को संग्रहीत करें",
   "sidebarWorkspaceArchiveDialogTitle": "Archive threads in {{name}}?",

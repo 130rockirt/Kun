@@ -449,7 +449,7 @@
   "sidebarFolderDeleteConfirmButton": "ลบโฟลเดอร์",
   "sidebarFolderAriaLabel": "{{name}}, {{count}} เธรด",
   "sidebarFolderEmpty": "ลากเธรดมาที่นี่",
-  "sidebarWorkspaceShowMore": "แสดงเพิ่มเติม (อีก {{count}} รายการ)",
+  "sidebarWorkspaceShowMore": "แสดง {{count}} รายการถัดไป",
   "sidebarWorkspaceShowLess": "แสดงน้อยลง",
   "sidebarWorkspaceArchiveThreads": "เก็บกระทู้ทั้งหมดในโครงการนี้",
   "sidebarWorkspaceArchiveDialogTitle": "เก็บกระทู้ใน {{name}}?",
