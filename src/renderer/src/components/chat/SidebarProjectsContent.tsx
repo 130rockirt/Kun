@@ -41,6 +41,7 @@ import {
   setSidebarWorkspaceCollapsed,
   type SidebarCollapseRegistry
 } from './sidebar-collapse'
+import { SidebarProjectExpansionControl } from './SidebarProjectExpansionControl'
 import {
   sidebarChildFolders,
   sidebarFolderDescendantThreadIds,
@@ -322,7 +323,14 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
           const showExpansionControl = hiddenThreadCount > 0
             || canLoadWorkspacePage
             || workspacePageLoading
-            || rootThreads.length > 5
+            || expansionStage > 0
+          const collapseExpansion = (): void => {
+            setExpandedWorkspaces((current) =>
+              current[workspacePath]
+                ? { ...current, [workspacePath]: 0 }
+                : current
+            )
+          }
           return (
             <div
               key={workspacePath}
@@ -549,16 +557,12 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                     )
                   ) : visibleThreads.map((thread) => renderThreadRow(thread, workspacePath, null))}
                   {showExpansionControl ? (
-                    <button
-                      type="button"
-                      data-cursor-spotlight-target
-                      disabled={workspacePageLoading}
-                      aria-busy={workspacePageLoading}
-                      onClick={() => {
-                        if (hiddenThreadCount === 0 && canLoadWorkspacePage) {
-                          onLoadMoreThreads(workspacePath)
-                          return
-                        }
+                    <SidebarProjectExpansionControl
+                      hiddenThreadCount={hiddenThreadCount}
+                      canLoadMore={canLoadWorkspacePage}
+                      loading={workspacePageLoading}
+                      canCollapse={expansionStage > 0}
+                      onShowMore={() => {
                         setExpandedWorkspaces((current) => ({
                           ...current,
                           [workspacePath]: nextSidebarProjectExpansionStage(
@@ -567,16 +571,10 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
                           )
                         }))
                       }}
-                      className="ml-1 mt-1 rounded-md px-2.5 py-1.5 text-[12.5px] text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
-                    >
-                      {hiddenThreadCount > 0
-                        ? t('sidebarWorkspaceShowMore', { count: hiddenThreadCount })
-                        : workspacePageLoading
-                          ? t('sidebarWorkspaceLoading')
-                          : canLoadWorkspacePage
-                            ? t('sidebarWorkspaceLoadMore')
-                            : t('sidebarWorkspaceShowLess')}
-                    </button>
+                      onLoadMore={() => onLoadMoreThreads(workspacePath)}
+                      onCollapse={collapseExpansion}
+                      t={t}
+                    />
                   ) : null}
                 </div>
               ) : null}
