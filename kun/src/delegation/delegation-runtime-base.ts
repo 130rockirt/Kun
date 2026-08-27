@@ -82,10 +82,10 @@ import {
 } from './child-result-materializer.js'
 
 import {
-  admitSlotWaiter,
   ChildQueueTimeoutError,
-  enqueueSlotWaiter,
-  type SlotWaiter
+  ScopedSlotScheduler,
+  SlotScheduler,
+  type SlotLease
 } from './delegation-slot-waiter.js'
 
 export type RunTurnFn = (threadId: string, turnId: string) => Promise<unknown>
@@ -106,12 +106,11 @@ export type ForegroundChildControl = {
 }
 
 export abstract class DelegationRuntimeBase {
-  protected active = 0
   private memoryPressureParallelLimit: number | undefined
+  private readonly ordinarySlots = new SlotScheduler(() => this.enabled() ? this.parallelLimit : 0)
+  private readonly fastContextSlots = new ScopedSlotScheduler(() => this.enabled() ? 1 : 0)
   protected childSeq = 0
   protected readonly childSeqById = new Map<string, number>()
-  /** Children waiting for a parallel slot, in FIFO order. */
-  protected readonly slotWaiters: SlotWaiter[] = []
   /**
    * Background (detached) child runs keyed by childId, exposing an
    * AbortController so the user can cancel a long-running task from the
@@ -157,12 +156,13 @@ export abstract class DelegationRuntimeBase {
       ...this.options,
       config
     }
-    this.drainSlotWaiters()
+    this.ordinarySlots.refresh()
+    this.fastContextSlots.refresh()
   }
 
   setMemoryPressureParallelLimit(limit?: number): void {
     this.memoryPressureParallelLimit = limit === undefined ? undefined : Math.max(1, Math.floor(limit))
-    this.drainSlotWaiters()
+    this.ordinarySlots.refresh()
   }
 
   enabled(): boolean {
@@ -176,36 +176,16 @@ export abstract class DelegationRuntimeBase {
     ))
   }
 
-  /** Acquire a parallel slot, queueing (FIFO) when the runtime is saturated. */
-  protected acquireSlot(signal: AbortSignal, queueTimeoutMs?: number): Promise<void> {
-    if (signal.aborted) return Promise.reject(new Error('aborted while queued'))
-    if (this.slotWaiters.length === 0 && this.active < this.parallelLimit) {
-      this.active += 1
-      return Promise.resolve()
-    }
-    return enqueueSlotWaiter({
-      waiters: this.slotWaiters,
-      signal,
-      queueTimeoutMs,
-      drain: () => this.drainSlotWaiters()
-    })
-  }
-
-  /** Free one occupied slot, then admit queued children under the current limit. */
-  protected releaseSlot(): void {
-    this.active = Math.max(0, this.active - 1)
-    this.drainSlotWaiters()
-  }
-
-  /** Fill newly available capacity from the existing FIFO before later arrivals. */
-  private drainSlotWaiters(): void {
-    while (this.enabled() && this.active < this.parallelLimit) {
-      const next = this.slotWaiters.shift()
-      if (!next) return
-      if (!admitSlotWaiter(next)) continue
-      this.active += 1
-      next.resolve()
-    }
+  /** Acquire the ordinary global lane or the Fast Context parent-session lane. */
+  protected acquireSlot(input: {
+    fastContext: boolean
+    parentThreadId: string
+    signal: AbortSignal
+    queueTimeoutMs?: number
+  }): Promise<SlotLease> {
+    return input.fastContext
+      ? this.fastContextSlots.acquire(input.parentThreadId, input.signal, input.queueTimeoutMs)
+      : this.ordinarySlots.acquire(input.signal, input.queueTimeoutMs)
   }
 
   /** Configured profiles, surfaced to the delegate_task tool schema/UI. */
@@ -322,7 +302,7 @@ export abstract class DelegationRuntimeBase {
     })
     return {
       enabled: this.options.config.enabled,
-      active: this.active,
+      active: this.ordinarySlots.activeCount + this.fastContextSlots.activeCount,
       childRuns,
       aggregates: aggregateChildRuns(childRuns)
     }
@@ -486,8 +466,14 @@ export abstract class DelegationRuntimeBase {
     signal: AbortSignal
   }): Promise<ChildRunRecord> {
     let record = args.state.record
+    let releaseSlot: SlotLease | undefined
     try {
-      await this.acquireSlot(args.signal, args.queueTimeoutMs)
+      releaseSlot = await this.acquireSlot({
+        fastContext: args.fastContext,
+        parentThreadId: args.parentThreadId,
+        signal: args.signal,
+        queueTimeoutMs: args.queueTimeoutMs
+      })
     } catch (error) {
       if (error instanceof ChildQueueTimeoutError) {
         const finishedAt = this.now()
@@ -649,7 +635,7 @@ export abstract class DelegationRuntimeBase {
       } catch (error) {
         console.warn('[kun] child activity subscription cleanup failed:', error)
       } finally {
-        this.releaseSlot()
+        releaseSlot?.()
       }
     }
   }
