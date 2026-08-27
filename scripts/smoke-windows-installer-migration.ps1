@@ -41,6 +41,14 @@ function Test-PathEqual([string]$Left, [string]$Right) {
   return [string]::Equals((Normalize-Path $Left), (Normalize-Path $Right), [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Show-InstallerDiagnostics([string]$Scenario) {
+  if (-not (Test-Path -LiteralPath $script:diagnosticPath -PathType Leaf)) {
+    return
+  }
+  Write-Host "[$Scenario] Installer helper diagnostics:"
+  Write-Host (Get-Content -LiteralPath $script:diagnosticPath -Raw)
+}
+
 function Invoke-Installer(
   [string]$Scenario,
   [string[]]$Arguments,
@@ -54,8 +62,17 @@ function Invoke-Installer(
   for ($attempt = 1; $attempt -le $maximumAttempts; $attempt += 1) {
     Write-Host "[$Scenario] Starting installer (attempt $attempt/$maximumAttempts): $argumentText"
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    $process = Start-Process -FilePath $script:InstallerPath -ArgumentList $Arguments -Wait -PassThru
+    $process = Start-Process -FilePath $script:InstallerPath -ArgumentList $Arguments -PassThru
+    # Start-Process -Wait follows the entire process tree. Automatic-update
+    # rollback intentionally relaunches the previous Kun app, so -Wait would
+    # hide the installer's real exit code until that interactive app closes.
+    $exited = $process.WaitForExit(600000)
     $stopwatch.Stop()
+    if (-not $exited) {
+      & "$env:SystemRoot\System32\taskkill.exe" /PID $process.Id /T /F | Out-Null
+      Show-InstallerDiagnostics $Scenario
+      throw "[$Scenario] Installer PID $($process.Id) did not exit within 600 seconds. Arguments: $argumentText"
+    }
     Write-Host "[$Scenario] Installer exited with $($process.ExitCode) after $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s."
     if ($process.ExitCode -ne $accessViolationExitCode -or $attempt -eq $maximumAttempts) {
       break
@@ -63,9 +80,8 @@ function Invoke-Installer(
     Write-Warning "[$Scenario] Installer hit Windows access violation 0xC0000005; retrying once after 2 seconds."
     Start-Sleep -Seconds 2
   }
-  if ($process.ExitCode -ne $ExpectedExitCode -and (Test-Path -LiteralPath $script:diagnosticPath -PathType Leaf)) {
-    Write-Host "[$Scenario] Installer helper diagnostics:"
-    Write-Host (Get-Content -LiteralPath $script:diagnosticPath -Raw)
+  if ($process.ExitCode -ne $ExpectedExitCode) {
+    Show-InstallerDiagnostics $Scenario
   }
   Assert-True ($process.ExitCode -eq $ExpectedExitCode) "Installer exited with $($process.ExitCode), expected $ExpectedExitCode. Arguments: $argumentText"
 }

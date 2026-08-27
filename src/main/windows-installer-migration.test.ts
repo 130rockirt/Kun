@@ -253,6 +253,11 @@ describe('Windows installer migration ACL contract', () => {
 
     expect(script).toContain('$accessViolationExitCode = -1073741819')
     expect(script).toContain('$maximumAttempts = 2')
+    expect(script).toContain('$process.WaitForExit(600000)')
+    expect(script).not.toContain(
+      'Start-Process -FilePath $script:InstallerPath -ArgumentList $Arguments -Wait'
+    )
+    expect(script).toContain('Show-InstallerDiagnostics $Scenario')
     expect(script).toContain('$process.ExitCode -ne $accessViolationExitCode')
     expect(script).toContain('retrying once after 2 seconds')
   })

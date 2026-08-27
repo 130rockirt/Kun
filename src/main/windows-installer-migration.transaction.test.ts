@@ -300,6 +300,30 @@ windowsOnly('Windows automatic update transaction', () => {
     expect(existsSync(join(input.source, 'DeepSeek GUI.exe'))).toBe(true)
   })
 
+  it('records the candidate health failure before rollback removes the result', () => {
+    const input = fixture()
+    assertSucceeded(run(input, 'Prepare'), 'Prepare')
+    payload(input.stage, 'Kun.exe')
+    assertSucceeded(run(input, 'SwitchUpdatePayload'), 'SwitchUpdatePayload')
+    const state = JSON.parse(readFileSync(input.transaction, 'utf8').replace(/^\uFEFF/, ''))
+    state.Phase = 'awaiting_health'
+    writeFileSync(input.transaction, JSON.stringify(state))
+    writeFileSync(input.health, JSON.stringify({
+      ok: false,
+      token: state.HealthToken,
+      installDir: input.target,
+      version: '0.2.0',
+      message: 'runtime adapter failed\r\nto load'
+    }))
+
+    const result = run(input, 'ValidateHealthResult')
+    assertExpectedFailure(result, 'ValidateHealthResult')
+    expect(processError(result)).toContain('runtime adapter failed to load')
+    expect(readFileSync(input.diagnostic, 'utf8')).toContain(
+      'HEALTH_RESULT ok=False version=0.2.0 message=runtime adapter failed to load'
+    )
+  })
+
   it('round-trips a typed REG_MULTI_SZ user PATH snapshot', () => {
     const input = fixture()
     const saved = join(input.root, 'path-before.clixml')
