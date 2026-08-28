@@ -1,7 +1,7 @@
 'use strict'
 
-const { existsSync, readFileSync } = require('node:fs')
-const { dirname, join } = require('node:path')
+const { existsSync, lstatSync, readFileSync, readdirSync, rmSync } = require('node:fs')
+const { dirname, join, relative } = require('node:path')
 
 // Shared pure-JS runtimes that the root app and Kun resolve identically.
 // after-pack removes the Kun copy from app.asar.unpacked/kun/node_modules; the
@@ -117,9 +117,112 @@ function validateRootHoistedDependencyClosure(root) {
   }
 }
 
+function pathEntryExists(path) {
+  try {
+    lstatSync(path)
+    return true
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false
+    throw error
+  }
+}
+
+function packedDependencyPackageRoots(dependencyRoot) {
+  if (existsSync(join(dependencyRoot, 'package.json'))) return [dependencyRoot]
+  if (!existsSync(dependencyRoot)) return []
+  return readdirSync(dependencyRoot, { withFileTypes: true })
+    .filter((entry) =>
+      (entry.isDirectory() || entry.isSymbolicLink()) &&
+      existsSync(join(dependencyRoot, entry.name, 'package.json'))
+    )
+    .map((entry) => join(dependencyRoot, entry.name))
+}
+
+function packageBinNames(packageRoot) {
+  const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
+  let names = []
+  if (typeof packageJson.bin === 'string') {
+    const packageName = packageJson.name?.split('/').pop()
+    if (packageName) names = [packageName]
+  } else if (packageJson.bin && typeof packageJson.bin === 'object') {
+    names = Object.keys(packageJson.bin)
+  }
+  for (const name of names) {
+    if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
+      throw new Error(`[after-pack] Unsafe packaged Kun binary name: ${String(name)}`)
+    }
+  }
+  return names
+}
+
+function packedKunPackageRoots(kunModules) {
+  return readdirSync(kunModules, { withFileTypes: true }).flatMap((entry) => {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) return []
+    const packageRoot = join(kunModules, entry.name)
+    return entry.name.startsWith('@')
+      ? packedDependencyPackageRoots(packageRoot)
+      : packedDependencyPackageRoots(packageRoot).slice(0, 1)
+  })
+}
+
+function assertNoPackedKunBinOwnerCollisions(kunModules, dependencyRoots) {
+  const prunedPackageRoots = new Set(dependencyRoots.flatMap(packedDependencyPackageRoots))
+  const owners = new Map()
+  for (const packageRoot of packedKunPackageRoots(kunModules)) {
+    for (const binName of packageBinNames(packageRoot)) {
+      const binOwners = owners.get(binName) || []
+      binOwners.push(packageRoot)
+      owners.set(binName, binOwners)
+    }
+  }
+  for (const packageRoot of prunedPackageRoots) {
+    for (const binName of packageBinNames(packageRoot)) {
+      const retainedOwners = (owners.get(binName) || [])
+        .filter((owner) => !prunedPackageRoots.has(owner))
+      if (retainedOwners.length > 0) {
+        const ownerNames = retainedOwners
+          .map((owner) => relative(kunModules, owner))
+          .join(', ')
+        throw new Error(
+          `[after-pack] Kun binary launcher collision for ${binName}: retained by ${ownerNames}`
+        )
+      }
+    }
+  }
+}
+
+function prunePackedKunBinLaunchers(kunModules, dependencyRoot) {
+  const binRoot = join(kunModules, '.bin')
+  if (!existsSync(binRoot)) return
+  const binNames = new Set(packedDependencyPackageRoots(dependencyRoot).flatMap(packageBinNames))
+  for (const binName of binNames) {
+    for (const suffix of ['', '.cmd', '.ps1']) {
+      const launcher = join(binRoot, `${binName}${suffix}`)
+      if (!pathEntryExists(launcher)) continue
+      rmSync(launcher, { force: true })
+      console.log(`[after-pack] Removed hoisted Kun binary launcher: ${binName}${suffix}`)
+    }
+  }
+}
+
+function validatePackedKunBinLinks(kunModules) {
+  const binRoot = join(kunModules, '.bin')
+  if (!existsSync(binRoot)) return
+  for (const entry of readdirSync(binRoot)) {
+    const launcher = join(binRoot, entry)
+    if (lstatSync(launcher).isSymbolicLink() && !existsSync(launcher)) {
+      throw new Error(`[after-pack] Dangling packaged Kun binary launcher: ${entry}`)
+    }
+  }
+}
+
 module.exports = {
   KUN_ROOT_HOISTED_SHARED_JS_PACKAGES,
   KUN_ROOT_HOISTED_SUPPORTING_JS_PACKAGES,
   KUN_ROOT_UNPACKED_SHARED_JS_PACKAGES,
+  assertNoPackedKunBinOwnerCollisions,
+  pathEntryExists,
+  prunePackedKunBinLaunchers,
+  validatePackedKunBinLinks,
   validateRootHoistedDependencyClosure
 }
