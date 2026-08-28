@@ -61,7 +61,7 @@ describe('WpsOfficeService foundation', () => {
     await writeFile(path, zip('before'))
     const fake = gateway({
       putDocument: vi.fn(async () => ({
-        documentId: 'other', fileId: 'other', format: 'pptx',
+        documentId: 'other', fileId: 'other', format: 'pptx' as const,
         sourceSha256: '0'.repeat(64), version
       }))
     })

@@ -17,11 +17,13 @@ import { WritePdfViewer } from './WritePdfViewer'
 import { WorkspaceOfficePreview } from '../WorkspaceOfficePreview'
 import { WorkspaceCodePreview } from '../WorkspaceCodePreview'
 import type {
+  OfficeSessionDescriptor,
   WorkspaceOfficePreviewSuccess,
   WorkspacePresentationViewReference,
   WorkspacePresentationViewSource
 } from '@shared/office-document'
 import type { WorkspaceSpreadsheetMutation } from '@shared/workspace-spreadsheet'
+import type { WpsOfficeSdkBridge } from '../WpsOfficeEditor'
 import { writeSelectionFromOffice } from '../../write/write-office-selection'
 import {
   isWriteFocusModeFormControl,
@@ -47,6 +49,9 @@ type Props = {
   officeLoading?: boolean
   officeRefreshError?: string | null
   officeAgentEditing?: boolean
+  officeProviderMode?: 'local' | 'wps'
+  wpsOfficeSession?: OfficeSessionDescriptor | null
+  wpsOfficeSdk?: WpsOfficeSdkBridge
   spreadsheetMutations?: WorkspaceSpreadsheetMutation[]
   spreadsheetSourceSha256?: string
   spreadsheetCommitRevision?: number
@@ -132,6 +137,9 @@ export function WriteWorkspaceDocumentPane({
   officeLoading = false,
   officeRefreshError = null,
   officeAgentEditing = false,
+  officeProviderMode = 'local',
+  wpsOfficeSession,
+  wpsOfficeSdk,
   spreadsheetMutations = [],
   spreadsheetSourceSha256 = '',
   spreadsheetCommitRevision = 0,
@@ -273,7 +281,11 @@ export function WriteWorkspaceDocumentPane({
   }
 
   if (activeFileIsOffice && officePreview) {
-    if (officePreview.sourceFormat === 'xlsx' && onSpreadsheetMutations) {
+    if (
+      officeProviderMode === 'local' &&
+      officePreview.sourceFormat === 'xlsx' &&
+      onSpreadsheetMutations
+    ) {
       return (
         <div ref={editorPaneRef} className="flex h-full min-h-0 min-w-0 flex-col">
           {spreadsheetUnsupportedReason || spreadsheetConflict || spreadsheetSaveError ? (
@@ -348,6 +360,10 @@ export function WriteWorkspaceDocumentPane({
           result={officePreview}
           loading={officeLoading || officeAgentEditing}
           refreshError={officeRefreshError}
+          providerMode={officeProviderMode}
+          wpsSession={wpsOfficeSession}
+          wpsSdk={wpsOfficeSdk}
+          wpsReadOnly={false}
           onSelectionChange={handleOfficeSelection}
           onPresentationViewChange={onPresentationViewChange}
           presentationKeyboardActive={focused}

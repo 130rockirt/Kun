@@ -5,72 +5,59 @@ import type { WorkspaceOfficePreviewSuccess } from '@shared/office-document'
 import { WorkspaceOfficePreview } from './WorkspaceOfficePreview'
 
 vi.mock('./WorkspaceDocxPreview', () => ({
-  WorkspaceDocxPreview: (props: unknown) => createElement('article', props as object)
+  WorkspaceDocxPreview: (props: unknown) => createElement('article', {
+    ...(props as object), 'data-local-word-mock': 'true'
+  })
 }))
-vi.mock('./WorkspacePptxPreview', () => ({
-  WorkspacePptxPreview: (props: unknown) => createElement('aside', props as object)
-}))
-vi.mock('./WorkspaceSpreadsheetPreview', () => ({
-  WorkspaceSpreadsheetPreview: (props: unknown) => createElement('section', props as object)
+vi.mock('./WorkspacePptxPreview', () => ({ WorkspacePptxPreview: () => createElement('aside') }))
+vi.mock('./WorkspaceSpreadsheetPreview', () => ({ WorkspaceSpreadsheetPreview: () => createElement('section') }))
+vi.mock('./WpsOfficeEditor', () => ({
+  WpsOfficeEditor: (props: unknown) => createElement('div', {
+    ...(props as object), 'data-wps-office-editor-mock': 'true'
+  })
 }))
 
 function preview(viewer: WorkspaceOfficePreviewSuccess['viewer']): WorkspaceOfficePreviewSuccess {
   const renderFormat = viewer === 'word' ? 'docx' : viewer === 'presentation' ? 'pptx' : 'xlsx'
   return {
-    ok: true,
-    path: `/repo/fixture.${renderFormat}`,
-    name: `fixture.${renderFormat}`,
-    sourceFormat: renderFormat,
-    renderFormat,
-    viewer,
-    size: 3,
-    mtimeMs: 1,
-    sourceSha256: 'a'.repeat(64),
-    data: new Uint8Array([1, 2, 3])
+    ok: true, path: `/repo/fixture.${renderFormat}`, name: `fixture.${renderFormat}`,
+    sourceFormat: renderFormat, renderFormat, viewer, size: 3, mtimeMs: 1,
+    sourceSha256: 'a'.repeat(64), data: new Uint8Array([1, 2, 3])
   }
 }
 
-describe('WorkspaceOfficePreview', () => {
+describe('WorkspaceOfficePreview provider boundary', () => {
   let renderer: ReactTestRenderer
 
   beforeEach(() => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   })
-
   afterEach(async () => {
     if (renderer) await act(async () => renderer.unmount())
   })
 
-  for (const [viewer, element] of [
-    ['word', 'article'],
-    ['presentation', 'aside'],
-    ['spreadsheet', 'section']
-  ] as const) {
-    it(`routes ${viewer} binary data to its browser renderer`, async () => {
+  for (const viewer of ['word', 'presentation', 'spreadsheet'] as const) {
+    it(`routes explicit WPS ${viewer} mode to the shared WPS editor`, async () => {
       const result = preview(viewer)
-      const onPresentationViewChange = vi.fn()
       await act(async () => {
         renderer = create(createElement(WorkspaceOfficePreview, {
-          result,
-          loading: true,
-          refreshError: 'refresh failed',
-          onPresentationViewChange,
-          presentationKeyboardActive: false
+          result, providerMode: 'wps', loading: true,
+          refreshError: 'WPS session unavailable'
         }))
       })
-
-      const renderedProps = renderer.root.find((node) => node.type === element).props
-      expect(renderedProps).toMatchObject({
-        result,
-        loading: true,
-        refreshError: 'refresh failed'
+      const props = renderer.root.findByProps({ 'data-wps-office-editor-mock': 'true' }).props
+      expect(props).toMatchObject({
+        result, loading: true, error: 'WPS session unavailable', readOnly: true
       })
-      if (viewer === 'presentation') {
-        expect(renderedProps).toMatchObject({
-          keyboardActive: false,
-          onPresentationViewChange
-        })
-      }
     })
   }
+
+  it('keeps the current local renderer until WPS mode is explicitly selected', async () => {
+    const result = preview('word')
+    await act(async () => {
+      renderer = create(createElement(WorkspaceOfficePreview, { result, loading: false }))
+    })
+    expect(renderer.root.findByProps({ 'data-local-word-mock': 'true' }).props.result).toEqual(result)
+    expect(renderer.root.findAllByProps({ 'data-wps-office-editor-mock': 'true' })).toHaveLength(0)
+  })
 })

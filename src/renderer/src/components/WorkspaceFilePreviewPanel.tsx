@@ -63,6 +63,9 @@ export function WorkspaceFilePreviewPanel({
   onCloseTarget,
   pinnedTargetKeys = [],
   preserveAcrossThreads = false,
+  officeProviderMode = 'local',
+  wpsOfficeSession,
+  wpsOfficeSdk,
   onTogglePinnedTarget,
   onCloseOtherTargets,
   onTogglePreserveAcrossThreads,
@@ -610,6 +613,9 @@ export function WorkspaceFilePreviewPanel({
           officeResult={officeResult}
           officeAgentEditing={officeAgentEditing}
           officeRefreshError={officeRefreshError}
+          officeProviderMode={officeProviderMode}
+          wpsOfficeSession={wpsOfficeSession}
+          wpsOfficeSdk={wpsOfficeSdk}
           previewLease={previewLease}
           previewKind={previewKind}
           currentFileName={currentFileName}
