@@ -40,6 +40,7 @@ import type {
   DesignTaskProfile,
   DesignTaskProfileInput
 } from '../agent/design-task-profile'
+import type { RemovedCodeWorkspacesRegistry } from '../lib/removed-code-workspaces'
 
 export type QueuedUserMessage = {
   id: string
@@ -313,6 +314,8 @@ export type ChatState = {
   runtimeConnection: RuntimeConnectionStatus
   runtimeStatus: KunRuntimeStatusPayload | null
   codeWorkspaceRoots: string[]
+  /** Projects hidden from the Code sidebar/picker; persisted in localStorage. */
+  removedCodeWorkspaces: RemovedCodeWorkspacesRegistry
   threads: NormalizedThread[]
   /**
    * Sidebar thread inventory lifecycle. Guards the "no conversations yet"
@@ -520,7 +523,13 @@ export type ChatState = {
   chooseWorkspace: (options?: { createThreadAfter?: boolean; selectThreadAfter?: boolean }) => Promise<string | null>
   selectWorkspaceRoot: (workspaceRoot: string) => Promise<string | null>
   clearWorkspace: () => Promise<void>
-  deleteWorkspace: (workspacePath: string) => Promise<void>
+  /**
+   * Remove a sidebar project from the Code project list. Keeps threads,
+   * snapshots and files on disk; re-adding the directory later restores it.
+   * `relatedPaths` carries the sidebar-resolved worktree/main aliases so the
+   * whole project identity is hidden at once.
+   */
+  removeWorkspace: (workspacePath: string, relatedPaths?: string[]) => Promise<void>
   refreshThreads: () => Promise<void>
   /** Reconcile lightweight runtime and scheduler activity for sidebar rows. */
   syncSidebarActivity: () => Promise<boolean>

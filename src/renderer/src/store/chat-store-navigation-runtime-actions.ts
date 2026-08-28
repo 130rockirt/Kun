@@ -42,6 +42,11 @@ import {
 } from '../lib/workspace-path'
 import { resolveProjectWorkspacePath } from '../lib/worktree-project-path'
 import { readThreadWorktreeRegistry } from '../lib/thread-worktree-registry'
+import {
+  codeRootsAfterRemoval,
+  isCodeWorkspaceRemoved
+} from './chat-store-navigation-workspace-removal'
+import { readRemovedCodeWorkspaces } from '../lib/removed-code-workspaces'
 import { buildClawRuntimePrompt } from '@shared/app-settings'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 import { invalidateThreadSnapshot } from './thread-snapshot-cache'
@@ -241,12 +246,22 @@ export function createNavigationRuntimeActions(
           settings.write.activeWorkspaceRoot,
           ...settings.write.workspaces
         ]
-        const codeWorkspaceRoots = reconcileCodeWorkspaceRoots({
-          currentRoots: readCodeWorkspaceRoots(),
-          codeThreadWorkspaceRoots: [workspaceRoot],
-          writeWorkspaceRoots,
-          preservedWorkspaceRoots: [workspaceRoot]
-        })
+        // Load hidden projects before reconciling remembered roots: a removed
+        // project must neither re-enter `codeWorkspaceRoots` nor keep its
+        // persisted root through the preserved-root path.
+        const removedRegistry = readRemovedCodeWorkspaces()
+        const codeWorkspaceRoots = codeRootsAfterRemoval(
+          reconcileCodeWorkspaceRoots({
+            currentRoots: readCodeWorkspaceRoots(),
+            codeThreadWorkspaceRoots: [workspaceRoot],
+            writeWorkspaceRoots,
+            preservedWorkspaceRoots: workspaceRoot &&
+              !isCodeWorkspaceRemoved(workspaceRoot, removedRegistry)
+              ? [workspaceRoot]
+              : []
+          }),
+          removedRegistry
+        )
         saveCodeWorkspaceRoots(codeWorkspaceRoots)
         const needsInitialSetup = settings.initialSetupCompleted !== true
         applyTheme(settings.theme)
@@ -330,6 +345,7 @@ export function createNavigationRuntimeActions(
           initialSetupMode: 'required',
           workspaceRoot,
           codeWorkspaceRoots,
+          removedCodeWorkspaces: removedRegistry,
           workspaceLabel: workspaceLabelFromPath(workspaceRoot),
           conversationWorkspaceRoot: settings.conversationWorkspaceRoot || '',
           disabledSkillIds: settings.disabledSkillIds,

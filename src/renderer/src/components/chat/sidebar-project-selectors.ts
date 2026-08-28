@@ -238,6 +238,8 @@ export function buildSidebarWorkspaceGroups(options: {
   workspaceRoots: string[]
   conversationRoot: string
   threadWorktrees?: SidebarThreadWorktrees
+  /** Projects the user removed from the sidebar; hidden by identity key. */
+  removedProjectKeys?: ReadonlySet<string>
 }): SidebarWorkspaceGroup[] {
   const map = new Map<string, { workspacePath: string; threads: NormalizedThread[] }>()
   const query = options.searchQuery.trim().toLowerCase()
@@ -308,7 +310,14 @@ export function buildSidebarWorkspaceGroups(options: {
     }
   }
 
+  // Removed projects are filtered at the end by final display identity, so a
+  // project removed via its main path also hides its worktree-thread group
+  // (and vice versa) regardless of which alias produced the group.
+  const removedKeys = options.removedProjectKeys
   return Array.from(map.values())
+    .filter(({ workspacePath }) =>
+      !removedKeys || !removedKeys.has(workspaceRootIdentityKey(workspacePath))
+    )
     .map(({ workspacePath, threads }): SidebarWorkspaceGroup => [workspacePath, threads])
     .sort(([a], [b]) => compareWorkspacePathsByActive(a, b, selectedWorkspace))
 }

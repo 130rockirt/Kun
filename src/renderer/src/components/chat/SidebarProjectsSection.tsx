@@ -170,7 +170,11 @@ type SidebarProjectsSectionProps = {
   awaitingUserInputThreadIds?: Parameters<typeof sidebarThreadActivity>[1]['awaitingUserInputThreadIds']
   locale: string
   onPickWorkspace: () => void
-  onRemoveWorkspace: (workspacePath: string) => Promise<void>
+  /**
+   * Remove the whole project identity (main dir + resolved worktree aliases)
+   * from the Code sidebar/picker. Keeps threads and files on disk.
+   */
+  onRemoveWorkspace: (workspacePath: string, relatedPaths?: string[]) => Promise<void>
   onCreateThreadInWorkspace: (
     workspacePath: string,
     options?: { forceNew?: boolean }
@@ -279,6 +283,7 @@ export function SidebarProjectsSection({
     () => readThreadWorktreeRegistry().worktrees
   )
   const [discoveredThreadWorktrees, setDiscoveredThreadWorktrees] = useState<SidebarThreadWorktrees>({})
+  const removedCodeWorkspaces = useChatStore((s) => s.removedCodeWorkspaces)
   const threadWorkspaceIdentityKey = sidebarThreadWorkspaceIdentityKey(threads)
   const workspaceRootsIdentityKey = workspaceRoots.map(normalizeWorkspaceRoot).sort().join('\n')
 
@@ -322,6 +327,15 @@ export function SidebarProjectsSection({
     awaitingUserInputThreadIds
   }
 
+  const removedProjectKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const record of removedCodeWorkspaces.removed) {
+      const key = workspaceRootIdentityKey(record.projectPath)
+      if (key) keys.add(key)
+    }
+    return keys
+  }, [removedCodeWorkspaces])
+
   const groups = useMemo(() => {
     return buildSidebarWorkspaceGroups({
       threads,
@@ -330,9 +344,10 @@ export function SidebarProjectsSection({
       workspaceRoot,
       workspaceRoots,
       conversationRoot,
-      threadWorktrees
+      threadWorktrees,
+      removedProjectKeys
     })
-  }, [searchQuery, showArchived, threadWorktrees, threads, workspaceRoot, workspaceRoots, conversationRoot])
+  }, [searchQuery, showArchived, threadWorktrees, threads, workspaceRoot, workspaceRoots, conversationRoot, removedProjectKeys])
 
   const allProjectGroups = useMemo(() => {
     const byWorkspace = new Map<string, [string, NormalizedThread[]]>()
@@ -344,7 +359,8 @@ export function SidebarProjectsSection({
         workspaceRoot,
         workspaceRoots,
         conversationRoot,
-        threadWorktrees
+        threadWorktrees,
+        removedProjectKeys
       })
       for (const [workspacePath, items] of nextGroups) {
         const key = workspaceRootIdentityKey(workspacePath)
@@ -354,7 +370,7 @@ export function SidebarProjectsSection({
       }
     }
     return [...byWorkspace.values()]
-  }, [conversationRoot, threadWorktrees, threads, workspaceRoot, workspaceRoots])
+  }, [conversationRoot, threadWorktrees, threads, workspaceRoot, workspaceRoots, removedProjectKeys])
 
   const allThreadIdsByScope = useMemo(() => {
     return Object.fromEntries(allProjectGroups.map(([workspacePath, items]) => [

@@ -58,6 +58,13 @@ import {
   reconcileCodeWorkspaceRoots,
   saveCodeWorkspaceRoots
 } from './chat-store-helpers'
+import {
+  codeRootsAfterRemoval,
+  createRemoveWorkspaceAction,
+  preservedRootsForReconcile,
+  rememberRootForRestore,
+  removedRegistryAfterRestore
+} from './chat-store-navigation-workspace-removal'
 import { preserveListedDesignProfiles } from '../design/design-locked-profile'
 import {
   clearedThreadSelection,
@@ -166,7 +173,7 @@ type StoreActionContext = {
 
 export function createNavigationWorkspaceActions(
   { set, get, sseAbortRef }: StoreActionContext
-): Pick<ChatState, 'chooseWorkspace' | 'selectWorkspaceRoot' | 'clearWorkspace' | 'deleteWorkspace' | 'refreshThreads' | 'loadMoreThreads' | 'setThreadSearch' | 'setShowArchivedThreads'> {
+): Pick<ChatState, 'chooseWorkspace' | 'selectWorkspaceRoot' | 'clearWorkspace' | 'removeWorkspace' | 'refreshThreads' | 'loadMoreThreads' | 'setThreadSearch' | 'setShowArchivedThreads'> {
   let refreshInFlight = false
   return {
   loadMoreThreads: (workspacePath) => loadMoreThreadsAction(workspacePath, set, get),
@@ -194,11 +201,20 @@ export function createNavigationWorkspaceActions(
       }
       const next = await rendererRuntimeClient.setSettings({ workspaceRoot: picked.path })
       const workspaceRoot = normalizeWorkspaceRoot(next.workspaceRoot)
-      const codeWorkspaceRoots = rememberCodeWorkspaceRoots(get().codeWorkspaceRoots, [workspaceRoot])
+      // Re-picking a previously removed directory is an explicit re-add: clear
+      // the hidden marker so the retained history reappears with this project.
+      const codeWorkspaceRoots = rememberRootForRestore(
+        codeRootsAfterRemoval(get().codeWorkspaceRoots, removedRegistryAfterRestore(
+          workspaceRoot,
+          get().removedCodeWorkspaces
+        )),
+        workspaceRoot
+      )
 
       set({
         workspaceRoot,
         codeWorkspaceRoots,
+        removedCodeWorkspaces: removedRegistryAfterRestore(workspaceRoot, get().removedCodeWorkspaces),
         workspaceLabel: workspaceLabelFromPath(workspaceRoot),
         error: null
       })
@@ -260,12 +276,18 @@ export function createNavigationWorkspaceActions(
       sseAbortRef.current = null
       clearBusyWatchdog()
       resetBusyRecoveryAttempts()
+      // Selecting a removed project from the picker is an explicit re-add.
+      const restoredRegistry = removedRegistryAfterRestore(persisted, get().removedCodeWorkspaces)
       set((s) => ({
         ...clearedThreadSelection(),
         route: 'chat',
         workspaceRoot: persisted,
         workspaceLabel: workspaceLabelFromPath(persisted),
-        codeWorkspaceRoots: rememberCodeWorkspaceRoots(s.codeWorkspaceRoots, [persisted]),
+        removedCodeWorkspaces: restoredRegistry,
+        codeWorkspaceRoots: rememberRootForRestore(
+          codeRootsAfterRemoval(s.codeWorkspaceRoots, restoredRegistry),
+          persisted
+        ),
         error: null
       }))
       await get().refreshThreads()
@@ -294,79 +316,7 @@ export function createNavigationWorkspaceActions(
     }
   },
 
-  deleteWorkspace: async (workspacePath) => {
-    const normalizedPath = normalizeWorkspaceRoot(workspacePath)
-    if (!normalizedPath) return
-    if (get().runtimeConnection !== 'ready') {
-      set({ error: i18n.t('common:runtimeActionNeedsConnection') })
-      return
-    }
-    const { activeThreadId } = get()
-    const p = getProvider()
-    const workspaceThreads = get().threads.filter((thread) =>
-      threadBelongsToWorkspace(thread, normalizedPath)
-    )
-    const deletingActive = workspaceThreads.some((th) => th.id === activeThreadId)
-    if (deletingActive) {
-      sseAbortRef.current?.abort()
-      sseAbortRef.current = null
-      clearBusyWatchdog()
-    }
-    try {
-      const deletedIds = typeof p.deleteThreadsByWorkspace === 'function'
-        ? await p.deleteThreadsByWorkspace(normalizedPath)
-        : await Promise.all(workspaceThreads.map(async (thread) => {
-          await p.deleteThread(thread.id)
-          return thread.id
-        }))
-      for (const threadId of deletedIds) invalidateThreadSnapshot(threadId)
-      const removeIds = new Set(deletedIds)
-      const codeWorkspaceRoots = forgetCodeWorkspaceRoot(get().codeWorkspaceRoots, normalizedPath)
-      set((s) => {
-        const w = { ...s.watchTurnCompletion }
-        const u = { ...s.unreadThreadIds }
-        for (const tid of removeIds) {
-          delete w[tid]
-          delete u[tid]
-          clearWatchedCompletionNotification(tid)
-        }
-        return {
-          threads: s.threads.filter(
-            (thread) => !threadBelongsToWorkspace(thread, normalizedPath)
-          ),
-          codeWorkspaceRoots,
-          watchTurnCompletion: w,
-          unreadThreadIds: u,
-          ...(deletingActive ? clearedThreadSelection() : {}),
-          error: null
-        }
-      })
-      // If the deleted workspace is the current workspaceRoot, clear it.
-      if (normalizeWorkspaceRoot(get().workspaceRoot) === normalizedPath) {
-        try {
-          if (typeof window.kunGui?.setSettings === 'function') {
-            const next = await rendererRuntimeClient.setSettings({ workspaceRoot: '' })
-            set({
-              workspaceRoot: normalizeWorkspaceRoot(next.workspaceRoot),
-              codeWorkspaceRoots: get().codeWorkspaceRoots,
-              workspaceLabel: workspaceLabelFromPath('')
-            })
-          }
-        } catch {
-          /* silently keep workspaceRoot if settings clear fails */
-        }
-      }
-      await get().refreshThreads()
-    } catch (e) {
-      set({
-        error: formatRuntimeError(e),
-        ...(shouldOpenSettingsForError(e)
-          ? { route: 'settings' as const, settingsSection: 'agents' as const }
-          : {})
-      })
-      await get().refreshThreads()
-    }
-  },
+  removeWorkspace: createRemoveWorkspaceAction({ set, get, sseAbortRef, clearBusyWatchdog }),
 
   refreshThreads: async () => {
     if (get().runtimeConnection !== 'ready') return
@@ -404,6 +354,9 @@ export function createNavigationWorkspaceActions(
         rawThreads = await p.listThreads()
       }
       rawThreads = rawThreads.filter((thread) => thread.relation !== 'side')
+      // Snapshot of hidden projects for this refresh cycle: remembered roots
+      // and the preserved current root must not resurrect removed projects.
+      const removedRegistry = get().removedCodeWorkspaces
       if (pendingDesignDocumentClones().length > 0) {
         try {
           const lifecycleThreads = await p.listThreads({
@@ -557,12 +510,15 @@ export function createNavigationWorkspaceActions(
           })
         })
         .filter(Boolean)
-      const codeWorkspaceRoots = reconcileCodeWorkspaceRoots({
-        currentRoots: get().codeWorkspaceRoots,
-        codeThreadWorkspaceRoots,
-        writeWorkspaceRoots,
-        preservedWorkspaceRoots: [get().workspaceRoot]
-      })
+      const codeWorkspaceRoots = codeRootsAfterRemoval(
+        reconcileCodeWorkspaceRoots({
+          currentRoots: get().codeWorkspaceRoots,
+          codeThreadWorkspaceRoots,
+          writeWorkspaceRoots,
+          preservedWorkspaceRoots: preservedRootsForReconcile(get(), removedRegistry)
+        }),
+        removedRegistry
+      )
       saveCodeWorkspaceRoots(codeWorkspaceRoots)
       const activeThreadId = get().activeThreadId
       const activeThread = activeThreadId

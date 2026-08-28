@@ -125,7 +125,7 @@ export function Sidebar({
   const refreshThreads = useChatStore((s) => s.refreshThreads)
   const loadMoreThreads = useChatStore((s) => s.loadMoreThreads)
   const chooseWorkspace = useChatStore((s) => s.chooseWorkspace)
-  const deleteWorkspace = useChatStore((s) => s.deleteWorkspace)
+  const removeWorkspace = useChatStore((s) => s.removeWorkspace)
   const busy = useChatStore((s) => s.busy)
   const watchTurnCompletion = useChatStore((s) => s.watchTurnCompletion)
   const unreadThreadIds = useChatStore((s) => s.unreadThreadIds)
@@ -282,7 +282,7 @@ export function Sidebar({
           awaitingUserInputThreadIds={awaitingUserInputThreadIds}
           locale={i18n.language}
           onPickWorkspace={() => void chooseWorkspace()}
-          onRemoveWorkspace={deleteWorkspace}
+          onRemoveWorkspace={removeWorkspace}
           onCreateThreadInWorkspace={onNewChatInWorkspace}
           onSelectThread={onSelectThread}
           onRenameThread={onRenameThread}
@@ -317,7 +317,7 @@ export function Sidebar({
         awaitingUserInputThreadIds={awaitingUserInputThreadIds}
         locale={i18n.language}
         onPickWorkspace={() => void chooseWorkspace()}
-        onRemoveWorkspace={deleteWorkspace}
+        onRemoveWorkspace={removeWorkspace}
         onCreateThreadInWorkspace={onNewChatInWorkspace}
         onSelectThread={onSelectThread}
         onRenameThread={onRenameThread}

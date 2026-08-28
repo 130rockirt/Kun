@@ -72,6 +72,11 @@ import {
   rememberTurnModel
 } from './chat-store-helpers'
 import {
+  codeRootsAfterRemoval,
+  rememberRootForRestore,
+  removedRegistryAfterRestore
+} from './chat-store-navigation-workspace-removal'
+import {
   clearedThreadSelection,
   collectAssistantTextForTurn,
   findLatestUserBlockId,
@@ -259,8 +264,13 @@ export function createThreadCreationActions(
         return null
       }
       if (!activationAllowed()) return null
-      const codeWorkspaceRoots = rememberCodeWorkspaceRoots(get().codeWorkspaceRoots, [workspaceRoot])
-      set({ codeWorkspaceRoots })
+      // Creating a thread here is an explicit re-add for a removed project.
+      const restoredRegistry = removedRegistryAfterRestore(workspaceRoot, get().removedCodeWorkspaces)
+      const codeWorkspaceRoots = rememberRootForRestore(
+        codeRootsAfterRemoval(get().codeWorkspaceRoots, restoredRegistry),
+        workspaceRoot
+      )
+      set({ codeWorkspaceRoots, removedCodeWorkspaces: restoredRegistry })
       // Worktree pool mode always needs a fresh thread bound to a fresh pool
       // slot, so never reuse an existing main-workspace thread in that case.
       const reusableThreadId = options.forceNew || options.useWorktreePool || personaProfile
