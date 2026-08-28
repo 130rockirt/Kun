@@ -48,6 +48,7 @@ import type {
   WriteAssistantMessageContext
 } from './chat-store-types'
 import { queuedMessageGuidancePayload } from './queued-message-guidance'
+import { threadIdBelongsToRemovedCodeProject } from './chat-store-navigation-workspace-removal'
 import { currentTurnStartGeneration } from './turn-start-fence'
 import {
   isPendingQueuedMessage,
@@ -172,6 +173,12 @@ export function createThreadSelectionActions(
   return {
   selectThread: async (id, options) => {
     if (options?.selectionGuard?.() === false) return
+    const currentState = get()
+    if (threadIdBelongsToRemovedCodeProject(id, currentState)) {
+      set({ error: i18n.t('common:sidebarWorkspaceRemoveDialogDetail') })
+      return
+    }
+    const targetThread = currentState.threads.find((thread) => thread.id === id) ?? null
     if (get().runtimeConnection !== 'ready') {
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
       return
@@ -216,7 +223,6 @@ export function createThreadSelectionActions(
     // Re-selecting the active conversation is an explicit refresh (and is
     // used by recovery paths to pick up durable queues), so only cross-thread
     // navigation may consume an in-memory snapshot.
-    const targetThread = get().threads.find((thread) => thread.id === id) ?? null
     const cached = prevId !== id && targetThread
       ? getThreadSnapshotForSelection(targetThread)
       : null

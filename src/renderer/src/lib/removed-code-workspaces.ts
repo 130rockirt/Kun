@@ -1,8 +1,4 @@
-import {
-  readBrowserStorageItem,
-  writeBrowserStorageItem,
-  type BrowserStorageLike
-} from './browser-storage'
+import type { BrowserStorageLike } from './browser-storage'
 import { normalizeWorkspaceRoot, workspaceRootIdentityKey } from './workspace-path'
 
 /**
@@ -26,7 +22,7 @@ export type RemovedCodeWorkspacesRegistry = {
 
 export const MAX_REMOVED_CODE_WORKSPACES = 100
 
-const REMOVED_CODE_WORKSPACES_STORAGE_KEY = 'kun.removedCodeWorkspaces.v1'
+export const REMOVED_CODE_WORKSPACES_STORAGE_KEY = 'kun.removedCodeWorkspaces.v1'
 
 export function emptyRemovedCodeWorkspacesRegistry(): RemovedCodeWorkspacesRegistry {
   return { version: 1, removed: [] }
@@ -212,6 +208,38 @@ export function isCodeWorkspaceRemoved(
   registry: RemovedCodeWorkspacesRegistry | null | undefined
 ): boolean {
   return removedProjectKeyForPath(path, registry) !== ''
+}
+
+export function removedWorkspaceIdentityKeys(
+  registry: RemovedCodeWorkspacesRegistry | null | undefined
+): Set<string> {
+  const keys = new Set<string>()
+  for (const record of registry?.removed ?? []) {
+    for (const path of [record.projectPath, ...record.aliases]) {
+      const key = workspaceRootIdentityKey(path)
+      if (key) keys.add(key)
+    }
+  }
+  return keys
+}
+
+export function effectiveCodeWorkspaceRoot(
+  workspaceRoot: string | null | undefined,
+  registry: RemovedCodeWorkspacesRegistry | null | undefined
+): string {
+  const normalized = normalizeWorkspaceRoot(workspaceRoot)
+  return isCodeWorkspaceRemoved(normalized, registry) ? '' : normalized
+}
+
+export function removedProjectKeyForPaths(
+  paths: readonly (string | null | undefined)[],
+  registry: RemovedCodeWorkspacesRegistry | null | undefined
+): string {
+  for (const path of paths) {
+    const key = removedProjectKeyForPath(path, registry)
+    if (key) return key
+  }
+  return ''
 }
 
 /** Drop candidate roots whose project identity was removed by the user. */

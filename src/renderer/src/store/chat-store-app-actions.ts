@@ -3,6 +3,10 @@ import type { AppSettingsV1, ModelReasoningEffort } from '@shared/app-settings'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import { extensionWorkbenchClient } from '../extensions/extension-workbench-client'
+import {
+  effectiveCodeWorkspaceRoot,
+  readRemovedCodeWorkspaces
+} from '../lib/removed-code-workspaces'
 import type { ChatState, ChatStoreGet, ChatStoreSet, InitialSetupMode, PluginHostRoute, SettingsRouteSection } from './chat-store-types'
 import type { ComposerPlanMode } from './chat-store-helpers'
 import {
@@ -357,7 +361,8 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
     reloadUiSettings: async () => {
       if (typeof window.kunGui === 'undefined') return
       const settings = await rendererRuntimeClient.getSettings({ forceRefresh: true })
-      const workspaceRoot = normalizeWorkspaceRoot(settings.workspaceRoot)
+      const removedRegistry = readRemovedCodeWorkspaces()
+      const workspaceRoot = effectiveCodeWorkspaceRoot(settings.workspaceRoot, removedRegistry)
       applyTheme(settings.theme)
       applyUiFontScale(settings.uiFontScale)
       applyChatContentMaxWidth(settings.chatContentMaxWidthPx)
@@ -367,6 +372,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
       if (settings.write?.typography) applyWriteTypography(settings.write.typography)
       set({
         workspaceRoot,
+        removedCodeWorkspaces: removedRegistry,
         workspaceLabel: workspaceLabelFromPath(workspaceRoot),
         conversationWorkspaceRoot: settings.conversationWorkspaceRoot || '',
         disabledSkillIds: settings.disabledSkillIds,

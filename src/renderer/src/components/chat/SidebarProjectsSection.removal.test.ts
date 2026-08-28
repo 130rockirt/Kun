@@ -156,15 +156,16 @@ describe('SidebarProjectsSection removed projects', () => {
     renderer.unmount()
   })
 
-  it('passes worktree aliases to onRemoveWorkspace via the context menu flow', async () => {
+  it('passes a Git-discovered custom worktree alias to onRemoveWorkspace', async () => {
+    const customWorktreePath = '/Users/zxy/code/A.worktrees/feature-a'
     const onRemoveWorkspace = vi.fn(async () => undefined)
     const renderer = await renderSidebar(sidebarProps({
       threads: [
         thread({ id: 'thr-main', workspace: projectPath }),
-        thread({ id: 'thr-wt', workspace: worktreePath })
+        thread({ id: 'thr-wt', workspace: customWorktreePath })
       ],
       workspaceRoot: projectPath,
-      workspaceRoots: [projectPath, worktreePath],
+      workspaceRoots: [projectPath, customWorktreePath],
       onRemoveWorkspace
     }))
 
@@ -177,11 +178,17 @@ describe('SidebarProjectsSection removed projects', () => {
       t: (key: string) => key,
       threads: [
         thread({ id: 'thr-main', workspace: projectPath }),
-        thread({ id: 'thr-wt', workspace: worktreePath })
+        thread({ id: 'thr-wt', workspace: customWorktreePath })
       ],
       workspaceRoot: projectPath,
-      workspaceRoots: [projectPath, worktreePath],
-      threadWorktrees: {},
+      workspaceRoots: [projectPath, customWorktreePath],
+      threadWorktrees: {
+        'thr-wt': {
+          projectPath,
+          worktreePath: customWorktreePath,
+          branch: 'feature-a'
+        }
+      },
       setThreadContextMenu: setNoop,
       setWorkspaceContextMenu: setNoop,
       setFolderContextMenu: setNoop,
@@ -198,7 +205,7 @@ describe('SidebarProjectsSection removed projects', () => {
       | undefined
     const related = call?.[1] ?? []
     expect(related).toContain(projectPath)
-    expect(related).toContain(worktreePath)
+    expect(related).toContain(customWorktreePath)
     renderer.unmount()
   })
 

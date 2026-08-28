@@ -11,6 +11,10 @@ import i18n from '../i18n'
 import type { BrowserStorageLike } from '../lib/browser-storage'
 import { queuedMessagesForThread, saveQueuedMessagesForThread } from './queued-message-persistence'
 import { clearThreadSnapshotCache } from './thread-snapshot-cache'
+import {
+  emptyRemovedCodeWorkspacesRegistry,
+  rememberRemovedCodeWorkspace
+} from '../lib/removed-code-workspaces'
 
 const registryMock = vi.hoisted(() => ({ getProvider: vi.fn() }))
 
@@ -638,6 +642,24 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.blocks.filter((block) => block.kind === 'user')).toEqual([
       expect.objectContaining({ id: 'item_graph_guidance' })
     ])
+  })
+
+  it('blocks direct selection of a thread from a removed project', async () => {
+    const { actions, state } = buildHarness()
+    const hidden = { ...thread('thr_hidden'), workspace: '/workspace/hidden' }
+    state.threads = [thread('thr_existing'), hidden]
+    state.removedCodeWorkspaces = rememberRemovedCodeWorkspace(
+      { projectPath: '/workspace/hidden' },
+      emptyRemovedCodeWorkspacesRegistry()
+    )
+    const getThreadDetail = vi.fn()
+    registryMock.getProvider.mockReturnValue({ getThreadDetail })
+
+    await actions.selectThread('thr_hidden')
+
+    expect(state.activeThreadId).toBe('thr_existing')
+    expect(getThreadDetail).not.toHaveBeenCalled()
+    expect(state.error).toBeTruthy()
   })
 
 })

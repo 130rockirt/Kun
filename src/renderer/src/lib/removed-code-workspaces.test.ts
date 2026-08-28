@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   emptyRemovedCodeWorkspacesRegistry,
+  effectiveCodeWorkspaceRoot,
   filterRemovedCodeWorkspaceRoots,
   isCodeWorkspaceRemoved,
   normalizeRemovedCodeWorkspacesRegistry,
   readRemovedCodeWorkspaces,
   rememberRemovedCodeWorkspace,
+  removedWorkspaceIdentityKeys,
   restoreRemovedCodeWorkspace,
   saveRemovedCodeWorkspaces,
   type RemovedCodeWorkspacesRegistry
@@ -140,6 +142,24 @@ describe('removed code workspaces registry', () => {
         registry
       )
     ).toEqual(['/Users/zxy/Code/B'])
+  })
+
+  it('returns every project and alias identity and hides alias current roots', () => {
+    const registry = rememberRemovedCodeWorkspace({
+      projectPath: '/Users/zxy/Code/A',
+      aliases: ['/Users/zxy/Code/A.worktrees/feature']
+    })
+
+    expect(removedWorkspaceIdentityKeys(registry)).toEqual(new Set([
+      '/users/zxy/code/a',
+      '/users/zxy/code/a.worktrees/feature'
+    ]))
+    expect(effectiveCodeWorkspaceRoot(
+      '/Users/zxy/Code/A.worktrees/feature',
+      registry
+    )).toBe('')
+    expect(effectiveCodeWorkspaceRoot('/Users/zxy/Code/B', registry))
+      .toBe('/Users/zxy/Code/B')
   })
 
   it('keeps an explicitly restored project removed-record free across reloads', () => {

@@ -43,6 +43,7 @@ import { resolveProjectWorkspacePath } from '../lib/worktree-project-path'
 import { readThreadWorktreeRegistry } from '../lib/thread-worktree-registry'
 import { buildClawRuntimePrompt } from '@shared/app-settings'
 import { primaryAgentAvailableOnSurface } from '../lib/subagent-profile-surface'
+import { threadBelongsToRemovedCodeProject } from './chat-store-navigation-workspace-removal'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 import { invalidateThreadSnapshot } from './thread-snapshot-cache'
 import {
@@ -159,6 +160,7 @@ export function createNavigationModeActions(
     const designRegistry = readDesignThreadRegistry()
     const writeRegistry = readWriteThreadRegistry()
     const sddRegistry = readSddThreadRegistry()
+    const worktreeRegistry = readThreadWorktreeRegistry().worktrees
     const activeThread = state.activeThreadId
       ? state.threads.find((thread) => thread.id === state.activeThreadId) ?? null
       : null
@@ -166,6 +168,11 @@ export function createNavigationModeActions(
     if (
       activeThread &&
       activeThread.archived !== true &&
+      !threadBelongsToRemovedCodeProject(
+        activeThread,
+        state.removedCodeWorkspaces,
+        worktreeRegistry[activeThread.id]
+      ) &&
       isCodeSidebarThread(activeThread, state.clawChannels, writeRegistry, designRegistry, sddRegistry)
     ) {
       if (activationAllowed()) set({ route: 'chat' })
@@ -173,6 +180,11 @@ export function createNavigationModeActions(
     }
 
     const codeThreads = state.threads.filter((thread) =>
+      !threadBelongsToRemovedCodeProject(
+        thread,
+        state.removedCodeWorkspaces,
+        worktreeRegistry[thread.id]
+      ) &&
       isCodeThread(thread, state.clawChannels, writeRegistry, designRegistry, sddRegistry)
     )
     // 返回 Code 工作台时优先恢复上次选中的会话,而不是默认选择更新时间最新的会话。
@@ -182,6 +194,11 @@ export function createNavigationModeActions(
       : null
     const rememberedIsCodeTarget = rememberedThread != null &&
       rememberedThread.archived !== true &&
+      !threadBelongsToRemovedCodeProject(
+        rememberedThread,
+        state.removedCodeWorkspaces,
+        worktreeRegistry[rememberedThread.id]
+      ) &&
       isCodeSidebarThread(rememberedThread, state.clawChannels, writeRegistry, designRegistry, sddRegistry)
 
     if (!activationAllowed()) return

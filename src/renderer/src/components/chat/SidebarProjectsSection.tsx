@@ -20,6 +20,7 @@ import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { useChatStore } from '../../store/chat-store'
 import { rememberCodeWorkspaceRoots } from '../../store/chat-store-helpers'
 import { workspaceLabelFromPath } from '../../lib/workspace-label'
+import { removedWorkspaceIdentityKeys } from '../../lib/removed-code-workspaces'
 import {
   normalizeWorkspaceRoot,
   workspaceRootIdentityKey
@@ -132,6 +133,7 @@ import { useSidebarWorkspaceAutoLoad } from './sidebar-project-auto-load'
 import type { SidebarProjectExpansionStage } from './sidebar-project-expansion'
 import { SidebarProjectsContent, type SidebarThreadListStatus } from './SidebarProjectsContent'
 import { discoverSidebarWorktrees } from './sidebar-worktree-discovery'
+import { useRemovedWorkspaceDiscoveredAliases } from './use-removed-workspace-discovered-aliases'
 export {
   buildSidebarDraftWorkspacePaths,
   buildSidebarThreadMoveTargets,
@@ -318,6 +320,8 @@ export function SidebarProjectsSection({
     ...registeredThreadWorktrees
   }), [discoveredThreadWorktrees, registeredThreadWorktrees])
 
+  useRemovedWorkspaceDiscoveredAliases(discoveredThreadWorktrees, removedCodeWorkspaces)
+
   const sidebarThreadActivityContext = {
     activeThreadId,
     busy,
@@ -327,14 +331,10 @@ export function SidebarProjectsSection({
     awaitingUserInputThreadIds
   }
 
-  const removedProjectKeys = useMemo(() => {
-    const keys = new Set<string>()
-    for (const record of removedCodeWorkspaces.removed) {
-      const key = workspaceRootIdentityKey(record.projectPath)
-      if (key) keys.add(key)
-    }
-    return keys
-  }, [removedCodeWorkspaces])
+  const removedProjectKeys = useMemo(
+    () => removedWorkspaceIdentityKeys(removedCodeWorkspaces),
+    [removedCodeWorkspaces]
+  )
 
   const groups = useMemo(() => {
     return buildSidebarWorkspaceGroups({

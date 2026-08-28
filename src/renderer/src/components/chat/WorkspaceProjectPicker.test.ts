@@ -156,4 +156,22 @@ describe('buildWorkspaceProjectPickerOptions', () => {
     })
     expect(restoredRoots).toEqual([projectA, projectB])
   })
+
+  it('does not reinsert a removed current root or its custom worktree alias', () => {
+    const project = '/Users/zxy/project-a'
+    const worktree = '/Users/zxy/project-a.worktrees/feature'
+    const registry = {
+      version: 1 as const,
+      removed: [{ projectPath: project, aliases: [worktree], removedAt: 'now' }]
+    }
+
+    const result = buildWorkspaceProjectPickerOptions({
+      currentWorkspaceRoot: worktree,
+      workspaceRoots: [project, worktree, '/Users/zxy/project-b'],
+      removedCodeWorkspaces: registry
+    })
+
+    expect(result.currentRoot).toBe('')
+    expect(result.options.map((option) => option.root)).toEqual(['/Users/zxy/project-b'])
+  })
 })

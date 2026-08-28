@@ -63,7 +63,8 @@ import {
   createRemoveWorkspaceAction,
   preservedRootsForReconcile,
   rememberRootForRestore,
-  removedRegistryAfterRestore
+  removedRegistryAfterRestore,
+  threadBelongsToRemovedCodeProject
 } from './chat-store-navigation-workspace-removal'
 import { preserveListedDesignProfiles } from '../design/design-locked-profile'
 import {
@@ -175,6 +176,7 @@ export function createNavigationWorkspaceActions(
   { set, get, sseAbortRef }: StoreActionContext
 ): Pick<ChatState, 'chooseWorkspace' | 'selectWorkspaceRoot' | 'clearWorkspace' | 'removeWorkspace' | 'refreshThreads' | 'loadMoreThreads' | 'setThreadSearch' | 'setShowArchivedThreads'> {
   let refreshInFlight = false
+  let refreshQueued = false
   return {
   loadMoreThreads: (workspacePath) => loadMoreThreadsAction(workspacePath, set, get),
   chooseWorkspace: async ({ createThreadAfter = false, selectThreadAfter = true } = {}) => {
@@ -320,7 +322,10 @@ export function createNavigationWorkspaceActions(
 
   refreshThreads: async () => {
     if (get().runtimeConnection !== 'ready') return
-    if (refreshInFlight) return
+    if (refreshInFlight) {
+      refreshQueued = true
+      return
+    }
     refreshInFlight = true
     // Surface loading/refreshing before the first inventory lands. A
     // background refresh must keep the previous list visible (never clears
@@ -354,9 +359,6 @@ export function createNavigationWorkspaceActions(
         rawThreads = await p.listThreads()
       }
       rawThreads = rawThreads.filter((thread) => thread.relation !== 'side')
-      // Snapshot of hidden projects for this refresh cycle: remembered roots
-      // and the preserved current root must not resurrect removed projects.
-      const removedRegistry = get().removedCodeWorkspaces
       if (pendingDesignDocumentClones().length > 0) {
         try {
           const lifecycleThreads = await p.listThreads({
@@ -510,14 +512,15 @@ export function createNavigationWorkspaceActions(
           })
         })
         .filter(Boolean)
+      const latestRemovedRegistry = get().removedCodeWorkspaces
       const codeWorkspaceRoots = codeRootsAfterRemoval(
         reconcileCodeWorkspaceRoots({
           currentRoots: get().codeWorkspaceRoots,
           codeThreadWorkspaceRoots,
           writeWorkspaceRoots,
-          preservedWorkspaceRoots: preservedRootsForReconcile(get(), removedRegistry)
+          preservedWorkspaceRoots: preservedRootsForReconcile(get(), latestRemovedRegistry)
         }),
-        removedRegistry
+        latestRemovedRegistry
       )
       saveCodeWorkspaceRoots(codeWorkspaceRoots)
       const activeThreadId = get().activeThreadId
@@ -542,7 +545,12 @@ export function createNavigationWorkspaceActions(
       const rememberedCodeThreadId = get().lastCodeThreadId?.trim() ?? ''
       const staleCodeThreadMemory = Boolean(
         rememberedCodeThreadId &&
-        !threads.some((thread) => thread.id === rememberedCodeThreadId && thread.archived !== true)
+        (!threads.some((thread) => thread.id === rememberedCodeThreadId && thread.archived !== true) ||
+          threadBelongsToRemovedCodeProject(
+            threads.find((thread) => thread.id === rememberedCodeThreadId) ?? null,
+            latestRemovedRegistry,
+            threadWorktreeRegistry[rememberedCodeThreadId]
+          ))
       )
       const { validIds } = threadRefreshSelection(get(), displayThreads)
       const reconciledCompletedWatchIds = new Set(
@@ -640,6 +648,12 @@ export function createNavigationWorkspaceActions(
       })
     } finally {
       refreshInFlight = false
+      if (refreshQueued) {
+        refreshQueued = false
+        if (get().runtimeConnection === 'ready') {
+          queueMicrotask(() => void get().refreshThreads())
+        }
+      }
     }
   },
   setThreadSearch: (query) => {
