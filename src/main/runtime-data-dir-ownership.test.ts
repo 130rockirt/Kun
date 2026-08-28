@@ -56,7 +56,7 @@ describe('Runtime data directory ownership detection', () => {
         maxBuffer: 32 * 1024 * 1024
       }
     )
-    expect(WINDOWS_PROCESS_COMMAND_TIMEOUT_MS).toBe(30_000)
+    expect(WINDOWS_PROCESS_COMMAND_TIMEOUT_MS).toBe(300_000)
   })
 
   it('fails closed when the production Windows inventory times out', () => {

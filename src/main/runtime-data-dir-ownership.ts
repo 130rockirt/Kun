@@ -22,7 +22,7 @@ export type WindowsProcessCommandRunner = (
   }
 ) => string
 
-export const WINDOWS_PROCESS_COMMAND_TIMEOUT_MS = 30_000
+export const WINDOWS_PROCESS_COMMAND_TIMEOUT_MS = 300_000
 export const WINDOWS_PROCESS_COMMAND_SCRIPT =
   `Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%serve%'" | ` +
   'Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress'
