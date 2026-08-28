@@ -95,6 +95,21 @@ test('handoff child early exit writes buffered output to stderr immediately', ()
   assert.match(source, /process\.stderr\.write\([\s\S]*desktop\.output\(\)/u)
 })
 
+test('positive handoff uses a normal GUI quit before probing shared owners', () => {
+  const source = readFileSync(join(process.cwd(), 'scripts/smoke-packaged-update-handoff.cjs'), 'utf8')
+  const positiveScenario = source.slice(
+    source.indexOf('async function runPositiveScenario'),
+    source.indexOf('async function runNegativeScenario')
+  )
+  assert.match(positiveScenario, /await quitDesktopNormally\(candidateDesktop,/u)
+  assert.doesNotMatch(positiveScenario, /terminateProcessTree/u)
+  assert.match(source, /await sendToWorkbenchSession\(\{/u)
+  assert.match(source, /window\.kunGui\.runDesktopCommand\('quit'\)/u)
+  assert.match(source, /finally \{\s*processExit\.dispose\(\)\s*\}/u)
+  assert.match(source, /managerJson\(current\.manager, '\/v1\/manager\/status'\)/u)
+  assert.match(source, /runtimeJson\(current\.runtime, '\/v1\/runtime\/info'\)/u)
+})
+
 test('Linux release handoff gates exercise the Chromium sandbox', () => {
   for (const workflow of [
     '.github/workflows/release.yml',
