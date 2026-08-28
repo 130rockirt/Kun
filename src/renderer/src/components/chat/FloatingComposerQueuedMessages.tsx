@@ -21,11 +21,51 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { queuedMessageGuidancePayload } from '../../store/queued-message-guidance'
 import { parseWritePromptForDisplay } from '../../write/quoted-selection'
+import {
+calculateComposerPopoverPlacement,
+type ComposerPopoverAnchorRect,
+type ComposerPopoverPlacement
+} from './floating-composer-popover-placement'
 
 const QUEUED_MENU_WIDTH = 176
 const QUEUED_MENU_HEIGHT = 48
 const QUEUED_MENU_MARGIN = 8
 const QUEUED_MENU_GAP = 6
+
+const QUEUED_POPOVER_WIDTH = 640
+const QUEUED_POPOVER_MAX_HEIGHT = 360
+const QUEUED_POPOVER_MARGIN = 12
+const QUEUED_POPOVER_GAP = 8
+const QUEUED_ROW_ESTIMATED_HEIGHT = 64
+const QUEUED_POPOVER_CHROME_HEIGHT = 24
+
+export type QueuedMessagesPopoverPlacement = ComposerPopoverPlacement
+
+export function calculateQueuedMessagesPopoverPlacement({
+anchorRect,
+popoverHeight,
+viewportHeight,
+viewportWidth,
+coordinateScale = 1
+}: {
+anchorRect: ComposerPopoverAnchorRect
+popoverHeight: number
+viewportHeight: number
+viewportWidth: number
+coordinateScale?: number
+}): QueuedMessagesPopoverPlacement {
+return calculateComposerPopoverPlacement({
+anchorRect,
+popoverHeight,
+viewportHeight,
+viewportWidth,
+coordinateScale,
+preferredWidth: QUEUED_POPOVER_WIDTH,
+maximumHeight: QUEUED_POPOVER_MAX_HEIGHT,
+margin: QUEUED_POPOVER_MARGIN,
+gap: QUEUED_POPOVER_GAP
+})
+}
 
 export type QueuedMessageMenuPlacement = {
   left: number
@@ -141,9 +181,14 @@ export function FloatingComposerQueuedMessages({
     (message) => !message.deliveryState || message.deliveryState === 'pending' || message.deliveryState === 'paused'
   )
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const popoverRef = useRef<HTMLDivElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
   const menuButtonRefs = useRef(new Map<string, HTMLButtonElement>())
   const guidingIdsRef = useRef(new Set<string>())
+  const hoverCloseTimerRef = useRef<number | null>(null)
+  const [open, setOpen] = useState(false)
+  const [popoverPlacement, setPopoverPlacement] = useState<QueuedMessagesPopoverPlacement | null>(null)
   const [guidingIds, setGuidingIds] = useState<Set<string>>(() => new Set())
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   const [menuPlacement, setMenuPlacement] = useState<QueuedMessageMenuPlacement | null>(null)
@@ -152,6 +197,71 @@ export function FloatingComposerQueuedMessages({
     id: string
     position: 'before' | 'after'
   } | null>(null)
+
+  const estimatedPopoverHeight = Math.min(
+    QUEUED_POPOVER_MAX_HEIGHT,
+    QUEUED_POPOVER_CHROME_HEIGHT + visibleMessages.length * QUEUED_ROW_ESTIMATED_HEIGHT
+  )
+
+  const closePopover = (): void => {
+    setOpen(false)
+    setOpenMenuId(null)
+    setDraggedMessageId(null)
+    setDropTarget(null)
+  }
+
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') {
+      setPopoverPlacement(null)
+      return
+    }
+    const updatePlacement = (): void => {
+      const button = buttonRef.current
+      if (!button) return
+      setPopoverPlacement(calculateQueuedMessagesPopoverPlacement({
+        anchorRect: button.getBoundingClientRect(),
+        popoverHeight: popoverRef.current?.offsetHeight ?? estimatedPopoverHeight,
+        viewportHeight: window.innerHeight,
+        viewportWidth: window.innerWidth,
+        coordinateScale: currentBodyZoom()
+      }))
+    }
+    updatePlacement()
+    const frame = window.requestAnimationFrame(updatePlacement)
+    window.addEventListener('resize', updatePlacement)
+    window.addEventListener('scroll', updatePlacement, true)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('resize', updatePlacement)
+      window.removeEventListener('scroll', updatePlacement, true)
+    }
+  }, [estimatedPopoverHeight, open])
+
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') return
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (rootRef.current?.contains(target) || popoverRef.current?.contains(target)) return
+      if (menuRef.current?.contains(target)) return
+      closePopover()
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') closePopover()
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+
+  useEffect(() => () => {
+    if (hoverCloseTimerRef.current != null && typeof window !== 'undefined') {
+      window.clearTimeout(hoverCloseTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (!openMenuId || typeof window === 'undefined') return
@@ -200,6 +310,41 @@ export function FloatingComposerQueuedMessages({
   }, [openMenuId])
 
   if (visibleMessages.length === 0) return null
+
+  const cancelClose = (): void => {
+    if (hoverCloseTimerRef.current == null || typeof window === 'undefined') return
+    window.clearTimeout(hoverCloseTimerRef.current)
+    hoverCloseTimerRef.current = null
+  }
+  const openDetails = (): void => {
+    cancelClose()
+    setOpen(true)
+  }
+  const closeDetailsSoon = (): void => {
+    cancelClose()
+    if (typeof window === 'undefined') {
+      closePopover()
+      return
+    }
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      hoverCloseTimerRef.current = null
+      closePopover()
+    }, 140)
+  }
+  const popoverStyle: CSSProperties = popoverPlacement
+    ? {
+        left: `${popoverPlacement.left}px`,
+        top: `${popoverPlacement.top}px`,
+        width: `${popoverPlacement.width}px`,
+        maxHeight: `${popoverPlacement.maxHeight}px`
+      }
+    : {
+        left: 0,
+        top: 0,
+        width: `${QUEUED_POPOVER_WIDTH}px`,
+        maxHeight: `${QUEUED_POPOVER_MAX_HEIGHT}px`,
+        visibility: 'hidden'
+      }
 
   const guide = async (id: string): Promise<void> => {
     if (!onGuide || guidingIdsRef.current.has(id)) return
@@ -299,15 +444,18 @@ export function FloatingComposerQueuedMessages({
     </div>
   ) : null
 
-  return (
-    <>
-      <div
-        ref={rootRef}
-        data-composer-queue
-        className="w-full space-y-2"
-        aria-label={t('queuedMessagesTitle', { count: visibleMessages.length })}
-      >
-        {visibleMessages.map((message, messageIndex) => {
+  const queueList = (
+    <div
+      ref={popoverRef}
+      role="dialog"
+      data-composer-queue
+      style={popoverStyle}
+      className="ds-no-drag fixed z-[1000] space-y-2 overflow-y-auto rounded-[22px] border border-ds-border bg-white p-2.5 text-ds-ink shadow-[0_18px_48px_rgba(20,47,95,0.16)] dark:bg-ds-card"
+      aria-label={t('queuedMessagesTitle', { count: visibleMessages.length })}
+      onMouseEnter={cancelClose}
+      onMouseLeave={closeDetailsSoon}
+    >
+      {visibleMessages.map((message, messageIndex) => {
           const guiding = guidingIds.has(message.id)
           const guidanceEligible =
             message.guidanceEligible !== false && canGuideQueuedComposerMessage(message)
@@ -456,6 +604,37 @@ export function FloatingComposerQueuedMessages({
             </div>
           )
         })}
+    </div>
+  )
+
+  return (
+    <>
+      {open
+        ? typeof document !== 'undefined'
+          ? createPortal(queueList, document.body)
+          : queueList
+        : null}
+      <div
+        ref={rootRef}
+        data-composer-stack-item="queue"
+        className="pointer-events-auto relative shrink-0"
+      >
+        <button
+          ref={buttonRef}
+          type="button"
+          onClick={openDetails}
+          onFocus={openDetails}
+          onBlur={closeDetailsSoon}
+          onMouseEnter={openDetails}
+          onMouseLeave={closeDetailsSoon}
+          className="ds-no-drag ds-composer-status-glass inline-flex h-11 items-center gap-2.5 rounded-full border px-4 text-[14px] font-medium text-ds-muted transition hover:border-ds-border-strong hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+          aria-label={t('queuedMessagesTitle', { count: visibleMessages.length })}
+          aria-expanded={open}
+          aria-haspopup="dialog"
+        >
+          <ListPlus className="h-5 w-5 shrink-0 text-ds-faint" strokeWidth={1.9} />
+          <span>{t('queuedMessagesTitle', { count: visibleMessages.length })}</span>
+        </button>
       </div>
       {editMenu && typeof document !== 'undefined'
         ? createPortal(editMenu, document.body)

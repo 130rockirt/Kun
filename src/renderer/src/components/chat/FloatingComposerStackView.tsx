@@ -29,6 +29,17 @@ export function FloatingComposerStackView({
             {showTodoProgress && activeThreadTodos ? (
               <FloatingComposerTodoProgress todos={activeThreadTodos} enabled={showGraphProgress} />
             ) : null}
+            <FloatingComposerQueuedMessages
+              messages={queuedMessages}
+              guidanceTarget={currentTurnOrchestration === 'graph' ? 'graph' : 'turn'}
+              onRemove={onRemoveQueuedMessage}
+              onGuide={onGuideQueuedMessage}
+              onReorder={reorderQueuedMessage}
+              onEdit={(message: QueuedComposerMessage) => {
+                returnQueuedMessageToComposer(message, onRemoveQueuedMessage, setInput)
+                draft.focusComposer()
+              }}
+            />
             <FloatingComposerGraphProgress
               threadId={activeThreadId}
               enabled={showGraphProgress}
@@ -99,17 +110,6 @@ export function FloatingComposerStackView({
         )}
         flowPanels={(
           <>
-            <FloatingComposerQueuedMessages
-              messages={queuedMessages}
-              guidanceTarget={currentTurnOrchestration === 'graph' ? 'graph' : 'turn'}
-              onRemove={onRemoveQueuedMessage}
-              onGuide={onGuideQueuedMessage}
-              onReorder={reorderQueuedMessage}
-              onEdit={(message: QueuedComposerMessage) => {
-                returnQueuedMessageToComposer(message, onRemoveQueuedMessage, setInput)
-                draft.focusComposer()
-              }}
-            />
             {userInput.active ? (
               <FloatingComposerUserInputPanel
                 controller={userInput}

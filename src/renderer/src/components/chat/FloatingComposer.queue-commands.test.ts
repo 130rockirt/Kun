@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { act, create as createRenderer } from 'react-test-renderer'
@@ -52,6 +52,7 @@ import {
 import {
   FloatingComposerQueuedMessages,
   calculateQueuedMessageMenuPlacement,
+  calculateQueuedMessagesPopoverPlacement,
   canEditQueuedComposerMessage
 } from './FloatingComposerQueuedMessages'
 import { requestContextSnapshotMatchesSelection } from './FloatingComposerContextCapacity'
@@ -103,11 +104,60 @@ const CODEX_PROVIDER_GROUP: ModelProviderModelGroup = {
 }
 
 describe('FloatingComposer queued guidance', () => {
-  it('renders compact Guide rows and disables structured payload guidance', async () => {
-    const previousLanguage = i18n.language
+  let previousLanguage: string
+
+  beforeEach(async () => {
+    previousLanguage = i18n.language
     await i18n.changeLanguage('en')
+  })
+
+  afterEach(async () => {
+    await i18n.changeLanguage(previousLanguage)
+  })
+
+  async function openQueuedPopover(
+    props: Parameters<typeof FloatingComposerQueuedMessages>[0]
+  ): Promise<ReturnType<typeof createRenderer>> {
+    let renderer: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement(FloatingComposerQueuedMessages, props))
+    })
+    const trigger = renderer!.root.findByProps({ 'data-composer-stack-item': 'queue' }).findByType('button')
+    await act(async () => {
+      trigger.props.onMouseEnter()
+    })
+    return renderer!
+  }
+
+  it('opens the queue popover on hover and toggles aria-expanded', async () => {
+    let renderer: ReturnType<typeof createRenderer>
     try {
-      const html = renderToStaticMarkup(createElement(FloatingComposerQueuedMessages, {
+      renderer = await openQueuedPopover({
+        messages: [{ id: 'q-one', text: 'first' }],
+        onRemove: () => undefined
+      })
+      const trigger = renderer.root.findByProps({ 'data-composer-stack-item': 'queue' }).findByType('button')
+      expect(trigger.props['aria-expanded']).toBe(true)
+      expect(trigger.props['aria-haspopup']).toBe('dialog')
+      expect(renderer.root.findByProps({ role: 'dialog' })).toBeDefined()
+    } finally {
+      renderer!.unmount()
+    }
+  })
+
+  it('centers the queue popover above the pill', () => {
+    expect(calculateQueuedMessagesPopoverPlacement({
+      anchorRect: { left: 440, right: 560, top: 700, bottom: 744 },
+      popoverHeight: 300,
+      viewportHeight: 900,
+      viewportWidth: 1000
+    })).toEqual({ left: 180, top: 392, width: 640, maxHeight: 360 })
+  })
+
+  it('renders compact Guide rows and disables structured payload guidance', async () => {
+    let renderer: ReturnType<typeof createRenderer>
+    try {
+      renderer = await openQueuedPopover({
         messages: [
           {
             id: 'q-text',
@@ -123,22 +173,25 @@ describe('FloatingComposer queued guidance', () => {
         ],
         onGuide: () => undefined,
         onRemove: () => undefined
-      }))
+      })
+      const tree = JSON.stringify(renderer.toJSON())
 
-      expect(html).toContain('Use compact logo')
-      expect(html.match(/>Guide</g)).toHaveLength(2)
-      expect(html).toContain('Add this input to the agent&#x27;s next model interaction')
-      expect(html).toContain('Only plain-text or image follow-ups can guide')
-      expect(html).toContain('disabled=""')
-      expect(html).not.toContain('These messages will send automatically')
+      expect(tree).toContain('Use compact logo')
+      const guideButtons = renderer.root.findAllByType('button').filter(
+        (button) => button.props['aria-label'] === 'Guide'
+      )
+      expect(guideButtons).toHaveLength(2)
+      expect(tree).toContain("Add this input to the agent's next model interaction")
+      expect(tree).toContain('Only plain-text or image follow-ups can guide')
+      expect(tree).toContain('"disabled":true')
+      expect(tree).not.toContain('These messages will send automatically')
     } finally {
-      await i18n.changeLanguage(previousLanguage)
+      renderer!.unmount()
     }
   })
 
   it('enables image guidance, renders an image indicator, and keeps Edit disabled', async () => {
-    const previousLanguage = i18n.language
-    await i18n.changeLanguage('en')
+    let renderer: ReturnType<typeof createRenderer>
     try {
       const message = {
         id: 'q-image',
@@ -146,25 +199,25 @@ describe('FloatingComposer queued guidance', () => {
         attachmentIds: ['att_image'],
         attachments: [{ id: 'att_image', kind: 'image' as const, name: 'reference.png' }]
       }
-      const html = renderToStaticMarkup(createElement(FloatingComposerQueuedMessages, {
+      renderer = await openQueuedPopover({
         messages: [message],
         onGuide: () => undefined,
         onRemove: () => undefined,
         onEdit: () => undefined
-      }))
+      })
+      const tree = JSON.stringify(renderer.toJSON())
 
-      expect(html).toContain('data-queued-message-images="1"')
-      expect(html).toContain('reference.png')
-      expect(html).not.toContain('disabled=""')
+      expect(tree).toContain('"data-queued-message-images":1')
+      expect(tree).toContain('reference.png')
+      expect(tree).not.toContain('"disabled":true')
       expect(canEditQueuedComposerMessage(message)).toBe(false)
     } finally {
-      await i18n.changeLanguage(previousLanguage)
+      renderer!.unmount()
     }
   })
 
   it('enables GUI plan image guidance while keeping Edit disabled', async () => {
-    const previousLanguage = i18n.language
-    await i18n.changeLanguage('en')
+    let renderer: ReturnType<typeof createRenderer>
     try {
       const message = {
         id: 'q-plan-image',
@@ -180,26 +233,25 @@ describe('FloatingComposer queued guidance', () => {
         attachments: [{ id: 'att_image', kind: 'image' as const, name: 'kun.png' }],
         guidanceEligible: true
       }
-      const html = renderToStaticMarkup(createElement(FloatingComposerQueuedMessages, {
+      renderer = await openQueuedPopover({
         messages: [message],
         onGuide: () => undefined,
         onRemove: () => undefined,
         onEdit: () => undefined
-      }))
+      })
+      const tree = JSON.stringify(renderer.toJSON())
 
-      expect(html).toContain('data-queued-message-images="1"')
-      expect(html).toContain('kun.png')
-      expect(html).not.toContain('disabled=""')
+      expect(tree).toContain('"data-queued-message-images":1')
+      expect(tree).toContain('kun.png')
+      expect(tree).not.toContain('"disabled":true')
       expect(canEditQueuedComposerMessage(message)).toBe(false)
-      expect(html).not.toContain('More queued message actions')
+      expect(tree).not.toContain('More queued message actions')
     } finally {
-      await i18n.changeLanguage(previousLanguage)
+      renderer!.unmount()
     }
   })
 
   it('labels active Graph input as queued work with an explicit Graph guidance action', async () => {
-    const previousLanguage = i18n.language
-    await i18n.changeLanguage('en')
     useChatStore.setState({
       activeThreadId: 'thr_graph_queue',
       activeThreadGoal: null,
@@ -210,45 +262,57 @@ describe('FloatingComposer queued guidance', () => {
       threads: []
     })
 
-    try {
-      const html = renderToStaticMarkup(createElement(FloatingComposer, {
-        input: '',
-        setInput: () => undefined,
-        mode: 'agent',
-        setMode: () => undefined,
-        orchestration: 'graph',
-        graphEnabled: true,
-        busy: true,
-        currentTurnOrchestration: 'graph',
-        runtimeReady: true,
-        hasActiveThread: true,
-        composerModel: 'test-model',
-        composerPickList: ['test-model'],
-        onComposerModelChange: () => undefined,
-        queuedMessages: [{
-          id: 'q-graph',
-          text: 'Reassign the blocked node',
-          guidanceEligible: true
-        }],
-        onGuideQueuedMessage: () => undefined,
-        onRemoveQueuedMessage: () => undefined,
-        onSend: () => undefined,
-        onInterrupt: () => undefined
-      }))
+    const html = renderToStaticMarkup(createElement(FloatingComposer, {
+      input: '',
+      setInput: () => undefined,
+      mode: 'agent',
+      setMode: () => undefined,
+      orchestration: 'graph',
+      graphEnabled: true,
+      busy: true,
+      currentTurnOrchestration: 'graph',
+      runtimeReady: true,
+      hasActiveThread: true,
+      composerModel: 'test-model',
+      composerPickList: ['test-model'],
+      onComposerModelChange: () => undefined,
+      queuedMessages: [{
+        id: 'q-graph',
+        text: 'Reassign the blocked node',
+        guidanceEligible: true
+      }],
+      onGuideQueuedMessage: () => undefined,
+      onRemoveQueuedMessage: () => undefined,
+      onSend: () => undefined,
+      onInterrupt: () => undefined
+    }))
 
-      expect(html).toContain('sends queue until this Graph finishes')
-      expect(html).toContain('Queued · Sends after this Graph finishes')
-      expect(html).toContain('Guide current Graph')
-      expect(html).toContain('Send this input to the current Graph Lead')
-      expect(html).not.toContain('Add this input to the agent&#x27;s next model interaction')
-    } finally {
-      await i18n.changeLanguage(previousLanguage)
-    }
+    expect(html).toContain('sends queue until this Graph finishes')
+    expect(html).toContain('data-composer-stack-item="queue"')
+    expect(html).toContain('1 queued')
+
+    const renderer = await openQueuedPopover({
+      messages: [{
+        id: 'q-graph',
+        text: 'Reassign the blocked node',
+        guidanceEligible: true
+      }],
+      guidanceTarget: 'graph',
+      onGuide: () => undefined,
+      onRemove: () => undefined
+    })
+      try {
+        const tree = JSON.stringify(renderer.toJSON())
+        expect(tree).toContain('Queued · Sends after this Graph finishes')
+        expect(tree).toContain('Guide current Graph')
+        expect(tree).toContain('Send this input to the current Graph Lead')
+        expect(tree).not.toContain("Add this input to the agent's next model interaction")
+      } finally {
+        renderer.unmount()
+      }
   })
 
   it('returns a plain-text queued message through the edit action', async () => {
-    const previousLanguage = i18n.language
-    await i18n.changeLanguage('en')
     const message = {
       id: 'q-edit',
       text: 'use compact logo',
@@ -263,12 +327,10 @@ describe('FloatingComposer queued guidance', () => {
     let renderer: ReturnType<typeof createRenderer>
 
     try {
-      await act(async () => {
-        renderer = createRenderer(createElement(FloatingComposerQueuedMessages, {
-          messages: [message],
-          onEdit,
-          onRemove
-        }))
+      renderer = await openQueuedPopover({
+        messages: [message],
+        onEdit,
+        onRemove
       })
 
       const moreButton = renderer!.root.findAllByType('button').find(
@@ -293,7 +355,6 @@ describe('FloatingComposer queued guidance', () => {
       expect(renderer!.root.findAllByProps({ role: 'menu' })).toHaveLength(0)
     } finally {
       renderer!.unmount()
-      await i18n.changeLanguage(previousLanguage)
     }
   })
 
@@ -313,21 +374,17 @@ describe('FloatingComposer queued guidance', () => {
   })
 
   it('reorders multiple queued messages by drag handle or keyboard', async () => {
-    const previousLanguage = i18n.language
-    await i18n.changeLanguage('en')
     const onReorder = vi.fn()
     let renderer: ReturnType<typeof createRenderer>
 
     try {
-      await act(async () => {
-        renderer = createRenderer(createElement(FloatingComposerQueuedMessages, {
-          messages: [
-            { id: 'q-first', text: 'first' },
-            { id: 'q-second', text: 'second' }
-          ],
-          onRemove: () => undefined,
-          onReorder
-        }))
+      renderer = await openQueuedPopover({
+        messages: [
+          { id: 'q-first', text: 'first' },
+          { id: 'q-second', text: 'second' }
+        ],
+        onRemove: () => undefined,
+        onReorder
       })
 
       const handles = renderer!.root.findAllByProps({
@@ -374,7 +431,6 @@ describe('FloatingComposer queued guidance', () => {
       expect(onReorder).toHaveBeenCalledWith('q-second', 'q-first', 'before')
     } finally {
       renderer!.unmount()
-      await i18n.changeLanguage(previousLanguage)
     }
   })
 
@@ -397,10 +453,9 @@ describe('FloatingComposer queued guidance', () => {
   })
 
   it('disables guidance when a compact sidebar row carries structured context', async () => {
-    const previousLanguage = i18n.language
-    await i18n.changeLanguage('en')
+    let renderer: ReturnType<typeof createRenderer>
     try {
-      const html = renderToStaticMarkup(createElement(FloatingComposerQueuedMessages, {
+      renderer = await openQueuedPopover({
         messages: [{
           id: 'q-design',
           text: 'make the card smaller',
@@ -408,25 +463,27 @@ describe('FloatingComposer queued guidance', () => {
         }],
         onGuide: () => undefined,
         onRemove: () => undefined
-      }))
+      })
+      const guideButton = renderer.root.findAllByType('button').find(
+        (button) => button.props['aria-label'] === 'Guide'
+      )
 
-      expect(html).toContain('aria-label="Guide"')
-      expect(html).toContain('disabled=""')
-      expect(html).toContain('Only plain-text or image follow-ups can guide')
+      expect(guideButton).toBeDefined()
+      expect(guideButton!.props.disabled).toBe(true)
+      expect(guideButton!.props.title.startsWith('Only plain-text or image follow-ups can guide')).toBe(true)
     } finally {
-      await i18n.changeLanguage(previousLanguage)
+      renderer!.unmount()
     }
   })
 
   it('shows only the user input for a queued Write prompt', async () => {
-    const previousLanguage = i18n.language
-    await i18n.changeLanguage('en')
+    let renderer: ReturnType<typeof createRenderer>
     const prompt = composeWritePrompt('Make the title shorter.', {
       workspaceRoot: '/workspace/deepseek-gui',
       activeFilePath: '/workspace/deepseek-gui/draft.md'
     })
     try {
-      const html = renderToStaticMarkup(createElement(FloatingComposerQueuedMessages, {
+      renderer = await openQueuedPopover({
         messages: [{
           id: 'q-write',
           text: prompt,
@@ -440,18 +497,19 @@ describe('FloatingComposer queued guidance', () => {
         }],
         onGuide: () => undefined,
         onRemove: () => undefined
-      }))
+      })
+      const tree = JSON.stringify(renderer.toJSON())
 
-      expect(html).toContain('Make the title shorter.')
-      expect(html).not.toContain('/workspace/deepseek-gui')
-      expect(html).toContain('disabled=""')
+      expect(tree).toContain('Make the title shorter.')
+      expect(tree).not.toContain('/workspace/deepseek-gui')
+      expect(tree).toContain('"disabled":true')
     } finally {
-      await i18n.changeLanguage(previousLanguage)
+      renderer!.unmount()
     }
   })
 
-  it('hides a durable in-flight item while keeping later pending items visible', () => {
-    const html = renderToStaticMarkup(createElement(FloatingComposerQueuedMessages, {
+  it('hides a durable in-flight item while keeping later pending items visible', async () => {
+    const renderer = await openQueuedPopover({
       messages: [
         {
           id: 'q-running',
@@ -466,10 +524,15 @@ describe('FloatingComposer queued guidance', () => {
         }
       ],
       onRemove: () => undefined
-    }))
+    })
 
-    expect(html).not.toContain('already running')
-    expect(html).toContain('send this next')
+    try {
+      const tree = JSON.stringify(renderer.toJSON())
+      expect(tree).not.toContain('already running')
+      expect(tree).toContain('send this next')
+    } finally {
+      renderer.unmount()
+    }
   })
 
 })
