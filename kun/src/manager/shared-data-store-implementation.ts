@@ -56,6 +56,7 @@ import type {
 } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
+import { JsonlFileAccessCoordinator } from '../adapters/file/jsonl-file-access.js'
 import { RevisionConflictError } from './revisioned-document-store.js'
 import { buildPublicItemHistoryPage } from '../services/item-history-page.js'
 
@@ -85,12 +86,13 @@ import type {
 
 export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
   static async create(dataDir: string): Promise<ManagerSharedDataStore> {
-    const threadStore = new HybridThreadStore({ dataDir })
+    const fileAccess = new JsonlFileAccessCoordinator()
+    const threadStore = new HybridThreadStore({ dataDir, fileAccess })
     await threadStore.ready()
     return new ManagerSharedDataStore({
       dataDir,
       threadStore,
-      sessionStore: new HybridSessionStore({ dataDir, index: threadStore })
+      sessionStore: new HybridSessionStore({ dataDir, index: threadStore, fileAccess })
     })
   }
 

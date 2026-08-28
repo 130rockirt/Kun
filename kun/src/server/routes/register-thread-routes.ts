@@ -308,7 +308,7 @@ export function registerThreadRoutes(
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     const sinceSeq = parseEventCursor(request)
     if (sinceSeq === null) return ERRORS.validation('since_seq must be a non-negative safe integer')
-    if (!await runtime.threadService.get(ctx.params.id)) {
+    if (!await runtime.threadService.getMetadata(ctx.params.id)) {
       return ERRORS.notFound(`thread not found: ${ctx.params.id}`)
     }
     return buildEventStreamResponse({

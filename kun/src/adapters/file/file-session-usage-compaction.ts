@@ -10,6 +10,8 @@ export async function compactUsageEventsIfLarge(options: {
   readRevision: () => number
   bumpRevision: () => void
   withWrite: (operation: () => Promise<boolean>) => Promise<boolean>
+  withRead: <T>(operation: () => Promise<T>) => Promise<T>
+  withReplacement: <T>(operation: () => Promise<T>) => Promise<T>
   scheduleRetry: () => void
   invalidateCache: () => void
 }): Promise<void> {
@@ -21,7 +23,8 @@ export async function compactUsageEventsIfLarge(options: {
     nowIso: options.nowIso,
     retentionDays: options.retentionDays,
     maxRecordBytes: options.maxRecordBytes,
-    commitReplacement: (replace) => options.withWrite(async () => {
+    withSourceRead: options.withRead,
+    commitReplacement: (replace) => options.withReplacement(() => options.withWrite(async () => {
       const currentInfo = await stat(options.path).catch(() => null)
       if (
         options.readRevision() !== revisionBefore ||
@@ -35,7 +38,7 @@ export async function compactUsageEventsIfLarge(options: {
       await replace()
       options.bumpRevision()
       return true
-    })
+    }))
   })
   if (conflicted) options.scheduleRetry()
   if (compacted) options.invalidateCache()

@@ -40,6 +40,7 @@ export async function compactUsageEventsJsonlFile(
     retentionDays: number
     maxRecordBytes: number
     commitReplacement?: (replace: () => Promise<void>) => Promise<boolean>
+    withSourceRead?: <T>(operation: () => Promise<T>) => Promise<T>
   }
 ): Promise<boolean> {
   const cutoffMs = Date.parse(options.nowIso) - options.retentionDays * MS_PER_DAY
@@ -47,11 +48,13 @@ export async function compactUsageEventsJsonlFile(
 
   const usageByIndex = new Map<number, RuntimeEvent>()
   let lineIndex = 0
-  for await (const record of iterateJsonlEventRecords(path, options.maxRecordBytes)) {
-    if (record.event?.kind === 'usage') usageByIndex.set(lineIndex, record.event)
-    lineIndex += 1
-    if (lineIndex % YIELD_EVERY_LINES === 0) await yieldToEventLoop()
-  }
+  await withSourceRead(options, async () => {
+    for await (const record of iterateJsonlEventRecords(path, options.maxRecordBytes)) {
+      if (record.event?.kind === 'usage') usageByIndex.set(lineIndex, record.event)
+      lineIndex += 1
+      if (lineIndex % YIELD_EVERY_LINES === 0) await yieldToEventLoop()
+    }
+  })
   if (usageByIndex.size === 0) return false
 
   const keepUsageIndexes = retainedUsageIndexes(usageByIndex, cutoffMs)
@@ -59,10 +62,10 @@ export async function compactUsageEventsJsonlFile(
 
   const tmp = `${path}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   try {
-    await rewriteJsonlKeepingLines(path, tmp, {
+    await withSourceRead(options, () => rewriteJsonlKeepingLines(path, tmp, {
       maxRecordBytes: options.maxRecordBytes,
       keepLine: (event, index) => event.kind !== 'usage' || keepUsageIndexes.has(index)
-    })
+    }))
     const replace = async (): Promise<void> => renameFileWithRetry(tmp, path)
     if (options.commitReplacement) {
       const committed = await options.commitReplacement(replace)
@@ -212,6 +215,7 @@ export async function trimEventsJsonlFromSeq(
   options: {
     maxRecordBytes: number
     commitReplacement?: (replace: () => Promise<void>) => Promise<boolean>
+    withSourceRead?: <T>(operation: () => Promise<T>) => Promise<T>
   }
 ): Promise<{ trimmed: boolean; keptEvents: number }> {
   const tmp = `${path}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
@@ -225,15 +229,17 @@ export async function trimEventsJsonlFromSeq(
     })
     let lineIndex = 0
     try {
-      for await (const record of iterateJsonlEventRecords(path, options.maxRecordBytes)) {
-        const keep = !record.event || record.event.seq >= fromSeqInclusive
-        if (keep && record.line.trim()) {
-          await writeLine(record.line)
-          keptEvents += 1
+      await withSourceRead(options, async () => {
+        for await (const record of iterateJsonlEventRecords(path, options.maxRecordBytes)) {
+          const keep = !record.event || record.event.seq >= fromSeqInclusive
+          if (keep && record.line.trim()) {
+            await writeLine(record.line)
+            keptEvents += 1
+          }
+          lineIndex += 1
+          if (lineIndex % YIELD_EVERY_LINES === 0) await yieldToEventLoop()
         }
-        lineIndex += 1
-        if (lineIndex % YIELD_EVERY_LINES === 0) await yieldToEventLoop()
-      }
+      })
     } catch (error) {
       writer.destroy()
       throw error
@@ -281,11 +287,14 @@ export async function trimEventsWithGuards(options: {
   bumpRevision: () => void
   invalidateCache: () => void
   withWrite: (operation: () => Promise<boolean>) => Promise<boolean>
+  withRead: <T>(operation: () => Promise<T>) => Promise<T>
+  withReplacement: <T>(operation: () => Promise<T>) => Promise<T>
   scheduleRetry: () => void
 }): Promise<{ afterBytes: number }> {
   const trimmed = await trimEventsJsonlFromSeq(options.path, options.fromSeqInclusive, {
     maxRecordBytes: options.maxRecordBytes,
-    commitReplacement: (replace) => options.withWrite(async () => {
+    withSourceRead: options.withRead,
+    commitReplacement: (replace) => options.withReplacement(() => options.withWrite(async () => {
       const currentInfo = await stat(options.path).catch(() => null)
       if (
         options.readRevision() !== options.revisionBefore ||
@@ -299,11 +308,18 @@ export async function trimEventsWithGuards(options: {
       options.bumpRevision()
       options.invalidateCache()
       return true
-    })
+    }))
   })
   if (!trimmed.trimmed) options.scheduleRetry()
   const after = await stat(options.path).catch(() => null)
   return { afterBytes: after?.size ?? 0 }
+}
+
+function withSourceRead<T>(
+  options: { withSourceRead?: <Value>(operation: () => Promise<Value>) => Promise<Value> },
+  operation: () => Promise<T>
+): Promise<T> {
+  return options.withSourceRead ? options.withSourceRead(operation) : operation()
 }
 
 function usageCoalescingBucket(event: RuntimeEvent): string {
@@ -335,6 +351,40 @@ export function parseReplayEventRecord(line: string, maxRecordBytes: number): Ru
 export function warnUsageCompaction(threadId: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error)
   console.warn(`[kun] usage event compaction failed for ${threadId}; keeping append-only log: ${message}`)
+}
+
+/** Stream durable newline-terminated runtime events from an append-only log. */
+export async function* iterateRuntimeEventsJsonl(
+  path: string,
+  sinceSeq: number,
+  maxRecordBytes: number
+): AsyncIterable<RuntimeEvent> {
+  let remainder = ''
+  try {
+    const stream = createReadStream(path, {
+      encoding: 'utf-8',
+      highWaterMark: Math.min(maxRecordBytes, 64 * 1024)
+    })
+    for await (const chunk of stream) {
+      remainder += typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
+      let newline = remainder.indexOf('\n')
+      while (newline >= 0) {
+        const event = parseReplayEventRecord(remainder.slice(0, newline), maxRecordBytes)
+        remainder = remainder.slice(newline + 1)
+        if (event && event.seq > sinceSeq) yield event
+        newline = remainder.indexOf('\n')
+      }
+      if (Buffer.byteLength(remainder, 'utf-8') > maxRecordBytes) {
+        throw new Error(`event replay record exceeds ${maxRecordBytes} bytes`)
+      }
+    }
+    // Bytes after the final newline belong to an in-flight append.
+    if (remainder.trim() && Buffer.byteLength(remainder, 'utf-8') > maxRecordBytes) {
+      throw new Error(`event replay record exceeds ${maxRecordBytes} bytes`)
+    }
+  } catch (error) {
+    if ((error as { code?: string }).code !== 'ENOENT') throw error
+  }
 }
 
 export async function readLatestItemsFromJsonl(
@@ -493,25 +543,28 @@ export async function readItemPageFromJsonl(
       encoding: 'utf-8',
       start: 0,
       end: sourceBytes - 1,
-      autoClose: true,
+      autoClose: false,
       highWaterMark: 64 * 1024
     })
-    for await (const chunk of stream) {
-      remainder += typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
-      let newline = remainder.indexOf('\n')
-      while (newline >= 0) {
-        acceptLine(remainder.slice(0, newline))
-        remainder = remainder.slice(newline + 1)
-        newline = remainder.indexOf('\n')
+    try {
+      for await (const chunk of stream) {
+        remainder += typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
+        let newline = remainder.indexOf('\n')
+        while (newline >= 0) {
+          acceptLine(remainder.slice(0, newline))
+          remainder = remainder.slice(newline + 1)
+          newline = remainder.indexOf('\n')
+        }
+        if (Buffer.byteLength(remainder, 'utf-8') > DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES) {
+          throw new Error(`item history record exceeds ${DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES} bytes`)
+        }
       }
-      if (Buffer.byteLength(remainder, 'utf-8') > DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES) {
-        throw new Error(`item history record exceeds ${DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES} bytes`)
-      }
+      acceptLine(remainder)
+    } finally {
+      stream.destroy()
     }
-    acceptLine(remainder)
-  } catch (error) {
+  } finally {
     await handle.close().catch(() => undefined)
-    throw error
   }
 
   const selectedWindow = options.before && beforeFound ? beforeWindow : latestWindow

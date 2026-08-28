@@ -18,7 +18,7 @@ export { FileAttachmentStore, type AttachmentStore } from '../attachments/attach
 export { InMemoryApprovalGate } from '../adapters/in-memory-approval-gate.js'
 export { InMemoryUserInputGate } from '../adapters/in-memory-user-input-gate.js'
 export { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
-export { FileSessionStore, FileThreadStore } from '../adapters/file/index.js'
+export { FileSessionStore, FileThreadStore, JsonlFileAccessCoordinator } from '../adapters/file/index.js'
 export { HybridSessionStore, HybridThreadStore } from '../adapters/hybrid/index.js'
 export {
   createManagerRemoteStores,

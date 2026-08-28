@@ -1,4 +1,4 @@
-import { mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, open, readdir, rm, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { Database as BetterSqliteDatabase, Statement } from 'better-sqlite3'
 import { ThreadSchema, type ThreadRecord, type ThreadSummary } from '../../contracts/threads.js'
@@ -33,6 +33,8 @@ import {
   type UsageRuntimeEvent
 } from './hybrid-thread-support.js'
 import { loadIndexedUsageRecords } from './hybrid-usage-query.js'
+import { JsonlFileAccessCoordinator } from '../file/jsonl-file-access.js'
+import { renameFileWithRetry } from '../file/atomic-write.js'
 
 export { describeSqliteAbiMismatch } from './hybrid-thread-support.js'
 
@@ -59,9 +61,18 @@ export class HybridThreadStore implements ThreadStore {
   private readonly metadataCompactFloor = new Map<string, number>()
   private readonly filesystemSummaries: HybridFilesystemSummaryCache
   private readonly sqliteState = new HybridSqliteDegradedState()
-  constructor(options: { dataDir: string; sqlitePath?: string; nowIso?: () => string }) {
+  private readonly fileAccess: JsonlFileAccessCoordinator
+  constructor(options: {
+    dataDir: string
+    sqlitePath?: string
+    nowIso?: () => string
+    fileAccess?: JsonlFileAccessCoordinator
+  }) {
     this.dataDir = resolve(options.dataDir, 'threads')
-    this.documents = new HybridThreadDocumentRepository(options.dataDir)
+    this.fileAccess = options.fileAccess ?? new JsonlFileAccessCoordinator()
+    this.documents = new HybridThreadDocumentRepository(options.dataDir, {
+      fileAccess: this.fileAccess
+    })
     this.sqlitePath = resolve(options.sqlitePath ?? join(options.dataDir, 'index.sqlite3'))
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
     this.filesystemSummaries = new HybridFilesystemSummaryCache({
@@ -480,7 +491,8 @@ export class HybridThreadStore implements ThreadStore {
   private async scanEventsForBackfill(
     threadId: string
   ): Promise<{ highWater: number; usage: UsageRuntimeEvent[] }> {
-    return scanEventsForUsageBackfill(this.eventsPath(threadId))
+    const path = this.eventsPath(threadId)
+    return this.fileAccess.withRead(path, () => scanEventsForUsageBackfill(path))
   }
 
   private queryThreadRows(options: ThreadStoreListOptions): ThreadRow[] {
@@ -560,7 +572,7 @@ export class HybridThreadStore implements ThreadStore {
       } finally {
         await handle.close()
       }
-      await rename(tmpPath, path)
+      await this.fileAccess.withReplacement(path, () => renameFileWithRetry(tmpPath, path))
       const compacted = await stat(path)
       this.metadataCompactFloor.set(
         threadId,

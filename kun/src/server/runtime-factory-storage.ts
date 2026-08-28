@@ -4,6 +4,7 @@ import {
   type AttachmentStore,
   FileSessionStore,
   FileThreadStore,
+  JsonlFileAccessCoordinator,
   HybridSessionStore,
   HybridThreadStore,
   createManagerRemoteStores,
@@ -37,17 +38,20 @@ export async function createPersistentStores(input: {
     }
   }
 
+  const fileAccess = new JsonlFileAccessCoordinator()
   const threadStore = new HybridThreadStore({
     dataDir: input.dataDir,
     sqlitePath: storage.sqlitePath ? expandHomePath(storage.sqlitePath) : undefined,
-    nowIso: input.nowIso
+    nowIso: input.nowIso,
+    fileAccess
   })
   await threadStore.ready()
   return {
     threadStore,
     sessionStore: new HybridSessionStore({
       dataDir: input.dataDir,
-      index: threadStore
+      index: threadStore,
+      fileAccess
     }),
     shutdown: async () => {
       await threadStore.shutdown()

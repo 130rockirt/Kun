@@ -298,11 +298,14 @@ export class ManagerRemoteSessionStore implements SessionStore {
   ): AsyncIterable<RuntimeEventValue> {
     let cursor = sinceSeq
     while (!signal.aborted) {
-      const events = await this.loadEventsSince(threadId, cursor)
-      for (const event of events) {
-        if (event.seq <= cursor) continue
-        cursor = event.seq
-        yield event
+      const highest = await this.highestSeq(threadId)
+      if (highest > cursor) {
+        const events = await this.loadEventsSince(threadId, cursor)
+        for (const event of events) {
+          if (event.seq <= cursor) continue
+          cursor = event.seq
+          yield event
+        }
       }
       await abortableDelay(250, signal)
     }

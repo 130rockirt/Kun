@@ -29,10 +29,12 @@ export class HybridSessionStore implements SessionStore {
     dataDir: string
     index: HybridThreadStore
     usageEventCompaction?: ConstructorParameters<typeof FileSessionStore>[0]['usageEventCompaction']
+    fileAccess?: ConstructorParameters<typeof FileSessionStore>[0]['fileAccess']
   }) {
     this.delegate = new FileSessionStore({
       dataDir: options.dataDir,
-      usageEventCompaction: options.usageEventCompaction
+      usageEventCompaction: options.usageEventCompaction,
+      fileAccess: options.fileAccess
     })
     this.index = options.index
   }
