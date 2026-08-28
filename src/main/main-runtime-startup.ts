@@ -10,6 +10,7 @@ import {
   waitForKunStartupSettled
 } from './kun-process'
 import { clearHistoricalKunServeProcesses } from './runtime/kun-serve-process-cleanup'
+import { waitForRuntimeTurnsIdle } from './runtime/managed-runtime-idle'
 import { managedKunHostCanAutoStart } from './managed-runtime-startup-policy'
 import { logWarn } from './logger'
 import {
@@ -173,6 +174,17 @@ export async function restartRuntime(settings: AppSettingsV1): Promise<void> {
 }
 
 async function restartRuntimeOnce(settings: AppSettingsV1): Promise<void> {
+  const idle = kunRuntimeAdapter.isChildRunning()
+    ? await waitForRuntimeTurnsIdle({ settings })
+    : 'idle'
+  if (idle !== 'idle') {
+    throw runtimeJsonError(
+      'runtime_busy',
+      idle === 'timeout'
+        ? 'Kun still has active tasks; restart was deferred.'
+        : 'Kun task state could not be verified; restart was deferred.'
+    )
+  }
   await restartRuntimeAfterStopping(
     settings,
     () => kunRuntimeAdapter.stopSharedAndWait(settings)

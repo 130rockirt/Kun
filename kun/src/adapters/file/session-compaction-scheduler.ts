@@ -23,6 +23,7 @@ export class SessionCompactionScheduler {
   private readonly clearTimer: typeof clearTimeout
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly inflight = new Map<string, Promise<void>>()
+  private serialTail: Promise<void> = Promise.resolve()
   private closed = false
 
   constructor(options: SessionCompactionSchedulerOptions) {
@@ -84,7 +85,10 @@ export class SessionCompactionScheduler {
 
   private async launch(threadId: string, kind: CompactionScheduleKind): Promise<void> {
     const key = `${kind}:${threadId}`
-    const previous = this.inflight.get(key) ?? Promise.resolve()
+    // A profile can contain many oversized legacy threads. Keep all physical
+    // rewrites behind one tail so post-readiness repair cannot saturate disk or
+    // the shared Manager with concurrent multi-gigabyte scans.
+    const previous = this.serialTail
     const run = previous
       .catch(() => undefined)
       .then(async () => {
@@ -96,6 +100,7 @@ export class SessionCompactionScheduler {
         }
       })
     const guard = run.then(() => undefined, () => undefined)
+    this.serialTail = guard
     this.inflight.set(key, guard)
     try {
       await run

@@ -14,6 +14,10 @@ import {
   type CanvasReceiptRegistry
 } from '../services/canvas-receipt-registry.js'
 import { prepareBrowserUseToolResultForPersistence } from './tool-result-image.js'
+import type { ArtifactStore } from '../artifacts/artifact-store.js'
+
+export const TOOL_RESULT_ARTIFACT_THRESHOLD_BYTES = 1024 * 1024
+const TOOL_RESULT_PREVIEW_CHARS = 16 * 1024
 
 export type PlanWrittenCallback = (input: {
   threadId: string
@@ -37,6 +41,7 @@ export type ToolExecutionServiceDeps = {
   ) => Promise<string | null>
   /** Design-tool renderer receipt registry; finalizes accepted results. */
   receipts?: CanvasReceiptRegistry
+  artifactStore?: ArtifactStore
 }
 
 export type ToolExecutionInput = {
@@ -160,9 +165,10 @@ export class ToolExecutionService {
     // Register before publishing the result. Otherwise the renderer can receive
     // the SSE item and POST its receipt before this process knows the key.
     await this.registerPendingDesignReceipt(threadId, turnId, call, result)
+    const browserSafeItem = prepareBrowserUseToolResultForPersistence(result.item)
     await this.deps.turns.applyItem(
       threadId,
-      prepareBrowserUseToolResultForPersistence(result.item)
+      await this.materializeLargeToolResult(threadId, turnId, call, browserSafeItem)
     )
     await this.afterResultPersisted(threadId, turnId, call, result)
     await this.deps.turns.compactItemHistory(threadId)
@@ -399,6 +405,54 @@ export class ToolExecutionService {
         code: 'todo_plan_sync_failed',
         severity: 'warning'
       })
+    }
+  }
+
+  private async materializeLargeToolResult(
+    threadId: string,
+    turnId: string,
+    call: ToolCallLike,
+    item: TurnItem
+  ): Promise<TurnItem> {
+    if (!this.deps.artifactStore || item.kind !== 'tool_result') return item
+    let content: string
+    try {
+      content = JSON.stringify(item.output)
+    } catch {
+      content = String(item.output)
+    }
+    const byteSize = Buffer.byteLength(content, 'utf8')
+    if (byteSize <= TOOL_RESULT_ARTIFACT_THRESHOLD_BYTES) return item
+    try {
+      const stored = await this.deps.artifactStore.put({
+        content,
+        mimeType: 'application/json',
+        source: 'tool',
+        origin: call.toolName,
+        linkedOwners: [threadId, turnId],
+        maxInlineChars: TOOL_RESULT_PREVIEW_CHARS
+      })
+      return {
+        ...item,
+        output: {
+          artifactId: stored.meta.id,
+          byteSize: stored.meta.byteSize,
+          lineCount: stored.meta.lineCount,
+          mimeType: stored.meta.mimeType ?? 'application/json',
+          inline: stored.summary.inline,
+          truncated: true
+        }
+      }
+    } catch (error) {
+      return {
+        ...item,
+        output: {
+          artifactUnavailable: true,
+          byteSize,
+          preview: content.slice(0, TOOL_RESULT_PREVIEW_CHARS),
+          reason: error instanceof Error ? error.message : String(error)
+        }
+      }
     }
   }
 }

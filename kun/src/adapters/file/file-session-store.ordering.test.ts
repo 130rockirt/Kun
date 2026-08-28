@@ -2,7 +2,13 @@ import { appendFile, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { makeAssistantTextItem, makeToolCallItem, makeToolResultItem, makeUserItem } from '../../domain/item.js'
+import {
+  makeAssistantReasoningItem,
+  makeAssistantTextItem,
+  makeToolCallItem,
+  makeToolResultItem,
+  makeUserItem
+} from '../../domain/item.js'
 import { FileSessionStore, readLatestItemsFromJsonl } from './file-session-store.js'
 
 const roots: string[] = []
@@ -12,6 +18,99 @@ afterEach(async () => {
 })
 
 describe('FileSessionStore item ordering', () => {
+  it('checkpoints a long assistant stream without cumulative canonical appends', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-session-live-item-'))
+    roots.push(root)
+    const store = new FileSessionStore({ dataDir: root })
+    const threadId = 'thread_live_item'
+    let text = ''
+    for (let index = 0; index < 256; index += 1) {
+      text += 'r'.repeat(2_048)
+      await store.checkpointLiveItem(threadId, makeAssistantReasoningItem({
+        id: 'reasoning_live',
+        threadId,
+        turnId: 'turn_live',
+        text,
+        status: 'running'
+      }), index)
+    }
+    const messagesPath = join(root, 'threads', threadId, 'messages.jsonl')
+    await expect(stat(messagesPath)).rejects.toThrow()
+    const checkpointPath = join(root, 'threads', threadId, 'live-items.json')
+    expect((await stat(checkpointPath)).size).toBeLessThan(text.length * 2)
+
+    store.clearThreadMemory(threadId)
+    const snapshot = await store.loadItemSnapshot(threadId)
+    expect(snapshot.items).toMatchObject([
+      { id: 'reasoning_live', kind: 'assistant_reasoning', status: 'running' }
+    ])
+    expect(snapshot.replayAfterSeq).toBeTypeOf('number')
+
+    await store.finalizeLiveItem(threadId, makeAssistantReasoningItem({
+      id: 'reasoning_live',
+      threadId,
+      turnId: 'turn_live',
+      text,
+      status: 'completed'
+    }))
+    expect((await readFile(messagesPath, 'utf8')).trim().split('\n')).toHaveLength(1)
+    await expect(stat(checkpointPath)).rejects.toThrow()
+  })
+
+  it('replays durable deltas after the last checkpoint during cold recovery', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-session-live-recovery-'))
+    roots.push(root)
+    const threadId = 'thread_live_recovery'
+    const store = new FileSessionStore({ dataDir: root })
+    const item = (text: string) => makeAssistantTextItem({
+      id: 'assistant_live', threadId, turnId: 'turn_live', text, status: 'running'
+    })
+    await store.checkpointLiveItem(threadId, item('hello'), 0)
+    await store.appendEvent(threadId, {
+      seq: 1,
+      timestamp: '2026-08-29T00:00:00.000Z',
+      kind: 'assistant_text_delta',
+      threadId,
+      turnId: 'turn_live',
+      itemId: 'assistant_live',
+      deltaOffset: 0,
+      item: item('hello')
+    })
+    // This in-memory checkpoint refresh is below 64 KiB, so only the event
+    // carries the second fragment durably.
+    await store.checkpointLiveItem(threadId, item('hello world'), 1)
+    await store.appendEvent(threadId, {
+      seq: 2,
+      timestamp: '2026-08-29T00:00:01.000Z',
+      kind: 'assistant_text_delta',
+      threadId,
+      turnId: 'turn_live',
+      itemId: 'assistant_live',
+      deltaOffset: 5,
+      item: item(' world')
+    })
+
+    const recovered = new FileSessionStore({ dataDir: root })
+    await expect(recovered.loadItems(threadId)).resolves.toMatchObject([
+      { id: 'assistant_live', text: 'hello world', status: 'running' }
+    ])
+  })
+
+  it('rejects an oversized item before creating a partial history record', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-session-record-limit-'))
+    roots.push(root)
+    const store = new FileSessionStore({ dataDir: root })
+    const threadId = 'thread_record_limit'
+    await expect(store.appendItem(threadId, makeAssistantTextItem({
+      id: 'assistant_too_large',
+      threadId,
+      turnId: 'turn_1',
+      text: 'x'.repeat(16 * 1024 * 1024),
+      status: 'completed'
+    }))).rejects.toThrow('item history record exceeds')
+    await expect(stat(join(root, 'threads', threadId, 'messages.jsonl'))).rejects.toThrow()
+  })
+
   it('keeps an updated item in its original timeline slot after a cold reload', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-session-order-'))
     roots.push(root)

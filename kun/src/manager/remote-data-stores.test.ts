@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createThreadRecord, toThreadSummary } from '../domain/thread.js'
 import type { ServiceManagerConnection } from './manager-client.js'
 import {
+  ManagerRemoteSessionStore,
   ManagerRemoteThreadStore,
   resolveManagerDataRequestTimeoutMs
 } from './remote-data-stores.js'
@@ -52,6 +53,42 @@ describe('resolveManagerDataRequestTimeoutMs', () => {
     expect(resolveManagerDataRequestTimeoutMs('session', 'loadItemPage')).toBe(120_000)
     expect(resolveManagerDataRequestTimeoutMs('session', 'loadItems')).toBe(30_000)
     expect(resolveManagerDataRequestTimeoutMs('thread', 'get')).toBe(30_000)
+  })
+})
+
+describe('ManagerRemoteSessionStore live items', () => {
+  it('forwards checkpoint and finalization operations without changing their payloads', async () => {
+    const requests: Array<{ url: string; body: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(input), body: JSON.parse(String(init?.body)) })
+      return new Response(JSON.stringify({ result: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }))
+    const store = new ManagerRemoteSessionStore(managerConnection())
+    const item = {
+      id: 'assistant_remote_live',
+      turnId: 'turn_remote_live',
+      threadId: 'thread_remote_live',
+      role: 'assistant' as const,
+      status: 'running' as const,
+      createdAt: '2026-08-29T00:00:00.000Z',
+      kind: 'assistant_text' as const,
+      text: 'live'
+    }
+
+    await store.checkpointLiveItem(item.threadId, item, 9)
+    await store.finalizeLiveItem(item.threadId, { ...item, status: 'completed' })
+
+    expect(requests.map((request) => request.url)).toEqual([
+      expect.stringContaining('/v1/data/session/checkpointLiveItem'),
+      expect.stringContaining('/v1/data/session/finalizeLiveItem')
+    ])
+    expect(requests.map((request) => request.body)).toEqual([
+      { threadId: item.threadId, item, representedSeq: 9 },
+      { threadId: item.threadId, item: { ...item, status: 'completed' } }
+    ])
   })
 })
 

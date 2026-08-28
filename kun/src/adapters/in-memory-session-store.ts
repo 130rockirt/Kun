@@ -3,12 +3,19 @@ import type {
   ItemHistoryPage,
   ItemHistoryPageOptions,
   ItemHistorySnapshot,
+  LiveItemCheckpoint,
   SessionStore
 } from '../ports/session-store.js'
 import type { RuntimeEvent } from '../contracts/events.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { AgentSession } from '../domain/session.js'
 import { buildPublicItemHistoryPage } from '../services/item-history-page.js'
+import {
+  overlayLiveItems,
+  replayLiveItemDeltas,
+  serializeItemRecord,
+  serializeItemRecords
+} from './file/file-session-live-items.js'
 
 /**
  * In-memory session store used by tests and the default runtime.
@@ -22,6 +29,7 @@ export class InMemorySessionStore implements SessionStore {
   private readonly events = new Map<string, RuntimeEvent[]>()
   private readonly items = new Map<string, TurnItem[]>()
   private readonly sessions = new Map<string, AgentSession>()
+  private readonly liveItems = new Map<string, Map<string, LiveItemCheckpoint>>()
   private readonly itemHistoryRevisions = new Map<string, number>()
   private nextItemHistoryRevision = 0
 
@@ -41,6 +49,7 @@ export class InMemorySessionStore implements SessionStore {
   }
 
   async appendItem(threadId: string, item: TurnItem): Promise<void> {
+    serializeItemRecord(item)
     const list = this.items.get(threadId) ?? []
     const existingIndex = list.findIndex((existing) => existing.id === item.id)
     const nextList = existingIndex >= 0
@@ -60,7 +69,21 @@ export class InMemorySessionStore implements SessionStore {
     }
   }
 
+  async checkpointLiveItem(threadId: string, item: TurnItem, representedSeq: number): Promise<void> {
+    serializeItemRecord(item)
+    const entries = this.liveItems.get(threadId) ?? new Map<string, LiveItemCheckpoint>()
+    entries.set(item.id, { item, representedSeq })
+    this.liveItems.set(threadId, entries)
+    this.bumpItemHistoryRevision(threadId)
+  }
+
+  async finalizeLiveItem(threadId: string, item: TurnItem): Promise<void> {
+    await this.appendItem(threadId, item)
+    this.removeLiveItem(threadId, item.id)
+  }
+
   async rewriteItems(threadId: string, items: TurnItem[]): Promise<void> {
+    serializeItemRecords(items)
     const nextItems = [...items]
     this.items.set(threadId, nextItems)
     this.bumpItemHistoryRevision(threadId)
@@ -75,9 +98,13 @@ export class InMemorySessionStore implements SessionStore {
   }
 
   async loadItemSnapshot(threadId: string): Promise<ItemHistorySnapshot> {
+    const live = this.liveEntries(threadId)
     return {
       revision: this.itemHistoryRevision(threadId),
-      items: [...(this.items.get(threadId) ?? [])]
+      items: overlayLiveItems(this.items.get(threadId) ?? [], this.recoverLive(threadId, live)),
+      ...(live.length > 0
+        ? { replayAfterSeq: Math.min(...live.map((entry) => entry.representedSeq)) }
+        : {})
     }
   }
 
@@ -90,6 +117,7 @@ export class InMemorySessionStore implements SessionStore {
     if (revision !== expectedRevision) {
       return { applied: false, reason: 'conflict', revision }
     }
+    serializeItemRecords(items)
     const nextItems = [...items]
     this.items.set(threadId, nextItems)
     const nextRevision = this.bumpItemHistoryRevision(threadId)
@@ -105,7 +133,7 @@ export class InMemorySessionStore implements SessionStore {
   }
 
   async updateItem(threadId: string, itemId: string, patch: Partial<TurnItem>): Promise<TurnItem | null> {
-    const list = this.items.get(threadId) ?? []
+    const list = overlayLiveItems(this.items.get(threadId) ?? [], this.liveEntries(threadId))
     let updated: TurnItem | null = null
     const nextList = list.map((item) => {
       if (item.id !== itemId) return item
@@ -113,7 +141,9 @@ export class InMemorySessionStore implements SessionStore {
       return updated
     })
     if (!updated) return null
+    serializeItemRecord(updated)
     this.items.set(threadId, nextList)
+    this.removeLiveItem(threadId, itemId)
     this.bumpItemHistoryRevision(threadId)
     const session = this.sessions.get(threadId)
     if (session) {
@@ -141,14 +171,24 @@ export class InMemorySessionStore implements SessionStore {
   }
 
   async loadItems(threadId: string): Promise<TurnItem[]> {
-    return [...(this.items.get(threadId) ?? [])]
+    return overlayLiveItems(
+      this.items.get(threadId) ?? [],
+      this.recoverLive(threadId, this.liveEntries(threadId))
+    )
   }
 
   async loadItemPage(
     threadId: string,
     options: ItemHistoryPageOptions
   ): Promise<ItemHistoryPage> {
-    return buildPublicItemHistoryPage(this.items.get(threadId) ?? [], options)
+    const live = this.liveEntries(threadId)
+    const page = buildPublicItemHistoryPage(
+      overlayLiveItems(this.items.get(threadId) ?? [], this.recoverLive(threadId, live)),
+      options
+    )
+    return live.length > 0 && !options.before
+      ? { ...page, replayAfterSeq: Math.min(...live.map((entry) => entry.representedSeq)) }
+      : page
   }
 
   async loadSession(threadId: string): Promise<AgentSession | null> {
@@ -175,6 +215,7 @@ export class InMemorySessionStore implements SessionStore {
     this.events.clear()
     this.items.clear()
     this.sessions.clear()
+    this.liveItems.clear()
     this.itemHistoryRevisions.clear()
   }
 
@@ -182,6 +223,7 @@ export class InMemorySessionStore implements SessionStore {
     this.events.delete(threadId)
     this.items.delete(threadId)
     this.sessions.delete(threadId)
+    this.liveItems.delete(threadId)
     this.itemHistoryRevisions.delete(threadId)
   }
 
@@ -195,5 +237,19 @@ export class InMemorySessionStore implements SessionStore {
     this.nextItemHistoryRevision += 1
     this.itemHistoryRevisions.set(threadId, this.nextItemHistoryRevision)
     return this.nextItemHistoryRevision
+  }
+
+  private liveEntries(threadId: string): LiveItemCheckpoint[] {
+    return [...(this.liveItems.get(threadId)?.values() ?? [])]
+  }
+
+  private recoverLive(threadId: string, live: LiveItemCheckpoint[]): LiveItemCheckpoint[] {
+    return replayLiveItemDeltas(live, this.events.get(threadId) ?? [])
+  }
+
+  private removeLiveItem(threadId: string, itemId: string): void {
+    const entries = this.liveItems.get(threadId)
+    entries?.delete(itemId)
+    if (entries?.size === 0) this.liveItems.delete(threadId)
   }
 }

@@ -439,6 +439,30 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
         await this.sessionStore.appendItem(body.threadId, body.item)
         return null
       }
+      case 'checkpointLiveItem': {
+        const body = z.object({
+          threadId: ThreadIdSchema,
+          item: TurnItem,
+          representedSeq: z.number().int().nonnegative()
+        }).strict().parse(value)
+        if (body.item.threadId !== body.threadId) throw new Error('item threadId does not match request')
+        if (this.sessionStore.checkpointLiveItem) {
+          await this.sessionStore.checkpointLiveItem(body.threadId, body.item, body.representedSeq)
+        } else {
+          await this.sessionStore.appendItem(body.threadId, body.item)
+        }
+        return null
+      }
+      case 'finalizeLiveItem': {
+        const body = z.object({ threadId: ThreadIdSchema, item: TurnItem }).strict().parse(value)
+        if (body.item.threadId !== body.threadId) throw new Error('item threadId does not match request')
+        if (this.sessionStore.finalizeLiveItem) {
+          await this.sessionStore.finalizeLiveItem(body.threadId, body.item)
+        } else {
+          await this.sessionStore.appendItem(body.threadId, body.item)
+        }
+        return null
+      }
       case 'rewriteItems': {
         const body = z.object({ threadId: ThreadIdSchema, items: z.array(TurnItem) }).strict().parse(value)
         await this.sessionStore.rewriteItems(body.threadId, body.items)
@@ -479,6 +503,11 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
           afterBytes: 0,
           itemCount: (await this.sessionStore.loadItems(body.threadId)).length
         }
+      }
+      case 'scheduleItemHistoryCompaction': {
+        const { threadId } = parseThreadId(value)
+        this.sessionStore.scheduleItemHistoryCompaction?.(threadId)
+        return null
       }
       case 'loadEventsSince': {
         const body = z.object({

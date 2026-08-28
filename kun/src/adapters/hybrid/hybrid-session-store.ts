@@ -48,6 +48,14 @@ export class HybridSessionStore implements SessionStore {
     await this.delegate.appendItem(threadId, item)
   }
 
+  async checkpointLiveItem(threadId: string, item: TurnItem, representedSeq: number): Promise<void> {
+    await this.delegate.checkpointLiveItem(threadId, item, representedSeq)
+  }
+
+  async finalizeLiveItem(threadId: string, item: TurnItem): Promise<void> {
+    await this.delegate.finalizeLiveItem(threadId, item)
+  }
+
   async rewriteItems(threadId: string, items: TurnItem[]): Promise<void> {
     await this.delegate.rewriteItems(threadId, items)
   }

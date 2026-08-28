@@ -273,6 +273,14 @@ export async function createRuntimeServices(
         })
       }
       const reports = await sessionGuardian.scanAll()
+      if (sessionStore.scheduleItemHistoryCompaction) {
+        for (const report of reports) {
+          if (report.messagesBytes <= 32 * 1024 * 1024) continue
+          const thread = await threadService.getMetadata(report.threadId).catch(() => null)
+          if (!thread || thread.status === 'running' || thread.status === 'deleted') continue
+          sessionStore.scheduleItemHistoryCompaction(report.threadId)
+        }
+      }
       const flagged = reports.filter((report) => report.warnings.length > 0)
       if (flagged.length > 0) {
         console.warn('[kun] session guardian warnings', {

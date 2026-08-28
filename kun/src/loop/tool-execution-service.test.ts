@@ -8,6 +8,7 @@ import type { TurnService } from '../services/turn-service.js'
 import { InflightTracker } from './inflight-tracker.js'
 import { ToolCancellationRegistry } from './tool-cancellation-registry.js'
 import { ToolExecutionService } from './tool-execution-service.js'
+import { InMemoryArtifactStore, type ArtifactStore } from '../artifacts/artifact-store.js'
 
 const call = {
   callId: 'call_1',
@@ -31,6 +32,7 @@ function makeService(input: {
   awaitWorkspaceCheckpoint?: (requestId: string, signal: AbortSignal) => Promise<string | null>
   toolCancellation?: ToolCancellationRegistry
   receipts?: CanvasReceiptRegistry
+  artifactStore?: ArtifactStore
 } = {}) {
   const lifecycle: string[] = []
   const events: Array<Record<string, unknown>> = []
@@ -63,12 +65,78 @@ function makeService(input: {
       : {}),
     ...(input.onPlanWritten ? { onPlanWritten: input.onPlanWritten } : {}),
     ...(input.toolCancellation ? { toolCancellation: input.toolCancellation } : {}),
-    ...(input.receipts ? { receipts: input.receipts } : {})
+    ...(input.receipts ? { receipts: input.receipts } : {}),
+    ...(input.artifactStore ? { artifactStore: input.artifactStore } : {})
   })
   return { service, lifecycle, events, turns }
 }
 
 describe('ToolExecutionService', () => {
+  it('externalizes oversized generic tool output before persisting the result', async () => {
+    const artifacts = new InMemoryArtifactStore()
+    const { service, turns } = makeService({ artifactStore: artifacts })
+    const result: ToolHostResult = {
+      item: makeToolResultItem({
+        id: 'item_large',
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        callId: 'call_1',
+        toolName: 'read',
+        output: { text: 'x'.repeat(1024 * 1024 + 1) }
+      }),
+      approved: true
+    }
+
+    await service.persistResult('thread_1', 'turn_1', call, result)
+
+    const persisted = vi.mocked(turns.applyItem).mock.calls[0]?.[1]
+    expect(persisted).toMatchObject({
+      kind: 'tool_result',
+      output: {
+        artifactId: expect.stringMatching(/^art_/),
+        truncated: true,
+        byteSize: expect.any(Number)
+      }
+    })
+    if (persisted?.kind !== 'tool_result' || !persisted.output || typeof persisted.output !== 'object') {
+      throw new Error('expected artifact-backed tool result')
+    }
+    const artifactId = (persisted.output as Record<string, unknown>).artifactId as string
+    expect(await artifacts.get(artifactId)).toContain('"text"')
+  })
+
+  it('persists only a bounded preview when artifact storage fails', async () => {
+    const artifacts = {
+      put: vi.fn(async () => { throw new Error('artifact disk unavailable') })
+    } as unknown as ArtifactStore
+    const { service, turns } = makeService({ artifactStore: artifacts })
+    const result: ToolHostResult = {
+      item: makeToolResultItem({
+        id: 'item_large_failed',
+        threadId: 'thread_1',
+        turnId: 'turn_1',
+        callId: 'call_1',
+        toolName: 'read',
+        output: { text: 'x'.repeat(1024 * 1024 + 1) }
+      }),
+      approved: true
+    }
+
+    await service.persistResult('thread_1', 'turn_1', call, result)
+
+    const persisted = vi.mocked(turns.applyItem).mock.calls[0]?.[1]
+    expect(persisted).toMatchObject({
+      kind: 'tool_result',
+      output: {
+        artifactUnavailable: true,
+        byteSize: expect.any(Number),
+        reason: 'artifact disk unavailable'
+      }
+    })
+    if (persisted?.kind !== 'tool_result') throw new Error('expected tool result')
+    expect(JSON.stringify(persisted.output).length).toBeLessThan(20 * 1024)
+  })
+
   it('normalizes advertised-tool rejection into a model-visible result', async () => {
     const { service, events } = makeService({
       execute: async () => { throw new Error('unknown tool: missing_tool') }

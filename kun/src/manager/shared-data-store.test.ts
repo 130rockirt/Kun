@@ -37,6 +37,45 @@ describe('manager atomic JSON policy', () => {
 })
 
 describe('manager shared data store', () => {
+  it('keeps live checkpoint and finalization behavior equivalent through the manager', async () => {
+    const store = await dataStore()
+    const threadId = 'thread-live-manager'
+    const running = {
+      id: 'assistant-live-manager',
+      turnId: 'turn-live-manager',
+      threadId,
+      role: 'assistant' as const,
+      status: 'running' as const,
+      createdAt: '2026-08-29T00:00:00.000Z',
+      kind: 'assistant_text' as const,
+      text: 'streaming'
+    }
+    await store.executeSession('checkpointLiveItem', {
+      threadId,
+      item: running,
+      representedSeq: 7
+    })
+
+    await expect(store.executeSession('loadItemSnapshot', { threadId })).resolves.toMatchObject({
+      replayAfterSeq: 7,
+      items: [{ id: running.id, text: 'streaming', status: 'running' }]
+    })
+
+    await store.executeSession('finalizeLiveItem', {
+      threadId,
+      item: { ...running, text: 'streaming complete', status: 'completed' }
+    })
+    const finalized = await store.executeSession('loadItemSnapshot', { threadId }) as {
+      replayAfterSeq?: number
+      items: Array<{ id: string; text: string; status: string }>
+    }
+    expect(finalized.replayAfterSeq).toBeUndefined()
+    expect(finalized.items).toMatchObject([
+      { id: running.id, text: 'streaming complete', status: 'completed' }
+    ])
+    await store.close()
+  })
+
   it('proxies the lock-free item text search so palette deep search works in shared mode', async () => {
     const store = await dataStore()
     const thread = createThreadRecord({

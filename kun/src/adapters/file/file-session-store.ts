@@ -33,7 +33,6 @@ import { SessionCompactionScheduler } from './session-compaction-scheduler.js'
 import { searchItemTextFile } from './file-session-text-search.js'
 import { writeSessionArchive } from './session-history-archive.js'
 import { compactUsageEventsIfLarge, sessionDirectoryExists } from './file-session-usage-compaction.js'
-import { scanHighestSeqFromTail } from './file-session-seq-tail-scan.js'
 import { FileSessionUsageIndex } from './file-session-usage-index.js'
 import {
   listThreadDirs,
@@ -41,12 +40,22 @@ import {
   loadUsageRecordsFromIndex
 } from './file-session-usage-read.js'
 import { JsonlFileAccessCoordinator } from './jsonl-file-access.js'
-import { loadItemPageFromStore } from './file-session-page.js'
-
+import { loadIndexedLiveItemPageFromStore } from './file-session-page.js'
+import {
+  FileSessionLiveItems,
+  liveReplayAfterSeq,
+  overlayLiveItems,
+  readRecoveredLiveItems,
+  readLiveItems,
+  serializeItemRecord,
+  serializeItemRecords
+} from './file-session-live-items.js'
+import { FileSessionItemIndex } from './file-session-item-index.js'
+import { compactFileSessionItems } from './file-session-item-compaction.js'
+import { loadFileSessionHighestSeq } from './file-session-highest-seq.js'
 export { readLatestItemsFromJsonl } from './file-session-jsonl.js'
 const DEFAULT_USAGE_EVENT_COMPACTION_MAX_BYTES = 5 * 1024 * 1024
 const DEFAULT_USAGE_EVENT_RETENTION_DAYS = 365
-/** Log a warning when a cold loadItems read blocks the loop for at least this long (#621). */
 const SLOW_LOAD_ITEMS_LOG_MS = 1_000
 
 /**
@@ -80,7 +89,6 @@ export class FileSessionStore implements SessionStore {
   }
   private readonly itemsCache: ItemsCache
   private readonly itemHistoryCompactionMinBytes: number
-  /** Opaque revisions used to fence stale read-compute-rewrite snapshots. */
   private readonly itemHistoryRevisions = new Map<string, number>()
   private nextItemHistoryRevision = 0
   private readonly eventHistoryRevisions = new Map<string, number>()
@@ -90,6 +98,8 @@ export class FileSessionStore implements SessionStore {
   private readonly compactionScheduler: SessionCompactionScheduler
   private readonly usageIndex: FileSessionUsageIndex
   private readonly fileAccess: JsonlFileAccessCoordinator
+  private readonly liveItems = new FileSessionLiveItems()
+  private readonly itemIndex = new FileSessionItemIndex()
 
   constructor(options: {
     dataDir: string
@@ -168,9 +178,48 @@ export class FileSessionStore implements SessionStore {
   async appendItem(threadId: string, item: TurnItem): Promise<void> {
     assertSafeThreadId(threadId)
     const path = this.messagesPath(threadId)
+    const record = serializeItemRecord(item)
     await this.fileAccess.withRead(path, () => this.withThreadWrite(threadId, async () => {
       await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
-      await appendFile(path, `${JSON.stringify(item)}\n`, { encoding: 'utf-8', mode: 0o600 })
+      await this.itemIndex.append({
+        sourcePath: path,
+        indexPath: this.itemIndexPath(threadId),
+        statePath: this.itemIndexStatePath(threadId),
+        item,
+        record
+      })
+      this.bumpItemsVersion(threadId)
+      this.applyItemToCache(threadId, item)
+      this.bumpItemHistoryRevision(threadId)
+    }))
+  }
+
+  async checkpointLiveItem(threadId: string, item: TurnItem, representedSeq: number): Promise<void> {
+    assertSafeThreadId(threadId)
+    await this.withThreadWrite(threadId, async () => {
+      await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
+      await this.liveItems.checkpoint(this.liveItemsPath(threadId), threadId, item, representedSeq)
+      this.bumpItemsVersion(threadId)
+      this.applyItemToCache(threadId, item)
+      this.bumpItemHistoryRevision(threadId)
+    })
+  }
+
+  async finalizeLiveItem(threadId: string, item: TurnItem): Promise<void> {
+    assertSafeThreadId(threadId)
+    const path = this.messagesPath(threadId)
+    const record = serializeItemRecord(item)
+    await this.fileAccess.withRead(path, () => this.withThreadWrite(threadId, async () => {
+      await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
+      await this.liveItems.stageFinal(this.liveItemsPath(threadId), threadId, item)
+      await this.itemIndex.append({
+        sourcePath: path,
+        indexPath: this.itemIndexPath(threadId),
+        statePath: this.itemIndexStatePath(threadId),
+        item,
+        record
+      })
+      await this.liveItems.remove(this.liveItemsPath(threadId), threadId, item.id)
       this.bumpItemsVersion(threadId)
       this.applyItemToCache(threadId, item)
       this.bumpItemHistoryRevision(threadId)
@@ -182,8 +231,8 @@ export class FileSessionStore implements SessionStore {
     const path = this.messagesPath(threadId)
     await this.fileAccess.withReplacement(path, () => this.withThreadWrite(threadId, async () => {
       await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
-      const contents = items.map((item) => JSON.stringify(item)).join('\n')
-      await atomicWriteFile(path, contents ? `${contents}\n` : '')
+      await atomicWriteFile(path, serializeItemRecords(items))
+      await this.refreshItemIndex(threadId, items)
       this.bumpItemsVersion(threadId)
       this.cacheItems(threadId, [...items])
       this.bumpItemHistoryRevision(threadId)
@@ -192,10 +241,16 @@ export class FileSessionStore implements SessionStore {
 
   async loadItemSnapshot(threadId: string): Promise<ItemHistorySnapshot> {
     if (!isSafeThreadId(threadId)) return { revision: 0, items: [] }
-    return this.fileAccess.withRead(this.messagesPath(threadId), () => this.withThreadWrite(threadId, async () => ({
-      revision: this.itemHistoryRevision(threadId),
-      items: await this.loadItemsUnlocked(threadId)
-    })))
+    return this.fileAccess.withRead(this.messagesPath(threadId), () => this.withThreadWrite(threadId, async () => {
+      const live = await readLiveItems(this.liveItemsPath(threadId))
+      return {
+        revision: this.itemHistoryRevision(threadId),
+        items: await this.loadItemsUnlocked(threadId),
+        ...(liveReplayAfterSeq(live) === undefined
+          ? {}
+          : { replayAfterSeq: liveReplayAfterSeq(live) })
+      }
+    }))
   }
 
   async rewriteItemsIfRevision(
@@ -211,8 +266,8 @@ export class FileSessionStore implements SessionStore {
         return { applied: false, reason: 'conflict', revision }
       }
       await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
-      const contents = items.map((item) => JSON.stringify(item)).join('\n')
-      await atomicWriteFile(path, contents ? `${contents}\n` : '')
+      await atomicWriteFile(path, serializeItemRecords(items))
+      await this.refreshItemIndex(threadId, items)
       this.bumpItemsVersion(threadId)
       this.cacheItems(threadId, [...items])
       return { applied: true, revision: this.bumpItemHistoryRevision(threadId) }
@@ -226,8 +281,16 @@ export class FileSessionStore implements SessionStore {
       const current = items.find((item) => item.id === itemId)
       if (!current) return null
       const updated = { ...current, ...patch } as TurnItem
+      const record = serializeItemRecord(updated)
       await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
-      await appendFile(this.messagesPath(threadId), `${JSON.stringify(updated)}\n`, { encoding: 'utf-8', mode: 0o600 })
+      await this.itemIndex.append({
+        sourcePath: this.messagesPath(threadId),
+        indexPath: this.itemIndexPath(threadId),
+        statePath: this.itemIndexStatePath(threadId),
+        item: updated,
+        record
+      })
+      await this.liveItems.remove(this.liveItemsPath(threadId), threadId, itemId)
       this.bumpItemsVersion(threadId)
       this.applyItemToCache(threadId, updated)
       this.bumpItemHistoryRevision(threadId)
@@ -241,65 +304,20 @@ export class FileSessionStore implements SessionStore {
   ): Promise<ItemHistoryCompactionResult> {
     assertSafeThreadId(threadId)
     const path = this.messagesPath(threadId)
-    const info = await stat(path).catch(() => null)
-    if (!info) {
-      return { compacted: false, beforeBytes: 0, afterBytes: 0, itemCount: 0 }
-    }
-    if (!options.force && info.size < this.itemHistoryCompactionMinBytes) {
-      return {
-        compacted: false,
-        beforeBytes: info.size,
-        afterBytes: info.size,
-        itemCount: this.itemsCache.get(threadId)?.length ?? 0
-      }
-    }
-    // Scan unlocked so appendItem/updateItem are not queued behind a 350MB parse.
-    const revisionBefore = this.itemHistoryRevision(threadId)
-    const parsed = await this.fileAccess.withRead(path, () => readLatestItemsFromJsonl(path))
-    const contents = parsed.items.map((item) => JSON.stringify(item)).join('\n')
-    const output = contents ? `${contents}\n` : ''
-    const afterBytes = Buffer.byteLength(output, 'utf-8')
-    return this.fileAccess.withReplacement(path, () => this.withThreadWrite(threadId, async () => {
-      const currentInfo = await stat(path).catch(() => null)
-      if (
-        this.itemHistoryRevision(threadId) !== revisionBefore ||
-        !currentInfo ||
-        currentInfo.size !== info.size ||
-        currentInfo.mtimeMs !== info.mtimeMs
-      ) {
-        // A concurrent append invalidated the snapshot; coalesce another pass.
-        this.scheduleItemHistoryCompaction(threadId)
-        return {
-          compacted: false,
-          beforeBytes: info.size,
-          afterBytes: info.size,
-          itemCount: parsed.items.length
-        }
-      }
-      const malformedCount = parsed.malformedCount + (parsed.incompleteTrailingRecord ? 1 : 0)
-      if (malformedCount > 0) {
-        throw new Error(`item history contains ${malformedCount} malformed record(s)`)
-      }
-      if (afterBytes >= currentInfo.size) {
-        this.cacheItems(threadId, parsed.items)
-        return {
-          compacted: false,
-          beforeBytes: currentInfo.size,
-          afterBytes: currentInfo.size,
-          itemCount: parsed.items.length
-        }
-      }
-      await atomicWriteFile(path, output, { allowDirectWriteFallback: false })
-      this.bumpItemsVersion(threadId)
-      this.cacheItems(threadId, parsed.items)
-      this.bumpItemHistoryRevision(threadId)
-      return {
-        compacted: true,
-        beforeBytes: info.size,
-        afterBytes,
-        itemCount: parsed.items.length
-      }
-    }))
+    return compactFileSessionItems({
+      path,
+      force: options.force === true,
+      minimumBytes: this.itemHistoryCompactionMinBytes,
+      cachedItemCount: () => this.itemsCache.get(threadId)?.length ?? 0,
+      fileAccess: this.fileAccess,
+      readRevision: () => this.itemHistoryRevision(threadId),
+      bumpRevision: () => { this.bumpItemHistoryRevision(threadId) },
+      bumpItemsVersion: () => this.bumpItemsVersion(threadId),
+      cacheItems: (items) => this.cacheItems(threadId, items),
+      refreshIndex: (items) => this.refreshItemIndex(threadId, items),
+      scheduleRetry: () => this.scheduleItemHistoryCompaction(threadId),
+      withThreadWrite: (operation) => this.withThreadWrite(threadId, operation)
+    })
   }
 
   scheduleItemHistoryCompaction(threadId: string): void {
@@ -400,7 +418,7 @@ export class FileSessionStore implements SessionStore {
       return { items: [], hasMore: false, itemBytes: 0 }
     }
     const path = this.messagesPath(threadId)
-    return loadItemPageFromStore({
+    return loadIndexedLiveItemPageFromStore({
       path,
       options,
       fileAccess: this.fileAccess,
@@ -408,7 +426,11 @@ export class FileSessionStore implements SessionStore {
       touchCache: (items) => this.cacheItems(threadId, items),
       withThreadWrite: (operation) => this.withThreadWrite(threadId, operation),
       scheduleCompaction: () => this.scheduleItemHistoryCompaction(threadId),
-      compactionMinBytes: this.itemHistoryCompactionMinBytes
+      compactionMinBytes: this.itemHistoryCompactionMinBytes,
+      itemIndex: this.itemIndex,
+      indexPath: this.itemIndexPath(threadId),
+      indexStatePath: this.itemIndexStatePath(threadId),
+      liveItemsPath: this.liveItemsPath(threadId)
     })
   }
 
@@ -420,13 +442,10 @@ export class FileSessionStore implements SessionStore {
     }
     const info = await stat(this.messagesPath(threadId)).catch(() => null)
     if (info && info.size >= this.itemHistoryCompactionMinBytes) {
-      // Defer rewrite; still return a cold deduped projection for this caller.
       this.scheduleItemHistoryCompaction(threadId)
     }
     const startedAt = performance.now()
-    const { items: ordered, rawCount } = await readLatestItemsFromJsonl(
-      this.messagesPath(threadId)
-    )
+    const { items: ordered, rawCount } = await readLatestItemsFromJsonl(this.messagesPath(threadId))
     const elapsedMs = performance.now() - startedAt
     if (elapsedMs >= SLOW_LOAD_ITEMS_LOG_MS) {
       // A slow cold read points at an oversized thread log as the likely
@@ -436,8 +455,11 @@ export class FileSessionStore implements SessionStore {
           `for ${rawCount} raw → ${ordered.length} items`
       )
     }
-    this.cacheItems(threadId, ordered)
-    return [...ordered]
+    const overlaid = overlayLiveItems(ordered, await readRecoveredLiveItems(
+      this.liveItemsPath(threadId), (seq) => this.loadEventsSince(threadId, seq)
+    ))
+    this.cacheItems(threadId, overlaid)
+    return [...overlaid]
   }
 
   async loadSession(threadId: string): Promise<AgentSession | null> {
@@ -460,34 +482,14 @@ export class FileSessionStore implements SessionStore {
   async highestSeq(threadId: string): Promise<number> {
     if (!isSafeThreadId(threadId)) return 0
     const path = this.eventsPath(threadId)
-    const info = await stat(path).catch(() => null)
-    if (!info) {
-      this.highestSeqCache.delete(threadId)
-      return 0
-    }
-    const cached = this.highestSeqCache.get(threadId)
-    if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) {
-      this.cacheHighestSeq(threadId, cached.seq, info)
-      return cached.seq
-    }
-    // Events append in seq order: the newest max sits at the tail, so a
-    // backwards scan avoids stream-parsing the whole log on a cache miss (#621).
-    const tail = await this.fileAccess.withRead(
+    return loadFileSessionHighestSeq({
       path,
-      () => scanHighestSeqFromTail({ path, fileSize: info.size })
-    )
-    if (tail.ok) {
-      this.cacheHighestSeq(threadId, tail.highestSeq, info)
-      return tail.highestSeq
-    }
-    let highest = 0
-    for await (const event of this.iterateEventsSince(threadId, -1)) {
-      highest = Math.max(highest, event.seq)
-    }
-    // Cache against the size captured before the streaming scan. If a writer
-    // appended concurrently, the next stat differs and forces another scan.
-    this.cacheHighestSeq(threadId, highest, info)
-    return highest
+      fileAccess: this.fileAccess,
+      cached: () => this.highestSeqCache.get(threadId),
+      clearCached: () => { this.highestSeqCache.delete(threadId) },
+      cache: (seq, info) => this.cacheHighestSeq(threadId, seq, info),
+      iterate: () => this.iterateEventsSince(threadId, -1)
+    })
   }
 
   async resetMemory(): Promise<void> {
@@ -497,6 +499,8 @@ export class FileSessionStore implements SessionStore {
     this.eventHistoryRevisions.clear()
     this.highestSeqCache.clear()
     this.usageIndex.resetMemory()
+    this.liveItems.clear()
+    this.itemIndex.clear()
   }
 
   clearThreadMemory(threadId: string): void {
@@ -505,6 +509,7 @@ export class FileSessionStore implements SessionStore {
     this.eventHistoryRevisions.delete(threadId)
     this.highestSeqCache.delete(threadId)
     this.usageIndex.clearThreadMemory(threadId)
+    this.liveItems.clearThread(threadId)
   }
 
   itemCacheStats(): { entries: number; bytes: number; maxBytes: number } {
@@ -615,6 +620,31 @@ export class FileSessionStore implements SessionStore {
 
   private messagesPath(threadId: string): string {
     return join(this.threadDir(threadId), 'messages.jsonl')
+  }
+
+  private liveItemsPath(threadId: string): string {
+    return join(this.threadDir(threadId), 'live-items.json')
+  }
+
+  private itemIndexPath(threadId: string): string {
+    return join(this.threadDir(threadId), 'messages-index.jsonl')
+  }
+
+  private itemIndexStatePath(threadId: string): string {
+    return join(this.threadDir(threadId), 'messages-index.state.json')
+  }
+
+  private async refreshItemIndex(threadId: string, items: readonly TurnItem[]): Promise<void> {
+    await this.itemIndex.replaceForItems({
+      sourcePath: this.messagesPath(threadId),
+      indexPath: this.itemIndexPath(threadId),
+      statePath: this.itemIndexStatePath(threadId),
+      items
+    }).catch((error) => {
+      console.warn(`[kun] item history index refresh deferred: ${
+        error instanceof Error ? error.message : String(error)
+      }`)
+    })
   }
 
   async trimEventsFromSeq(threadId: string, fromSeqInclusive: number): Promise<{ afterBytes: number }> {

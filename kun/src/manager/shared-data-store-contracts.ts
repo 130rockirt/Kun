@@ -138,11 +138,14 @@ export type ManagerThreadStoreOperation = (typeof MANAGER_THREAD_STORE_OPERATION
 export type ManagerSessionStoreOperation =
   | 'appendEvent'
   | 'appendItem'
+  | 'checkpointLiveItem'
+  | 'finalizeLiveItem'
   | 'rewriteItems'
   | 'loadItemSnapshot'
   | 'rewriteItemsIfRevision'
   | 'updateItem'
   | 'compactItems'
+  | 'scheduleItemHistoryCompaction'
   | 'loadEventsSince'
   | 'loadItems'
   | 'searchItemText'
@@ -251,10 +254,13 @@ export function isThreadMutation(operation: ManagerThreadStoreOperation): boolea
 export function isSessionMutation(operation: ManagerSessionStoreOperation): boolean {
   return operation === 'appendEvent' ||
     operation === 'appendItem' ||
+    operation === 'checkpointLiveItem' ||
+    operation === 'finalizeLiveItem' ||
     operation === 'rewriteItems' ||
     operation === 'rewriteItemsIfRevision' ||
     operation === 'updateItem' ||
     operation === 'compactItems' ||
+    operation === 'scheduleItemHistoryCompaction' ||
     operation === 'upsertSession' ||
     operation === 'clearThreadMemory'
 }

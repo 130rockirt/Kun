@@ -244,6 +244,8 @@ export class LifecycleFencedSessionStore implements SessionStore {
   readonly loadItemPage?: SessionStore['loadItemPage']
   readonly searchItemText?: SessionStore['searchItemText']
   readonly trimEventsFromSeq?: SessionStore['trimEventsFromSeq']
+  readonly checkpointLiveItem?: SessionStore['checkpointLiveItem']
+  readonly finalizeLiveItem?: SessionStore['finalizeLiveItem']
 
   constructor(
     readonly raw: SessionStore,
@@ -301,6 +303,15 @@ export class LifecycleFencedSessionStore implements SessionStore {
     if (raw.trimEventsFromSeq) {
       this.trimEventsFromSeq = (threadId, fromSeqInclusive) =>
         this.write(threadId, { afterBytes: 0 }, () => raw.trimEventsFromSeq!(threadId, fromSeqInclusive))
+    }
+    if (raw.checkpointLiveItem) {
+      this.checkpointLiveItem = (threadId, item, representedSeq) =>
+        this.write(threadId, undefined, () =>
+          raw.checkpointLiveItem!(threadId, item, representedSeq))
+    }
+    if (raw.finalizeLiveItem) {
+      this.finalizeLiveItem = (threadId, item) =>
+        this.write(threadId, undefined, () => raw.finalizeLiveItem!(threadId, item))
     }
   }
 

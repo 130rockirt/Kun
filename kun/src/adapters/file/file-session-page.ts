@@ -4,10 +4,50 @@ import type { ItemHistoryPage, ItemHistoryPageOptions } from '../../ports/sessio
 import { buildPublicItemHistoryPage } from '../../services/item-history-page.js'
 import { readItemPageFromJsonl } from './file-session-jsonl.js'
 import type { JsonlFileAccessCoordinator } from './jsonl-file-access.js'
+import type { FileSessionItemIndex } from './file-session-item-index.js'
+import { liveReplayAfterSeq, overlayLiveItems, readLiveItems } from './file-session-live-items.js'
 
 type PageSource =
   | { kind: 'cached'; items: TurnItem[] }
   | { kind: 'file'; handle: FileHandle; size: number }
+
+export async function loadIndexedLiveItemPageFromStore(input: Parameters<
+  typeof loadItemPageFromStore
+>[0] & {
+  itemIndex: FileSessionItemIndex
+  indexPath: string
+  indexStatePath: string
+  liveItemsPath: string
+}): Promise<ItemHistoryPage> {
+  const indexed = await input.fileAccess.withRead(input.path, () => input.itemIndex.loadPage({
+    sourcePath: input.path,
+    indexPath: input.indexPath,
+    statePath: input.indexStatePath,
+    options: input.options
+  }))
+  if (indexed) {
+    if ((await statSize(input.path)) >= input.compactionMinBytes) input.scheduleCompaction()
+  } else {
+    input.itemIndex.scheduleRebuild({
+      sourcePath: input.path,
+      indexPath: input.indexPath,
+      statePath: input.indexStatePath
+    })
+  }
+  const page = indexed ?? await loadItemPageFromStore(input)
+  if (input.options.before) return page
+  const live = await readLiveItems(input.liveItemsPath)
+  if (live.length === 0) return page
+  const overlaid = buildPublicItemHistoryPage(overlayLiveItems(page.items, live), input.options)
+  return {
+    ...overlaid,
+    hasMore: page.hasMore || overlaid.hasMore,
+    ...(overlaid.nextCursor || page.nextCursor
+      ? { nextCursor: overlaid.nextCursor ?? page.nextCursor }
+      : {}),
+    replayAfterSeq: liveReplayAfterSeq(live)
+  }
+}
 
 /** Capture and scan one bounded item page while fencing atomic replacement. */
 export async function loadItemPageFromStore(input: {
@@ -49,5 +89,15 @@ export async function loadItemPageFromStore(input: {
     return page
   } finally {
     release()
+  }
+}
+
+async function statSize(path: string): Promise<number> {
+  const handle = await open(path, 'r').catch(() => null)
+  if (!handle) return 0
+  try {
+    return (await handle.stat()).size
+  } finally {
+    await handle.close()
   }
 }

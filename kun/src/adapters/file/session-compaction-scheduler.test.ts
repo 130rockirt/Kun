@@ -40,4 +40,28 @@ describe('SessionCompactionScheduler', () => {
     // Drop the pending timer without waiting for a hangable in-flight run.
     await scheduler.close()
   })
+
+  it('runs physical repairs one at a time across threads', async () => {
+    vi.useFakeTimers()
+    const started: string[] = []
+    let releaseFirst!: () => void
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const scheduler = new SessionCompactionScheduler({
+      delayMs: 0,
+      run: async (threadId) => {
+        started.push(threadId)
+        if (threadId === 'thr_1') await firstGate
+      }
+    })
+    scheduler.schedule('thr_1', 'items')
+    scheduler.schedule('thr_2', 'items')
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.waitFor(() => expect(started).toEqual(['thr_1']))
+
+    releaseFirst()
+    await scheduler.flush()
+
+    expect(started).toEqual(['thr_1', 'thr_2'])
+    await scheduler.close()
+  })
 })

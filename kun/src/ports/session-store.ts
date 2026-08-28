@@ -35,6 +35,8 @@ export type SessionLatestUsageSnapshot = {
 export type ItemHistorySnapshot = {
   revision: number
   items: TurnItem[]
+  /** Replay events after this sequence to close a live-checkpoint gap. */
+  replayAfterSeq?: number
 }
 
 /** Result of a conditional full-history replacement. */
@@ -88,6 +90,13 @@ export type ItemHistoryPage = {
   nextCursor?: string
   hasMore: boolean
   itemBytes: number
+  /** Replay events after this sequence to close a live-checkpoint gap. */
+  replayAfterSeq?: number
+}
+
+export type LiveItemCheckpoint = {
+  item: TurnItem
+  representedSeq: number
 }
 
 export type ItemTextSearchOptions = {
@@ -115,6 +124,13 @@ export interface SessionStore {
   allocateEventSeq?(threadId: string): Promise<number>
   appendEvent(threadId: string, event: RuntimeEvent): Promise<void>
   appendItem(threadId: string, item: TurnItem): Promise<void>
+  /**
+   * Persist a recoverable, replaceable projection of an in-progress assistant
+   * item without appending another cumulative record to canonical history.
+   */
+  checkpointLiveItem?(threadId: string, item: TurnItem, representedSeq: number): Promise<void>
+  /** Append the authoritative item once, then remove its live checkpoint. */
+  finalizeLiveItem?(threadId: string, item: TurnItem): Promise<void>
   /**
    * Replace the canonical item stream for a thread. File-backed stores
    * should write atomically because this is used by load-time healing

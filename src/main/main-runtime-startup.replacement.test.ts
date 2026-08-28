@@ -7,6 +7,7 @@ import {
 
 const harness = vi.hoisted(() => {
   let latest: unknown
+  let childRunning = false
   const stopSharedAndWait = vi.fn(async () => undefined)
   const stopSharedForReplacementAndWait = vi.fn(async () => undefined)
   const ensureRunning = vi.fn(async () => undefined)
@@ -21,6 +22,7 @@ const harness = vi.hoisted(() => {
   const probeRuntimeApi = vi.fn(async () => ({ ok: true as const }))
   const noteRuntimeHealthy = vi.fn()
   const waitForKunStartupSettled = vi.fn(async () => undefined)
+  const waitForRuntimeTurnsIdle = vi.fn(async () => 'idle' as const)
   const clearHistoricalKunServeProcesses = vi.fn(async (): Promise<{
     matchedPids: number[]
     terminatedPids: number[]
@@ -45,6 +47,7 @@ const harness = vi.hoisted(() => {
 
   return {
     clearHistoricalKunServeProcesses,
+    childRunning: () => childRunning,
     ensureReplacementRunning,
     ensureRunning,
     resolveConnection,
@@ -54,10 +57,12 @@ const harness = vi.hoisted(() => {
     probeBundledBuildReplacement,
     runtimeSupervisor,
     setLatest: (settings: unknown): void => { latest = settings },
+    setChildRunning: (running: boolean): void => { childRunning = running },
     stopSharedAndWait,
     stopSharedForReplacementAndWait,
     waitForHealthy,
-    waitForKunStartupSettled
+    waitForKunStartupSettled,
+    waitForRuntimeTurnsIdle
   }
 })
 
@@ -65,7 +70,7 @@ vi.mock('./runtime/kun-adapter', () => ({
   kunRuntimeAdapter: {
     ensureRunning: harness.ensureRunning,
     ensureReplacementRunning: harness.ensureReplacementRunning,
-    isChildRunning: () => false,
+    isChildRunning: harness.childRunning,
     probeBundledBuildReplacement: harness.probeBundledBuildReplacement,
     resolveConnection: harness.resolveConnection,
     stopSharedAndWait: harness.stopSharedAndWait,
@@ -78,6 +83,9 @@ vi.mock('./kun-process', () => ({
 }))
 vi.mock('./runtime/kun-serve-process-cleanup', () => ({
   clearHistoricalKunServeProcesses: harness.clearHistoricalKunServeProcesses
+}))
+vi.mock('./runtime/managed-runtime-idle', () => ({
+  waitForRuntimeTurnsIdle: harness.waitForRuntimeTurnsIdle
 }))
 vi.mock('./managed-runtime-startup-policy', () => ({
   managedKunHostCanAutoStart: (settings: AppSettingsV1) => settings.agents.kun.autoStart
@@ -100,6 +108,7 @@ import {
   ensureKunServeFreshOnStartup,
   reconcileBundledRuntimeAfterInstall,
   replaceKunServe,
+  restartRuntime,
   restartAllKunServeProcesses
 } from './main-runtime-startup'
 
@@ -118,6 +127,7 @@ function settings(): AppSettingsV1 {
 
 beforeEach(() => {
   harness.setLatest(undefined)
+  harness.setChildRunning(false)
   harness.stopSharedAndWait.mockClear()
   harness.stopSharedForReplacementAndWait.mockClear()
   harness.ensureRunning.mockClear()
@@ -130,6 +140,8 @@ beforeEach(() => {
   harness.probeRuntimeApi.mockClear()
   harness.noteRuntimeHealthy.mockClear()
   harness.waitForKunStartupSettled.mockClear()
+  harness.waitForRuntimeTurnsIdle.mockReset()
+  harness.waitForRuntimeTurnsIdle.mockResolvedValue('idle')
   harness.clearHistoricalKunServeProcesses.mockReset()
   harness.clearHistoricalKunServeProcesses.mockResolvedValue({
     matchedPids: [],
@@ -227,6 +239,17 @@ describe('explicit Kun serve replacement', () => {
 })
 
 describe('startup Kun serve restart', () => {
+  it('defers an ordinary restart without stopping an active runtime', async () => {
+    const current = settings()
+    harness.setChildRunning(true)
+    harness.waitForRuntimeTurnsIdle.mockResolvedValueOnce('timeout')
+
+    await expect(restartRuntime(current)).rejects.toMatchObject({ code: 'runtime_busy' })
+
+    expect(harness.stopSharedAndWait).not.toHaveBeenCalled()
+    expect(harness.ensureRunning).not.toHaveBeenCalled()
+  })
+
   it('reuses a healthy shared serve on GUI launch instead of replacing it', async () => {
     const current = settings()
     harness.resolveConnection.mockResolvedValueOnce(true)

@@ -71,7 +71,8 @@ const MANAGER_DATA_REQUEST_TIMEOUT_MS = 30_000
 const MANAGER_TIMELINE_DATA_REQUEST_TIMEOUT_MS = 120_000
 const ItemSnapshotSchema = z.object({
   revision: z.number().int().nonnegative(),
-  items: z.array(TurnItem)
+  items: z.array(TurnItem),
+  replayAfterSeq: z.number().int().nonnegative().optional()
 })
 const ItemCommitSchema = z.discriminatedUnion('applied', [
   z.object({ applied: z.literal(true), revision: z.number().int().nonnegative() }),
@@ -91,7 +92,8 @@ const ItemPageSchema = z.object({
   items: z.array(TurnItem),
   nextCursor: z.string().optional(),
   hasMore: z.boolean(),
-  itemBytes: z.number().int().nonnegative()
+  itemBytes: z.number().int().nonnegative(),
+  replayAfterSeq: z.number().int().nonnegative().optional()
 })
 const ThreadStoreListPageSchema: z.ZodType<ThreadStoreListPage> = z.object({
   threads: z.array(ThreadSummarySchema),
@@ -244,6 +246,18 @@ export class ManagerRemoteSessionStore implements SessionStore {
     await this.call('appendItem', { threadId, item })
   }
 
+  async checkpointLiveItem(
+    threadId: string,
+    item: TurnItemValue,
+    representedSeq: number
+  ): Promise<void> {
+    await this.call('checkpointLiveItem', { threadId, item, representedSeq })
+  }
+
+  async finalizeLiveItem(threadId: string, item: TurnItemValue): Promise<void> {
+    await this.call('finalizeLiveItem', { threadId, item })
+  }
+
   async rewriteItems(threadId: string, items: TurnItemValue[]): Promise<void> {
     await this.call('rewriteItems', { threadId, items })
   }
@@ -277,6 +291,14 @@ export class ManagerRemoteSessionStore implements SessionStore {
     options?: { force?: boolean }
   ): Promise<ItemHistoryCompactionResult> {
     return ItemCompactionSchema.parse(await this.call('compactItems', { threadId, options }))
+  }
+
+  scheduleItemHistoryCompaction(threadId: string): void {
+    void this.call('scheduleItemHistoryCompaction', { threadId }).catch((error) => {
+      console.warn(`[kun] manager item history repair schedule failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`)
+    })
   }
 
   async loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEventValue[]> {

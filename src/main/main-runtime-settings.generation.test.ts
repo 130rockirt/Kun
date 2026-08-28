@@ -11,6 +11,7 @@ const harness = vi.hoisted(() => {
   let latest: unknown
   let tail = Promise.resolve()
   const stopSharedAndWait = vi.fn(async () => undefined)
+  const classifyHotApply = vi.fn(() => ({ result: 'applied' as const, message: '' }))
   const reconcile = vi.fn(async (settings: AppSettingsV1, isCurrent: () => boolean) => ({
     current: isCurrent(),
     ...(settings.agents.kun.browserUse.enabled
@@ -56,6 +57,7 @@ const harness = vi.hoisted(() => {
     waitForIdle: async (): Promise<void> => { await tail }
   }
   return {
+    classifyHotApply,
     mainState,
     reconcile,
     runtimeSettingsIntents,
@@ -97,7 +99,7 @@ vi.mock('./managed-runtime-startup-policy', () => ({
   managedKunHostCanAutoStart: () => true
 }))
 vi.mock('./runtime/managed-runtime-idle', () => ({
-  waitForRuntimeTurnsIdle: vi.fn(async () => ({ idle: true }))
+  waitForRuntimeTurnsIdle: vi.fn(async () => 'idle')
 }))
 vi.mock('./runtime/kun-runtime-config-service', () => ({
   buildManagedRuntimeHotApplyBody: (
@@ -108,7 +110,7 @@ vi.mock('./runtime/kun-runtime-config-service', () => ({
     browserEnabled: settings.agents.kun.browserUse.enabled,
     browserUseHostBinding: binding
   }),
-  classifyManagedRuntimeHotApplyResponse: () => ({ result: 'applied', message: '' })
+  classifyManagedRuntimeHotApplyResponse: harness.classifyHotApply
 }))
 vi.mock('./main-runtime-startup', () => ({
   ensureKunRuntime: vi.fn(async () => undefined),
@@ -125,6 +127,7 @@ vi.mock('./logger', () => ({
 }))
 
 import {
+  applyManagedRuntimeSettingsHot,
   queueRuntimeSettingsApply,
   reserveRuntimeSettingsApply
 } from './main-runtime-settings'
@@ -150,6 +153,18 @@ describe('Runtime settings generation ownership', () => {
     vi.unstubAllGlobals()
     harness.stopSharedAndWait.mockClear()
     harness.reconcile.mockClear()
+    harness.classifyHotApply.mockReset()
+    harness.classifyHotApply.mockReturnValue({ result: 'applied', message: '' })
+  })
+
+  it('keeps the current runtime running when hot configuration validation fails', async () => {
+    const current = browserSettings(false)
+    harness.classifyHotApply.mockReturnValue({ result: 'failed', message: 'invalid credentials' })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('invalid credentials', { status: 400 })))
+
+    await expect(applyManagedRuntimeSettingsHot(current, 'settings-test')).resolves.toBe('failed')
+
+    expect(harness.stopSharedAndWait).not.toHaveBeenCalled()
   })
 
   it('reconciles S0 after a rapid S0 to S1 to S0 while the stale hot request fails', async () => {

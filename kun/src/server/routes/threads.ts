@@ -136,6 +136,7 @@ export async function getThread(
   // replayable without creating either an old-state/new-cursor gap or duplicate
   // assistant text.
   const latestSeq = sessionStore ? await sessionStore.highestSeq(threadId) : 0
+  let replayFloor = latestSeq
   // With a durable session store, the thread metadata and items are separate
   // projections. Read only metadata here, then hydrate item history once
   // below; `service.get()` would otherwise transfer the same history first.
@@ -144,10 +145,16 @@ export async function getThread(
   if (sessionStore) {
     const loaded = await Promise.all([
       loadThreadMetadata(service, threadId),
-      sessionStore.loadItems(threadId)
+      typeof sessionStore.loadItemSnapshot === 'function'
+        ? sessionStore.loadItemSnapshot(threadId)
+        : sessionStore.loadItems(threadId).then((items) => ({ revision: 0, items }))
     ])
     thread = loaded[0]
-    loadedSessionItems = loaded[1]
+    loadedSessionItems = loaded[1].items
+    const replayAfterSeq = 'replayAfterSeq' in loaded[1] ? loaded[1].replayAfterSeq : undefined
+    if (typeof replayAfterSeq === 'number') {
+      replayFloor = Math.min(replayFloor, replayAfterSeq)
+    }
   } else {
     thread = await service.get(threadId)
   }
@@ -189,7 +196,7 @@ export async function getThread(
     : undefined
   return jsonResponse({
     ...ThreadSchemaReadable.parse(hydratedThread),
-    latestSeq,
+    latestSeq: replayFloor,
     pendingUserInputIds,
     ...(pendingApprovalIds ? { pendingApprovalIds } : {})
   })
@@ -356,6 +363,9 @@ export async function getThreadTimeline(
   const page = sessionStore.loadItemPage
     ? await sessionStore.loadItemPage(threadId, pageOptions)
     : buildPublicItemHistoryPage(await sessionStore.loadItems(threadId), pageOptions)
+  if (page.replayAfterSeq !== undefined) {
+    replayFloor = Math.min(replayFloor, page.replayAfterSeq)
+  }
 
   const pendingApprovals = approvalGate?.pending(threadId) ?? []
   let sessionItems = await healSessionItemsForFinishedTurns(

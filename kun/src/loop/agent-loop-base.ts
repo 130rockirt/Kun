@@ -116,6 +116,7 @@ export abstract class AgentLoopBase {
       model: opts.model,
       events: opts.events,
       nowIso: opts.nowIso,
+      ...(opts.artifactStore ? { artifactStore: opts.artifactStore } : {}),
       getRoles: () => opts.roles
     })
     this.budgetGate = new TurnBudgetGate({
