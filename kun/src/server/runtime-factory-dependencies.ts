@@ -24,7 +24,7 @@ export {
   FileThreadStore,
   JsonlFileAccessCoordinator
 } from '../adapters/file/index.js'
-export { HybridSessionStore, HybridThreadStore } from '../adapters/hybrid/index.js'
+export { HybridMemoryStore, HybridSessionStore, HybridThreadStore } from '../adapters/hybrid/index.js'
 export {
   createManagerRemoteStores,
   ManagerRemoteAttachmentStore,

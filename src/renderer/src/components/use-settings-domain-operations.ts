@@ -347,13 +347,16 @@ export function useSettingsDomainOperations(scope: Record<string, any>): Record<
     void refreshMemoryDiagnostics()
   }, [category, memoryRecords])
 
-  const memoryMutationWorkspace = useCallback((memoryId: string): string | undefined => {
+  const memoryMutationAccess = useCallback((memoryId: string): { workspace?: string; project?: string } => {
     const record = memoryRecords.find((item) => item.id === memoryId)
-    if (!record || record.scope === 'user') return undefined
+    if (!record || record.scope === 'user') return {}
     if (record.scope === 'project') {
-      return record.project ?? record.workspace
+      return {
+        workspace: record.workspace,
+        project: record.project ?? record.workspace
+      }
     }
-    return record.workspace
+    return { workspace: record.workspace }
   }, [memoryRecords])
 
   const createMemoryRecord = async (input: {
@@ -362,6 +365,10 @@ export function useSettingsDomainOperations(scope: Record<string, any>): Record<
     targetPath?: string
     tags?: string[]
     confidence?: number
+    type?: CoreMemoryRecordJson['type']
+    importance?: number
+    observedAt?: string
+    sources?: Array<Omit<NonNullable<CoreMemoryRecordJson['sources']>[number], 'id'> & { id?: string }>
   }): Promise<boolean> => {
     const provider = getProvider()
     if (typeof provider.createMemory !== 'function') return false
@@ -372,6 +379,10 @@ export function useSettingsDomainOperations(scope: Record<string, any>): Record<
         scope: input.scope,
         tags: input.tags,
         confidence: input.confidence,
+        type: input.type,
+        importance: input.importance,
+        observedAt: input.observedAt,
+        sources: input.sources,
         ...(input.scope === 'user' ? {} : { workspace }),
         ...(input.scope === 'project' ? { project: workspace } : {})
       })
@@ -388,14 +399,12 @@ export function useSettingsDomainOperations(scope: Record<string, any>): Record<
 
   const updateMemoryRecord = async (
     memoryId: string,
-    patch: { content?: string; tags?: string[]; confidence?: number; disabled?: boolean }
+    patch: { content?: string; tags?: string[]; confidence?: number; importance?: number; type?: CoreMemoryRecordJson['type']; disabled?: boolean }
   ): Promise<boolean> => {
     const provider = getProvider()
     if (typeof provider.updateMemory !== 'function') return false
     try {
-      const memory = await provider.updateMemory(memoryId, patch, {
-        workspace: memoryMutationWorkspace(memoryId)
-      })
+      const memory = await provider.updateMemory(memoryId, patch, memoryMutationAccess(memoryId))
       setMemoryRecords((records) => records.map((record) => (record.id === memoryId ? memory : record)))
       return true
     } catch (error) {
@@ -411,9 +420,7 @@ export function useSettingsDomainOperations(scope: Record<string, any>): Record<
     const provider = getProvider()
     if (typeof provider.updateMemory !== 'function') return
     try {
-      const memory = await provider.updateMemory(memoryId, { disabled }, {
-        workspace: memoryMutationWorkspace(memoryId)
-      })
+      const memory = await provider.updateMemory(memoryId, { disabled }, memoryMutationAccess(memoryId))
       setMemoryRecords((records) => records.map((record) => record.id === memoryId ? memory : record))
     } catch (error) {
       setRuntimeDiagnosticsNotice({
@@ -445,9 +452,7 @@ export function useSettingsDomainOperations(scope: Record<string, any>): Record<
     const provider = getProvider()
     if (typeof provider.deleteMemory !== 'function') return
     try {
-      await provider.deleteMemory(memoryId, {
-        workspace: memoryMutationWorkspace(memoryId)
-      })
+      await provider.deleteMemory(memoryId, memoryMutationAccess(memoryId))
       setMemoryRecords((records) => records.filter((record) => record.id !== memoryId))
     } catch (error) {
       setRuntimeDiagnosticsNotice({

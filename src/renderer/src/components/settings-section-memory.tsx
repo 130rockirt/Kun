@@ -2,6 +2,7 @@ import {
   buildMemoryImportContent,
   buildMemoryMarkdownExport,
   defaultMemoryExportFileName,
+  memoryImportObservedAt,
   parseMemoryProfileImport,
   type MemoryImportEntry
 } from '@shared/memory-import-export'
@@ -30,6 +31,7 @@ import {
   Toggle
 } from './settings-controls'
 import { MemoryImportDialog, MemoryRecordDialog } from './settings-section-memory-dialogs'
+import { MemoryDiagnosticsPanel } from './settings-section-memory-diagnostics'
 
 type MemoryScope = 'user' | 'workspace' | 'project'
 type MemorySettingsTab = 'overview' | 'records'
@@ -296,12 +298,25 @@ export function MemorySettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     let imported = 0
     try {
       for (const entry of entriesToImport) {
+        const observedAt = memoryImportObservedAt(entry.date)
         const ok = await createMemoryRecord({
           content: buildMemoryImportContent(entry),
           scope: importScope,
           ...(importScope === 'user' ? {} : { targetPath }),
           tags: entry.tags,
-          confidence: 1
+          confidence: 1,
+          importance: 0.6,
+          type: entry.category === '偏好'
+            ? 'preference'
+            : entry.category === '项目'
+              ? 'episode'
+              : 'fact',
+          ...(observedAt ? { observedAt } : {}),
+          sources: [{
+            kind: 'imported',
+            locator: 'memory-profile-import',
+            trust: 'imported'
+          }]
         })
         if (ok) imported += 1
       }
@@ -381,53 +396,11 @@ export function MemorySettingsSection({ ctx }: { ctx: Record<string, any> }): Re
               />
             }
           />
-          <SettingRow
-            title={t('memoryOverview')}
-            description={t('memoryOverviewDesc')}
-            wideControl
-            control={
-              <div className="grid grid-cols-3 gap-2 text-[12px]">
-                <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
-                  <div className="text-ds-faint">{t('memoryActiveCount')}</div>
-                  <div className="mt-0.5 font-mono text-[15px] font-semibold text-ds-ink">
-                    {memoryDiagnostics?.activeCount ?? memoryRecords?.length ?? 0}
-                  </div>
-                </div>
-                <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
-                  <div className="text-ds-faint">{t('memoryTombstoneCount')}</div>
-                  <div className="mt-0.5 font-mono text-[15px] font-semibold text-ds-ink">
-                    {memoryDiagnostics?.tombstoneCount ?? 0}
-                  </div>
-                </div>
-                <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
-                  <div className="text-ds-faint">{t('memoryEnabled')}</div>
-                  <div className="mt-0.5 font-mono text-[15px] font-semibold text-ds-ink">
-                    {memoryDiagnostics?.enabled === false ? t('memoryOff') : t('memoryOn')}
-                  </div>
-                </div>
-              </div>
-            }
+          <MemoryDiagnosticsPanel
+            diagnostics={memoryDiagnostics}
+            fallbackRecordCount={memoryRecords?.length ?? 0}
+            t={t}
           />
-
-          {memoryDiagnostics?.lastInjectedIds?.length ? (
-            <SettingRow
-              title={t('memoryLastInjected')}
-              description={t('memoryLastInjectedDesc')}
-              wideControl
-              control={
-                <div className="flex flex-wrap gap-1.5">
-                  {memoryDiagnostics.lastInjectedIds.map((id: string) => (
-                    <span
-                      key={id}
-                      className="rounded-lg bg-ds-hover/50 px-2 py-0.5 font-mono text-[11px] text-ds-faint"
-                    >
-                      {id.slice(0, 12)}
-                    </span>
-                  ))}
-                </div>
-              }
-            />
-          ) : null}
         </SettingsCard>
       </SettingsTabPanel>
 
@@ -529,6 +502,8 @@ export function MemorySettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                           {memory.confidence !== undefined && memory.confidence !== 1 && (
                             <span className="font-mono">★ {memory.confidence.toFixed(2)}</span>
                           )}
+                          {memory.type ? <span>{memory.type}</span> : null}
+                          {memory.importance !== undefined ? <span className="font-mono">I {memory.importance.toFixed(2)}</span> : null}
                           {memory.tags?.length ? (
                             <span>{memory.tags.join(' · ')}</span>
                           ) : null}

@@ -43,6 +43,7 @@ export type MemoryImportEntry = {
 }
 
 export type MemoryExportRecord = {
+  schemaVersion?: 2
   id: string
   content: string
   scope: 'user' | 'workspace' | 'project'
@@ -50,6 +51,19 @@ export type MemoryExportRecord = {
   project?: string
   tags?: string[]
   confidence?: number
+  type?: 'fact' | 'preference' | 'decision' | 'episode' | 'relationship' | 'insight'
+  authority?: 'reference'
+  importance?: number
+  observedAt?: string
+  validFrom?: string
+  validTo?: string
+  expiresAt?: string
+  sources?: Array<{
+    id: string
+    kind: 'user' | 'tool' | 'inference' | 'file' | 'web' | 'imported' | 'legacy'
+    locator?: string
+    trust: 'explicit-user' | 'observed' | 'inferred' | 'imported' | 'legacy'
+  }>
   createdAt: string
   updatedAt: string
   disabledAt?: string
@@ -113,6 +127,15 @@ export function parseMemoryProfileImport(raw: string): MemoryImportEntry[] {
 
 export function buildMemoryImportContent(entry: MemoryImportEntry): string {
   return `[${entry.date}] ${entry.category}: ${entry.content}`
+}
+
+export function memoryImportObservedAt(date: string): string | undefined {
+  if (date === 'unknown') return undefined
+  const candidate = `${date}T00:00:00.000Z`
+  const parsed = new Date(candidate)
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date
+    ? parsed.toISOString()
+    : undefined
 }
 
 export function defaultMemoryExportFileName(now = new Date()): string {

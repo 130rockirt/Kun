@@ -162,6 +162,7 @@ export type CoreAttachmentDiagnosticsJson = {
 }
 
 export type CoreMemoryRecordJson = {
+  schemaVersion?: 2
   id: string
   content: string
   scope: 'user' | 'workspace' | 'project'
@@ -171,10 +172,30 @@ export type CoreMemoryRecordJson = {
   sourceTurnId?: string
   tags?: string[]
   confidence?: number
+  type?: 'fact' | 'preference' | 'decision' | 'episode' | 'relationship' | 'insight'
+  authority?: 'reference'
+  importance?: number
+  observedAt?: string
+  validFrom?: string
+  validTo?: string
+  expiresAt?: string
+  sources?: CoreMemorySourceEvidenceJson[]
   createdAt: string
   updatedAt: string
   disabledAt?: string
   deletedAt?: string
+}
+
+export type CoreMemorySourceEvidenceJson = {
+  id: string
+  kind: 'user' | 'tool' | 'inference' | 'file' | 'web' | 'imported' | 'legacy'
+  threadId?: string
+  turnId?: string
+  itemId?: string
+  locator?: string
+  excerpt?: string
+  contentHash?: string
+  trust: 'explicit-user' | 'observed' | 'inferred' | 'imported' | 'legacy'
 }
 
 export type CoreThreadGoalStatusJson =
@@ -243,6 +264,43 @@ export type CoreMemoryDiagnosticsJson = {
   activeCount: number
   tombstoneCount: number
   lastInjectedIds?: string[]
+  canonicalCount?: number
+  malformedCount?: number
+  indexState?: 'disabled' | 'ready' | 'backfilling' | 'degraded' | 'filesystem'
+  indexSchemaVersion?: number
+  indexedCount?: number
+  staleCount?: number
+  backfill?: { running: boolean; scanned: number; remaining: number }
+  degradedReason?: string
+  lastRetrieval?: {
+    timestamp: string
+    mode: 'sqlite-fts5' | 'filesystem-fallback'
+    queryTokenCount: number
+    queryTokensTruncated: boolean
+    candidateCount: number
+    filtered: { scope: number; lifecycle: number; irrelevant: number }
+    rankings: Array<{
+      memoryId: string
+      channel: 'fts5' | 'type-affinity' | 'filesystem'
+      features: {
+        lexical: number
+        scopeAffinity: number
+        typeAffinity: number
+        freshness: number
+        importance: number
+        confidence: number
+        finalScore: number
+      }
+      selected: boolean
+    }>
+    selectedIds: string[]
+    excludedByPromptBudget: string[]
+    truncatedIds: string[]
+    selectedCharacters: number
+    recordLimit: number
+    promptCharacterBudget: number
+    rankingWeights: Record<string, number>
+  }
 }
 
 export type CoreRuntimeCapabilityStateJson = {

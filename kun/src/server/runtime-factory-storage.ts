@@ -6,6 +6,7 @@ import {
   FileThreadStore,
   JsonlFileAccessCoordinator,
   HybridSessionStore,
+  HybridMemoryStore,
   HybridThreadStore,
   createManagerRemoteStores,
   ManagerRemoteAttachmentStore,
@@ -99,11 +100,17 @@ export function createPersistentMemoryStore(
   if (!config?.enabled) return undefined
   return options.serviceManager
     ? new ManagerRemoteMemoryStore(options.serviceManager, config)
-    : new FileMemoryStore({
-        rootDir: join(options.dataDir, 'memory'),
-        config,
-        nowIso
-      })
+    : process.env.KUN_MEMORY_STORE_BACKEND === 'file'
+      ? new FileMemoryStore({
+          rootDir: join(options.dataDir, 'memory'),
+          config,
+          nowIso
+        })
+      : new HybridMemoryStore({
+          dataDir: options.dataDir,
+          config,
+          nowIso
+        })
 }
 
 export function createPersistentAttachmentStore(

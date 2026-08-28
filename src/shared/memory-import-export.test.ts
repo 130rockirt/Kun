@@ -3,6 +3,7 @@ import {
   buildMemoryImportContent,
   buildMemoryMarkdownExport,
   defaultMemoryExportFileName,
+  memoryImportObservedAt,
   parseMemoryProfileImport
 } from './memory-import-export'
 
@@ -68,6 +69,9 @@ describe('parseMemoryProfileImport', () => {
       content: 'Kun: 桌面 AI 应用。',
       tags: []
     })).toBe('[unknown] 项目: Kun: 桌面 AI 应用。')
+    expect(memoryImportObservedAt('2026-07-01')).toBe('2026-07-01T00:00:00.000Z')
+    expect(memoryImportObservedAt('2026-02-30')).toBeUndefined()
+    expect(memoryImportObservedAt('unknown')).toBeUndefined()
   })
 })
 

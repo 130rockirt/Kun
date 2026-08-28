@@ -156,6 +156,8 @@ Kun uses the [PolyForm Noncommercial License 1.0.0](./LICENSE) for learning, res
 
 Thanks to everyone who contributes issues, ideas, code, and documentation.
 
+Kun's memory architecture research draws on the public Thread/Memory separation, provenance, and hybrid-retrieval concepts documented by [Nowledge Mem](https://mem.nowledge.co/docs); Kun's implementation remains independent and follows its own single-runtime, local-first architecture.
+
 <a href="https://github.com/KunAgent/Kun/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=KunAgent/Kun" alt="Kun contributors">
 </a>

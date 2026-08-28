@@ -309,8 +309,29 @@ export function MemoryRecordDialog({
               ) : null}
             </div>
           ) : memory ? (
-            <div className="whitespace-pre-wrap break-words rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-3 py-3 text-[13px] leading-6 text-ds-ink">
-              {memory.content}
+            <div className="space-y-3">
+              <div className="whitespace-pre-wrap break-words rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-3 py-3 text-[13px] leading-6 text-ds-ink">
+                {memory.content}
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[11px] text-ds-faint sm:grid-cols-4">
+                <div>{t('memoryType')}: <span className="text-ds-ink">{memory.type ?? 'fact'}</span></div>
+                <div>{t('memoryAuthority')}: <span className="text-ds-ink">{memory.authority ?? 'reference'}</span></div>
+                <div>{t('memoryConfidence')}: <span className="font-mono text-ds-ink">{(memory.confidence ?? 1).toFixed(2)}</span></div>
+                <div>{t('memoryImportance')}: <span className="font-mono text-ds-ink">{(memory.importance ?? 0.5).toFixed(2)}</span></div>
+              </div>
+              {memory.sources?.length ? (
+                <div className="rounded-lg border border-ds-border-muted bg-ds-main/30 px-3 py-2">
+                  <div className="mb-1.5 text-[11px] font-semibold text-ds-ink">{t('memorySources')}</div>
+                  <div className="space-y-1 text-[11px] text-ds-faint">
+                    {memory.sources.map((source) => (
+                      <div key={source.id} className="break-all">
+                        <span className="text-ds-ink">{source.kind}/{source.trust}</span>
+                        {source.locator ? ` · ${source.locator}` : ''}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>

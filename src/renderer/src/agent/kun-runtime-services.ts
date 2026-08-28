@@ -288,9 +288,10 @@ export class KunRuntimeProviderServices {
     )
   }
 
-  async listMemories(options: { workspace?: string; includeDeleted?: boolean; all?: boolean } = {}): Promise<CoreMemoryRecordJson[]> {
+  async listMemories(options: { workspace?: string; project?: string; includeDeleted?: boolean; all?: boolean } = {}): Promise<CoreMemoryRecordJson[]> {
     const query = buildQuery({
       workspace: options.workspace,
+      project: options.project,
       include_deleted: options.includeDeleted,
       all: options.all
     })
@@ -311,6 +312,12 @@ export class KunRuntimeProviderServices {
     project?: string
     tags?: string[]
     confidence?: number
+    type?: CoreMemoryRecordJson['type']
+    importance?: number
+    observedAt?: string
+    validFrom?: string
+    validTo?: string
+    sources?: Array<Omit<NonNullable<CoreMemoryRecordJson['sources']>[number], 'id'> & { id?: string }>
   }): Promise<CoreMemoryRecordJson> {
     const response = await rendererRuntimeClient.runtimeRequest(
       KUN_MEMORY_PATH,
@@ -328,10 +335,10 @@ export class KunRuntimeProviderServices {
 
   async updateMemory(
     memoryId: string,
-    patch: { content?: string; tags?: string[]; confidence?: number; disabled?: boolean },
-    options: { workspace?: string } = {}
+    patch: { content?: string; tags?: string[]; confidence?: number; importance?: number; type?: CoreMemoryRecordJson['type']; disabled?: boolean },
+    options: { workspace?: string; project?: string } = {}
   ): Promise<CoreMemoryRecordJson> {
-    const query = buildQuery({ workspace: options.workspace })
+    const query = buildQuery({ workspace: options.workspace, project: options.project })
     const response = await rendererRuntimeClient.runtimeRequest(
       `${kunMemoryRecordPath(memoryId)}${query}`,
       'PATCH',
@@ -346,8 +353,8 @@ export class KunRuntimeProviderServices {
     ).memory
   }
 
-  async deleteMemory(memoryId: string, options: { workspace?: string } = {}): Promise<CoreMemoryRecordJson> {
-    const query = buildQuery({ workspace: options.workspace })
+  async deleteMemory(memoryId: string, options: { workspace?: string; project?: string } = {}): Promise<CoreMemoryRecordJson> {
+    const query = buildQuery({ workspace: options.workspace, project: options.project })
     const response = await rendererRuntimeClient.runtimeRequest(`${kunMemoryRecordPath(memoryId)}${query}`, 'DELETE')
     if (!response.ok) {
       throw runtimeErrorToError(readRuntimeError(response.body, 'failed to delete memory'))
