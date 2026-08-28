@@ -271,6 +271,30 @@ describe('Windows installer migration ACL contract', () => {
     expect(script).not.toContain("@('--updated', '/currentuser')")
   })
 
+  it('opens automatic-update transaction keys in the NSIS 64-bit registry view', () => {
+    const script = readFileSync(
+      join(process.cwd(), 'build/windows-installer-migration-transaction.ps1'),
+      'utf8'
+    )
+    const prepare = script.slice(
+      script.indexOf('function Initialize-UpdateTransaction'),
+      script.indexOf('function Invoke-SwitchUpdatePayload')
+    )
+    const validate = script.slice(
+      script.indexOf('function Assert-UpdateCutover'),
+      script.indexOf('function Restore-TransactionPayloadBackup')
+    )
+    const rollback = script.slice(script.indexOf('function Invoke-RollbackUpdateTransaction'))
+
+    expect(script).toContain('[Microsoft.Win32.RegistryKey]::OpenBaseKey')
+    expect(script).toContain('[Microsoft.Win32.RegistryView]::Registry64')
+    expect(script).not.toContain('[Microsoft.Win32.Registry]::LocalMachine')
+    expect(prepare).toContain('Open-TransactionRegistryHive $hiveName')
+    expect(prepare).toContain("Open-TransactionRegistryHive 'CurrentUser'")
+    expect(validate).toContain('$hive = Open-TransactionRegistryHive')
+    expect(rollback).toContain('Open-TransactionRegistryHive ([string]$record.Hive)')
+  })
+
   it('hashes smoke payloads without relying on PowerShell module auto-loading', () => {
     const script = readFileSync(smokePath, 'utf8')
 

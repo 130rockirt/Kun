@@ -41,11 +41,12 @@ function Convert-RegistryValueFromJson($Record) {
   return $Record.Value
 }
 
-function Get-TransactionRegistryHive {
-  if ((Get-NormalizedInstallMode) -eq 'all') {
-    return [Microsoft.Win32.Registry]::LocalMachine
+function Open-TransactionRegistryHive([string]$HiveName = '') {
+  if ([string]::IsNullOrWhiteSpace($HiveName)) {
+    $HiveName = if ((Get-NormalizedInstallMode) -eq 'all') { 'LocalMachine' } else { 'CurrentUser' }
   }
-  return [Microsoft.Win32.Registry]::CurrentUser
+  $hive = [Microsoft.Win32.RegistryHive]([Enum]::Parse([Microsoft.Win32.RegistryHive], $HiveName))
+  return [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, [Microsoft.Win32.RegistryView]::Registry64)
 }
 
 function Get-TransactionRegistryKeyNames {
@@ -365,18 +366,20 @@ function Initialize-UpdateTransaction {
     $recoveryRoot = $backup
   }
   $registry = @()
-  $hive = Get-TransactionRegistryHive
   $hiveName = if ((Get-NormalizedInstallMode) -eq 'all') { 'LocalMachine' } else { 'CurrentUser' }
-  foreach ($keyName in @(Get-TransactionRegistryKeyNames)) {
-    $registry += @{ Hive = $hiveName; Snapshot = Export-RegistryTree $hive $keyName }
-  }
+  $hive = Open-TransactionRegistryHive $hiveName
+  try {
+    foreach ($keyName in @(Get-TransactionRegistryKeyNames)) {
+      $registry += @{ Hive = $hiveName; Snapshot = Export-RegistryTree $hive $keyName }
+    }
+  } finally { $hive.Dispose() }
   if ((Get-NormalizedInstallMode) -eq 'all' -and
       [string]::Equals((Get-EnvironmentValue 'KUN_INSTALLER_PRESERVE_OTHER_SCOPE'), '1', [StringComparison]::Ordinal)) {
     $uninstallKey = (Get-TransactionRegistryKeyNames)[1]
-    $registry += @{
-      Hive = 'CurrentUser'
-      Snapshot = Export-RegistryTree ([Microsoft.Win32.Registry]::CurrentUser) $uninstallKey
-    }
+    $hive = Open-TransactionRegistryHive 'CurrentUser'
+    try {
+      $registry += @{ Hive = 'CurrentUser'; Snapshot = Export-RegistryTree $hive $uninstallKey }
+    } finally { $hive.Dispose() }
   }
   $transaction = @{
     TransactionId = [Guid]::NewGuid().ToString('N')
@@ -474,28 +477,30 @@ function Assert-UpdateCutover {
   $target = Normalize-FullPath ([string]$transaction.Target)
   $stage = Normalize-FullPath ([string]$transaction.StageRoot)
   Assert-PackagedInstallPayloadAt $target
-  $hive = Get-TransactionRegistryHive
-  foreach ($keyName in @(Get-TransactionRegistryKeyNames)) {
-    Assert-RegistryTreeNoStage $hive $keyName $stage
-  }
-  foreach ($keyName in @(Get-TransactionRegistryKeyNames)) {
-    $key = $hive.OpenSubKey($keyName, $false)
-    if ($null -eq $key) { throw "The committed installer registry key is missing: $keyName" }
-    try {
-      foreach ($name in @($key.GetValueNames())) {
-        $value = [string]$key.GetValue($name, '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-        if (-not [string]::IsNullOrWhiteSpace($stage) -and $value.IndexOf($stage, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-          throw "The committed registry value references the staging directory: $keyName/$name"
-        }
-      }
-    } finally { $key.Dispose() }
-  }
-  $installKey = $hive.OpenSubKey((Get-TransactionRegistryKeyNames)[0], $false)
+  $hive = Open-TransactionRegistryHive
   try {
-    if ($null -eq $installKey -or -not (Test-PathEqual ([string]$installKey.GetValue('InstallLocation')) $target)) {
-      throw 'The committed InstallLocation does not reference the final target.'
+    foreach ($keyName in @(Get-TransactionRegistryKeyNames)) {
+      Assert-RegistryTreeNoStage $hive $keyName $stage
     }
-  } finally { if ($null -ne $installKey) { $installKey.Dispose() } }
+    foreach ($keyName in @(Get-TransactionRegistryKeyNames)) {
+      $key = $hive.OpenSubKey($keyName, $false)
+      if ($null -eq $key) { throw "The committed installer registry key is missing: $keyName" }
+      try {
+        foreach ($name in @($key.GetValueNames())) {
+          $value = [string]$key.GetValue($name, '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+          if (-not [string]::IsNullOrWhiteSpace($stage) -and $value.IndexOf($stage, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            throw "The committed registry value references the staging directory: $keyName/$name"
+          }
+        }
+      } finally { $key.Dispose() }
+    }
+    $installKey = $hive.OpenSubKey((Get-TransactionRegistryKeyNames)[0], $false)
+    try {
+      if ($null -eq $installKey -or -not (Test-PathEqual ([string]$installKey.GetValue('InstallLocation')) $target)) {
+        throw 'The committed InstallLocation does not reference the final target.'
+      }
+    } finally { if ($null -ne $installKey) { $installKey.Dispose() } }
+  } finally { $hive.Dispose() }
   $expectedExecutable = Join-Path $target (Get-ExpectedApplicationExecutable)
   $shortcutCount = 0
   foreach ($root in @(Get-ShortcutRoots)) {
@@ -585,12 +590,8 @@ function Invoke-RollbackUpdateTransaction {
       })) {
         throw "The registry recovery root is not authorized: $recordPath"
       }
-      $hive = if ([string]$record.Hive -eq 'LocalMachine') {
-        [Microsoft.Win32.Registry]::LocalMachine
-      } else {
-        [Microsoft.Win32.Registry]::CurrentUser
-      }
-      Restore-RegistryTree $hive $record.Snapshot $recordPath
+      $hive = Open-TransactionRegistryHive ([string]$record.Hive)
+      try { Restore-RegistryTree $hive $record.Snapshot $recordPath } finally { $hive.Dispose() }
     }
     Restore-ShortcutSnapshot $transaction.Shortcuts
     Restore-UserPathSnapshot $transaction.UserPath
