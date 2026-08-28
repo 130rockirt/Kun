@@ -93,4 +93,111 @@ describe('BackgroundShellRuntime completion handoff', () => {
 
     expect(startTurn).not.toHaveBeenCalled()
   })
+
+  it('delivers both completions when two detached shells settle at once (#5)', async () => {
+    const sourceTurn = createTurnRecord({
+      id: 'turn_source',
+      threadId: 'thread_1',
+      prompt: 'Build the project.',
+      clientSurface: 'gui',
+      disableUserInput: true,
+      status: 'completed'
+    })
+    const thread = {
+      ...createThreadRecord({
+        id: 'thread_1',
+        title: 'Build',
+        workspace: '/tmp/workspace',
+        model: 'test-model',
+        status: 'idle'
+      }),
+      turns: [sourceTurn]
+    }
+    const startTurn = vi.fn(async () => ({
+      threadId: 'thread_1',
+      turnId: 'turn_callback'
+    }))
+    const steerTurn = vi.fn(async () => undefined)
+    const runtime = new BackgroundShellRuntime({
+      events: { record: vi.fn(async (event: unknown) => event) },
+      threadStore: { get: vi.fn(async () => thread) },
+      turns: { startTurn, steerTurn },
+      nowIso: () => '2026-07-29T00:01:00.000Z'
+    } as unknown as BackgroundShellRuntimeDeps)
+    runtime.bindAgentLoop({ runTurn: vi.fn(async () => 'completed') })
+
+    const first = runtime.bashHooks().onSessionSettled?.(settledShell('completed'))
+    const second = runtime.bashHooks().onSessionSettled?.({
+      ...settledShell('completed'),
+      id: 'shell002',
+      command: 'npm run test',
+      output: 'tests passed'
+    })
+    await Promise.all([first, second])
+
+    // Both session ids must reach the agent: two notices, no lost settlement.
+    const notices = startTurn.mock.calls.map(
+      (call) => (call[0] as { request: { prompt: string } }).request.prompt
+    )
+    expect(notices).toHaveLength(2)
+    expect(notices[0]).toContain('shell001')
+    expect(notices[1]).toContain('shell002')
+  })
+
+  it('steers the notice into the winning turn when startTurn conflicts', async () => {
+    const sourceTurn = createTurnRecord({
+      id: 'turn_source',
+      threadId: 'thread_1',
+      prompt: 'Build the project.',
+      clientSurface: 'gui',
+      status: 'completed'
+    })
+    const idleThread = {
+      ...createThreadRecord({
+        id: 'thread_1',
+        title: 'Build',
+        workspace: '/tmp/workspace',
+        model: 'test-model',
+        status: 'idle'
+      }),
+      turns: [sourceTurn]
+    }
+    const runningThread = {
+      ...idleThread,
+      status: 'running',
+      turns: [sourceTurn, createTurnRecord({
+        id: 'turn_winner',
+        threadId: 'thread_1',
+        prompt: 'Competing turn.',
+        clientSurface: 'gui',
+        status: 'running'
+      })]
+    }
+    let getCallCount = 0
+    const startTurn = vi.fn(async () => {
+      throw new Error('thread already has an active turn')
+    })
+    const steerTurn = vi.fn(async () => undefined)
+    const runtime = new BackgroundShellRuntime({
+      events: { record: vi.fn(async (event: unknown) => event) },
+      threadStore: {
+        get: vi.fn(async () => {
+          getCallCount += 1
+          return getCallCount <= 1 ? idleThread : runningThread
+        })
+      },
+      turns: { startTurn, steerTurn },
+      nowIso: () => '2026-07-29T00:01:00.000Z'
+    } as unknown as BackgroundShellRuntimeDeps)
+    runtime.bindAgentLoop({ runTurn: vi.fn(async () => 'completed') })
+
+    await runtime.bashHooks().onSessionSettled?.(settledShell('completed'))
+
+    expect(startTurn).toHaveBeenCalledOnce()
+    expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: 'thread_1',
+      turnId: 'turn_winner',
+      text: expect.stringContaining('shell001')
+    }))
+  })
 })

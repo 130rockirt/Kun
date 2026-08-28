@@ -19,9 +19,39 @@ env:
   NODE_VERSION: '22'
 
 jobs:
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            kun/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
   package:
     name: Build Linux package (x64)
     runs-on: ubuntu-latest
+    needs: quality
     timeout-minutes: 60
     steps:
       - name: Check out repository
@@ -71,6 +101,7 @@ jobs:
   package-linux-arm64:
     name: Build Linux package and TUI (ARM64)
     runs-on: ubuntu-24.04-arm
+    needs: quality
     timeout-minutes: 90
     steps:
       - name: Check out repository
@@ -147,6 +178,7 @@ jobs:
   package-macos:
     name: Build ad-hoc macOS packages (PR)
     runs-on: macos-latest
+    needs: quality
     timeout-minutes: 90
     env:
       # PR validation intentionally uses the afterPack ad-hoc signature only.
@@ -201,6 +233,7 @@ jobs:
   package-windows:
     name: Build Windows NSIS installer (PR)
     runs-on: windows-latest
+    needs: quality
     timeout-minutes: 90
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -282,6 +315,7 @@ jobs:
     name: Request PR changes on failure
     runs-on: ubuntu-latest
     needs:
+      - quality
       - package
       - package-linux-arm64
       - package-macos
@@ -292,6 +326,7 @@ jobs:
         github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         (
+          needs.quality.result == 'failure' ||
           needs.package.result == 'failure' ||
           needs['package-linux-arm64'].result == 'failure' ||
           needs['package-macos'].result == 'failure' ||
@@ -307,6 +342,7 @@ jobs:
         with:
           script: |
             const failedJobs = [
+              ['Quality gates', '${{ needs.quality.result }}'],
               ['Build Linux package', '${{ needs.package.result }}'],
               ['Build Linux package and TUI (ARM64)', '${{ needs['package-linux-arm64'].result }}'],
               ['Build ad-hoc macOS packages (PR)', '${{ needs['package-macos'].result }}'],

@@ -384,3 +384,83 @@ windowsOnly('Windows automatic update transaction', () => {
     expect(existsSync(join(input.source, 'DeepSeek GUI.exe'))).toBe(true)
   })
 })
+
+windowsOnly('Windows automatic update fault injection points', () => {
+  function readTransaction(input: Fixture): Record<string, unknown> {
+    return JSON.parse(readFileSync(input.transaction, 'utf8').replace(/^\uFEFF/, ''))
+  }
+
+  it('persists the complete recovery context before any payload move (prepare.after_journal)', () => {
+    const input = fixture()
+    const failed = run(input, 'Prepare', 'prepare.after_journal')
+    assertExpectedFailure(failed, 'Prepare')
+    const state = readTransaction(input)
+    expect(state.Phase).toBe('prepared')
+    expect(state.JournalPath).toBe(input.journal)
+    expect(state.OldVersion).toBe('0.1.0')
+    expect(state.NewVersion).toBe('0.2.0')
+    expect(String(state.Target)).toContain('Kun')
+    expect(String(state.AppExecutable)).toBe('Kun.exe')
+    // The transaction is already a complete rollback record before the cutover.
+    payload(input.stage, 'Kun.exe')
+    assertSucceeded(run(input, 'RollbackUpdateTransaction'), 'RollbackUpdateTransaction')
+    expect(existsSync(join(input.source, 'DeepSeek GUI.exe'))).toBe(true)
+  })
+
+  it('restores the old payload when interrupted mid-move (switch.after_old_move)', () => {
+    const input = fixture()
+    assertSucceeded(run(input, 'Prepare'), 'Prepare')
+    payload(input.stage, 'Kun.exe')
+    const failed = run(input, 'SwitchUpdatePayload', 'switch.after_old_move')
+    assertExpectedFailure(failed, 'SwitchUpdatePayload')
+    const state = readTransaction(input)
+    expect(state.Phase).toBe('prepared')
+    assertSucceeded(run(input, 'RecoverUpdateTransaction'), 'RecoverUpdateTransaction')
+    expect(readFileSync(join(input.source, 'notes.txt'), 'utf8')).toBe('preserved user file')
+    expect(existsSync(join(input.source, 'DeepSeek GUI.exe'))).toBe(true)
+    expect(existsSync(input.target)).toBe(false)
+  })
+
+  it('rolls back a payload that switched but never validated cutover (switch.after_payload_switched)', () => {
+    const input = fixture()
+    assertSucceeded(run(input, 'Prepare'), 'Prepare')
+    payload(input.stage, 'Kun.exe')
+    const failed = run(input, 'SwitchUpdatePayload', 'switch.after_payload_switched')
+    assertExpectedFailure(failed, 'SwitchUpdatePayload')
+    expect(readTransaction(input).Phase).toBe('payload_switched')
+    assertSucceeded(run(input, 'RecoverUpdateTransaction'), 'RecoverUpdateTransaction')
+    expect(readFileSync(join(input.source, 'DeepSeek GUI.exe'), 'utf8')).toBe('executable')
+    expect(existsSync(input.target)).toBe(false)
+  })
+
+  it('keeps the transaction rollback-capable after awaiting_health (cutover.after_awaiting_health)', () => {
+    const input = fixture()
+    assertSucceeded(run(input, 'Prepare'), 'Prepare')
+    payload(input.stage, 'Kun.exe')
+    assertSucceeded(run(input, 'SwitchUpdatePayload'), 'SwitchUpdatePayload')
+    const failed = run(input, 'Restore', 'cutover.after_awaiting_health')
+    assertExpectedFailure(failed, 'Restore')
+    expect(readTransaction(input).Phase).toBe('awaiting_health')
+    assertSucceeded(run(input, 'RecoverUpdateTransaction'), 'RecoverUpdateTransaction')
+    expect(readTransaction(input)).toMatchObject({ Phase: 'rolled_back', RollbackOutcome: 'succeeded' })
+  })
+
+  it('rolls back a transaction interrupted right before commit (commit.before_committed)', () => {
+    const input = fixture()
+    assertSucceeded(run(input, 'Prepare'), 'Prepare')
+    payload(input.stage, 'Kun.exe')
+    assertSucceeded(run(input, 'SwitchUpdatePayload'), 'SwitchUpdatePayload')
+    assertSucceeded(run(input, 'Restore'), 'Restore')
+    const state = readTransaction(input)
+    state.Phase = 'awaiting_health'
+    writeFileSync(input.transaction, JSON.stringify(state))
+    writeFileSync(input.health, JSON.stringify({
+      ok: true, token: state.HealthToken, installDir: input.target, version: '0.2.0'
+    }))
+    const failed = run(input, 'CommitUpdateTransaction', 'commit.before_committed')
+    assertExpectedFailure(failed, 'CommitUpdateTransaction')
+    expect(readTransaction(input).Phase).toBe('cleanup_pending')
+    assertSucceeded(run(input, 'RecoverUpdateTransaction'), 'RecoverUpdateTransaction')
+    expect(readTransaction(input)).toMatchObject({ Phase: 'rolled_back', RollbackOutcome: 'succeeded' })
+  })
+})

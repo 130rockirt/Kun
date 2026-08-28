@@ -335,7 +335,7 @@ function Initialize-UpdateTransaction {
   if (-not (Test-AutomaticUpdateRequested)) { return }
   Assert-UpdateTransactionStorage
   $existing = Read-UpdateTransaction
-  if ($null -ne $existing -and @('committed', 'rolled_back') -contains [string]$existing.Phase) {
+  if ($null -ne $existing -and @('committed', 'rolled_back', 'finalizing') -contains [string]$existing.Phase) {
     Finalize-TerminalUpdateTransaction
     $existing = $null
   }
@@ -404,7 +404,19 @@ function Initialize-UpdateTransaction {
     CompletedMutations = @()
     RollbackOutcome = 'not_started'
   }
+  # Persist the complete recovery context before any payload moves. The
+  # transaction file is the authoritative rollback record; the GUI result
+  # file is only an execution summary written after the cutover.
+  foreach ($name in @(
+    'AppExecutable', 'CanonicalLeaf', 'CommonDesktop', 'CommonPrograms',
+    'CurrentDesktop', 'CurrentPrograms', 'InstallRegistryKey',
+    'PreserveOtherScope', 'ProductName', 'SecondarySource', 'UninstallRegistryKey'
+  )) {
+    $transaction.$name = Get-EnvironmentValue ("KUN_INSTALLER_" + $name.ToUpper())
+  }
+  $transaction.JournalPath = Get-JournalPath
   Write-UpdateTransaction $transaction
+  Invoke-InstallerFaultPoint 'prepare.after_journal'
   Write-InstallerResult $stage
 }
 
@@ -421,6 +433,7 @@ function Invoke-SwitchUpdatePayload {
   if (Test-Path -LiteralPath $target) {
     if (Test-PathEqual ([string]$transaction.Source) $target) {
       Move-Item -LiteralPath $target -Destination $old
+      Invoke-InstallerFaultPoint 'switch.after_old_move'
     } elseif (@(Get-ChildItem -LiteralPath $target -Force).Count -eq 0) {
       Remove-Item -LiteralPath $target -Force
     } else {
@@ -437,6 +450,7 @@ function Invoke-SwitchUpdatePayload {
   }
   Assert-PackagedInstallPayloadAt $target
   Set-UpdateTransactionPhase $transaction 'payload_switched' | Out-Null
+  Invoke-InstallerFaultPoint 'switch.after_payload_switched'
 }
 
 function Assert-PackagedInstallPayloadAt([string]$Root) {
@@ -516,6 +530,7 @@ function Assert-UpdateCutover {
     throw 'No committed Kun shortcut exists for the selected install scope.'
   }
   Set-UpdateTransactionPhase $transaction 'awaiting_health' | Out-Null
+  Invoke-InstallerFaultPoint 'cutover.after_awaiting_health'
 }
 
 function Restore-TransactionPayloadBackup($Transaction) {
@@ -650,7 +665,9 @@ function Invoke-CommitUpdateTransaction {
   # Retain payload, registry/PATH, shortcut and journal recovery artifacts
   # through the first complete application startup. FinalizeUpdateTransaction
   # performs this cleanup only after the runtime health handshake succeeds.
+  Invoke-InstallerFaultPoint 'commit.before_committed'
   Set-UpdateTransactionPhase $transaction 'committed' | Out-Null
+  Invoke-InstallerFaultPoint 'commit.after_committed'
 }
 
 function Finalize-TerminalUpdateTransaction {
