@@ -121,6 +121,10 @@ const KUN_ROOT_HOISTED_DEPENDENCY_PATHS = [
   ...require('./after-pack-hoisted-dependencies.cjs').KUN_ROOT_HOISTED_SHARED_JS_PACKAGES
 ]
 const {
+  assertNoPackedKunBinOwnerCollisions,
+  pathEntryExists,
+  prunePackedKunBinLaunchers,
+  validatePackedKunBinLinks,
   validateRootHoistedDependencyClosure
 } = require('./after-pack-hoisted-dependencies.cjs')
 const KUN_ROOT_HOISTED_VERSION_ANCHORS = [
@@ -284,6 +288,10 @@ function prunePackedHoistedKunDependencies(context) {
   const root = unpackedAppRoot(context)
   const modules = join(root, 'node_modules')
   const kunModules = join(root, 'kun', 'node_modules')
+  assertNoPackedKunBinOwnerCollisions(
+    kunModules,
+    KUN_ROOT_HOISTED_DEPENDENCY_PATHS.map((relativePath) => join(kunModules, relativePath))
+  )
   for (const packageName of KUN_ROOT_HOISTED_VERSION_ANCHORS) {
     const relativeManifest = join(...packageName.split('/'), 'package.json')
     const rootManifest = join(modules, relativeManifest)
@@ -303,6 +311,7 @@ function prunePackedHoistedKunDependencies(context) {
     const duplicate = join(kunModules, relativePath)
     assertExists(rootDependency, `root-hoisted runtime dependency ${relativePath}`)
     if (!existsSync(duplicate)) continue
+    prunePackedKunBinLaunchers(kunModules, duplicate)
     rmSync(duplicate, { recursive: true, force: true })
     console.log(`[after-pack] Removed root-hoisted Kun dependency duplicate: ${relativePath}`)
   }
@@ -316,7 +325,7 @@ function prunePackedApplicationPayload(context) {
 }
 
 function assertMissing(path, label) {
-  if (existsSync(path)) {
+  if (pathEntryExists(path)) {
     throw new Error(`[after-pack] Unexpected packaged ${label}: ${path}`)
   }
 }
@@ -377,6 +386,7 @@ function validatePackedApplicationPayload(context) {
     assertExists(join(modules, relativePath), `root-hoisted runtime dependency ${relativePath}`)
     assertMissing(join(kunModules, relativePath), `duplicate Kun dependency ${relativePath}`)
   }
+  validatePackedKunBinLinks(kunModules)
   validateRootHoistedDependencyClosure(root)
 }
 
@@ -655,6 +665,7 @@ exports._internals = {
   prunePackedClaudeCodeBinary,
   prunePackedBetterSqliteBuildFiles,
   prunePackedTesseractResources,
+  prunePackedKunBinLaunchers,
   prunePackedHoistedKunDependencies,
   prunePackedApplicationPayload,
   validatePackedApplicationPayload,
@@ -676,6 +687,7 @@ exports._internals = {
   BETTER_SQLITE_BUILD_PATHS,
   KUN_ROOT_HOISTED_DEPENDENCY_PATHS,
   KUN_ROOT_HOISTED_VERSION_ANCHORS,
+  validatePackedKunBinLinks,
   validateRootHoistedDependencyClosure
 }
 exports.default = afterPack
