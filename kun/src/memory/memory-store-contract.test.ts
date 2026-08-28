@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { HybridMemoryStore } from '../adapters/hybrid/hybrid-memory-store.js'
 import type { MemoryCapabilityConfig } from '../contracts/capabilities.js'
 import type { ServiceManagerConnection } from '../manager/manager-client.js'
+import { KUN_MANAGER_PROTOCOL_VERSION } from '../manager/manager-discovery.js'
 import { ManagerRemoteMemoryStore } from '../manager/remote-data-stores.js'
 import { ManagerSharedDataStore } from '../manager/shared-data-store.js'
 import { buildServiceManagerRouter, ServiceManagerState } from '../manager/service-manager.js'
@@ -142,7 +143,7 @@ async function createManagerHarness(dataDir: string): Promise<{
   const connection: ServiceManagerConnection = {
     discovery: {
       version: 1,
-      protocolVersion: 3,
+      protocolVersion: KUN_MANAGER_PROTOCOL_VERSION,
       instanceId: 'manager-memory-test',
       pid: process.pid,
       startedAt: '2026-08-28T00:00:00.000Z',

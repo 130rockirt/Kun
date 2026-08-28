@@ -21,6 +21,7 @@ export class HybridMemoryBackfillCoordinator {
     upsert: (record: MemoryRecord, hash: string) => void
     remove: (id: string) => void
     noteState: (state: HybridMemoryBackfillState) => void
+    complete?: () => void
     yieldToEventLoop: () => Promise<void>
     warn: (action: string, error: unknown) => void
     batchSize?: number
@@ -28,11 +29,17 @@ export class HybridMemoryBackfillCoordinator {
 
   start(): void {
     if (this.promise || this.stopped) return
-    this.promise = this.run().catch((error) => this.deps.warn('backfill', error))
+    const promise = this.run()
+      .then(() => { if (!this.stopped) this.deps.complete?.() })
+      .catch((error) => this.deps.warn('backfill', error))
+      .finally(() => { if (this.promise === promise) this.promise = null })
+    this.promise = promise
   }
 
   stop(): void { this.stopped = true }
-  async wait(): Promise<void> { await this.promise }
+  async wait(): Promise<void> {
+    while (this.promise) await this.promise
+  }
   state(): HybridMemoryBackfillState { return { ...this.stateValue } }
 
   private async run(): Promise<void> {

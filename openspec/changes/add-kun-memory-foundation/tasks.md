@@ -12,6 +12,8 @@
 - [x] 2.2 Add versioned SQLite schema/migrations for memory rows, source summaries, FTS5 search tokens, index metadata, and reconciliation state
 - [x] 2.3 Implement bounded startup backfill and id/hash/update-time reconciliation that yields to the event loop and never deletes malformed canonical files
 - [x] 2.4 Implement degraded-state detection and filesystem/n-gram fallback for missing modules, FTS5 absence, open/migration/query failure, corruption, and stale indexes
+  - [x] 2.4.1 Retry a transient list/retrieve index failure in the same process and clear degraded state only after a successful indexed operation
+  - [x] 2.4.2 Treat a detected stale projection as unavailable, serve filesystem fallback, reconcile it, and return to ready without restart
 - [x] 2.5 Keep create, createWithId, update, disable/restore, supersede, delete, purge, list, retrieve, and diagnostics contract-equivalent while converging every projection
 - [x] 2.6 Add direct adapter tests for crash windows, index deletion/rebuild, corruption, migration failure, CJK FTS, lifecycle mutations, exact-path protection, and concurrent reads/writes
 
@@ -39,12 +41,20 @@
 - [x] 5.3 Add actionable sanitized errors for native SQLite/FTS5 failures and preserve local memory use through fallback
 - [x] 5.4 Update `kun/README.md`, architecture, data-layout, diagnostics, migration, and user-facing memory documentation in the existing bilingual pattern
 - [x] 5.5 Retain explicit memory tool approval and verify that imported/tool/web/inference content never gains user or system instruction authority
+- [x] 5.6 Expose validated Memory V2 create/update fields through the approved memory tools without weakening authority, scope, or source-evidence bounds
 
 ## 6. Verification and delivery
 
 - [x] 6.1 Add legacy JSON, damaged JSON, scope-path, migration, restart, Manager serialization, deletion cleanup, prompt-injection, and retrieval-regression integration tests
 - [ ] 6.2 Verify FTS5 and native `better-sqlite3` behavior in packaged Windows x64, macOS arm64/x64, Linux x64, and Linux ARM64 artifacts while retaining measured fallback behavior
+  - 2026-08-28: Windows Electron 43.1.0/ABI 148 loaded `better-sqlite3`, created an FTS5 table, and completed an FTS5 `MATCH` query. NSIS packaging is still blocked by the local Visual Studio installation missing Spectre-mitigated x64 libraries required by `node-pty`; macOS and Linux artifact checks remain outstanding.
 - [x] 6.3 Compare baseline and hybrid retrieval metrics, record ranking weights and accepted trade-offs, and block semantic/vector follow-ups until the report is reproducible
 - [ ] 6.4 Run focused tests, `npm run build:kun`, `npm run check:file-lines`, `npm run lint`, `npm run typecheck`, `npm run test`, `npm run build`, and `git diff --check`
+  - 2026-08-28: Memory focused tests pass (48/48); `build:kun`, file-lines, typecheck, changed-file ESLint, build, OpenSpec strict validation, and `git diff --check` pass. Full lint retains three pre-existing `no-unsafe-finally` errors in `src/renderer/src/store/chat-store-schedulers.ts`; the full test suite retains unrelated baseline failures, including the reproducible streamed-idle timeout in `kun/tests/model-client.test.ts`.
+  - 2026-08-31: After rebasing onto `upstream/develop` at `f646e33d`, direct Memory Vitest coverage passes (27/27), `build:kun`, Kun/Web/Node typechecks, full build, conflict-file ESLint, OpenSpec strict validation, and `git diff --check` pass. The standard Kun test command stops before Vitest on the existing runtime-manifest version expectation (`0.3.9` versus `0.1.0`); repository ESLint retains 16 `no-useless-escape` errors in `settings-section-agents-provider-discovery.test.ts`, and file-lines retains the two current develop overages in `hybrid-thread-store.ts` and `extension-agent-service-core.ts`. These baseline fixes are tracked by open PR #1257, so the full gate remains pending.
 - [ ] 6.5 Manually verify create/edit/disable/restore/delete/import/export, cross-workspace isolation, retrieval explanation, runtime restart, and SQLite-degraded Memory UI flows
+  - 2026-08-28: The development Electron app launches successfully, but automated desktop inspection is blocked because the current Codex session cannot surface the required app-approval elicitation. The complete manual flow remains outstanding.
+  - 2026-08-31: A first isolated real-Electron UI pass completed 4/9 scenarios, found four acceptance blockers, and left destructive Delete/tombstone verification awaiting action-time confirmation. Because the branch was subsequently rebased, affected UI scenarios and the final continuous video/GIF must be rerun before completion.
 - [ ] 6.6 Rebase the implementation branch onto latest `develop`, rerun affected validation, complete the PR template and CLA checkbox, and attach UI video/GIF evidence when the settings surface changes
+  - 2026-08-28: The branch is rebased onto `upstream/develop`; PR/CLA and UI evidence remain outstanding.
+  - 2026-08-31: Rebased the two Memory commits onto current `upstream/develop` (`f646e33d`). The Manager store-lifecycle and runtime dependency conflicts were resolved by retaining develop's session/JSONL coordination and adding Memory shutdown/export behavior. Final validation after the quality-baseline PR, Memory PR/CLA, and refreshed UI evidence remain outstanding.

@@ -49,6 +49,7 @@ export class HybridMemoryStore implements MemoryStore {
   private index: HybridMemoryIndex | null = null
   private backfill: HybridMemoryBackfillCoordinator | null = null
   private backfillState: HybridMemoryBackfillState = { running: false, scanned: 0, remaining: 0 }
+  private indexStale = false
   private lastRetrieval: MemoryRetrievalTrace | undefined
   private lastInjectedIds: string[] = []
   private mutationQueue: Promise<unknown> = Promise.resolve()
@@ -64,6 +65,8 @@ export class HybridMemoryStore implements MemoryStore {
     databaseFactory?: DatabaseFactory
     beforeMigrate?: () => void
     beforeProject?: (record: MemoryRecord) => void
+    beforeIndexQuery?: (operation: 'list' | 'retrieve') => void
+    beforeIndexRemove?: (id: string) => void
     backfillBatchSize?: number
   }) {
     this.dataDir = resolve(options.dataDir)
@@ -134,8 +137,10 @@ export class HybridMemoryStore implements MemoryStore {
       await this.canonical.purge(id)
       if (!this.index) return
       try {
+        this.options.beforeIndexRemove?.(id)
         this.index.remove(id)
       } catch (error) {
+        this.indexStale = true
         this.degraded.fail('purge projection', error)
       }
     })
@@ -145,6 +150,7 @@ export class HybridMemoryStore implements MemoryStore {
     await this.ready()
     if (this.indexReady()) {
       try {
+        this.options.beforeIndexQuery?.('list')
         const records = this.index!.list(filter)
         this.degraded.recover()
         return records
@@ -152,7 +158,9 @@ export class HybridMemoryStore implements MemoryStore {
         this.degraded.fail('list query', error)
       }
     }
-    return this.canonical.list(filter)
+    const records = await this.canonical.list(filter)
+    this.reconcileStaleIndex()
+    return records
   }
 
   async retrieve(request: MemoryRetrieveRequest): Promise<MemoryRecord[]> {
@@ -160,6 +168,7 @@ export class HybridMemoryStore implements MemoryStore {
     const policy = request.policy ?? this.config()
     if (this.indexReady()) {
       try {
+        this.options.beforeIndexQuery?.('retrieve')
         const queryTokens = memorySearchTokens(request.query, MEMORY_MAX_QUERY_SEARCH_TOKENS)
         const nowIso = this.now()
         const candidates = this.index!.candidates(request, policy, queryTokens, nowIso)
@@ -187,6 +196,7 @@ export class HybridMemoryStore implements MemoryStore {
     const diagnostics = await this.canonical.diagnostics(policy)
     this.lastRetrieval = diagnostics.lastRetrieval
     this.lastInjectedIds = [...(diagnostics.lastInjectedIds ?? [])]
+    this.reconcileStaleIndex()
     return records
   }
 
@@ -206,6 +216,12 @@ export class HybridMemoryStore implements MemoryStore {
         const indexedIds = new Set(rows.map((row) => row.id))
         staleCount = rows.filter((row) => canonicalHashes.get(row.id) !== row.canonicalHash).length +
           canonical.records.filter((record) => !indexedIds.has(record.id)).length
+        if (staleCount > 0 && !this.indexStale) {
+          this.indexStale = true
+          if (!this.degraded.degradedReason()) {
+            this.degraded.fail('stale projection', new Error(`${staleCount} canonical memory row(s) need reconciliation`))
+          }
+        }
       } catch (error) {
         this.degraded.fail('diagnostics query', error)
       }
@@ -213,7 +229,7 @@ export class HybridMemoryStore implements MemoryStore {
     const reason = this.degraded.degradedReason()
     const indexState = !policy.enabled
       ? 'disabled'
-      : reason || !this.index
+      : reason || !this.index || this.indexStale
         ? 'degraded'
         : this.backfillState.running
           ? 'backfilling'
@@ -275,6 +291,10 @@ export class HybridMemoryStore implements MemoryStore {
         upsert: (record, hash) => this.index!.upsert(record, hash),
         remove: (id) => this.index!.remove(id),
         noteState: (state) => { this.backfillState = state; this.index!.noteBackfillState(state) },
+        complete: () => {
+          this.indexStale = false
+          this.degraded.recover()
+        },
         yieldToEventLoop,
         warn: (action, error) => this.degraded.fail(action, error),
         batchSize: this.options.backfillBatchSize
@@ -301,12 +321,17 @@ export class HybridMemoryStore implements MemoryStore {
       this.options.beforeProject?.(record)
       this.index.upsert(record, canonicalMemoryHash(record))
     } catch (error) {
+      this.indexStale = true
       this.degraded.fail(`project ${record.id}`, error)
     }
   }
 
   private indexReady(): boolean {
-    return Boolean(this.index && !this.backfillState.running && !this.degraded.degradedReason())
+    return Boolean(this.index && !this.backfillState.running && !this.indexStale)
+  }
+
+  private reconcileStaleIndex(): void {
+    if (this.indexStale) this.backfill?.start()
   }
 
   private config(): MemoryCapabilityConfig {

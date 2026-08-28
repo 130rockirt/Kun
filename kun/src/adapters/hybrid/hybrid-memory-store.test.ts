@@ -137,6 +137,170 @@ describe('HybridMemoryStore', () => {
     await migrationFailure.shutdown()
   })
 
+  it('retries a transient indexed retrieval failure without restarting', async () => {
+    const root = await tempRoot()
+    let queryAttempts = 0
+    const store = new HybridMemoryStore({
+      dataDir: root,
+      config: policy,
+      beforeIndexQuery: (operation) => {
+        if (operation === 'retrieve' && queryAttempts++ === 0) {
+          throw new Error('simulated transient retrieval failure')
+        }
+      }
+    })
+    try {
+      await store.createWithId('mem_recover', {
+        content: 'Recover indexed retrieval without restart', scope: 'workspace', workspace: '/workspace-a'
+      })
+
+      await expect(store.retrieve({ query: 'recover indexed', workspace: '/workspace-a', limit: 3 }))
+        .resolves.toMatchObject([{ id: 'mem_recover' }])
+      expect(await store.diagnostics()).toMatchObject({
+        indexState: 'degraded',
+        degradedReason: expect.stringContaining('transient retrieval failure'),
+        lastRetrieval: { mode: 'filesystem-fallback' }
+      })
+
+      await expect(store.retrieve({ query: 'recover indexed', workspace: '/workspace-a', limit: 3 }))
+        .resolves.toMatchObject([{ id: 'mem_recover' }])
+      expect(await store.diagnostics()).toMatchObject({
+        indexState: 'ready',
+        degradedReason: undefined,
+        lastRetrieval: { mode: 'sqlite-fts5' }
+      })
+      expect(queryAttempts).toBe(2)
+    } finally {
+      await store.shutdown()
+    }
+  })
+
+  it('retries a transient indexed list failure without restarting', async () => {
+    const root = await tempRoot()
+    let queryAttempts = 0
+    const store = new HybridMemoryStore({
+      dataDir: root,
+      config: policy,
+      beforeIndexQuery: (operation) => {
+        if (operation === 'list' && queryAttempts++ === 0) {
+          throw new Error('simulated transient list failure')
+        }
+      }
+    })
+    try {
+      await store.createWithId('mem_list_recover', {
+        content: 'Recover indexed list without restart', scope: 'workspace', workspace: '/workspace-a'
+      })
+      await expect(store.list({ workspace: '/workspace-a' }))
+        .resolves.toMatchObject([{ id: 'mem_list_recover' }])
+      expect(await store.diagnostics()).toMatchObject({
+        indexState: 'degraded', degradedReason: expect.stringContaining('transient list failure')
+      })
+
+      await expect(store.list({ workspace: '/workspace-a' }))
+        .resolves.toMatchObject([{ id: 'mem_list_recover' }])
+      expect(await store.diagnostics()).toMatchObject({ indexState: 'ready', degradedReason: undefined })
+      expect(queryAttempts).toBe(2)
+    } finally {
+      await store.shutdown()
+    }
+  })
+
+  it('falls back and reconciles a stale canonical projection without restarting', async () => {
+    const { root, store } = await createStore()
+    try {
+      await store.createWithId('mem_external', {
+        content: 'Original searchable memory text', scope: 'workspace', workspace: '/workspace-a'
+      })
+      await store.waitForBackfill()
+      const path = join(root, 'memory', 'mem_external.json')
+      const record = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+      await writeFile(path, JSON.stringify({
+        ...record,
+        content: 'Externally updated canonical phrase',
+        updatedAt: '2026-08-28T00:01:00.000Z'
+      }, null, 2))
+
+      expect(await store.diagnostics()).toMatchObject({ staleCount: 1, indexState: 'degraded' })
+      await expect(store.retrieve({ query: 'externally updated', workspace: '/workspace-a', limit: 3 }))
+        .resolves.toMatchObject([{ id: 'mem_external' }])
+      expect((await store.diagnostics()).lastRetrieval?.mode).toBe('filesystem-fallback')
+
+      await store.waitForBackfill()
+      await expect(store.retrieve({ query: 'externally updated', workspace: '/workspace-a', limit: 3 }))
+        .resolves.toMatchObject([{ id: 'mem_external' }])
+      expect(await store.diagnostics()).toMatchObject({
+        staleCount: 0,
+        indexState: 'ready',
+        degradedReason: undefined,
+        lastRetrieval: { mode: 'sqlite-fts5' }
+      })
+    } finally {
+      await store.shutdown()
+    }
+  })
+
+  it('reconciles a failed canonical projection before indexed retrieval resumes', async () => {
+    const root = await tempRoot()
+    let failProjection = true
+    const store = new HybridMemoryStore({
+      dataDir: root,
+      config: policy,
+      beforeProject: () => {
+        if (failProjection) throw new Error('simulated projection failure')
+      }
+    })
+    try {
+      await store.createWithId('mem_projection_recover', {
+        content: 'Projection recovery stays searchable', scope: 'workspace', workspace: '/workspace-a'
+      })
+      failProjection = false
+      await expect(store.retrieve({ query: 'projection recovery', workspace: '/workspace-a', limit: 3 }))
+        .resolves.toMatchObject([{ id: 'mem_projection_recover' }])
+      expect((await store.diagnostics()).lastRetrieval?.mode).toBe('filesystem-fallback')
+
+      await store.waitForBackfill()
+      await expect(store.retrieve({ query: 'projection recovery', workspace: '/workspace-a', limit: 3 }))
+        .resolves.toMatchObject([{ id: 'mem_projection_recover' }])
+      expect(await store.diagnostics()).toMatchObject({
+        indexState: 'ready', staleCount: 0, lastRetrieval: { mode: 'sqlite-fts5' }
+      })
+    } finally {
+      await store.shutdown()
+    }
+  })
+
+  it('falls back until a failed purge projection removes the stale index row', async () => {
+    const root = await tempRoot()
+    let failRemove = true
+    const store = new HybridMemoryStore({
+      dataDir: root,
+      config: policy,
+      beforeIndexRemove: () => {
+        if (failRemove) throw new Error('simulated purge projection failure')
+      }
+    })
+    try {
+      await store.createWithId('mem_purge_recover', {
+        content: 'Purged memory must not leak from the index', scope: 'workspace', workspace: '/workspace-a'
+      })
+      await store.purge('mem_purge_recover')
+      failRemove = false
+
+      expect(await store.retrieve({ query: 'purged memory', workspace: '/workspace-a', limit: 3 })).toEqual([])
+      expect((await store.diagnostics()).lastRetrieval?.mode).toBe('filesystem-fallback')
+
+      await store.waitForBackfill()
+      expect(await store.retrieve({ query: 'purged memory', workspace: '/workspace-a', limit: 3 })).toEqual([])
+      expect(await store.diagnostics()).toMatchObject({
+        canonicalCount: 0, indexedCount: 0, staleCount: 0, indexState: 'ready',
+        lastRetrieval: { mode: 'sqlite-fts5' }
+      })
+    } finally {
+      await store.shutdown()
+    }
+  })
+
   it('converges lifecycle and purge projections and protects exact paths', async () => {
     const { root, store } = await createStore()
     await store.createWithId('mem_lifecycle', {
