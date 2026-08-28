@@ -332,6 +332,8 @@ export type ChatState = {
   activeThreadId: string | null
   /** Thread selected immediately but whose durable snapshot is still loading. */
   threadLoadingId: string | null
+  /** Active-thread durable refresh; unlike initial hydration, its projection stays interactive. */
+  threadRefreshingId: string | null
   /** Opaque cursor for the next older durable timeline page. */
   threadHistoryCursor: string | null
   threadHasMoreHistory: boolean
@@ -386,11 +388,25 @@ export type ChatState = {
    */
   turnTimingMetrics: Map<string, TurnTimingMetrics>
   busy: boolean
+  /**
+   * True right after a thread switch/recovery hydrated a snapshot that claims
+   * a running turn, before that claim is re-confirmed by the runtime. The
+   * timeline must render history as settled (no live-progress UI, no
+   * typewriter replay) while input/disabling decisions still follow `busy`.
+   */
+  busyUnconfirmed: boolean
   error: string | null
   runtimeErrorDetail: string | null
   currentTurnId: string | null
   currentTurnOrchestration: 'direct' | 'graph' | null
   currentTurnUserId: string | null
+  /**
+   * Start time of the currently running turn (ms epoch), recovered from the
+   * runtime's persisted turn record on hydration/reconciliation. Unlike the
+   * live `turnStartedAtByUserId`, this survives a thread switch or renderer
+   * restart so elapsed-time displays anchored to it do not reset mid-turn.
+   */
+  currentTurnStartedAtMs: number | null
   turnStartedAtByUserId: Record<string, number>
   turnDurationByUserId: Record<string, number>
   turnReasoningFirstAtByUserId: Record<string, number>
@@ -425,6 +441,8 @@ export type ChatState = {
   /** Source-neutral, host-fenced context awaiting one main-chat turn. Legacy field name is persisted for compatibility. */
   extensionComposerContexts: PendingComposerContextEvent[]
   watchTurnCompletion: Record<string, boolean>
+  /** Threads whose live runtime is currently awaiting a user_input answer. */
+  awaitingUserInputThreadIds: Record<string, true>
   /** Completion attention keyed by thread. Legacy boolean true reads as completed. */
   unreadThreadIds: CompletionAttentionRegistry
   scheduledThreadActivities: Record<string, ScheduledThreadActivity>

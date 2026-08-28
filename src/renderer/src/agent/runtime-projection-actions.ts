@@ -17,6 +17,7 @@ import type {
   ThreadUsageSnapshot,
   DelegatedRuntimeState,
   ToolEventPayload,
+  TurnTerminalEvent,
   UserInputRequestPayload,
   UserInputStatusPayload,
   UserMessageEventPayload
@@ -62,15 +63,25 @@ type RuntimeProjectionActionPayload =
         threadStatus?: string
         latestTurnId?: string
         latestTurnStatus?: string
+        latestTurnStartedAtMs?: number
         goal?: ThreadGoal | null
         todos?: ThreadTodoList | null
         turnId?: string | null
         userBlockId?: string | null
       }
     }
-  | { type: 'turn_completed' }
-  | { type: 'turn_aborted' }
-  | { type: 'turn_failed'; error: Error; options?: ThreadErrorOptions }
+  | { type: 'turn_completed'; payload: TurnTerminalEvent }
+  | { type: 'turn_aborted'; payload: TurnTerminalEvent }
+  | {
+      type: 'turn_failed'
+      payload: {
+        threadId?: string
+        turnId?: string
+        seq?: number
+        error: Error
+        options?: ThreadErrorOptions
+      }
+    }
 
 /**
  * Every action produced from a persisted runtime event keeps that event's

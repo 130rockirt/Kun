@@ -11,6 +11,8 @@ import {
   SetThreadGoalRequest,
   SetThreadTodosRequest,
   ThreadGoalResponse,
+  ThreadRuntimeStateBatchRequestSchema,
+  ThreadRuntimeStateBatchResponseSchema,
   ThreadRuntimeStateSchema,
   ThreadSchema,
   ThreadSchemaReadable,
@@ -18,11 +20,14 @@ import {
   ThreadTodosResponse,
   THREAD_TIMELINE_MAX_ITEM_BYTES,
   THREAD_TIMELINE_MAX_ITEMS,
+  THREAD_RUNTIME_STATE_BATCH_CONCURRENCY,
+  THREAD_RUNTIME_STATE_SCHEMA_VERSION,
   UpdateThreadRequest,
   type ThreadRecord
 } from '../../contracts/threads.js'
 import { jsonResponse, type JsonResponse } from '../response.js'
 import { readJsonBody } from '../read-json-body.js'
+import { threadStateLoadFailure } from './thread-state-error.js'
 import type { ForkThreadOptions, ListThreadsOptions, ThreadService } from '../../services/thread-service.js'
 import type { RuntimeError } from './runtime-error.js'
 import type { SessionStore } from '../../ports/session-store.js'
@@ -33,12 +38,15 @@ import {
   type TurnItem
 } from '../../contracts/items.js'
 import { buildPublicItemHistoryPage } from '../../services/item-history-page.js'
+import type { DelegationRuntime } from '../../delegation/delegation-runtime.js'
 import {
+  hasChildBackedToolResult,
   healSessionItemsForFinishedTurns,
   hydrateThreadItemsFromSession,
   loadThreadMetadata,
   mergePendingApprovalItems,
   omitTurnItems,
+  overlayChildRunsOnToolResults,
   projectPublicThreadRecord,
   projectTimelineThread,
   projectTimelineTurn
@@ -194,22 +202,41 @@ export async function getThread(
 export async function getThreadState(
   service: ThreadService,
   threadId: string,
-  sessionStore?: SessionStore
+  sessionStore?: SessionStore,
+  userInputGate?: UserInputGate
 ): Promise<JsonResponse> {
-  const latestSeq = sessionStore ? await sessionStore.highestSeq(threadId) : 0
-  const thread = await loadThreadMetadata(service, threadId)
-  if (!thread) {
+  const state = await loadThreadRuntimeState(service, threadId, sessionStore, userInputGate)
+  if (!state) {
     return jsonResponse(
       { code: 'not_found', message: `thread not found: ${threadId}` },
       404
     )
   }
+  return jsonResponse(state)
+}
+
+/** Build the lightweight state projection without materializing item history. */
+export async function loadThreadRuntimeState(
+  service: ThreadService,
+  threadId: string,
+  sessionStore?: SessionStore,
+  userInputGate?: UserInputGate
+): Promise<z.infer<typeof ThreadRuntimeStateSchema> | null> {
+  const [latestSeq, thread] = await Promise.all([
+    sessionStore ? sessionStore.highestSeq(threadId) : Promise.resolve(0),
+    loadThreadMetadata(service, threadId)
+  ])
+  if (!thread) {
+    return null
+  }
   const latestTurn = thread.turns.at(-1)
-  return jsonResponse(ThreadRuntimeStateSchema.parse({
+  return ThreadRuntimeStateSchema.parse({
+    schemaVersion: THREAD_RUNTIME_STATE_SCHEMA_VERSION,
     id: thread.id,
     status: thread.status,
     updatedAt: thread.updatedAt,
     latestSeq,
+    pendingUserInputIds: userInputGate?.pending(threadId).map((request) => request.id) ?? [],
     latestTurn: latestTurn
       ? {
           id: latestTurn.id,
@@ -217,7 +244,64 @@ export async function getThreadState(
           orchestration: latestTurn.orchestration === 'graph' ? 'graph' : 'direct'
         }
       : null
-  }))
+  })
+}
+
+/**
+ * Resolve a bounded set of lightweight states. Failures stay scoped to their
+ * thread so one unavailable execution owner cannot block the rest of the list.
+ */
+export async function getThreadStates(
+  request: Request,
+  loadState: (threadId: string) => Promise<z.infer<typeof ThreadRuntimeStateSchema> | null>
+): Promise<JsonResponse> {
+  const body = await readJsonBody(request)
+  if (!body.ok) return body.response
+  const parsed = ThreadRuntimeStateBatchRequestSchema.safeParse(body.value)
+  if (!parsed.success) {
+    return validationError('invalid thread states body', parsed.error.issues)
+  }
+  const threadIds = [...new Set(parsed.data.threadIds)]
+  const results: z.infer<typeof ThreadRuntimeStateBatchResponseSchema>['results'] =
+    new Array(threadIds.length)
+  let cursor = 0
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = cursor
+      cursor += 1
+      if (index >= threadIds.length) return
+      const id = threadIds[index]
+      const startedAt = Date.now()
+      try {
+        const state = await loadState(id)
+        results[index] = state
+          ? { id, ok: true, state }
+          : { id, ok: false, error: { code: 'not_found', message: `thread not found: ${id}` } }
+      } catch (error) {
+        const failure = threadStateLoadFailure(error)
+        // Diagnostics live in the log only; the public message stays generic
+        // and never carries owner instance identifiers or internal details.
+        console.warn(`[kun] thread state batch load failed: ${JSON.stringify({
+          threadId: id,
+          stage: failure.stage ?? 'load',
+          durationMs: Date.now() - startedAt,
+          httpStatus: failure.httpStatus,
+          errorName: failure.errorName,
+          code: failure.code
+        })}`)
+        results[index] = {
+          id,
+          ok: false,
+          error: { code: failure.code, message: `thread state unavailable: ${id}` }
+        }
+      }
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(THREAD_RUNTIME_STATE_BATCH_CONCURRENCY, threadIds.length) },
+    worker
+  ))
+  return jsonResponse(ThreadRuntimeStateBatchResponseSchema.parse({ results }))
 }
 
 /**
@@ -230,7 +314,8 @@ export async function getThreadTimeline(
   request: Request,
   sessionStore: SessionStore,
   userInputGate?: UserInputGate,
-  approvalGate?: ApprovalGate
+  approvalGate?: ApprovalGate,
+  delegationRuntime?: DelegationRuntime
 ): Promise<JsonResponse> {
   const url = new URL(request.url)
   const parsedQuery = z.object({
@@ -250,6 +335,7 @@ export async function getThreadTimeline(
   // Freeze the replay floor before reading the item projection. Any event
   // appended afterwards is replayed by SSE from this sequence.
   const latestSeq = await sessionStore.highestSeq(threadId)
+  let replayFloor = latestSeq
   const thread = await loadThreadMetadata(service, threadId)
   if (!thread) {
     return jsonResponse(
@@ -282,6 +368,21 @@ export async function getThreadTimeline(
   if (!parsedQuery.data.before) {
     sessionItems = mergePendingApprovalItems(sessionItems, pendingApprovals)
   }
+  // Persisted child-backed tool progress can lag the child store because only
+  // the first queued update is durable. Reconcile every lifecycle state before
+  // returning the snapshot whose latestSeq becomes the renderer's SSE floor.
+  if (delegationRuntime && hasChildBackedToolResult(sessionItems)) {
+    try {
+      const { childRuns } = await delegationRuntime.diagnostics(threadId)
+      const overlay = overlayChildRunsOnToolResults(sessionItems, childRuns)
+      sessionItems = overlay.items
+      if (overlay.unresolved) replayFloor = 0
+    } catch {
+      // Replaying from zero is safer than pairing stale queued progress with a
+      // cursor that has already consumed its authoritative lifecycle event.
+      replayFloor = 0
+    }
+  }
   // Re-apply the anchor after healing/merging so a newly materialized gate
   // item cannot push the active turn's user message back off the page.
   const bounded = buildPublicItemHistoryPage(sessionItems, {
@@ -312,7 +413,7 @@ export async function getThreadTimeline(
 
   return jsonResponse(ThreadTimelineResponseSchema.parse({
     ...ThreadSchemaReadable.parse(projectTimelineThread(pageThread)),
-    latestSeq,
+    latestSeq: replayFloor,
     latestTurn: latestTurnMetadata,
     pendingUserInputIds,
     ...(pendingApprovalIds ? { pendingApprovalIds } : {}),

@@ -47,6 +47,7 @@ import type { DelegationRuntime } from '../../delegation/delegation-runtime.js'
 import type { BackgroundShellRuntime } from '../../services/background-shell-runtime.js'
 import type { ModelClient } from '../../ports/model-client.js'
 import type { ModelRoutePoolConfig } from '../../contracts/model-route-pool.js'
+import type { GatewayCredentialService } from '../../services/gateway-credential-service.js'
 import type { RoutePoolHealthStore } from '../../adapters/model/route-pool-model-client.js'
 import type { RoutePoolTestService } from '../../services/route-pool-test-service.js'
 import type { GraphRuntimeConfig, RolesConfig } from '../../config/kun-config.js'
@@ -94,7 +95,10 @@ import type { RuntimeMigrationImportService } from '../../services/runtime-migra
 import type { ArtifactStore } from '../../artifacts/artifact-store.js'
 import type { ModelConnectionRegistry } from '../../services/model-connection-registry.js'
 import type { ModelConnectionOAuthService } from '../../services/model-connection-oauth.js'
-import type { OfficialProviderAuthService } from '../../services/official-provider-cli.js'
+import type {
+  OfficialProviderAuthService,
+  OfficialProviderCliService
+} from '../../services/official-provider-cli.js'
 import type { ProviderQuotaService } from '../../services/provider-quota-service.js'
 import type { ToolCancellationService } from '../../services/tool-cancellation-service.js'
 import type { KnowledgeBaseService } from '../../knowledge/knowledge-base-service.js'
@@ -225,6 +229,7 @@ export type ServerRuntime = {
   modelConnections?: ModelConnectionRegistry
   modelConnectionOAuth?: ModelConnectionOAuthService
   officialProviderAuth?: OfficialProviderAuthService
+  officialProviderCli?: OfficialProviderCliService
   providerQuotaService?: Pick<ProviderQuotaService, 'list'>
   modelGateway?: {
     enabled(): boolean
@@ -232,6 +237,7 @@ export type ServerRuntime = {
     configuredPools(): ModelRoutePoolConfig[]
     health: RoutePoolHealthStore
     tests: RoutePoolTestService
+    credentials: GatewayCredentialService
   }
   defaultModel?: string
   /**
@@ -287,6 +293,12 @@ export type ServerRuntime = {
   requestShutdown?(instanceId: string): Promise<boolean>
   /** Starts non-critical historical scans only after the HTTP server is live. */
   startBackgroundMaintenance?(): void
+  /** Runs the bounded thread-store guardian immediately. */
+  inspectThreadStore?(): Promise<import('../../services/thread-store-guardian.js').ThreadStoreGuardianResult>
+  /** Read-only session storage health scans (guardian). */
+  sessionGuardian?: import('../../services/session-guardian.js').SessionGuardian
+  /** Shared thread snapshot store for prune/restore flows. */
+  threadSnapshots?: import('../../services/thread-snapshot-store.js').ThreadSnapshotStore
   /** Forward active-turn controls to the flavor that currently owns the lease. */
   forwardThreadControl?(request: Request, threadId: string): Promise<Response | null>
   forwardControlById?(

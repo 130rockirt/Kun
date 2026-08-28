@@ -1,5 +1,8 @@
 import { describe, expect, test, vi } from 'vitest'
 import { z } from 'zod'
+import { CapabilityRegistry } from '../../adapters/tool/capability-registry.js'
+import { LocalToolHost } from '../../adapters/tool/local-tool-host.js'
+import type { ToolHostContext } from '../../ports/tool-host.js'
 import {
   buildBridgedToolSpecs,
   bridgedToolModelNames,
@@ -15,6 +18,26 @@ const tool = (name: string, inputSchema: Record<string, unknown> = {}): Bridgeab
   inputSchema
 })
 
+const toolContext: ToolHostContext = {
+  threadId: 'thread_1',
+  turnId: 'turn_1',
+  workspace: '/workspace',
+  approvalPolicy: 'auto',
+  sandboxMode: 'danger-full-access',
+  abortSignal: new AbortController().signal,
+  awaitApproval: async () => 'allow'
+}
+
+function localTool(name: string) {
+  return LocalToolHost.defineTool({
+    name,
+    description: `${name} tool`,
+    inputSchema: { type: 'object' },
+    policy: 'auto',
+    execute: async () => ({ output: null })
+  })
+}
+
 describe('selectBridgeableTools', () => {
   test('drops Claude Code overlap tools and excluded tools, keeps kun-exclusive', () => {
     const tools = [
@@ -26,7 +49,8 @@ describe('selectBridgeableTools', () => {
       tool('generate_image'),
       tool('memory_create'),
       tool('delegate_task'),
-      tool('web_search')
+      tool('web_search'),
+      tool('render_chart')
     ]
     // overlap (read/bash/edit) and excluded (echo) are dropped; user_input is
     // now bridged so kun's GUI input panel handles interactive questions.
@@ -36,8 +60,22 @@ describe('selectBridgeableTools', () => {
       'generate_image',
       'memory_create',
       'delegate_task',
-      'web_search'
+      'web_search',
+      'render_chart'
     ])
+  })
+
+  test('bridges the canonical input name while retaining a legacy-only fallback', () => {
+    const both = CapabilityRegistry.fromLocalTools([
+      localTool('user_input'),
+      localTool('request_user_input')
+    ])
+    const legacy = CapabilityRegistry.fromLocalTools([localTool('request_user_input')])
+
+    expect(selectBridgeableTools(both.listTools(toolContext)).map((entry) => entry.name))
+      .toEqual(['user_input'])
+    expect(selectBridgeableTools(legacy.listTools(toolContext)).map((entry) => entry.name))
+      .toEqual(['request_user_input'])
   })
 
   test('de-dupes by name and ignores blanks', () => {

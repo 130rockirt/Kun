@@ -84,9 +84,46 @@ function Invoke-RestoreJournal {
     return
   }
 
-  $remainingRecords = @()
+  $validatedRecords = @()
+  $collisionNames = @()
   foreach ($recordValue in (Get-JournalRecords $journal)) {
     $record = Get-ValidatedJournalRecord $recordValue
+    $validatedRecords += $record
+    if (-not (Test-Path -LiteralPath $record.Content -PathType Container)) {
+      continue
+    }
+    Assert-SafeInstallRoot $record.RestoreDestination 'Restore destination'
+    foreach ($entry in @(Get-ChildItem -LiteralPath $record.Content -Force)) {
+      if (Test-Path -LiteralPath (Join-Path $record.RestoreDestination $entry.Name)) {
+        $collisionNames += $entry.Name
+      }
+    }
+  }
+
+  if ($collisionNames.Count -gt 0) {
+    $remainingRecords = @()
+    foreach ($record in $validatedRecords) {
+      if (-not (Test-Path -LiteralPath $record.Content -PathType Container)) {
+        continue
+      }
+      $remainingRecords += @{
+        Source = $record.Source
+        Target = $record.Target
+        RestoreDestination = $record.RestoreDestination
+        Stash = $record.Stash
+        Entries = @($record.Content | Get-ChildItem -Force | ForEach-Object { $_.Name })
+      }
+    }
+    Write-Journal @{
+      SchemaVersion = 3
+      Phase = 'restore-conflict'
+      Records = $remainingRecords
+    }
+    throw ('Preserved install content conflicts with existing paths: ' + ($collisionNames -join ', '))
+  }
+
+  $movedEntries = 0
+  foreach ($record in $validatedRecords) {
     if (-not (Test-Path -LiteralPath $record.Content -PathType Container)) {
       if (Test-Path -LiteralPath $record.Stash) {
         Remove-Item -LiteralPath $record.Stash -Recurse -Force
@@ -94,48 +131,29 @@ function Invoke-RestoreJournal {
       continue
     }
 
-    Assert-SafeInstallRoot $record.RestoreDestination 'Restore destination'
     [IO.Directory]::CreateDirectory($record.RestoreDestination) | Out-Null
-    $collisions = @()
     foreach ($entry in @(Get-ChildItem -LiteralPath $record.Content -Force)) {
-      $destinationEntry = Join-Path $record.RestoreDestination $entry.Name
-      if (Test-Path -LiteralPath $destinationEntry) {
-        $collisions += $entry.Name
-        continue
+      Move-Item -LiteralPath $entry.FullName -Destination (Join-Path $record.RestoreDestination $entry.Name)
+      $movedEntries += 1
+      if ($movedEntries -eq 1) {
+        Invoke-InstallerFaultPoint 'restore.after_first_entry'
       }
-      Move-Item -LiteralPath $entry.FullName -Destination $destinationEntry
     }
-
-    if ($collisions.Count -gt 0) {
-      $remainingRecords += @{
-        Source = $record.Source
-        Target = $record.Target
-        RestoreDestination = $record.RestoreDestination
-        Stash = $record.Stash
-        Entries = $collisions
-      }
-    } else {
-      Remove-Item -LiteralPath $record.Stash -Recurse -Force
-    }
-  }
-
-  if ($remainingRecords.Count -gt 0) {
-    $updated = @{
-      SchemaVersion = 3
-      Phase = 'restore-conflict'
-      Records = $remainingRecords
-    }
-    Write-Journal $updated
-    $collisionNames = @($remainingRecords | ForEach-Object { $_['Entries'] })
-    throw ('Preserved install content conflicts with existing paths: ' + ($collisionNames -join ', '))
+    Remove-Item -LiteralPath $record.Stash -Recurse -Force
   }
 
   Remove-Journal
 }
 
+function Write-PrepareDiagnostic([string]$Phase) {
+  Write-InstallerDiagnostic "PREPARE phase=$Phase"
+}
+
 function Invoke-Prepare {
+  Write-PrepareDiagnostic 'restore-journal'
   Invoke-RestoreJournal
 
+  Write-PrepareDiagnostic 'resolve-paths'
   $primarySource = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
   $secondarySource = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SECONDARY_SOURCE')
   $registeredSources = @(Get-InstallSources $true $true)
@@ -146,6 +164,7 @@ function Invoke-Prepare {
     throw 'KUN_INSTALLER_TARGET is required.'
   }
 
+  Write-PrepareDiagnostic 'validate-sources'
   Assert-SafeInstallRoot $target 'Target'
   if ((Test-Path -LiteralPath $target) -and -not (Test-Path -LiteralPath $target -PathType Container)) {
     throw "The target exists but is not a directory: $target"
@@ -189,6 +208,7 @@ function Invoke-Prepare {
     }
   }
 
+  Write-PrepareDiagnostic 'inspect-payloads'
   $preparedSources = @()
   foreach ($source in $sources) {
     $entries = @(Get-ChildItem -LiteralPath $source -Force)
@@ -215,11 +235,17 @@ function Invoke-Prepare {
     }
   }
 
+  Write-PrepareDiagnostic 'stop-processes'
   $stopResult = Stop-AppProcesses @($sources + $target)
   if ($stopResult.Outcome -ne 'stopped') {
     throw 'Unable to stop verified application processes before migration.'
   }
+  if (Test-AutomaticUpdateRequested) {
+    Write-PrepareDiagnostic 'initialize-transaction'
+    Initialize-UpdateTransaction
+  }
 
+  Write-PrepareDiagnostic 'preserve-user-files'
   $journal = @{
     SchemaVersion = 3
     Phase = 'preserving'
@@ -332,5 +358,25 @@ function Remove-EmptyLegacyContainers {
       Assert-SafeInstallRoot $candidate 'Empty legacy container'
       Remove-Item -LiteralPath $candidate -Force
     }
+  }
+}
+
+function Assert-UpdateHealthResult {
+  $transaction = Read-UpdateTransaction
+  if ($null -eq $transaction) { throw 'The automatic update transaction is unavailable.' }
+  $path = Normalize-FullPath ([string]$transaction.HealthResult)
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'The candidate application did not report update health.' }
+  $result = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+  $messageProperty = $result.PSObject.Properties['message']
+  $healthMessage = if ($null -eq $messageProperty) { '' } else { ([string]$messageProperty.Value -replace '[\r\n]+', ' ').Trim() }
+  Write-InstallerDiagnostic "HEALTH_RESULT ok=$([bool]$result.ok) version=$([string]$result.version) message=$healthMessage"
+  $versionMismatch = -not [string]::IsNullOrWhiteSpace([string]$transaction.NewVersion) -and
+    -not [string]::Equals([string]$result.version, [string]$transaction.NewVersion, [StringComparison]::OrdinalIgnoreCase)
+  if (-not [bool]$result.ok -or
+      $versionMismatch -or
+      -not [string]::Equals([string]$result.token, [string]$transaction.HealthToken, [StringComparison]::Ordinal) -or
+      -not (Test-PathEqual ([string]$result.installDir) ([string]$transaction.Target))) {
+    $detail = if ([string]::IsNullOrWhiteSpace($healthMessage)) { '' } else { " $healthMessage" }
+    throw "The candidate application failed the update health handshake.$detail"
   }
 }

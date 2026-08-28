@@ -47,7 +47,8 @@ const electronMock = vi.hoisted(() => ({
   showItemInFolder: vi.fn(),
   appLocale: 'en-US',
   userDataPath: '/tmp/kun-user-data',
-  setBadgeCount: vi.fn(() => true)
+  setBadgeCount: vi.fn(() => true),
+  writeText: vi.fn()
 }))
 const uiPluginMocks = vi.hoisted(() => ({
   ensureBundledUiPlugins: vi.fn(async () => undefined),
@@ -85,6 +86,7 @@ vi.mock('electron', () => ({
     setBadgeCount: electronMock.setBadgeCount
   },
   dialog: { showMessageBox: electronMock.showMessageBox },
+  clipboard: { writeText: electronMock.writeText },
   shell: {
     openPath: electronMock.openPath,
     showItemInFolder: electronMock.showItemInFolder
@@ -251,13 +253,16 @@ export function expectRendererModelCredentialsRedacted(value: unknown): void {
   expect(projected.provider.apiKey).toBe('')
   expect(projected.provider.providers.every((provider) => provider.apiKey === '')).toBe(true)
   expect(projected.agents.kun.apiKey).toBe('')
-  // These custom capability secrets have not migrated to Registry ownership;
-  // preserving them avoids erasing the key on an adjacent settings edit.
-  expect(projected.agents.kun.imageGeneration.apiKey).toBe('image-secret')
-  expect(projected.agents.kun.speechToText.apiKey).toBe('speech-to-text-secret')
-  expect(projected.agents.kun.textToSpeech.apiKey).toBe('text-to-speech-secret')
-  expect(projected.agents.kun.musicGeneration.apiKey).toBe('music-secret')
-  expect(projected.agents.kun.videoGeneration.apiKey).toBe('video-secret')
+  expect(projected.agents.kun.imageGeneration.apiKey).toBe('')
+  expect(projected.agents.kun.imageGeneration.apiKeyConfigured).toBe(true)
+  expect(projected.agents.kun.speechToText.apiKey).toBe('')
+  expect(projected.agents.kun.speechToText.apiKeyConfigured).toBe(true)
+  expect(projected.agents.kun.textToSpeech.apiKey).toBe('')
+  expect(projected.agents.kun.textToSpeech.apiKeyConfigured).toBe(true)
+  expect(projected.agents.kun.musicGeneration.apiKey).toBe('')
+  expect(projected.agents.kun.musicGeneration.apiKeyConfigured).toBe(true)
+  expect(projected.agents.kun.videoGeneration.apiKey).toBe('')
+  expect(projected.agents.kun.videoGeneration.apiKeyConfigured).toBe(true)
   expect(projected.agents.kun.runtimeToken).toBe('runtime-auth-token')
 }
 
@@ -267,6 +272,7 @@ export function registerOptions(overrides: Partial<Parameters<typeof import('./r
   return {
     store: { load: vi.fn(async () => settings()) } as never,
     getMainWindow: () => null,
+    assertRendererRuntimeReady: () => undefined,
     applySettingsPatch,
     saveSettingsPatch,
     resetUnreadableCredentials: vi.fn(async () => ({
@@ -320,6 +326,7 @@ export function resetAppIpcHandlerTestState(): void {
     electronMock.openPath.mockClear()
     electronMock.showItemInFolder.mockClear()
     electronMock.setBadgeCount.mockClear()
+    electronMock.writeText.mockClear()
     uiPluginMocks.ensureBundledUiPlugins.mockClear()
     uiPluginMocks.installUiPluginFromDirectory.mockReset()
     uiPluginMocks.listUiPlugins.mockReset()

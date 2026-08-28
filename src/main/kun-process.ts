@@ -56,7 +56,6 @@ import {
 } from './claw-schedule-mcp-config'
 import { defaultKunDataDir } from './runtime/kun-adapter'
 import { resolveClaudeBinary } from './agent-sdk-installer'
-import { resolveAntigravityCliBinary } from './antigravity-cli'
 import type { KunUnexpectedExitInfo } from './runtime/kun-process-controller'
 import {
   waitForKunStartup
@@ -113,11 +112,26 @@ import {
 } from '../../kun/src/cli/runtime-flavor.js'
 import {
   ensureServiceManager,
-  resolveServiceManager,
+  ensureServiceManagerWithStartLockHeld,
+  type LegacyRuntimeHandoverStatus,
   type ServiceManagerConnection
 } from '../../kun/src/manager/manager-client.js'
+import {
+  defaultKunControlDir,
+  withManagerStartLock
+} from '../../kun/src/manager/manager-discovery.js'
 import { configureManagerAtomicJsonClient } from '../../kun/src/extensions/atomic-json.js'
 import { handoffExistingKunServiceManagerForDataDir } from './runtime/service-manager-build-handoff'
+import {
+  drainKunOwnersForHandoff,
+  drainKunOwnersForHandoffWithLock,
+  installedBuildProbeError,
+  probeInstalledBuildHandoff
+} from './runtime/kun-installed-build-handoff'
+import {
+  createHandoffEventReporter,
+  type HandoffEventListener
+} from './runtime/kun-handoff-events'
 
 import {
   appendTail,
@@ -161,21 +175,11 @@ export async function resolveKunManagerDataDirFromSettings(
   }
 }
 
-async function handoffMismatchedKunServiceManager(
-  dataDir: string,
-  settingsPath: string,
-  expectedBuildId: string | undefined
-): Promise<void> {
-  const existing = await resolveServiceManager()
-  if (!existing) return
-  await handoffExistingKunServiceManagerForDataDir(existing, dataDir, settingsPath, {
-    force: Boolean(expectedBuildId) && existing.discovery.buildId !== expectedBuildId
-  })
-}
-
 export async function ensureKunServiceManager(input: {
   dataDir?: string
   settingsPath: string
+  onLegacyHandoverStatus?: (status: LegacyRuntimeHandoverStatus) => void
+  onHandoffEvent?: HandoffEventListener
 }): Promise<ServiceManagerConnection> {
   serviceManagerSettingsPath = input.settingsPath
   const dataDir = input.dataDir ?? defaultKunDataDir()
@@ -187,11 +191,12 @@ export async function ensureKunServiceManager(input: {
     )
   }
   const buildId = await resolveKunRuntimeBuildId(resolution)
-  await handoffMismatchedKunServiceManager(dataDir, input.settingsPath, buildId)
   const managerEntry = join(dirname(serveEntry), '..', 'manager', 'manager-entry.js')
   const flavor = resolveCliRuntimeFlavor({ env: process.env })
-  const manager = await ensureServiceManager({
+  const controlDir = defaultKunControlDir()
+  const managerInput = {
     flavor,
+    controlDir,
     allowDevelopmentBootstrap: allowsDevelopmentManagerBootstrap({
       flavor,
       env: process.env,
@@ -204,9 +209,65 @@ export async function ensureKunServiceManager(input: {
       command: resolveNodeScriptCommand(process.execPath),
       args: [managerEntry],
       runAsNode: true
+    },
+    ...(input.onLegacyHandoverStatus ? { onLegacyHandoverStatus: input.onLegacyHandoverStatus } : {})
+  }
+  let manager: ServiceManagerConnection
+  const handoffInput = {
+    reason: 'installed-build-change' as const,
+    dataDirs: [dataDir],
+    settingsPath: input.settingsPath,
+    controlDir,
+    onEvent: createHandoffEventReporter(input.onHandoffEvent),
+    ...(buildId ? { targetBuildId: buildId } : {})
+  }
+  if (app.isPackaged && flavor === 'production') {
+    const probe = await probeInstalledBuildHandoff(handoffInput)
+    const probeError = installedBuildProbeError(handoffInput, probe)
+    if (probeError) throw probeError
+    if (probe === 'mismatched') {
+      manager = await withManagerStartLock(controlDir, async () => {
+        // Recheck after acquiring the election lock so a replacement that won
+        // the race before us is not interrupted unnecessarily.
+        const lockedProbe = await probeInstalledBuildHandoff(handoffInput)
+        const lockedProbeError = installedBuildProbeError(handoffInput, lockedProbe)
+        if (lockedProbeError) throw lockedProbeError
+        if (lockedProbe === 'mismatched') {
+          await drainKunOwnersForHandoffWithLock(handoffInput)
+        }
+        return ensureServiceManagerWithStartLockHeld(managerInput)
+      })
+    } else {
+      manager = await ensureServiceManager(managerInput)
     }
-  })
+  } else {
+    manager = await ensureServiceManager(managerInput)
+  }
   return configureKunManagerDataPlaneForCurrentProcess(manager)
+}
+
+export async function preparePackagedKunBuildHandoff(input: {
+  dataDir: string
+  settingsPath: string
+  onHandoffEvent?: HandoffEventListener
+}): Promise<boolean> {
+  const flavor = resolveCliRuntimeFlavor({ env: process.env })
+  if (!app.isPackaged || flavor !== 'production') return false
+  const buildId = await resolveKunRuntimeBuildId(resolveKunExecutable(appRoot(), ''))
+  const handoffInput = {
+    reason: 'installed-build-change' as const,
+    dataDirs: [input.dataDir],
+    settingsPath: input.settingsPath,
+    controlDir: defaultKunControlDir(),
+    onEvent: createHandoffEventReporter(input.onHandoffEvent),
+    ...(buildId ? { targetBuildId: buildId } : {})
+  }
+  const probe = await probeInstalledBuildHandoff(handoffInput)
+  const probeError = installedBuildProbeError(handoffInput, probe)
+  if (probeError) throw probeError
+  if (probe === 'matched') return false
+  await drainKunOwnersForHandoff(handoffInput)
+  return true
 }
 
 /**
@@ -248,6 +309,10 @@ function appRoot(): string {
     : app.getAppPath()
 }
 
+export function resolveKunExecutableForCurrentApp(): ReturnType<typeof resolveKunExecutable> {
+  return resolveKunExecutable(appRoot(), '')
+}
+
 function resolveNodeScriptCommand(command: string): string {
   if (command !== process.execPath) return command
   if (process.platform !== 'darwin') return command
@@ -271,11 +336,9 @@ function expandHomePath(path: string): string {
   }
   return path
 }
-
 export function isKunChildRunning(): boolean {
   return processController.isRunning()
 }
-
 function isCurrentKunChildPid(pid: number): boolean {
   return processController.isCurrentPid(pid)
 }
@@ -449,7 +512,6 @@ async function prepareKunLaunch(
     (provider) => provider.id?.trim() === getKunRuntimeSettings(settings).providerId.trim()
   )?.kind
   const claudeBinary = resolveClaudeBinary(app.getPath('userData'), [join(appRoot(), 'kun')])
-  const antigravityBinary = resolveAntigravityCliBinary(app.getPath('userData'))
   const officeCliBinary = resolveOfficeCliBinary({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
@@ -469,7 +531,6 @@ async function prepareKunLaunch(
     KUN_PPT_TOOLCHAIN_DIR: pptToolchainDirectory,
     ...(activeProviderKind ? { KUN_RUNTIME_PROVIDER_KIND: activeProviderKind } : {}),
     ...(claudeBinary ? { KUN_CLAUDE_BINARY: claudeBinary } : {}),
-    ...(antigravityBinary ? { KUN_ANTIGRAVITY_BINARY: antigravityBinary } : {}),
     ...(officeCliBinary ? { KUN_OFFICECLI_BINARY: officeCliBinary } : {}),
     ...(browserUseBridge
       ? {

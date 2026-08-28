@@ -95,6 +95,7 @@ export type TurnContextResolverDeps = {
   blockedSkillIds?: readonly string[]
   runtimeDataDir?: string
   fastContext?: boolean
+  fastContextScopeId?: string
   fastContextTaskCount?: number
 }
 
@@ -211,6 +212,7 @@ export class TurnContextResolver {
       ...(this.deps.blockedSkillIds ? { blockedSkillIds: this.deps.blockedSkillIds } : {}),
       ...(this.deps.runtimeDataDir ? { runtimeDataDir: this.deps.runtimeDataDir } : {}),
       ...(this.deps.fastContext ? { fastContext: true } : {}),
+      ...(this.deps.fastContextScopeId ? { fastContextScopeId: this.deps.fastContextScopeId } : {}),
       ...(this.deps.fastContextTaskCount ? { fastContextTaskCount: this.deps.fastContextTaskCount } : {}),
       interactiveToolBridge: this.deps.interactiveToolBridge
     })
@@ -263,13 +265,14 @@ async function listModelTools(
   toolHost: Pick<ToolHost, 'listTools'>,
   contexts: readonly ToolHostContext[]
 ): Promise<DiscoveredTool[]> {
+  const listings = await Promise.all(contexts.map((context) => toolHost.listTools(context)))
   const byName = new Map<string, DiscoveredTool>()
-  for (const context of contexts) {
-    for (const tool of await toolHost.listTools(context)) {
+  for (const tools of listings) {
+    for (const tool of tools) {
       if (!byName.has(tool.name)) byName.set(tool.name, tool)
     }
   }
-  return [...byName.values()]
+  return [...byName.values()].sort((left, right) => left.name.localeCompare(right.name))
 }
 
 export function resolveTurnClientSurface(turn: Pick<

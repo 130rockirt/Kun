@@ -1,4 +1,7 @@
 import { describe, expect, test, vi } from 'vitest'
+import { CapabilityRegistry } from '../../adapters/tool/capability-registry.js'
+import { LocalToolHost } from '../../adapters/tool/local-tool-host.js'
+import type { ToolHostContext } from '../../ports/tool-host.js'
 import {
   buildCursorCustomTools,
   selectCursorBridgeTools,
@@ -23,6 +26,13 @@ const tools: CursorBridgeTool[] = [{
   inputSchema: { type: 'object' },
   providerId: 'extension:render',
   providerKind: 'extension'
+}, {
+  name: 'render_chart',
+  description: 'Render a governed chart',
+  toolKind: 'tool_call',
+  inputSchema: { type: 'object' },
+  providerId: 'chart',
+  providerKind: 'gui'
 }, {
   name: 'read',
   description: 'Overlaps Cursor built-in read',
@@ -94,6 +104,26 @@ const tools: CursorBridgeTool[] = [{
   providerKind: 'built-in'
 }]
 
+const toolContext: ToolHostContext = {
+  threadId: 'thread_1',
+  turnId: 'turn_1',
+  workspace: '/workspace',
+  approvalPolicy: 'auto',
+  sandboxMode: 'danger-full-access',
+  abortSignal: new AbortController().signal,
+  awaitApproval: async () => 'allow'
+}
+
+function localTool(name: string) {
+  return LocalToolHost.defineTool({
+    name,
+    description: `${name} tool`,
+    inputSchema: { type: 'object' },
+    policy: 'auto',
+    execute: async () => ({ output: null })
+  })
+}
+
 describe('Cursor SDK Kun custom-tool bridge', () => {
   test('bridges Kun-exclusive tools while excluding overlap and internal-only tools', () => {
     expect(selectCursorBridgeTools(tools).map((tool) => [
@@ -104,8 +134,22 @@ describe('Cursor SDK Kun custom-tool bridge', () => {
     ])).toEqual([
       ['mcp_call_tool', 'tool_call', 'mcp:facade', 'mcp'],
       ['extension_render', 'tool_call', 'extension:render', 'extension'],
+      ['render_chart', 'tool_call', 'chart', 'gui'],
       ['  padded_tool  ', 'command_execution', 'builtin', 'built-in']
     ])
+  })
+
+  test('receives one canonical input tool with a legacy-only fallback', () => {
+    const both = CapabilityRegistry.fromLocalTools([
+      localTool('user_input'),
+      localTool('request_user_input')
+    ])
+    const legacy = CapabilityRegistry.fromLocalTools([localTool('request_user_input')])
+
+    expect(selectCursorBridgeTools(both.listTools(toolContext)).map((entry) => entry.name))
+      .toEqual(['user_input'])
+    expect(selectCursorBridgeTools(legacy.listTools(toolContext)).map((entry) => entry.name))
+      .toEqual(['request_user_input'])
   })
 
   test('does not advertise overlapping Cursor built-ins as custom tools', () => {
@@ -115,6 +159,7 @@ describe('Cursor SDK Kun custom-tool bridge', () => {
     }
     expect(customTools.mcp_call_tool).toBeDefined()
     expect(customTools.extension_render).toBeDefined()
+    expect(customTools.render_chart).toBeDefined()
   })
 
   test('maps Cursor callbacks to Kun execution and preserves call identity and provenance', async () => {

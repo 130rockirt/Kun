@@ -82,6 +82,7 @@ import {
   threadSnapshotLooksRunning,
   threadBelongsToWorkspace
 } from './chat-store-runtime-helpers'
+import { restoredLiveProjection } from './chat-store-live-projection'
 import {
   WRITE_ASSISTANT_THREAD_TITLE,
   activeWriteThreadForWorkspace,
@@ -424,11 +425,13 @@ export function createThreadCreationActions(
         latestTurnStatus,
         latestTurnOrchestration,
         latestUserMessageId,
+        latestTurnStartedAtMs,
         turnDurationByUserId = {},
         goal,
         todos,
         historyCursor,
-        hasMoreHistory = false
+        hasMoreHistory = false,
+        liveProjection
       } = await p.getThreadDetail(activeThreadId)
       if (!recoveryStillCurrent()) return state.busy
       const loaded = hydrateBlockModelLabels(activeThreadId, rawBlocks)
@@ -459,6 +462,8 @@ export function createThreadCreationActions(
         }
         return {
           activeThreadId,
+          threadLoadingId: !busy && snapshot.threadLoadingId === activeThreadId
+            ? null : snapshot.threadLoadingId,
           activeThreadGoal: goal ?? null,
           activeThreadTodos: todos ?? null,
           threadHistoryCursor: historyCursor ?? null,
@@ -466,16 +471,16 @@ export function createThreadCreationActions(
           threadHistoryLoading: false,
           blocks,
           lastSeq: latestSeq,
-          // Re-baseline the shared delta floor to this subscription's since_seq,
-          // in lockstep with the liveAssistant reset below.
-          liveDeltaSeqFloor: latestSeq,
-          liveReasoning: '',
-          liveAssistant: '',
+          ...restoredLiveProjection(latestSeq, busy ? liveProjection : undefined),
           error: busy ? runtimeStreamRecoveringMessage() : null,
           busy,
+          // Recovery re-read a persisted snapshot; its running claim stays
+          // unconfirmed until the live stream proves the turn is alive.
+          busyUnconfirmed: busy,
           currentTurnId,
           currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
           currentTurnUserId,
+          currentTurnStartedAtMs: busy ? latestTurnStartedAtMs ?? null : null,
           turnDurationByUserId,
           queuedMessages,
           watchTurnCompletion,
@@ -493,7 +498,12 @@ export function createThreadCreationActions(
 
       const ac = new AbortController()
       sseAbortRef.current = ac
-      const sink = buildThreadEventSink(set, get, { threadId: activeThreadId, signal: ac.signal, sinceSeq: latestSeq })
+      const sink = buildThreadEventSink(set, get, {
+        threadId: activeThreadId,
+        signal: ac.signal,
+        sinceSeq: latestSeq,
+        awaitReplaySynchronization: busy
+      })
       subscribeThreadEventsWithRecovery(p, activeThreadId, latestSeq, sink, ac.signal, get)
       if (busy) {
         armBusyWatchdog(set, get)

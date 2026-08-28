@@ -64,7 +64,9 @@ export function createServerRuntimeComposition(
     routePoolTests,
     providerQuotaService,
     modelConnectionOAuth,
+    officialProviderCli,
     officialProviderAuth,
+    gatewayCredentials,
     stopExtensionModelListener
   } = model
   const {
@@ -131,6 +133,9 @@ export function createServerRuntimeComposition(
       activeCaptures: llmDebug?.activeCaptureCount ?? 0
     }),
     startBackgroundMaintenance: () => backgroundMaintenance.start(),
+    inspectThreadStore: () => services.threadStoreGuardian.run(),
+    sessionGuardian: services.sessionGuardian,
+    threadSnapshots: services.threadSnapshots,
     approvalGate,
 	    userInputGate,
 	    workspaceInspector,
@@ -189,14 +194,16 @@ export function createServerRuntimeComposition(
 	    },
 	    modelClient,
 	    modelGateway: {
-	      enabled: () => config.activeOptions.localModelGateway?.enabled === true,
+	      enabled: () => config.activeOptions.localModelGateway?.enabled === true && gatewayCredentials.hasKey(),
 	      pools: () => modelClient.routePools(),
 	      configuredPools: () => modelClient.configuredPools(),
 	      health: routeHealth,
-	      tests: routePoolTests
+	      tests: routePoolTests,
+	      credentials: gatewayCredentials
 	    },
 	    modelConnections,
 	    modelConnectionOAuth,
+	    officialProviderCli,
 	    officialProviderAuth,
 	    providerQuotaService,
 	    get defaultModel() {

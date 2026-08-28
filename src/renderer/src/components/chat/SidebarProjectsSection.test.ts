@@ -215,36 +215,48 @@ describe('SidebarProjectsSection collapse memory', () => {
 
 describe('SidebarProjectsSection project expansion', () => {
   const expansionTranslation = (key: string, options?: Record<string, unknown>): string =>
-    key === 'sidebarWorkspaceShowMore'
-      ? `sidebarWorkspaceShowMore:${String(options?.count)}`
-      : key
+    key === 'sidebarWorkspaceShowMore' ? `sidebarWorkspaceShowMore:${String(options?.count)}` : key
+  const cindyThreads = (count: number) => Array.from({ length: count }, (_, index) => thread({
+    id: `cindy-${index + 1}`, title: `Cindy ${index + 1}`, workspace: '/Users/zxy/cindy',
+    updatedAt: `2026-06-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`
+  }))
 
   it('does not use a global thread total as a project remaining count', () => {
-    const cindyThreads = Array.from({ length: 6 }, (_, index) => thread({
-      id: `cindy-${index + 1}`,
-      title: `Cindy ${index + 1}`,
-      workspace: '/Users/zxy/cindy',
-      updatedAt: `2026-06-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`
-    }))
-
     const html = renderToStaticMarkup(createElement(SidebarProjectsSection, sidebarProjectProps({
-      threads: cindyThreads,
-      workspaceRoot: '/Users/zxy/cindy',
+      threads: cindyThreads(6), workspaceRoot: '/Users/zxy/cindy',
       workspaceRoots: ['/Users/zxy/cindy', '/Users/zxy/other'],
       threadListCursorByWorkspace: {
-        '/users/zxy/other': {
-          workspaceKey: '/users/zxy/other',
-          hasMore: false,
-          total: 1040
-        }
-      },
-      t: expansionTranslation
+        '/users/zxy/other': { workspaceKey: '/users/zxy/other', hasMore: false, total: 1040 }
+      }, t: expansionTranslation
     })))
-
     expect(html).toContain('sidebarWorkspaceShowMore:1')
     expect(html).not.toContain('sidebarWorkspaceShowMore:1034')
   })
 
+  it.each([[6, 'Cindy 6'], [5, null]])(
+    'expands %i loaded threads before requesting the remote page', async (count, newlyVisibleTitle) => {
+      const onLoadMoreThreads = vi.fn()
+      let renderer: ReactTestRenderer | null = null
+      await act(async () => { renderer = createRenderer(createElement(SidebarProjectsSection, sidebarProjectProps({
+        threads: cindyThreads(count), workspaceRoot: '/Users/zxy/cindy', workspaceRoots: ['/Users/zxy/cindy'],
+        onLoadMoreThreads, threadListCursorByWorkspace: {
+          '/users/zxy/cindy': {
+            workspaceKey: '/users/zxy/cindy', mode: 'active', status: 'unknown', hasMore: true
+          }
+        }, t: expansionTranslation
+      }))) })
+      const findButton = (prefix: string) => renderer!.root.find((node) => node.type === 'button'
+        && String(node.props.children).startsWith(prefix))
+      if (newlyVisibleTitle) {
+        await act(async () => { findButton('sidebarWorkspaceShowMore:').props.onClick() })
+        expect(onLoadMoreThreads).not.toHaveBeenCalled()
+        expect(JSON.stringify(renderer!.toJSON())).toContain(newlyVisibleTitle)
+      }
+      await act(async () => { findButton('sidebarWorkspaceLoadMore').props.onClick() })
+      expect(onLoadMoreThreads).toHaveBeenCalledTimes(1)
+      ;(renderer as ReactTestRenderer | null)?.unmount()
+    }
+  )
 })
 
 describe('SidebarProjectsSection groups', () => {
@@ -602,7 +614,7 @@ describe('SidebarProjectsSection groups', () => {
     ).toEqual(['thread-normal', 'thread-sdd-active-build'])
   })
 
-  it('prioritizes running threads, then unread threads, while preserving each bucket order', () => {
+  it('keeps row order stable instead of prioritizing activity buckets', () => {
     const base = [
       thread({ id: 'read-newer', workspace: '/tmp/app' }),
       thread({ id: 'running-status', workspace: '/tmp/app', status: 'running' }),
@@ -619,11 +631,11 @@ describe('SidebarProjectsSection groups', () => {
     }
 
     expect(prioritizeSidebarThreadActivity(base, context).map((item) => item.id)).toEqual([
-      'running-status',
-      'running-watched',
-      'unread-first',
-      'unread-second',
       'read-newer',
+      'running-status',
+      'unread-first',
+      'running-watched',
+      'unread-second',
       'read-older'
     ])
   })
@@ -656,7 +668,7 @@ describe('SidebarProjectsSection groups', () => {
     expect(prioritizeSidebarThreadActivity([viewed, running], {
       ...context,
       unreadThreadIds: {}
-    }).map((item) => item.id)).toEqual(['running', 'viewed'])
+    }).map((item) => item.id)).toEqual(['viewed', 'running'])
   })
 
   it('sorts pinned threads before newer unpinned threads', () => {

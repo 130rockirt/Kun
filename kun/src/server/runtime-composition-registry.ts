@@ -9,7 +9,9 @@ import {
   buildTodoLocalTools,
   buildDelegationToolProviders,
   buildComponentDesignToolProviders,
+  buildDiagramVisualizationToolProvider,
   buildConversationVisualizationToolProvider,
+  buildChartToolProvider,
   protocolSupportsImageEdit,
   buildRuntimeCapabilityManifest,
   DEFAULT_APPROVAL_REVIEWER,
@@ -340,7 +342,7 @@ export function createRuntimeRegistry(
     ...buildDelegationToolProviders(delegationRuntime, subagentRouter),
     ...buildFastContextToolProvider(
       delegationRuntime,
-      () => core.activeOptions.lab?.fastContext
+      () => core.activeOptions.fastContext
     ),
     ...buildPptAgentToolProvider(
       delegationRuntime,
@@ -357,7 +359,14 @@ export function createRuntimeRegistry(
       turnService
     ),
     ...buildComponentDesignToolProviders(delegationRuntime),
+    ...buildDiagramVisualizationToolProvider(
+      () => core.activeOptions.lab?.conversationVisualization,
+      delegationRuntime
+    ),
     ...buildConversationVisualizationToolProvider(
+      () => core.activeOptions.lab?.conversationVisualization
+    ),
+    ...buildChartToolProvider(
       () => core.activeOptions.lab?.conversationVisualization
     )
   ])

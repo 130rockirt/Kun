@@ -472,6 +472,8 @@ function scrubDesktopEnvironment(environment) {
       exactOverrides.has(key) ||
       (key.startsWith('KUN_') &&
         key !== 'KUN_PACKAGED_EXTENSION_DESKTOP_SMOKE' &&
+        key !== 'KUN_PACKAGED_UPDATE_HANDOFF_SMOKE' &&
+        key !== 'KUN_PACKAGED_UPDATE_HANDOFF_DENY_INSPECTION' &&
         key !== 'KUN_DISABLE_OS_CREDENTIAL_STORE') ||
       key.startsWith('DEEPSEEK_')
     ) {
@@ -504,7 +506,15 @@ function createDesktopLaunchPlan({
 
 function platformDesktopArguments(platform = process.platform) {
   if (platform !== 'linux') return []
-  return ['--disable-gpu', '--disable-dev-shm-usage']
+  const args = ['--disable-gpu', '--disable-dev-shm-usage']
+  if (
+    process.env.CI === 'true' &&
+    process.env.KUN_CI_ALLOW_NO_SANDBOX === '1' &&
+    process.env.KUN_CI_NO_SANDBOX_ACTIVE === '1'
+  ) {
+    args.push('--no-sandbox')
+  }
+  return args
 }
 
 function runPackagedKun(executable, runtimeEntry, args, environment, timeoutMs = DEFAULT_TIMEOUT_MS) {

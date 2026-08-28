@@ -10,7 +10,9 @@ import { presentationFileArtifactsForTurn } from './presentation-file-artifacts'
 import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
 import { ProcessSectionRow, groupProcessSections, summarizeToolBlock } from './message-timeline-process'
 import { ComponentPrototypeCard } from './ComponentPrototypeCard'
+import { DiagramPrototypeCard } from './DiagramPrototypeCard'
 import { ConversationVisualizationCard } from './ConversationVisualizationCard'
+import { ChartRenderer } from './ChartRenderer'
 import type { OpenChildThreadHandler } from './SubagentCallCard'
 import {
   AnimatedWorkLogo,
@@ -24,12 +26,14 @@ import {
 import type { UiPluginLabelKey } from '@shared/ui-plugin'
 import { useUiPluginWorkLabel } from '../../store/ui-plugin-store'
 import { sameTurnContent, splitThink, type Turn } from './message-timeline-turns'
-import { extractPlanMetadataFromBlock } from '../../plan/plan-tool'
+import { extractPlanMetadataFromBlock, type GuiPlanToolMeta } from '../../plan/plan-tool'
 import { planDisplayNameFromRelativePath } from '../../plan/plan-path'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { TimelineRuntimeError, liveTurnProgressClass } from './message-timeline-jump-preview'
 import type { TurnUsageSummary } from '../../hooks/use-turn-usage'
 import { TurnUsageRow } from './TurnUsageRow'
+import { hasLivePendingUserInput } from '../../store/chat-store-runtime-helpers'
+import { CircleHelp } from 'lucide-react'
 
 export type ConversationTurnProps = {
   turn: Turn
@@ -41,8 +45,8 @@ export type ConversationTurnProps = {
   devPreviewCard?: ReactElement | null
   planActionsBusy?: boolean
   graphEnabled?: boolean
-  onBuildPlan?: (orchestration: PlanBuildOrchestration) => void
-  onOpenPlan?: () => void
+  onBuildPlan?: (orchestration: PlanBuildOrchestration, meta?: GuiPlanToolMeta) => void
+  onOpenPlan?: (meta?: GuiPlanToolMeta) => void
   onOpenChanges?: () => void
   onReviewChanges?: () => void
   reviewChangesDisabled?: boolean
@@ -116,9 +120,11 @@ export function ConversationTurn({
     runtimeErrorsBeforeFinalContent,
     runtimeErrorsAfterFinalContent,
     componentPrototypeBlocks,
+    diagramPrototypeBlocks,
     conversationVisualizationBlocks,
     generatedFileBlocks,
-    turnFileChanges
+    turnFileChanges,
+    chartBlocks
   } = useMemo(
     () =>
       deriveTurnSections({
@@ -212,6 +218,9 @@ export function ConversationTurn({
       updatedAt: activity.updatedAt ?? ''
     })
   }, [liveToolBlock])
+  // A live user_input gate means the turn is parked waiting for the user, not
+  // computing. Surface that instead of the generic "thinking" label.
+  const awaitingUserInput = isProcessing && hasLivePendingUserInput(turn.blocks)
   const showLiveThinking = Boolean(liveProcessText.trim()) && !liveChildActivityLabel && !liveToolBlock
   const forkFromTurn = async (): Promise<void> => {
     if (!allowMainThreadActions || !forkTurnId || forking) return
@@ -294,8 +303,20 @@ export function ConversationTurn({
         />
       ))}
 
+      {diagramPrototypeBlocks.map((block) => (
+        <DiagramPrototypeCard
+          key={block.id}
+          block={block}
+          workspaceRoot={filePreviewWorkspaceRoot}
+        />
+      ))}
+
       {conversationVisualizationBlocks.map((block) => (
         <ConversationVisualizationCard key={block.id} block={block} />
+      ))}
+
+      {chartBlocks.map((block) => (
+        <ChartRenderer key={block.id} spec={block.spec} />
       ))}
 
       {assistantContentBlocks.map((block) => (
@@ -331,7 +352,7 @@ export function ConversationTurn({
       ) : null}
 
       {allowMainThreadActions && !isProcessing && forkTurnId ? (
-        <div className="flex justify-end">
+        <div className="flex justify-end pt-6">
           <button
             type="button"
             disabled={archiving}
@@ -376,8 +397,9 @@ export function ConversationTurn({
           relativePath={planResult.relativePath}
           busy={planActionsBusy === true}
           graphEnabled={graphEnabled}
-          onOpen={onOpenPlan}
-          onBuild={onBuildPlan}
+          planMeta={planResult}
+          onOpen={onOpenPlan ? () => onOpenPlan(planResult) : undefined}
+          onBuild={onBuildPlan ? (orchestration) => onBuildPlan(orchestration, planResult) : undefined}
         />
       ) : null}
 
@@ -397,6 +419,7 @@ export function ConversationTurn({
           tool={liveToolBlock}
           thinking={showLiveThinking}
           activityLabel={liveChildActivityLabel}
+          awaitingUserInput={awaitingUserInput}
         />
       ) : null}
     </div>
@@ -406,11 +429,13 @@ export function ConversationTurn({
 function LiveTurnProgressRow({
   tool,
   thinking,
-  activityLabel
+  activityLabel,
+  awaitingUserInput = false
 }: {
   tool?: Extract<ChatBlock, { kind: 'tool' }>
   thinking: boolean
   activityLabel?: string
+  awaitingUserInput?: boolean
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const swimMode = useWorkLogoSwimMode(true)
@@ -427,7 +452,9 @@ function LiveTurnProgressRow({
     swimLabelKey as UiPluginLabelKey,
     i18n.language ?? 'zh'
   )
-  const label = activityLabel
+  const label = awaitingUserInput
+    ? t('awaitingYourInput')
+    : activityLabel
     ? t('workingToolAction', { action: activityLabel })
     : thinking
       ? t('thinkingNow')
@@ -442,6 +469,7 @@ function LiveTurnProgressRow({
       label={label}
       ikunVariant={ikunVariant}
       swimMode={swimMode}
+      awaitingUserInput={awaitingUserInput}
     />
   )
 }
@@ -449,18 +477,31 @@ function LiveTurnProgressRow({
 function LiveTurnActivityRow({
   label,
   ikunVariant,
-  swimMode
+  swimMode,
+  awaitingUserInput = false
 }: {
   label: string
   ikunVariant?: IkunWorkLogoVariant
   swimMode?: WorkLogoSwimMode
+  awaitingUserInput?: boolean
 }): ReactElement {
   return (
     <div className={liveTurnProgressClass()}>
-      <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
-        <AnimatedWorkLogo active ikunVariant={ikunVariant} mode={swimMode} phase="trail" size="sm" />
+      {awaitingUserInput ? (
+        <CircleHelp
+          className="mr-0.5 h-4 w-4 shrink-0 text-amber-500 motion-safe:animate-pulse"
+          strokeWidth={2}
+          role="img"
+          aria-label={label}
+        />
+      ) : (
+        <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
+          <AnimatedWorkLogo active ikunVariant={ikunVariant} mode={swimMode} phase="trail" size="sm" />
+        </span>
+      )}
+      <span className={awaitingUserInput ? 'font-medium text-amber-600 dark:text-amber-300' : 'ds-shiny-text'}>
+        {label}
       </span>
-      <span className="ds-shiny-text">{label}</span>
     </div>
   )
 }

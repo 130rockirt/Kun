@@ -59,14 +59,11 @@ import {
   accountIdForComposerSelection,
   activeClawChannel,
   compactCodeWorkspaceRoots,
-  composerReasoningEffortForSelection,
   forgetCodeWorkspaceRoot,
   hydrateBlockModelLabels,
   isClawThread,
   optimisticUserModelLabel,
   readCodeWorkspaceRoots,
-  composerModeForThread,
-  readThreadComposerMode,
   rememberCodeWorkspaceRoots,
   rememberThreadComposerSelection,
   rememberTurnModel
@@ -128,16 +125,21 @@ import {
   watchTurnCompletionNotification
 } from './chat-store-runtime'
 import {
-  getThreadSnapshot,
+  clearedTurnTimingPatch,
+  getThreadSnapshotForSelection,
+  hydratedTurnTimingPatch,
   invalidateThreadSnapshot,
-  snapshotThreadProjection
+  snapshotThreadProjection,
+  turnTimingSnapshotPatch
 } from './thread-snapshot-cache'
+import { copyLiveProjection, emptyLiveProjection, restoredLiveProjection } from './chat-store-live-projection'
+import { getThreadPrewarmHandle, threadPrewarmHandleIsCurrent } from './thread-detail-prewarm'
 import {
-  composerSelectionForThread,
   ensureRuntimeProviderForSend,
   fallbackComposerProviderIdForSend,
   subscribeThreadEventsWithRecovery
 } from './chat-store-thread-action-helpers'
+import { resolveThreadComposerState } from './chat-store-thread-composer-state'
 import { GitCheckpointAvailabilityCache } from '../lib/git-checkpoint-availability'
 import { readDesignThreadRegistry } from '../design/design-thread-registry'
 import { readSddThreadRegistry } from '../sdd/sdd-thread-registry'
@@ -197,8 +199,11 @@ export function createThreadSelectionActions(
     const nextUnread = { ...get().unreadThreadIds }
     delete nextUnread[id]
 
-    sseAbortRef.current?.abort()
-    sseAbortRef.current = null
+    const refreshingActiveThread = prevId === id
+    if (!refreshingActiveThread) {
+      sseAbortRef.current?.abort()
+      sseAbortRef.current = null
+    }
     const p = getProvider()
     const durableQueuedMessages = queuedMessagesForThread(id)
     // Park the outgoing renderer projection before its state is replaced. This
@@ -211,12 +216,21 @@ export function createThreadSelectionActions(
     // Re-selecting the active conversation is an explicit refresh (and is
     // used by recovery paths to pick up durable queues), so only cross-thread
     // navigation may consume an in-memory snapshot.
-    const cached = prevId !== id ? getThreadSnapshot(id) : null
     const targetThread = get().threads.find((thread) => thread.id === id) ?? null
-    resetBusyRecoveryAttempts()
-    clearBusyWatchdog()
+    const cached = prevId !== id && targetThread
+      ? getThreadSnapshotForSelection(targetThread)
+      : null
+    if (!refreshingActiveThread) {
+      resetBusyRecoveryAttempts()
+      clearBusyWatchdog()
+    }
     if (cached) {
-      const queuedMessages = reconcileQueuedMessages(cached.queuedMessages, {
+      // The durable queue is the only authoritative queue source. The parked
+      // snapshot may hold a queue that was already consumed (e.g. guidance
+      // finished while this thread was inactive), so its queuedMessages must
+      // never be restored. durableQueuedMessages was read synchronously above
+      // (before the old snapshot was parked), so it is still fresh here.
+      const queuedMessages = reconcileQueuedMessages(durableQueuedMessages, {
         busy: cached.busy,
         turnId: cached.currentTurnId ?? undefined,
         blocks: cached.blocks
@@ -230,11 +244,15 @@ export function createThreadSelectionActions(
           readDesignThreadRegistry(),
           readSddThreadRegistry()
         )
+      const composerState = resolveThreadComposerState(get(), targetThread, {
+        hasUserMessages: cached.blocks.some((block) => block.kind === 'user')
+      })
       set((state) => ({
         watchTurnCompletion: nextWatch,
         unreadThreadIds: nextUnread,
         activeThreadId: id,
-        threadLoadingId: null,
+        threadLoadingId: cached.busy ? id : null,
+        threadRefreshingId: null,
         threadHistoryCursor: cached.threadHistoryCursor,
         threadHasMoreHistory: cached.threadHasMoreHistory,
         threadHistoryLoading: false,
@@ -244,24 +262,14 @@ export function createThreadSelectionActions(
         activeThreadTodos: cached.activeThreadTodos,
         blocks: cached.blocks,
         lastSeq: cached.lastSeq,
-        liveDeltaSeqFloor: cached.liveDeltaSeqFloor,
-        liveReasoning: cached.liveReasoning,
-        liveAssistant: cached.liveAssistant,
+        ...copyLiveProjection(cached),
         error: null,
         busy: cached.busy,
-        currentTurnId: cached.currentTurnId,
-        currentTurnOrchestration: cached.currentTurnOrchestration,
-        currentTurnUserId: cached.currentTurnUserId,
-        turnStartedAtByUserId: cached.turnStartedAtByUserId,
-        turnDurationByUserId: cached.turnDurationByUserId,
-        turnReasoningFirstAtByUserId: cached.turnReasoningFirstAtByUserId,
-        turnReasoningLastAtByUserId: cached.turnReasoningLastAtByUserId,
+        busyUnconfirmed: cached.busyUnconfirmed,
+        ...turnTimingSnapshotPatch(cached),
         inspectorSelectedId: null,
         queuedMessages,
-        composerMode: cached.composerMode,
-        composerModel: cached.composerModel,
-        composerProviderId: cached.composerProviderId,
-        composerReasoningEffort: cached.composerReasoningEffort,
+        ...composerState,
         threads: state.threads.map((thread) => thread.id === id
           ? { ...thread, status: cached.busy ? 'running' : 'idle' }
           : thread),
@@ -271,7 +279,12 @@ export function createThreadSelectionActions(
       syncTurnCompletionPoll(set, get)
       const ac = new AbortController()
       sseAbortRef.current = ac
-      const sink = buildThreadEventSink(set, get, { threadId: id, signal: ac.signal, sinceSeq: cached.lastSeq })
+      const sink = buildThreadEventSink(set, get, {
+        threadId: id,
+        signal: ac.signal,
+        sinceSeq: cached.lastSeq,
+        awaitReplaySynchronization: cached.busy
+      })
       subscribeThreadEventsWithRecovery(p, id, cached.lastSeq, sink, ac.signal, get)
       if (cached.busy) armBusyWatchdog(set, get)
       else if (queuedMessages.some(isPendingQueuedMessage)) void get().drainQueuedMessages()
@@ -280,44 +293,70 @@ export function createThreadSelectionActions(
     // Give the sidebar its selected state in this render frame. The timeline
     // shows a skeleton and the composer is disabled until detail hydration
     // commits, preventing sends against an unhydrated thread.
-    set({
-      watchTurnCompletion: nextWatch,
-      unreadThreadIds: nextUnread,
-      activeThreadId: id,
-      threadLoadingId: id,
-      threadHistoryCursor: null,
-      threadHasMoreHistory: false,
-      threadHistoryLoading: false,
-      activeThreadRelation: targetThread?.relation ?? 'primary',
-      activeThreadParentId: targetThread?.parentThreadId ?? null,
-      activeThreadGoal: targetThread?.goal ?? null,
-      activeThreadTodos: targetThread?.todos ?? null,
-      blocks: [],
-      lastSeq: 0,
-      liveDeltaSeqFloor: 0,
-      liveReasoning: '',
-      liveAssistant: '',
-      busy: false,
-      currentTurnId: null,
-      currentTurnOrchestration: null,
-      currentTurnUserId: null,
-      turnStartedAtByUserId: {},
-      turnDurationByUserId: {},
-      turnReasoningFirstAtByUserId: {},
-      turnReasoningLastAtByUserId: {},
-      inspectorSelectedId: null,
-      queuedMessages: [],
-      error: null
-    })
+    if (refreshingActiveThread) {
+      set({
+        watchTurnCompletion: nextWatch,
+        unreadThreadIds: nextUnread,
+        threadRefreshingId: id,
+        error: null
+      })
+    } else {
+      const initialComposerState = resolveThreadComposerState(get(), targetThread)
+      set({
+        watchTurnCompletion: nextWatch,
+        unreadThreadIds: nextUnread,
+        activeThreadId: id,
+        threadLoadingId: id,
+        threadRefreshingId: null,
+        threadHistoryCursor: null,
+        threadHasMoreHistory: false,
+        threadHistoryLoading: false,
+        activeThreadRelation: targetThread?.relation ?? 'primary',
+        activeThreadParentId: targetThread?.parentThreadId ?? null,
+        activeThreadGoal: targetThread?.goal ?? null,
+        activeThreadTodos: targetThread?.todos ?? null,
+        blocks: [],
+        lastSeq: 0,
+        ...emptyLiveProjection(),
+        busy: false,
+        busyUnconfirmed: false,
+        currentTurnId: null,
+        currentTurnOrchestration: null,
+        currentTurnUserId: null,
+        turnStartedAtByUserId: {},
+        turnDurationByUserId: {},
+        turnReasoningFirstAtByUserId: {},
+        turnReasoningLastAtByUserId: {},
+        inspectorSelectedId: null,
+        queuedMessages: [],
+        error: null,
+        ...initialComposerState
+      })
+    }
     try {
+      const prewarmHandle = targetThread ? getThreadPrewarmHandle(targetThread) : null
+      let detail = await (prewarmHandle?.promise ?? p.getThreadDetail(id))
+      if (!selectionStillCurrent()) return
+      if (prewarmHandle) {
+        const currentThread = get().threads.find((thread) => thread.id === id) ?? null
+        // The thread may have advanced while the prewarm request was in
+        // flight; a stale detail would both render outdated blocks and be
+        // re-cached under the new fingerprint by snapshotThreadProjection.
+        if (!threadPrewarmHandleIsCurrent(prewarmHandle, currentThread)) {
+          detail = await p.getThreadDetail(id)
+          if (!selectionStillCurrent()) return
+        }
+      }
       const {
         blocks: rawBlocks,
         latestSeq,
+        liveProjection,
         threadStatus,
         latestTurnId,
         latestTurnStatus,
         latestTurnOrchestration,
         latestUserMessageId,
+        latestTurnStartedAtMs,
         turnDurationByUserId = {},
         usage: threadUsage,
         relation: threadRelation,
@@ -329,8 +368,7 @@ export function createThreadSelectionActions(
         payloadBytes,
         historyCursor,
         hasMoreHistory = false
-      } = await p.getThreadDetail(id)
-      if (!selectionStillCurrent()) return
+      } = detail
       // A subagent's `side` thread has no locally-stored per-turn model labels
       // (it was never sent through the composer). Backfill the user blocks with
       // the child thread's resolved model so the session shows "which model",
@@ -364,21 +402,39 @@ export function createThreadSelectionActions(
           readDesignThreadRegistry(),
           readSddThreadRegistry()
         )
-      const composerSelection = composerSelectionForThread(get(), threadSnap, {
+      const composerState = resolveThreadComposerState(get(), threadSnap, {
         hasUserMessages: rawBlocks.some((block) => block.kind === 'user'),
         runtimeModel: threadModel
       })
-      const composerMode = composerModeForThread(threadSnap, readThreadComposerMode(id))
       const queuedMessages = reconcileQueuedMessages(durableQueuedMessages, {
         busy,
         turnId: latestTurnId,
         blocks
       })
+      if (refreshingActiveThread) {
+        sseAbortRef.current?.abort()
+        sseAbortRef.current = null
+        resetBusyRecoveryAttempts()
+        clearBusyWatchdog()
+      }
+      // Re-derive the awaiting-input marker from the runtime's pending gate so
+      // switching threads (or restarting) keeps the sidebar hint accurate.
+      const hasLivePendingUserInput = blocks.some(
+        (block) => block.kind === 'user_input' && block.status === 'pending' && block.live === true
+      )
       set({
         watchTurnCompletion: nextWatch,
         unreadThreadIds: nextUnread,
+        awaitingUserInputThreadIds: hasLivePendingUserInput
+          ? { ...get().awaitingUserInputThreadIds, [id]: true }
+          : (() => {
+              const next = { ...get().awaitingUserInputThreadIds }
+              delete next[id]
+              return next
+            })(),
         activeThreadId: id,
-        threadLoadingId: null,
+        threadLoadingId: busy && (!refreshingActiveThread || get().threadLoadingId === id) ? id : null,
+        threadRefreshingId: null,
         threadHistoryCursor: historyCursor ?? null,
         threadHasMoreHistory: hasMoreHistory,
         threadHistoryLoading: false,
@@ -388,21 +444,22 @@ export function createThreadSelectionActions(
         activeThreadTodos: todos ?? null,
         blocks,
         lastSeq: latestSeq,
-        liveDeltaSeqFloor: latestSeq,
-        liveReasoning: '',
-        liveAssistant: '',
+        ...restoredLiveProjection(latestSeq, busy ? liveProjection : undefined),
         error: null,
         busy,
-        currentTurnId: busy ? latestTurnId ?? null : null,
-        currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
-        currentTurnUserId,
-        turnStartedAtByUserId: {},
-        turnDurationByUserId,
-        turnReasoningFirstAtByUserId: {},
-        turnReasoningLastAtByUserId: {},
+        // Replay synchronization confirms the restored running claim.
+        busyUnconfirmed: busy,
+        ...hydratedTurnTimingPatch({
+          busy,
+          latestTurnId,
+          latestTurnOrchestration,
+          currentTurnUserId,
+          latestTurnStartedAtMs,
+          turnDurationByUserId
+        }),
         inspectorSelectedId: null,
         queuedMessages,
-        composerMode,
+        ...composerState,
         threads: get().threads.map((thread) => thread.id === id
           ? {
               ...thread,
@@ -413,24 +470,18 @@ export function createThreadSelectionActions(
             }
           : thread),
         ...(remembersCodeThread ? { lastCodeThreadId: id } : {}),
-        ...(composerSelection
-          ? {
-              composerModel: composerSelection.model,
-              composerProviderId: composerSelection.providerId,
-              composerReasoningEffort: composerReasoningEffortForSelection(
-                get().composerModelGroups,
-                composerSelection.model,
-                composerSelection.providerId
-              )
-            }
-          : {})
       })
       snapshotThreadProjection(get(), payloadBytes)
       saveQueuedMessagesForThread(id, queuedMessages)
       syncTurnCompletionPoll(set, get)
       const ac = new AbortController()
       sseAbortRef.current = ac
-      const sink = buildThreadEventSink(set, get, { threadId: id, signal: ac.signal, sinceSeq: latestSeq })
+      const sink = buildThreadEventSink(set, get, {
+        threadId: id,
+        signal: ac.signal,
+        sinceSeq: latestSeq,
+        awaitReplaySynchronization: busy
+      })
       subscribeThreadEventsWithRecovery(p, id, latestSeq, sink, ac.signal, get)
       if (busy) {
         armBusyWatchdog(set, get)
@@ -441,6 +492,7 @@ export function createThreadSelectionActions(
       if (!selectionStillCurrent()) return
       set({
         threadLoadingId: null,
+        threadRefreshingId: get().threadRefreshingId === id ? null : get().threadRefreshingId,
         error: formatRuntimeError(e),
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
@@ -448,7 +500,6 @@ export function createThreadSelectionActions(
       })
     }
   },
-
   loadEarlierThreadHistory: async () => {
     const state = get()
     const threadId = state.activeThreadId
@@ -457,8 +508,7 @@ export function createThreadSelectionActions(
       !threadId ||
       !cursor ||
       !state.threadHasMoreHistory ||
-      state.threadHistoryLoading ||
-      state.busy
+      state.threadHistoryLoading
     ) return false
     set({ threadHistoryLoading: true })
     try {
@@ -498,7 +548,6 @@ export function createThreadSelectionActions(
       return false
     }
   },
-
   subscribeThreadEventsLive: async (threadId) => {
     if (get().runtimeConnection !== 'ready') return
     const targetThreadId = threadId.trim()
@@ -518,30 +567,27 @@ export function createThreadSelectionActions(
     // snapshot request fails. Cross-thread fallback starts from an empty
     // projection/cursor and can safely replay from zero.
     const keepExistingBlocks = prevState.activeThreadId === targetThreadId
+    const hydratingTarget = !keepExistingBlocks
     const fallbackSinceSeq = keepExistingBlocks ? prevState.lastSeq : 0
     resetBusyRecoveryAttempts()
     clearBusyWatchdog()
     set({
       activeThreadId: targetThreadId,
-      threadLoadingId: null,
+      threadLoadingId: hydratingTarget ? targetThreadId : prevState.threadLoadingId,
       threadHistoryCursor: keepExistingBlocks ? prevState.threadHistoryCursor : null,
       threadHasMoreHistory: keepExistingBlocks ? prevState.threadHasMoreHistory : false,
       threadHistoryLoading: false,
       blocks: keepExistingBlocks ? prevState.blocks : [],
       lastSeq: fallbackSinceSeq,
-      liveDeltaSeqFloor: fallbackSinceSeq,
-      liveReasoning: '',
-      liveAssistant: '',
+      ...(keepExistingBlocks
+        ? copyLiveProjection(prevState)
+        : emptyLiveProjection(fallbackSinceSeq)),
       unreadThreadIds: { ...prevState.unreadThreadIds, [targetThreadId]: false },
       busy: true,
-      currentTurnId: null,
-      currentTurnOrchestration:
-        keepExistingBlocks && prevState.busy ? prevState.currentTurnOrchestration : null,
-      currentTurnUserId: null,
-      turnStartedAtByUserId: {},
-      turnDurationByUserId: {},
-      turnReasoningFirstAtByUserId: {},
-      turnReasoningLastAtByUserId: {},
+      busyUnconfirmed: keepExistingBlocks ? prevState.busyUnconfirmed : true,
+      ...(keepExistingBlocks && prevState.busy
+        ? turnTimingSnapshotPatch(prevState)
+        : clearedTurnTimingPatch({ keepExistingBlocks, previous: prevState })),
       inspectorSelectedId: null,
       queuedMessages: keepExistingBlocks
         ? prevState.queuedMessages
@@ -549,11 +595,12 @@ export function createThreadSelectionActions(
     })
     const ac = new AbortController()
     sseAbortRef.current = ac
-    const subscribeFrom = (sinceSeq: number): void => {
+    const subscribeFrom = (sinceSeq: number, awaitReplaySynchronization = false): void => {
       const sink = buildThreadEventSink(set, get, {
         threadId: targetThreadId,
         signal: ac.signal,
-        sinceSeq
+        sinceSeq,
+        awaitReplaySynchronization
       })
       subscribeThreadEventsWithRecovery(p, targetThreadId, sinceSeq, sink, ac.signal, get)
     }
@@ -561,18 +608,20 @@ export function createThreadSelectionActions(
       const {
         blocks: rawBlocks,
         latestSeq,
+        liveProjection,
         threadStatus,
         latestTurnId,
         latestTurnStatus,
         latestTurnOrchestration,
         latestUserMessageId,
+        latestTurnStartedAtMs,
         turnDurationByUserId = {},
         goal,
         todos,
         historyCursor,
         hasMoreHistory = false
       } = await p.getThreadDetail(targetThreadId)
-      if (ac.signal.aborted) return
+      if (ac.signal.aborted || get().activeThreadId !== targetThreadId) return
       const loaded = hydrateBlockModelLabels(targetThreadId, rawBlocks)
       const busy = threadSnapshotLooksRunning(loaded, threadStatus, latestTurnStatus)
       // Settle blocks left open by an interrupted turn when the server has
@@ -589,16 +638,21 @@ export function createThreadSelectionActions(
       set({
         activeThreadGoal: goal ?? null,
         activeThreadTodos: todos ?? null,
+        threadLoadingId: busy && (hydratingTarget || get().threadLoadingId === targetThreadId)
+          ? targetThreadId : null,
         threadHistoryCursor: historyCursor ?? null,
         threadHasMoreHistory: hasMoreHistory,
         threadHistoryLoading: false,
         blocks,
         lastSeq: latestSeq,
-        liveDeltaSeqFloor: latestSeq,
+        ...restoredLiveProjection(latestSeq, busy ? liveProjection : undefined),
         busy,
+        // Replay synchronization confirms the restored running claim.
+        busyUnconfirmed: busy,
         currentTurnId: busy ? latestTurnId ?? null : null,
         currentTurnOrchestration: busy ? latestTurnOrchestration ?? 'direct' : null,
         currentTurnUserId,
+        currentTurnStartedAtMs: busy ? latestTurnStartedAtMs ?? null : null,
         turnDurationByUserId,
         queuedMessages,
         threads: get().threads.map((thread) => thread.id === targetThreadId
@@ -613,18 +667,19 @@ export function createThreadSelectionActions(
       saveQueuedMessagesForThread(targetThreadId, queuedMessages)
       // The server replays every event persisted after latestSeq, including
       // events committed while getThreadDetail was in flight.
-      subscribeFrom(latestSeq)
+      subscribeFrom(latestSeq, busy)
       if (busy) armBusyWatchdog(set, get)
       if (!busy && queuedMessages.some(isPendingQueuedMessage)) {
         void get().drainQueuedMessages()
       }
     } catch (e) {
-      if (ac.signal.aborted) return
+      if (ac.signal.aborted || get().activeThreadId !== targetThreadId) return
       // The fallback cursor matches the projection installed above, so this
       // cannot replay older lifecycle records over newer on-screen state.
       subscribeFrom(fallbackSinceSeq)
       if (get().busy) armBusyWatchdog(set, get)
       set({
+        threadLoadingId: get().threadLoadingId === targetThreadId ? null : get().threadLoadingId,
         error: formatRuntimeError(e),
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }

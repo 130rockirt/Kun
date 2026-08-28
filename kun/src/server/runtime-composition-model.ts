@@ -31,6 +31,7 @@ import {
   ModelConnectionOAuthService,
   ClaudeConnectionService,
   OfficialProviderAuthService,
+OfficialProviderCliService,
   type GeminiCodeAssistCredential
 } from './runtime-factory-dependencies.js'
 import type { KunServeRuntimeOptions } from './runtime-factory-types.js'
@@ -46,6 +47,7 @@ import {
 } from './runtime-factory-model.js'
 import { aggregateCodexProviderLocalCosts } from '../services/provider-local-cost.js'
 import { loadUsageHistory } from '../services/usage-history.js'
+import { GatewayCredentialService } from '../services/gateway-credential-service.js'
 
 export async function createRuntimeModelComposition(
   core: Awaited<ReturnType<typeof createRuntimeCore>>
@@ -260,13 +262,14 @@ export async function createRuntimeModelComposition(
     modelClient: timedModelClient,
     roles: () => core.activeOptions.roles,
     defaultModel: () => core.activeOptions.model,
-    recordUsage: async ({ threadId, turnId, model, usage }) => {
+    recordUsage: async ({ threadId, turnId, model, providerId, usage }) => {
       const cumulative = usageService.record(threadId, usage, undefined, turnId)
       await events.record({
         kind: 'usage',
         threadId,
         turnId,
         model,
+        ...(providerId ? { providerId } : {}),
         usage: cumulative
       })
     }
@@ -490,6 +493,9 @@ export async function createRuntimeModelComposition(
     registry: modelConnections,
     claude: claudeConnections
   })
+  const officialProviderCli = new OfficialProviderCliService({
+    dataDir: core.activeOptions.dataDir
+  })
   const officialProviderAuth = new OfficialProviderAuthService({
     dataDir: core.activeOptions.dataDir,
     registry: modelConnections
@@ -498,6 +504,11 @@ export async function createRuntimeModelComposition(
   const hasMcpOAuth = Object.values(core.activeOptions.capabilities?.mcp?.servers ?? {}).some((server) =>
     server.oauth?.enabled !== false && Boolean(server.oauth) && server.transport !== 'stdio'
   )
+  const gatewayCredentials = new GatewayCredentialService(
+    core.activeOptions.dataDir,
+    extensionCredentialKeyProvider.encryptor
+  )
+  await gatewayCredentials.initialize()
   const oauthEncryptor = hasMcpOAuth
     ? extensionCredentialKeyProvider.encryptor
     : undefined
@@ -536,8 +547,10 @@ export async function createRuntimeModelComposition(
     providerQuotaService,
     claudeConnections,
     modelConnectionOAuth,
+    officialProviderCli,
     officialProviderAuth,
     stopExtensionModelListener,
+    gatewayCredentials,
     hasMcpOAuth,
     oauthEncryptor,
     get refreshModelConnectionDelegatedDeps() {

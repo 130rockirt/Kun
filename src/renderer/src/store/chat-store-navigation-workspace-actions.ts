@@ -1,6 +1,8 @@
 import type { NormalizedThread } from '../agent/types'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
+import { loadThreadStates } from '../agent/thread-state-loader'
+import type { ThreadRuntimeState } from '../agent/provider-types'
 import i18n from '../i18n'
 import {
   applyChatContentMaxWidth,
@@ -106,7 +108,14 @@ import {
   stopTurnCompletionPoll
 } from './chat-store-schedulers'
 import { saveThreadListCache } from './thread-list-cache'
-import { loadMoreThreads as loadMoreThreadsAction } from './chat-store-thread-pagination'
+import { scheduleRecentThreadPrewarm } from './thread-detail-prewarm'
+import {
+  loadMoreThreads as loadMoreThreadsAction,
+  mergeThreadPages,
+  reconcileWorkspaceThreadPages,
+  threadPageMode,
+  THREAD_LIST_FIRST_PAGE_SIZE
+} from './chat-store-thread-pagination'
 import {
   collectRunningWatchTargets,
   normalizeListedThreadActivity
@@ -155,11 +164,10 @@ type StoreActionContext = {
   sseAbortRef: SseAbortRef
 }
 
-let refreshThreadsGeneration = 0
-
 export function createNavigationWorkspaceActions(
   { set, get, sseAbortRef }: StoreActionContext
 ): Pick<ChatState, 'chooseWorkspace' | 'selectWorkspaceRoot' | 'clearWorkspace' | 'deleteWorkspace' | 'refreshThreads' | 'loadMoreThreads' | 'setThreadSearch' | 'setShowArchivedThreads'> {
+  let refreshInFlight = false
   return {
   loadMoreThreads: (workspacePath) => loadMoreThreadsAction(workspacePath, set, get),
   chooseWorkspace: async ({ createThreadAfter = false, selectThreadAfter = true } = {}) => {
@@ -305,11 +313,14 @@ export function createNavigationWorkspaceActions(
       clearBusyWatchdog()
     }
     try {
-      for (const th of workspaceThreads) {
-        await p.deleteThread(th.id)
-        invalidateThreadSnapshot(th.id)
-      }
-      const removeIds = new Set(workspaceThreads.map((th) => th.id))
+      const deletedIds = typeof p.deleteThreadsByWorkspace === 'function'
+        ? await p.deleteThreadsByWorkspace(normalizedPath)
+        : await Promise.all(workspaceThreads.map(async (thread) => {
+          await p.deleteThread(thread.id)
+          return thread.id
+        }))
+      for (const threadId of deletedIds) invalidateThreadSnapshot(threadId)
+      const removeIds = new Set(deletedIds)
       const codeWorkspaceRoots = forgetCodeWorkspaceRoot(get().codeWorkspaceRoots, normalizedPath)
       set((s) => {
         const w = { ...s.watchTurnCompletion }
@@ -359,6 +370,8 @@ export function createNavigationWorkspaceActions(
 
   refreshThreads: async () => {
     if (get().runtimeConnection !== 'ready') return
+    if (refreshInFlight) return
+    refreshInFlight = true
     // Surface loading/refreshing before the first inventory lands. A
     // background refresh must keep the previous list visible (never clears
     // `threads` early), so the sidebar only shows skeletons when there is
@@ -367,18 +380,20 @@ export function createNavigationWorkspaceActions(
       threadListStatus: s.threads.length === 0 ? 'loading' : 'refreshing',
       threadListError: null
     }))
-    const refreshGeneration = ++refreshThreadsGeneration
     try {
       const p = getProvider()
       let rawThreads: NormalizedThread[]
+      let firstPageHasMore = false
       try {
         if (typeof p.listThreadsPage === 'function') {
           const page = await p.listThreadsPage({
-            includeArchived: true,
+            limit: THREAD_LIST_FIRST_PAGE_SIZE,
+            ...(get().showArchivedThreads ? { archivedOnly: true } : {}),
             includeSide: true,
             lean: true
           })
           rawThreads = page.threads
+          firstPageHasMore = page.hasMore
         } else {
           rawThreads = await p.listThreads({
             includeArchived: true,
@@ -418,18 +433,16 @@ export function createNavigationWorkspaceActions(
         threadLooksRunning(thread) ||
         watchSnapshot[thread.id] === true
       )
-      const reconciledStateById = new Map<string, Awaited<ReturnType<typeof p.getThreadState>>>()
-      if (reconcileCandidates.length > 0 && typeof p.getThreadState === 'function') {
-        const results = await Promise.allSettled(
-          reconcileCandidates.map(async (thread) => ({
-            id: thread.id,
-            state: await p.getThreadState(thread.id)
-          }))
-        )
+      const reconciledStateById = new Map<string, ThreadRuntimeState>()
+      if (reconcileCandidates.length > 0 &&
+          (typeof p.getThreadState === 'function' || typeof p.getThreadStates === 'function')) {
+        // Bulk endpoint first (chunked + sequential inside the loader); bounded
+        // single reads keep older runtimes compatible.
+        const results = await loadThreadStates(p, reconcileCandidates.map((t) => t.id))
         for (const result of results) {
-          if (result.status !== 'fulfilled') continue
-          const localThread = localThreadById.get(result.value.id)
-          const latestTurnId = result.value.state.latestTurnId
+          if (!result.ok) continue
+          const localThread = localThreadById.get(result.id)
+          const latestTurnId = result.state.latestTurnId
           // Reject the response when the runtime reports a *newer* turn than
           // the one this refresh started from: the response is authoritative
           // for its own turn, but committing it here could regress local state
@@ -439,7 +452,7 @@ export function createNavigationWorkspaceActions(
             localThread?.latestTurnId &&
             localThread.latestTurnId !== latestTurnId
           ) continue
-          reconciledStateById.set(result.value.id, result.value.state)
+          reconciledStateById.set(result.id, result.state)
         }
         threads = threads.map((thread) => {
           const runtimeState = reconciledStateById.get(thread.id)
@@ -567,9 +580,8 @@ export function createNavigationWorkspaceActions(
         sseAbortRef.current?.abort()
         sseAbortRef.current = null
       }
-      // A newer whole-list refresh already committed; this older result must
-      // not clobber its thread projections, watch state, or selection.
-      if (refreshGeneration !== refreshThreadsGeneration) return
+      // A newer local action may have changed the inventory while the request
+      // was in flight; a queued trailing refresh will reconcile it afterwards.
       // 记忆中的 Code 会话被删除或归档后清理,避免长期保存悬空 ID。
       const rememberedCodeThreadId = get().lastCodeThreadId?.trim() ?? ''
       const staleCodeThreadMemory = Boolean(
@@ -627,14 +639,25 @@ export function createNavigationWorkspaceActions(
             ? clearUnreadCompletion(u, id)
             : markUnreadCompletion(u, id, outcome)
         }
+        const pageMode = threadPageMode(s.showArchivedThreads)
+        const workspacePaths = [
+          ...codeWorkspaceRoots,
+          ...threads.map((thread) => thread.workspace)
+        ]
+        const pages = reconcileWorkspaceThreadPages(
+          s.threadListCursorByWorkspace,
+          workspacePaths,
+          firstPageHasMore,
+          pageMode
+        )
         return {
-          threads: displayThreads,
+          threads: firstPageHasMore ? mergeThreadPages(displayThreads, s.threads) : displayThreads,
           codeWorkspaceRoots,
           watchTurnCompletion: w,
           unreadThreadIds: u,
           threadListStatus: 'ready',
           threadListError: null,
-          threadListCursorByWorkspace: {},
+          threadListCursorByWorkspace: pages,
           ...(staleCodeThreadMemory ? { lastCodeThreadId: null } : {}),
           ...(shouldClearSelection ? clearedThreadSelection() : {})
         }
@@ -644,6 +667,7 @@ export function createNavigationWorkspaceActions(
       // startup can paint the sidebar from local storage before the runtime
       // inventory arrives.
       saveThreadListCache(displayThreads)
+      scheduleRecentThreadPrewarm(get().threads, get().activeThreadId)
       if (activeThreadIsManagedInCodeRoute) {
         await get().openCode()
       }
@@ -658,16 +682,17 @@ export function createNavigationWorkspaceActions(
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
           : {})
       })
+    } finally {
+      refreshInFlight = false
     }
   },
-
   setThreadSearch: (query) => {
     set({ threadSearch: query })
   },
 
   setShowArchivedThreads: (show) => {
-    set({ showArchivedThreads: show })
-    if (show && get().runtimeConnection === 'ready') {
+    set({ showArchivedThreads: show, threadListCursorByWorkspace: {} })
+    if (get().runtimeConnection === 'ready') {
       void get().refreshThreads()
     }
   },
