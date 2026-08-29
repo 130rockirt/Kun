@@ -48,6 +48,8 @@ import type {
   GraphStoreDiagnostic
 } from '../graph/graph-run-store.js'
 import type {
+  EventHistoryPage,
+  EventHistoryPageOptions,
   ItemHistoryCompactionResult,
   ItemHistoryCommit,
   ItemHistoryPage,
@@ -87,6 +89,12 @@ const ItemCompactionSchema = z.object({
   beforeBytes: z.number().int().nonnegative(),
   afterBytes: z.number().int().nonnegative(),
   itemCount: z.number().int().nonnegative()
+})
+const EventPageSchema = z.object({
+  events: z.array(RuntimeEvent),
+  nextCursor: z.string().optional(),
+  hasMore: z.boolean(),
+  eventBytes: z.number().int().nonnegative()
 })
 const ItemPageSchema = z.object({
   items: z.array(TurnItem),
@@ -305,12 +313,45 @@ export class ManagerRemoteSessionStore implements SessionStore {
     return RuntimeEvent.array().parse(await this.call('loadEventsSince', { threadId, sinceSeq }))
   }
 
+  async loadEventPage(threadId: string, options: EventHistoryPageOptions): Promise<EventHistoryPage> {
+    return EventPageSchema.parse(await this.call('loadEventPage', { threadId, options }))
+  }
+
   async *iterateEventsSince(
     threadId: string,
     sinceSeq: number,
-    _options?: { maxRecordBytes?: number }
+    options?: { maxRecordBytes?: number }
   ): AsyncIterable<RuntimeEventValue> {
-    yield* await this.loadEventsSince(threadId, sinceSeq)
+    let cursor: string | undefined
+    let pageSinceSeq = sinceSeq
+    do {
+      const page = await this.loadEventPage(threadId, {
+        sinceSeq: pageSinceSeq,
+        ...(cursor ? { cursor } : {}),
+        maxEvents: 256,
+        maxBytes: 512 * 1024,
+        ...(options?.maxRecordBytes ? { maxRecordBytes: options.maxRecordBytes } : {})
+      })
+      for (const event of page.events) {
+        pageSinceSeq = Math.max(pageSinceSeq, event.seq)
+        yield event
+      }
+      if (!page.hasMore) return
+      if (page.events.length === 0 && !page.nextCursor) {
+        throw new Error('manager event replay page made no forward progress')
+      }
+      cursor = page.nextCursor
+    } while (true)
+  }
+
+  async trimEventsFromSeq(threadId: string, fromSeqInclusive: number): Promise<{ afterBytes: number }> {
+    return z.object({ afterBytes: z.number().int().nonnegative() }).parse(
+      await this.call('trimEventsFromSeq', { threadId, fromSeqInclusive })
+    )
+  }
+
+  async eventReplayFloorSeq(threadId: string): Promise<number> {
+    return z.number().int().nonnegative().parse(await this.call('eventReplayFloorSeq', { threadId }))
   }
 
   async *watchEventsSince(

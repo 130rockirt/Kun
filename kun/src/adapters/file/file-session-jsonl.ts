@@ -265,8 +265,8 @@ export async function trimEventsJsonlFromSeq(
  * is missing/empty. Used as the SSE replay floor; trimming only removes a
  * prefix, so the head record alone determines the floor.
  */
-export async function firstEventSeqFromJsonl(path: string): Promise<number> {
-  for await (const record of iterateJsonlEventRecords(path, 1024 * 1024)) {
+export async function firstEventSeqFromJsonl(path: string, maxRecordBytes: number): Promise<number> {
+  for await (const record of iterateJsonlEventRecords(path, maxRecordBytes)) {
     if (record.event) return record.event.seq
   }
   return 0

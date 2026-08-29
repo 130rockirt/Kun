@@ -90,7 +90,41 @@ describe('ManagerRemoteSessionStore live items', () => {
       { threadId: item.threadId, item: { ...item, status: 'completed' } }
     ])
   })
+
+  it('iterates bounded manager event pages without materializing the backlog', async () => {
+    const requestBodies: unknown[] = []
+    const pages = [
+      { events: [event(1), event(2)], nextCursor: 'v1:1:2:200', hasMore: true, eventBytes: 200 },
+      { events: [event(3)], hasMore: false, eventBytes: 100 }
+    ]
+    vi.stubGlobal('fetch', vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body)))
+      return new Response(JSON.stringify({ result: pages.shift() }), {
+        status: 200, headers: { 'content-type': 'application/json' }
+      })
+    }))
+    const store = new ManagerRemoteSessionStore(managerConnection())
+    const seen: number[] = []
+    for await (const runtimeEvent of store.iterateEventsSince('thread_remote_pages', 0)) {
+      seen.push(runtimeEvent.seq)
+    }
+
+    expect(seen).toEqual([1, 2, 3])
+    expect(requestBodies).toMatchObject([
+      { threadId: 'thread_remote_pages', options: { sinceSeq: 0 } },
+      { threadId: 'thread_remote_pages', options: { sinceSeq: 2, cursor: 'v1:1:2:200' } }
+    ])
+  })
 })
+
+function event(seq: number) {
+  return {
+    kind: 'heartbeat' as const,
+    seq,
+    timestamp: `2026-08-29T00:00:0${seq}.000Z`,
+    threadId: 'thread_remote_pages'
+  }
+}
 
 describe('ManagerRemoteThreadStore legacy read compatibility', () => {
   it('forwards workspace keyset pages through the dedicated manager operation', async () => {

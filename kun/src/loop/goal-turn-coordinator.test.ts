@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
 import { createThreadRecord } from '../domain/thread.js'
 import { createTurnRecord } from '../domain/turn.js'
+import { makeToolResultItem } from '../domain/item.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
 import type { TurnService } from '../services/turn-service.js'
 import { GoalTurnCoordinator } from './goal-turn-coordinator.js'
@@ -58,9 +59,10 @@ function harness() {
     userMessageItemId: 'item_resumed'
   }))
   const runTurn = vi.fn(async () => 'completed' as const)
+  const finishTurn = vi.fn(async () => ({ kind: 'settled', status: 'failed' as const }))
   const coordinator = new GoalTurnCoordinator({
     threadStore,
-    turns: { startTurn } as Pick<TurnService, 'startTurn'>,
+    turns: { startTurn, finishTurn } as unknown as Pick<TurnService, 'startTurn' | 'finishTurn'>,
     events,
     nowIso: () => `2026-07-11T00:00:0${nowSequence++}.000Z`,
     nowMs: () => nowMs,
@@ -80,6 +82,7 @@ function harness() {
     timers,
     startTurn,
     runTurn,
+    finishTurn,
     setNowMs: (value: number) => { nowMs = value }
   }
 }
@@ -147,7 +150,12 @@ describe('GoalTurnCoordinator', () => {
   it('consumes progress and deliberate-stop state before cleanup', async () => {
     const progressing = harness()
     await progressing.threadStore.upsert(activeThread())
-    progressing.coordinator.noteToolExecuted(turnId, 'write')
+    progressing.coordinator.noteToolExecuted(turnId, 'write', {
+      item: makeToolResultItem({
+        id: 'item_success', threadId, turnId, callId: 'call_success', toolName: 'write', output: {}
+      }),
+      approved: true
+    })
     await progressing.coordinator.afterTerminal({
       threadId,
       turnId,
@@ -173,5 +181,23 @@ describe('GoalTurnCoordinator', () => {
       timer: null
     })
     expect(suppressed.timers.filter((entry) => !entry.cancelled)).toHaveLength(0)
+  })
+
+  it('does not count failed tool results or goal bookkeeping as progress', () => {
+    const h = harness()
+    h.coordinator.noteToolExecuted(turnId, 'write', {
+      item: makeToolResultItem({
+        id: 'item_failed', threadId, turnId, callId: 'call_failed', toolName: 'write',
+        output: { error: 'failed' }, isError: true
+      }),
+      approved: false
+    })
+    h.coordinator.noteToolExecuted(turnId, 'get_goal', {
+      item: makeToolResultItem({
+        id: 'item_goal', threadId, turnId, callId: 'call_goal', toolName: 'get_goal', output: {}
+      }),
+      approved: true
+    })
+    expect(h.coordinator.hasMadeProgress(turnId)).toBe(false)
   })
 })

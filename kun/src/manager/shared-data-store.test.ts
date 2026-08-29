@@ -37,6 +37,27 @@ describe('manager atomic JSON policy', () => {
 })
 
 describe('manager shared data store', () => {
+  it('exposes bounded event pages plus trim floor through the manager protocol', async () => {
+    const store = await dataStore()
+    const threadId = 'thread-event-page-manager'
+    for (let seq = 1; seq <= 5; seq += 1) {
+      await store.executeSession('appendEvent', {
+        threadId,
+        event: { kind: 'heartbeat', seq, timestamp: `2026-08-29T00:00:0${seq}.000Z`, threadId }
+      })
+    }
+    const first = await store.executeSession('loadEventPage', {
+      threadId,
+      options: { sinceSeq: 0, maxEvents: 2 }
+    }) as { events: Array<{ seq: number }>; nextCursor?: string; hasMore: boolean }
+    expect(first.events.map((event) => event.seq)).toEqual([1, 2])
+    expect(first).toMatchObject({ hasMore: true, nextCursor: expect.any(String) })
+
+    await store.executeSession('trimEventsFromSeq', { threadId, fromSeqInclusive: 3 })
+    await expect(store.executeSession('eventReplayFloorSeq', { threadId })).resolves.toBe(3)
+    await store.close()
+  })
+
   it('keeps live checkpoint and finalization behavior equivalent through the manager', async () => {
     const store = await dataStore()
     const threadId = 'thread-live-manager'
@@ -320,6 +341,35 @@ describe('manager shared data store', () => {
       threadId: event.threadId,
       event: { ...event, timestamp: '2026-08-01T00:00:01.000Z' }
     })).rejects.toThrow(/high-water/u)
+    await store.close()
+  })
+
+  it('consumes a reserved transient sequence with a private cursor checkpoint', async () => {
+    const store = await dataStore()
+    const threadId = 'thread-transient-checkpoint'
+    const transientSeq = await store.executeSession('allocateEventSeq', { threadId }) as number
+    await store.executeSession('appendEvent', {
+      threadId,
+      event: {
+        kind: 'cursor_checkpoint',
+        transientKind: 'item_updated',
+        threadId,
+        seq: transientSeq,
+        timestamp: '2026-08-01T00:00:00.000Z'
+      }
+    })
+
+    const nextSeq = await store.executeSession('allocateEventSeq', { threadId }) as number
+    expect(nextSeq).toBe(transientSeq + 1)
+    await expect(store.executeSession('appendEvent', {
+      threadId,
+      event: {
+        kind: 'heartbeat',
+        threadId,
+        seq: nextSeq,
+        timestamp: '2026-08-01T00:00:01.000Z'
+      }
+    })).resolves.toBeNull()
     await store.close()
   })
 

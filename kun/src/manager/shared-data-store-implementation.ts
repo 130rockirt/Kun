@@ -516,6 +516,36 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
         }).strict().parse(value)
         return this.sessionStore.loadEventsSince(body.threadId, body.sinceSeq)
       }
+      case 'loadEventPage': {
+        const body = z.object({
+          threadId: ThreadIdSchema,
+          options: z.object({
+            sinceSeq: z.number().int().nonnegative(),
+            cursor: z.string().max(256).optional(),
+            maxEvents: z.number().int().positive().max(4_096).optional(),
+            maxBytes: z.number().int().positive().max(16 * 1024 * 1024).optional(),
+            maxRecordBytes: z.number().int().positive().max(16 * 1024 * 1024).optional()
+          }).strict()
+        }).strict().parse(value)
+        if (this.sessionStore.loadEventPage) {
+          return this.sessionStore.loadEventPage(body.threadId, body.options)
+        }
+        const events = await this.sessionStore.loadEventsSince(body.threadId, body.options.sinceSeq)
+        const maxEvents = body.options.maxEvents ?? 256
+        const page = events.slice(0, maxEvents)
+        return { events: page, eventBytes: Buffer.byteLength(JSON.stringify(page)), hasMore: events.length > page.length }
+      }
+      case 'trimEventsFromSeq': {
+        const body = z.object({
+          threadId: ThreadIdSchema,
+          fromSeqInclusive: z.number().int().nonnegative()
+        }).strict().parse(value)
+        return this.sessionStore.trimEventsFromSeq?.(body.threadId, body.fromSeqInclusive) ?? { afterBytes: 0 }
+      }
+      case 'eventReplayFloorSeq': {
+        const { threadId } = parseThreadId(value)
+        return this.sessionStore.eventReplayFloorSeq?.(threadId) ?? 0
+      }
       case 'loadItems': {
         const { threadId } = parseThreadId(value)
         return this.sessionStore.loadItems(threadId)

@@ -87,6 +87,7 @@ export class DelegationRuntime extends DelegationRuntimeRun {
     threadId: string,
     deleteSideThread?: (childId: string) => Promise<boolean>
   ): Promise<number> {
+    await this.detachedHandoffs.cleanupParent(threadId)
     const children = await this.options.store.list(threadId)
     await this.releaseArtifactOwner(`thread:${threadId}`)
     await this.releaseArtifactOwner(`child:${threadId}`)
@@ -452,6 +453,7 @@ export class DelegationRuntime extends DelegationRuntimeRun {
         updatedAt: this.now()
       })
       try {
+        await this.detachedHandoffs.prepare(updated)
         await this.options.store.upsert(updated)
         await this.recordChildEvent(updated)
         reconciled += 1

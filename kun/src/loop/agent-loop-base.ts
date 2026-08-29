@@ -174,6 +174,8 @@ export abstract class AgentLoopBase {
       turns: opts.turns,
       events: opts.events,
       nowIso: opts.nowIso,
+      ...(opts.receipts ? { receipts: opts.receipts } : {}),
+      ...(opts.artifactStore ? { artifactStore: opts.artifactStore } : {}),
       ...(opts.awaitWorkspaceCheckpoint
         ? { awaitWorkspaceCheckpoint: opts.awaitWorkspaceCheckpoint }
         : {}),
@@ -397,9 +399,9 @@ export abstract class AgentLoopBase {
       dispatch: input,
       context,
       stormBreaker: this.toolStormBreakers.get(input.turnId),
-      onToolExecuted: (toolName) => {
+      onToolExecuted: (toolName, result) => {
         executed += 1
-        this.goalTurns.noteToolExecuted(input.turnId, toolName)
+        this.goalTurns.noteToolExecuted(input.turnId, toolName, result)
       }
     })
     if (thread?.extensionBudget && executed > 0) {

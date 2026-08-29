@@ -32,9 +32,11 @@ export async function createPersistentStores(input: {
   if (input.serviceManager) return createManagerRemoteStores(input.serviceManager)
   const storage = input.storage ?? DEFAULT_STORAGE_CONFIG
   if (storage.backend === 'file') {
+    const sessionStore = new FileSessionStore({ dataDir: input.dataDir })
     return {
-      sessionStore: new FileSessionStore({ dataDir: input.dataDir }),
-      threadStore: new FileThreadStore({ dataDir: input.dataDir })
+      sessionStore,
+      threadStore: new FileThreadStore({ dataDir: input.dataDir }),
+      shutdown: () => sessionStore.close()
     }
   }
 
@@ -46,15 +48,20 @@ export async function createPersistentStores(input: {
     fileAccess
   })
   await threadStore.ready()
+  const sessionStore = new HybridSessionStore({
+    dataDir: input.dataDir,
+    index: threadStore,
+    fileAccess
+  })
   return {
     threadStore,
-    sessionStore: new HybridSessionStore({
-      dataDir: input.dataDir,
-      index: threadStore,
-      fileAccess
-    }),
+    sessionStore,
     shutdown: async () => {
-      await threadStore.shutdown()
+      try {
+        await sessionStore.close()
+      } finally {
+        await threadStore.shutdown()
+      }
     }
   }
 }

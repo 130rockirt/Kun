@@ -137,8 +137,14 @@ export async function startKunServe(
           await runtime.requestShutdown?.(instanceId).catch(() => false)
           return true
         },
-        setSubagentParallelLimit: (limit) =>
+        setAdmissionParallelLimit: (limit) => {
           runtime.delegationRuntime?.setMemoryPressureParallelLimit(limit)
+          runtime.turnService.updateRuntimeConfig({
+            maxConcurrentTurns: limit === undefined
+              ? options.runtime?.turnLimits?.maxConcurrentTurns
+              : Math.min(options.runtime?.turnLimits?.maxConcurrentTurns ?? limit, limit)
+          })
+        }
       })
     : null
   return {

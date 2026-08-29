@@ -39,6 +39,7 @@ import {
   runtimeBuildIdForFlavor
 } from './runtime-flavor.js'
 import { settleCleanupBeforeDeadline } from '../server/runtime-factory-cleanup.js'
+import { installLiveProcessLog } from './live-process-log.js'
 
 export const KUN_READY_PREFIX = 'KUN_READY '
 // Replacement clients wait 15 seconds before escalating to a hard kill. Keep
@@ -390,7 +391,10 @@ export async function main(argv: readonly string[]): Promise<number> {
   })
 }
 
-main(process.argv.slice(2)).then(
+const liveLog = process.env.KUN_RUNTIME_LOG_PATH?.trim()
+  ? installLiveProcessLog({ logPath: process.env.KUN_RUNTIME_LOG_PATH.trim() })
+  : undefined
+main(process.argv.slice(2)).finally(() => liveLog?.close()).then(
   (code) => {
     process.exit(code)
   },

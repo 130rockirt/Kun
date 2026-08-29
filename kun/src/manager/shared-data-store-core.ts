@@ -169,7 +169,11 @@ export abstract class ManagerSharedDataStoreCore {
   }
 
   async close(): Promise<void> {
-    await this.hybridThreadStore.shutdown()
+    try {
+      await (this.sessionStore as HybridSessionStore).close()
+    } finally {
+      await this.hybridThreadStore.shutdown()
+    }
   }
 
   /**

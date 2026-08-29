@@ -58,6 +58,7 @@ import {
 } from './child-result-materializer.js'
 import { buildFastContextEvidencePack } from './fast-context-evidence.js'
 import { createFastContextToolHost } from './fast-context-tool-host.js'
+import { resolveChildEpisodeLimits } from './child-episode-limits.js'
 
 export type ChildDelegatedRuntimeFactory = (input: {
   threads: ThreadService
@@ -325,16 +326,12 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(options.artifactStore ? { artifactStore: options.artifactStore } : {}),
       ...(options.contextCompaction ? { contextCompaction: options.contextCompaction } : {}),
       ...(options.tokenEconomy ? { tokenEconomy: options.tokenEconomy } : {}),
-      // A delegated child settles only when it completes or an explicit
-      // parent/user cancellation reaches its signal. Do not inherit the
-      // generic AgentLoop wall-clock deadline.
-      disableWallTimeLimit: true,
+      turnLimits: resolveChildEpisodeLimits(options.runtime?.turnLimits, input.fastContext === true),
       ...(input.fastContext
         ? {
             fastContext: true,
             fastContextScopeId: input.parentThreadId,
-            fastContextTaskCount,
-            turnLimits: { maxSteps: 4, maxToolCallsPerStep: 8 }
+            fastContextTaskCount
           }
         : {}),
       ...(options.runtime?.toolStorm ? { toolStorm: options.runtime.toolStorm } : {}),

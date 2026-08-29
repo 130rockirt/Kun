@@ -78,6 +78,7 @@ export const ThreadStoreOperationSchema = z.enum(MANAGER_THREAD_STORE_OPERATIONS
 export const SessionStoreOperationSchema = z.enum([
   'appendEvent', 'appendItem', 'checkpointLiveItem', 'finalizeLiveItem', 'rewriteItems', 'loadItemSnapshot',
   'rewriteItemsIfRevision', 'updateItem', 'compactItems', 'scheduleItemHistoryCompaction', 'loadEventsSince',
+  'loadEventPage', 'trimEventsFromSeq', 'eventReplayFloorSeq',
   'loadItems', 'searchItemText', 'loadItemPage', 'loadSession', 'upsertSession',
   'highestSeq', 'allocateEventSeq',
   'loadUsageRecords', 'loadLatestUsageSnapshots', 'resetMemory', 'clearThreadMemory'

@@ -7,6 +7,7 @@ export type RestartReconciliationReport = {
   resumedGoals: number
   resumedTurns: number
   recoveryParentIds: string[]
+  retriedDetachedHandoffs: number
 }
 
 type RestartRuntime = Pick<
@@ -71,12 +72,20 @@ export async function reconcileRuntimeAfterRestart(
   if (resumedTurns > 0) {
     console.warn(`[kun] auto-resumed ${resumedTurns} interrupted turn(s) after restart`)
   }
+  const retryDetachedHandoffs = runtime.delegationRuntime?.retryDetachedChildHandoffs
+  const retriedDetachedHandoffs = typeof retryDetachedHandoffs === 'function'
+    ? await retryDetachedHandoffs.call(runtime.delegationRuntime).catch((error) => {
+        console.warn('[kun] detached child handoff replay failed:', error)
+        return 0
+      })
+    : 0
   return {
     orphanedChildren,
     orphanedThreadIds,
     resumeCandidateIds,
     resumedGoals,
     resumedTurns,
-    recoveryParentIds
+    recoveryParentIds,
+    retriedDetachedHandoffs
   }
 }

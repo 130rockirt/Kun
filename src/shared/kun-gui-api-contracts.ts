@@ -627,12 +627,7 @@ export type LegacySessionImportResult =
   | ({ ok: true } & LegacySessionImportSummary)
   | { ok: false; message: string }
 
-/** One IPC message carries every SSE event parsed from a network chunk. */
-export type SseEventPayload = { streamId: string; events: unknown[]; batchId?: string }
-
-export type SseEndPayload = { streamId: string }
-
-export type SseErrorPayload = { streamId: string; status?: number; message?: string }
+export type { SseEventPayload, SseEndPayload, SseErrorPayload } from './kun-gui-sse-contracts'
 
 export type TrayActionPayload =
   | { type: 'new-chat' }

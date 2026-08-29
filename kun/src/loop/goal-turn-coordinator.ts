@@ -12,6 +12,8 @@ import {
 } from './goal-resume-coordinator.js'
 import type { TurnExecutionStatus, TurnRunOutcome } from './turn-execution-types.js'
 import { resolveTurnClientSurface } from './turn-context-resolver.js'
+import type { ToolHostResult } from '../ports/tool-host.js'
+import { launchContinuationTurn } from './continuation-turn-launch.js'
 
 const GOAL_RESUME_PROMPT = [
   'Continue working toward the active goal.',
@@ -37,7 +39,7 @@ export type GoalTurnCoordinatorOptions = Pick<
 
 export type GoalTurnCoordinatorDeps = {
   threadStore: ThreadStore
-  turns: Pick<TurnService, 'startTurn'>
+  turns: Pick<TurnService, 'startTurn' | 'finishTurn'>
   events: Pick<RuntimeEventRecorder, 'record'>
   nowIso: () => string
   nowMs: () => number
@@ -101,8 +103,12 @@ export class GoalTurnCoordinator {
     await this.evaluateResume(input.threadId, input.turnId, input.finalStatus).catch(() => undefined)
   }
 
-  noteToolExecuted(turnId: string, toolName: string): void {
-    if (!GOAL_NON_PROGRESS_TOOL_NAMES.has(toolName)) {
+  noteToolExecuted(turnId: string, toolName: string, result: ToolHostResult): void {
+    if (
+      !GOAL_NON_PROGRESS_TOOL_NAMES.has(toolName) &&
+      result.item.kind === 'tool_result' &&
+      result.item.isError !== true
+    ) {
       this.madeProgressByTurn.add(turnId)
     }
   }
@@ -237,15 +243,17 @@ export class GoalTurnCoordinator {
       }
       throw error
     }
-    await this.deps.events.record({
-      kind: 'error',
-      threadId,
-      turnId: started.turnId,
-      message: 'Auto-resuming the active goal after an interrupted turn.',
-      code: 'goal_auto_resume',
-      severity: 'warning'
+    launchContinuationTurn({
+      threadId, turnId: started.turnId,
+      runTurn: this.deps.runTurn,
+      finishTurn: (input) => this.deps.turns.finishTurn(input),
+      events: this.deps.events,
+      diagnostic: {
+        kind: 'error', threadId, turnId: started.turnId,
+        message: 'Auto-resuming the active goal after an interrupted turn.',
+        code: 'goal_auto_resume', severity: 'warning'
+      }
     })
-    void this.deps.runTurn(threadId, started.turnId)
   }
 
   private async transitionGoalStatus(

@@ -88,6 +88,7 @@ export const RuntimeEventKind = z.enum([
   'usage',
   'error',
   'canvas_receipt',
+  'cursor_checkpoint',
   'heartbeat'
 ])
 export type RuntimeEventKind = z.infer<typeof RuntimeEventKind>
@@ -538,6 +539,17 @@ export const HeartbeatEvent = RuntimeEventBase.extend({
 })
 export type HeartbeatEvent = z.infer<typeof HeartbeatEvent>
 
+/**
+ * Private durable cursor consumption for a live-only event. The payload that
+ * used this sequence is deliberately not stored, but replay still has to
+ * consume the sequence after a runtime restart.
+ */
+export const CursorCheckpointEvent = RuntimeEventBase.extend({
+  kind: z.literal('cursor_checkpoint'),
+  transientKind: RuntimeEventKind
+}).strict()
+export type CursorCheckpointEvent = z.infer<typeof CursorCheckpointEvent>
+
 export const CanvasReceiptEvent = RuntimeEventBase.extend({
   kind: z.literal('canvas_receipt'),
   itemId: z.string().min(1),
@@ -576,6 +588,7 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   UsageEvent,
   ErrorEvent,
   CanvasReceiptEvent,
+  CursorCheckpointEvent,
   HeartbeatEvent
 ])
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>
@@ -586,6 +599,7 @@ export type RuntimeEvent = z.infer<typeof RuntimeEvent>
  * migration or a future producer accidentally persists an item event for one.
  */
 export function isPublicRuntimeEvent(event: RuntimeEvent): boolean {
+  if (event.kind === 'cursor_checkpoint') return false
   return !('item' in event) || isPublicTurnItem(event.item)
 }
 

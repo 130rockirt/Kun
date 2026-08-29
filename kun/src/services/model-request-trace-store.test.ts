@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -123,6 +123,82 @@ describe('ModelRequestTraceStore', () => {
     const latest = await store.list('thread-1')
     expect(latest.records.map((item) => item.id)).toEqual(['trace-2', 'trace-1'])
     expect(latest.warnings).not.toContain('one malformed trace record was ignored')
+  })
+
+  it('retains a bounded newest tail per thread while the process stays alive', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-model-traces-'))
+    cleanup.push(dataDir)
+    const sampleBytes = Buffer.byteLength(JSON.stringify(
+      record('trace-1', '2026-01-01T00:00:01.000Z')
+    )) + 1
+    const maxBytesPerThread = sampleBytes * 2 + 32
+    const store = new ModelRequestTraceStore(dataDir, {
+      maxBytesPerThread,
+      maintenanceIntervalMs: 0,
+      now: () => Date.parse('2026-01-02T00:00:00.000Z')
+    })
+    for (let index = 1; index <= 5; index += 1) {
+      await store.append(record(
+        `trace-${index}`,
+        `2026-01-01T00:00:0${index}.000Z`
+      ))
+    }
+
+    const page = await store.list('thread-1')
+    expect(page.records.map((item) => item.id)).toEqual(['trace-5', 'trace-4'])
+    const path = join(
+      dataDir,
+      'observability',
+      'model-http',
+      `${Buffer.from('thread-1').toString('base64url')}.jsonl`
+    )
+    expect((await stat(path)).size).toBeLessThanOrEqual(maxBytesPerThread)
+  })
+
+  it('shares a global byte budget across recent traces from multiple threads', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-model-traces-'))
+    cleanup.push(dataDir)
+    const samples = ['thread-1', 'thread-2', 'thread-3'].map((threadId) =>
+      Buffer.byteLength(JSON.stringify(record('trace-2', '2026-01-01T00:00:02.000Z', threadId))) + 1)
+    const maxTotalBytes = Math.max(...samples) * 3 + 32
+    const store = new ModelRequestTraceStore(dataDir, {
+      maxBytesPerThread: maxTotalBytes,
+      maxTotalBytes,
+      maintenanceIntervalMs: 0,
+      now: () => Date.parse('2026-01-02T00:00:00.000Z')
+    })
+    for (const threadId of ['thread-1', 'thread-2', 'thread-3']) {
+      await store.append(record('trace-1', '2026-01-01T00:00:01.000Z', threadId))
+      await store.append(record('trace-2', '2026-01-01T00:00:02.000Z', threadId))
+    }
+
+    for (const threadId of ['thread-1', 'thread-2', 'thread-3']) {
+      expect((await store.list(threadId)).records.map((item) => item.id)).toEqual(['trace-2'])
+    }
+    const root = join(dataDir, 'observability', 'model-http')
+    const sizes = await Promise.all((await readdir(root)).map(async (name) => (await stat(join(root, name))).size))
+    expect(sizes.reduce((sum, size) => sum + size, 0)).toBeLessThanOrEqual(maxTotalBytes)
+  })
+
+  it('evicts idle thread tails from an LRU-bounded in-memory cache', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-model-traces-'))
+    cleanup.push(dataDir)
+    const store = new ModelRequestTraceStore(dataDir, { maxCachedThreads: 1 })
+    await store.append(record('trace-1', '2026-01-01T00:00:01.000Z', 'thread-1'))
+    await store.append(record('trace-2', '2026-01-01T00:00:02.000Z', 'thread-2'))
+    await store.list('thread-1')
+    await store.list('thread-2')
+    const path = join(
+      dataDir,
+      'observability',
+      'model-http',
+      `${Buffer.from('thread-1').toString('base64url')}.jsonl`
+    )
+    await appendFile(path, '{"malformed-after-eviction":\n')
+
+    const reloaded = await store.list('thread-1')
+    expect(reloaded.records.map((item) => item.id)).toEqual(['trace-1'])
+    expect(reloaded.warnings).toContain('one malformed trace record was ignored')
   })
 
   it('degrades without throwing or blocking when persistence is unavailable', async () => {

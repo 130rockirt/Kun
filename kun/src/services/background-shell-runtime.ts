@@ -8,6 +8,8 @@ import {
   formatBackgroundShellCompletionNotice
 } from './background-shell-notice.js'
 import { resolveTurnClientSurface } from '../loop/turn-context-resolver.js'
+import { existsSync } from 'node:fs'
+import { BACKGROUND_SHELL_OUTPUT_EXPIRED_NOTICE } from './background-shell-output.js'
 
 export type BackgroundShellRuntimeDeps = {
   events: RuntimeEventRecorder
@@ -53,11 +55,14 @@ export class BackgroundShellRuntime {
   listSessions(threadId?: string): BackgroundShellRecord[] {
     const all = [...this.sessions.values()]
     const filtered = threadId ? all.filter((session) => session.threadId === threadId) : all
-    return filtered.sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+    return filtered
+      .map((session) => this.visibleSession(session))
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
   }
 
   getSession(sessionId: string): BackgroundShellRecord | null {
-    return this.sessions.get(sessionId) ?? null
+    const session = this.sessions.get(sessionId)
+    return session ? this.visibleSession(session) : null
   }
 
   private stopHandler: ((sessionId: string) => Promise<boolean>) | null = null
@@ -123,6 +128,20 @@ export class BackgroundShellRuntime {
       output: record.output,
       ...(record.outputTruncated ? { outputTruncated: true as const } : {}),
       ...(record.outputFilePath ? { outputFilePath: record.outputFilePath } : {})
+    }
+  }
+
+  private visibleSession(record: BackgroundShellRecord): BackgroundShellRecord {
+    if (
+      record.status === 'running' ||
+      !record.outputFilePath ||
+      existsSync(record.outputFilePath)
+    ) return record
+    return {
+      ...record,
+      output: BACKGROUND_SHELL_OUTPUT_EXPIRED_NOTICE,
+      outputTruncated: true,
+      outputFilePath: undefined
     }
   }
 

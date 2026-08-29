@@ -24,6 +24,25 @@ function settledShell(
 }
 
 describe('BackgroundShellRuntime completion handoff', () => {
+  it('marks retained session metadata expired after its output file is pruned', () => {
+    const runtime = new BackgroundShellRuntime({
+      events: { record: vi.fn() },
+      threadStore: { get: vi.fn() },
+      turns: { startTurn: vi.fn(), steerTurn: vi.fn() },
+      nowIso: () => '2026-07-29T00:01:00.000Z'
+    } as unknown as BackgroundShellRuntimeDeps)
+    runtime.upsertSession({
+      ...settledShell('completed'),
+      outputFilePath: '/definitely/missing/background-shell.output'
+    })
+
+    expect(runtime.getSession('shell001')).toMatchObject({
+      output: expect.stringContaining('expired by retention policy'),
+      outputTruncated: true
+    })
+    expect(runtime.getSession('shell001')?.outputFilePath).toBeUndefined()
+  })
+
   it.each(['completed', 'failed', 'stopped'] as const)(
     'automatically resumes the agent after a detached shell is %s (#1031)',
     async (status) => {
@@ -77,7 +96,7 @@ describe('BackgroundShellRuntime completion handoff', () => {
   )
 
   it('does not resume for a foreground shell settlement', async () => {
-    const startTurn = vi.fn(async () => ({
+    const startTurn = vi.fn(async (_input: unknown) => ({
       threadId: 'thread_1',
       turnId: 'turn_callback'
     }))
@@ -113,7 +132,7 @@ describe('BackgroundShellRuntime completion handoff', () => {
       }),
       turns: [sourceTurn]
     }
-    const startTurn = vi.fn(async () => ({
+    const startTurn = vi.fn(async (_input: unknown) => ({
       threadId: 'thread_1',
       turnId: 'turn_callback'
     }))

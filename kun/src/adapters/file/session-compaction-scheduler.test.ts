@@ -64,4 +64,25 @@ describe('SessionCompactionScheduler', () => {
     expect(started).toEqual(['thr_1', 'thr_2'])
     await scheduler.close()
   })
+
+  it('waits for in-flight work and refuses new schedules after close', async () => {
+    vi.useFakeTimers()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const run = vi.fn(async () => gate)
+    const scheduler = new SessionCompactionScheduler({ delayMs: 0, run })
+    scheduler.schedule('thr_1', 'events')
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce())
+
+    let closed = false
+    const closing = scheduler.close().then(() => { closed = true })
+    await Promise.resolve()
+    expect(closed).toBe(false)
+    release()
+    await closing
+    scheduler.schedule('thr_2', 'events')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(run).toHaveBeenCalledOnce()
+  })
 })

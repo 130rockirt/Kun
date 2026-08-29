@@ -22,7 +22,9 @@ const harness = vi.hoisted(() => {
   const probeRuntimeApi = vi.fn(async () => ({ ok: true as const }))
   const noteRuntimeHealthy = vi.fn()
   const waitForKunStartupSettled = vi.fn(async () => undefined)
-  const waitForRuntimeTurnsIdle = vi.fn(async () => 'idle' as const)
+  const waitForRuntimeTurnsIdle = vi.fn<() => Promise<'idle' | 'timeout'>>(
+    async () => 'idle'
+  )
   const clearHistoricalKunServeProcesses = vi.fn(async (): Promise<{
     matchedPids: number[]
     terminatedPids: number[]

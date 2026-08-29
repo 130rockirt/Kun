@@ -18,6 +18,16 @@ import type { ArtifactStore } from '../artifacts/artifact-store.js'
 
 export const TOOL_RESULT_ARTIFACT_THRESHOLD_BYTES = 1024 * 1024
 const TOOL_RESULT_PREVIEW_CHARS = 16 * 1024
+const DEFAULT_TOOL_ABORT_GRACE_MS = 5_000
+export const TOOL_ABORT_OUTCOME_UNKNOWN_CODE = 'tool_abort_outcome_unknown'
+
+class ToolAbortOutcomeUnknownError extends Error {
+  readonly unknownOutcome = true
+  constructor(readonly graceMs: number) {
+    super(`tool did not settle within ${graceMs} ms after cancellation`)
+    this.name = 'ToolAbortOutcomeUnknownError'
+  }
+}
 
 export type PlanWrittenCallback = (input: {
   threadId: string
@@ -42,6 +52,8 @@ export type ToolExecutionServiceDeps = {
   /** Design-tool renderer receipt registry; finalizes accepted results. */
   receipts?: CanvasReceiptRegistry
   artifactStore?: ArtifactStore
+  /** Bounded wait for an aborted provider/tool to acknowledge cancellation. */
+  abortGraceMs?: number
 }
 
 export type ToolExecutionInput = {
@@ -60,6 +72,7 @@ export class ToolExecutionService {
   private readonly checkpointGates = new Map<string, Promise<void>>()
   private readonly deps: ToolExecutionServiceDeps
   private readonly toolCancellation: ToolCancellationRegistry
+  private readonly abortGraceMs: number
 
   constructor(deps: ToolExecutionServiceDeps) {
     const toolCancellation = deps.toolCancellation ?? new ToolCancellationRegistry()
@@ -68,6 +81,7 @@ export class ToolExecutionService {
       toolCancellation
     }
     this.toolCancellation = toolCancellation
+    this.abortGraceMs = Math.max(0, Math.floor(deps.abortGraceMs ?? DEFAULT_TOOL_ABORT_GRACE_MS))
   }
 
   async executeSafely(input: ToolExecutionInput): Promise<ToolHostResult> {
@@ -97,6 +111,7 @@ export class ToolExecutionService {
       if (registration?.wasCancelledByUser()) return this.cancelledResult(input)
       return result
     } catch (error) {
+      if (error instanceof ToolAbortOutcomeUnknownError) return this.unknownOutcomeResult(input, error)
       if (input.context.abortSignal.aborted && !registration?.wasCancelledByUser()) throw error
       if (registration?.wasCancelledByUser()) return this.cancelledResult(input)
       const message = error instanceof Error ? error.message : String(error)
@@ -145,6 +160,29 @@ export class ToolExecutionService {
           error: 'The user stopped this tool execution.',
           guidance:
             'Only this tool was stopped. Continue using the other tool results and choose an alternative approach. Do not repeat the identical call automatically.'
+        },
+        isError: true
+      }),
+      approved: false
+    }
+  }
+
+  private unknownOutcomeResult(
+    input: ToolExecutionInput,
+    error: ToolAbortOutcomeUnknownError
+  ): ToolHostResult {
+    return {
+      item: makeToolResultItem({
+        id: `item_${input.call.callId}`,
+        turnId: input.turnId,
+        threadId: input.threadId,
+        callId: input.call.callId,
+        toolName: input.call.toolName,
+        toolKind: input.call.toolKind ?? 'tool_call',
+        output: {
+          code: TOOL_ABORT_OUTCOME_UNKNOWN_CODE,
+          error: error.message,
+          guidance: 'The tool may still have completed externally. Inspect state before retrying.'
         },
         isError: true
       }),
@@ -250,7 +288,7 @@ export class ToolExecutionService {
           let lastProgressFingerprint: string | undefined
           let result: ToolHostResult
           try {
-            result = await this.deps.toolHost.execute(input.call, input.context, (item) => {
+            const execution = this.deps.toolHost.execute(input.call, input.context, (item) => {
               if (!acceptingUpdates) return
               const fingerprint = progressFingerprint(item)
               if (fingerprint === lastProgressFingerprint) return pendingUpdates
@@ -274,6 +312,7 @@ export class ToolExecutionService {
               })
               return update
             })
+            result = await settleToolAfterAbort(execution, input.context.abortSignal, this.abortGraceMs)
           } finally {
             // Tool progress is scoped to the execute() promise. Detached work
             // may keep a callback reference, but it must not regress an already
@@ -468,4 +507,41 @@ function isRecoverableToolDispatchError(error: unknown): boolean {
     message.includes(' is not provided by ') ||
     message.includes(' is not advertised') ||
     message.includes(' is disabled by policy')
+}
+
+async function settleToolAfterAbort<T>(
+  execution: Promise<T>,
+  signal: AbortSignal,
+  graceMs: number
+): Promise<T> {
+  type Settled = { status: 'fulfilled'; value: T } | { status: 'rejected'; reason: unknown }
+  const settled: Promise<Settled> = execution.then(
+    (value) => ({ status: 'fulfilled', value }),
+    (reason) => ({ status: 'rejected', reason })
+  )
+  let onAbort: (() => void) | undefined
+  const aborted = signal.aborted
+    ? Promise.resolve<'aborted'>('aborted')
+    : new Promise<'aborted'>((resolve) => {
+        onAbort = () => resolve('aborted')
+        signal.addEventListener('abort', onAbort, { once: true })
+      })
+  const first = await Promise.race([settled, aborted])
+  if (onAbort) signal.removeEventListener('abort', onAbort)
+  if (first !== 'aborted') return unwrapSettled(first)
+
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), graceMs)
+    timer.unref?.()
+  })
+  const afterAbort = await Promise.race([settled, timeout])
+  if (timer) clearTimeout(timer)
+  if (afterAbort === 'timeout') throw new ToolAbortOutcomeUnknownError(graceMs)
+  return unwrapSettled(afterAbort)
+}
+
+function unwrapSettled<T>(settled: { status: 'fulfilled'; value: T } | { status: 'rejected'; reason: unknown }): T {
+  if (settled.status === 'rejected') throw settled.reason
+  return settled.value
 }

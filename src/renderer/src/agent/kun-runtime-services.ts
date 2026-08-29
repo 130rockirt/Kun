@@ -96,7 +96,13 @@ const MAX_PENDING_SSE_DISPATCH_BATCHES = 32
 
 /** Preserves the native SSE failure status for the store's recovery policy. */
 export class KunSseSubscriptionError extends Error {
-  constructor(message: string, readonly status?: number) {
+  constructor(
+    message: string,
+    readonly status?: number,
+    readonly code?: 'replay_reset_required',
+    readonly threadId?: string,
+    readonly floorSeq?: number
+  ) {
     super(message)
     this.name = 'KunSseSubscriptionError'
   }
@@ -586,9 +592,22 @@ export class KunRuntimeProviderServices {
           queuedDispatchBatches = Math.max(0, queuedDispatchBatches - 1)
         })
       })
-      const offErr = rendererRuntimeClient.onSseError(({ streamId: sid, message, status }) => {
+      const offErr = rendererRuntimeClient.onSseError(({
+        streamId: sid,
+        message,
+        status,
+        code,
+        threadId: resetThreadId,
+        floorSeq
+      }) => {
         if (sid !== streamId) return
-        sink.onError(new KunSseSubscriptionError(message ?? `sse error ${status ?? ''}`, status))
+        sink.onError(new KunSseSubscriptionError(
+          message ?? `sse error ${status ?? ''}`,
+          status,
+          code,
+          resetThreadId,
+          floorSeq
+        ))
         finish()
       })
       const offEnd = rendererRuntimeClient.onSseEnd(({ streamId: sid }) => {

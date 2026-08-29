@@ -125,6 +125,56 @@ describe('KunRuntimeProvider', () => {
     })
   })
 
+  it('preserves replay reset metadata for projection recovery', async () => {
+    let onSseError: ((payload: {
+      streamId: string
+      message?: string
+      code?: 'replay_reset_required'
+      threadId?: string
+      floorSeq?: number
+    }) => void) | null = null
+    const onError = vi.fn()
+    const sink: ThreadEventSink = {
+      onSeq: vi.fn(),
+      onDeltas: vi.fn(),
+      onUserMessage: vi.fn(),
+      onTool: vi.fn(),
+      onCompaction: vi.fn(),
+      onApproval: vi.fn(),
+      onUserInput: vi.fn(),
+      onUserInputStatus: vi.fn(),
+      onGoal: vi.fn(),
+      onTodos: vi.fn(),
+      onTurnComplete: vi.fn(),
+      onError
+    }
+    installDsGui({
+      onSseError: vi.fn((handler) => {
+        onSseError = handler
+        return () => undefined
+      }),
+      startSse: vi.fn(async (_threadId, _sinceSeq, streamId) => {
+        queueMicrotask(() => onSseError?.({
+          streamId: streamId ?? 'stream-1',
+          message: 'reload snapshot',
+          code: 'replay_reset_required',
+          threadId: 'thr_1',
+          floorSeq: 80
+        }))
+        return { streamId: streamId ?? 'stream-1' }
+      })
+    })
+
+    await new KunRuntimeProvider().subscribeThreadEvents('thr_1', 7, sink, new AbortController().signal)
+
+    expect(onError.mock.calls[0]?.[0]).toMatchObject({
+      name: 'KunSseSubscriptionError',
+      code: 'replay_reset_required',
+      threadId: 'thr_1',
+      floorSeq: 80
+    })
+  })
+
   it('advances the renderer cursor after dispatch and only then acknowledges the SSE batch', async () => {
     let onData: ((payload: { streamId: string; events: unknown[]; batchId?: string }) => void) | null = null
     let releaseAck: (() => void) | undefined

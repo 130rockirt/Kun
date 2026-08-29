@@ -9,6 +9,7 @@ import { getRuntimeBaseUrlForSettings, runtimeAuthHeaders } from './runtime/kun-
 
 type SseControllerState = {
   controller: AbortController
+  owner: WebContents
   stoppedByClient: boolean
   pendingAck?: {
     batchId: string
@@ -26,6 +27,27 @@ export const MAX_SSE_BATCH_BYTES = 512 * 1024
 
 
 const sseControllers = new Map<string, SseControllerState>()
+const observedSseOwners = new WeakSet<WebContents>()
+
+function stopSseState(state: SseControllerState): void {
+  state.stoppedByClient = true
+  state.pendingAck?.resolve(false)
+  state.controller.abort()
+}
+
+function observeSseOwner(owner: WebContents): void {
+  if (observedSseOwners.has(owner)) return
+  observedSseOwners.add(owner)
+  const onDestroyed = (): void => {
+    for (const [streamId, state] of sseControllers) {
+      if (state.owner !== owner) continue
+      stopSseState(state)
+      sseControllers.delete(streamId)
+    }
+  }
+  ;(owner as WebContents & { once?: (event: 'destroyed', listener: () => void) => void })
+    .once?.('destroyed', onDestroyed)
+}
 
 function waitForSseBatchAck(
   state: SseControllerState,
@@ -192,8 +214,9 @@ export function registerRuntimeSseIpc(options: {
 }): void {
   const { ipcMain, store, ensureRuntime, assertRendererRuntimeReady, logError } = options
   ipcMain.handle('runtime:sse:start', async (event, args: unknown) => {
-    void event
     assertRendererRuntimeReady()
+    const wc = event.sender
+    observeSseOwner(wc)
     const request = sseStartPayloadSchema.parse(args)
     const loadedSettings = await store.load()
     const ensuredSettings = await ensureRuntime(loadedSettings)
@@ -202,18 +225,15 @@ export function registerRuntimeSseIpc(options: {
     const id = requestedId || randomUUID()
     const existing = sseControllers.get(id)
     if (existing) {
-      existing.stoppedByClient = true
-      existing.pendingAck?.resolve(false)
-      existing.controller.abort()
+      stopSseState(existing)
       sseControllers.delete(id)
     }
     const ac = new AbortController()
-    const state: SseControllerState = { controller: ac, stoppedByClient: false }
+    const state: SseControllerState = { controller: ac, owner: wc, stoppedByClient: false }
     sseControllers.set(id, state)
     const acknowledgedBatches = request.acknowledgedBatches === true
 
     ;(async () => {
-      const wc = event.sender
       let nextSinceSeq = request.sinceSeq
       let reconnectDelayMs = SSE_RECONNECT_BASE_MS
       let notFoundRetries = 0
@@ -326,6 +346,32 @@ export function registerRuntimeSseIpc(options: {
             const enqueueParsedEvent = async (block: string): Promise<boolean> => {
               const parsed = parseSseData(block)
               if (parsed === null) return true
+              if (parsed.event === 'replay_reset_required' && !parsed.id) {
+                const reset = parsed.data && typeof parsed.data === 'object'
+                  ? parsed.data as { threadId?: unknown; floorSeq?: unknown }
+                  : undefined
+                if (
+                  reset?.threadId !== request.threadId ||
+                  typeof reset.floorSeq !== 'number' ||
+                  !Number.isSafeInteger(reset.floorSeq) ||
+                  reset.floorSeq < 0
+                ) {
+                  throw new Error('SSE server returned an invalid replay reset')
+                }
+                sendSseMessage(wc, 'runtime:sse-error', {
+                  streamId: id,
+                  code: 'replay_reset_required',
+                  threadId: request.threadId,
+                  floorSeq: reset.floorSeq,
+                  message: 'Runtime event history was compacted; reload the thread snapshot.'
+                })
+                // Never reconnect this worker with the rejected cursor. The
+                // renderer must replace its projection from /state first and
+                // then create a fresh subscription at the snapshot high-water.
+                state.stoppedByClient = true
+                ac.abort()
+                return false
+              }
               // Route-level SSE failures are control frames without an event
               // id. They must not be treated as normal runtime `error` events:
               // acknowledging one would retain the old cursor and reconnect
@@ -404,10 +450,10 @@ export function registerRuntimeSseIpc(options: {
         if (!state.stoppedByClient && !ac.signal.aborted) {
           sendSseMessage(wc, 'runtime:sse-end', { streamId: id })
         }
-        sseControllers.delete(id)
+        if (sseControllers.get(id) === state) sseControllers.delete(id)
       }
     })().catch((error) => {
-      sseControllers.delete(id)
+      if (sseControllers.get(id) === state) sseControllers.delete(id)
       logError('sse', `SSE worker crashed for thread ${request.threadId}`, {
         message: error instanceof Error ? error.message : String(error),
         streamId: id
@@ -417,22 +463,18 @@ export function registerRuntimeSseIpc(options: {
     return { streamId: id }
   })
 
-  ipcMain.handle('runtime:sse:ack', async (_, args: unknown) => {
+  ipcMain.handle('runtime:sse:ack', async (event, args: unknown) => {
     const acknowledgement = sseAckPayloadSchema.parse(args)
     const state = sseControllers.get(acknowledgement.streamId)
-    if (!state || state.pendingAck?.batchId !== acknowledgement.batchId) return false
+    if (!state || state.owner !== event.sender || state.pendingAck?.batchId !== acknowledgement.batchId) return false
     state.pendingAck.resolve(true)
     return true
   })
 
-  ipcMain.handle('runtime:sse:stop', async (_, streamId: unknown) => {
+  ipcMain.handle('runtime:sse:stop', async (event, streamId: unknown) => {
     const normalizedStreamId = streamIdSchema.parse(streamId)
     const state = sseControllers.get(normalizedStreamId)
-    if (state) {
-      state.stoppedByClient = true
-      state.pendingAck?.resolve(false)
-      state.controller.abort()
-    }
+    if (state?.owner === event.sender) stopSseState(state)
     return true
   })
 }

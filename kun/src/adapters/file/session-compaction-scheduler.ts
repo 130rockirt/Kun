@@ -3,7 +3,7 @@
  * full JSONL rewrite. Multiple schedule() calls within the debounce window
  * collapse into one run.
  */
-export type CompactionScheduleKind = 'items' | 'usage'
+export type CompactionScheduleKind = 'events' | 'items' | 'usage'
 
 export type SessionCompactionSchedulerOptions = {
   delayMs?: number
@@ -51,24 +51,29 @@ export class SessionCompactionScheduler {
   }
 
   async flush(threadId?: string): Promise<void> {
-    const keys = threadId
-      ? [...this.timers.keys()].filter((key) => key.endsWith(`:${threadId}`))
-      : [...this.timers.keys()]
-    for (const key of keys) {
-      const timer = this.timers.get(key)
-      if (timer) this.clearTimer(timer)
-      this.timers.delete(key)
-      const sep = key.indexOf(':')
-      const kind = key.slice(0, sep) as CompactionScheduleKind
-      const id = key.slice(sep + 1)
-      await this.launch(id, kind)
-    }
-    const inflight = threadId
-      ? [...this.inflight.entries()]
-          .filter(([key]) => key.endsWith(`:${threadId}`))
-          .map(([, promise]) => promise)
-      : [...this.inflight.values()]
-    await Promise.all(inflight)
+    const matches = (key: string): boolean => !threadId || key.endsWith(`:${threadId}`)
+    // A revision conflict can schedule a retry while the first rewrite is in
+    // flight. Drain until no matching timer or run remains, rather than taking
+    // one snapshot that can strand that retry during shutdown/tests.
+    do {
+      const launches: Promise<void>[] = []
+      for (const key of [...this.timers.keys()].filter(matches)) {
+        const timer = this.timers.get(key)
+        if (timer) this.clearTimer(timer)
+        this.timers.delete(key)
+        const sep = key.indexOf(':')
+        launches.push(this.launch(
+          key.slice(sep + 1),
+          key.slice(0, sep) as CompactionScheduleKind
+        ))
+      }
+      await Promise.all(launches)
+      await Promise.all([...this.inflight.entries()]
+        .filter(([key]) => matches(key))
+        .map(([, promise]) => promise))
+    } while (
+      [...this.timers.keys()].some(matches) || [...this.inflight.keys()].some(matches)
+    )
   }
 
   /** Drop pending timers without running them; wait for in-flight work. */

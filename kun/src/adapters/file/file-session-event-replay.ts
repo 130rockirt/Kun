@@ -1,0 +1,101 @@
+import type { RuntimeEvent } from '../../contracts/events.js'
+import type { EventHistoryPage, EventHistoryPageOptions } from '../../ports/session-store.js'
+import { stat } from 'node:fs/promises'
+import { firstEventSeqFromJsonl, iterateRuntimeEventsJsonl, trimEventsWithGuards } from './file-session-jsonl.js'
+import { loadFileSessionEventPage } from './file-session-event-page.js'
+import type { JsonlFileAccessCoordinator } from './jsonl-file-access.js'
+
+export async function collectFileSessionEvents(input: {
+  path: string
+  sinceSeq: number
+  maxRecordBytes: number
+  fileAccess: JsonlFileAccessCoordinator
+}): Promise<RuntimeEvent[]> {
+  const events: RuntimeEvent[] = []
+  for await (const event of iterateFileSessionEvents(input)) events.push(event)
+  return events.sort((left, right) => left.seq - right.seq)
+}
+
+export async function* iterateFileSessionEvents(input: {
+  path: string
+  sinceSeq: number
+  maxRecordBytes: number
+  fileAccess: JsonlFileAccessCoordinator
+}): AsyncIterable<RuntimeEvent> {
+  const release = await input.fileAccess.acquireRead(input.path)
+  try {
+    yield* iterateRuntimeEventsJsonl(input.path, input.sinceSeq, input.maxRecordBytes)
+  } finally {
+    release()
+  }
+}
+
+export function readFileSessionReplayFloor(input: {
+  path: string
+  maxRecordBytes: number
+  fileAccess: JsonlFileAccessCoordinator
+}): Promise<number> {
+  return input.fileAccess.withRead(
+    input.path,
+    () => firstEventSeqFromJsonl(input.path, input.maxRecordBytes)
+  )
+}
+
+export class FileSessionEventHistory {
+  constructor(private readonly options: {
+    pathFor: (threadId: string) => string
+    maxRecordBytes: number
+    fileAccess: JsonlFileAccessCoordinator
+    readRevision: (threadId: string) => number
+    bumpRevision: (threadId: string) => void
+    invalidateCache: (threadId: string) => void
+    withWrite: <T>(threadId: string, operation: () => Promise<T>) => Promise<T>
+    scheduleRetry: (threadId: string) => void
+  }) {}
+
+  load(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]> {
+    return collectFileSessionEvents({
+      path: this.options.pathFor(threadId), sinceSeq,
+      maxRecordBytes: this.options.maxRecordBytes, fileAccess: this.options.fileAccess
+    })
+  }
+
+  page(threadId: string, options: EventHistoryPageOptions): Promise<EventHistoryPage> {
+    return loadFileSessionEventPage({
+      path: this.options.pathFor(threadId), options,
+      defaultMaxRecordBytes: this.options.maxRecordBytes, fileAccess: this.options.fileAccess
+    })
+  }
+
+  iterate(threadId: string, sinceSeq: number, maxRecordBytes: number): AsyncIterable<RuntimeEvent> {
+    return iterateFileSessionEvents({
+      path: this.options.pathFor(threadId), sinceSeq,
+      maxRecordBytes, fileAccess: this.options.fileAccess
+    })
+  }
+
+  floor(threadId: string): Promise<number> {
+    return readFileSessionReplayFloor({
+      path: this.options.pathFor(threadId),
+      maxRecordBytes: this.options.maxRecordBytes,
+      fileAccess: this.options.fileAccess
+    })
+  }
+
+  async trim(threadId: string, fromSeqInclusive: number): Promise<{ afterBytes: number }> {
+    const path = this.options.pathFor(threadId)
+    const info = await stat(path).catch(() => null)
+    if (!info) return { afterBytes: 0 }
+    return trimEventsWithGuards({
+      path, fromSeqInclusive, maxRecordBytes: this.options.maxRecordBytes, info,
+      revisionBefore: this.options.readRevision(threadId),
+      readRevision: () => this.options.readRevision(threadId),
+      bumpRevision: () => this.options.bumpRevision(threadId),
+      invalidateCache: () => this.options.invalidateCache(threadId),
+      withWrite: (operation) => this.options.withWrite(threadId, operation),
+      withRead: (operation) => this.options.fileAccess.withRead(path, operation),
+      withReplacement: (operation) => this.options.fileAccess.withReplacement(path, operation),
+      scheduleRetry: () => this.options.scheduleRetry(threadId)
+    })
+  }
+}

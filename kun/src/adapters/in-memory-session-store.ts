@@ -27,6 +27,7 @@ import {
  */
 export class InMemorySessionStore implements SessionStore {
   private readonly events = new Map<string, RuntimeEvent[]>()
+  private readonly cursorCheckpoints = new Map<string, number>()
   private readonly items = new Map<string, TurnItem[]>()
   private readonly sessions = new Map<string, AgentSession>()
   private readonly liveItems = new Map<string, Map<string, LiveItemCheckpoint>>()
@@ -34,6 +35,10 @@ export class InMemorySessionStore implements SessionStore {
   private nextItemHistoryRevision = 0
 
   async appendEvent(threadId: string, event: RuntimeEvent): Promise<void> {
+    if (event.kind === 'cursor_checkpoint') {
+      this.cursorCheckpoints.set(threadId, Math.max(this.cursorCheckpoints.get(threadId) ?? 0, event.seq))
+      return
+    }
     const list = this.events.get(threadId) ?? []
     if (list.some((existing) => existing.seq === event.seq)) return
     list.push(event)
@@ -208,11 +213,15 @@ export class InMemorySessionStore implements SessionStore {
 
   async highestSeq(threadId: string): Promise<number> {
     const list = this.events.get(threadId) ?? []
-    return list.reduce((max, event) => Math.max(max, event.seq), 0)
+    return Math.max(
+      this.cursorCheckpoints.get(threadId) ?? 0,
+      list.reduce((max, event) => Math.max(max, event.seq), 0)
+    )
   }
 
   async resetMemory(): Promise<void> {
     this.events.clear()
+    this.cursorCheckpoints.clear()
     this.items.clear()
     this.sessions.clear()
     this.liveItems.clear()
@@ -221,6 +230,7 @@ export class InMemorySessionStore implements SessionStore {
 
   clearThreadMemory(threadId: string): void {
     this.events.delete(threadId)
+    this.cursorCheckpoints.delete(threadId)
     this.items.delete(threadId)
     this.sessions.delete(threadId)
     this.liveItems.delete(threadId)

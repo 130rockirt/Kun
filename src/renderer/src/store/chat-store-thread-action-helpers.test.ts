@@ -103,4 +103,43 @@ describe('subscribeThreadEventsWithRecovery', () => {
     expect(recoverActiveTurn).toHaveBeenCalledOnce()
     controller.abort()
   })
+
+  it('immediately rehydrates a replay reset without surfacing a false chat error', async () => {
+    vi.useFakeTimers()
+    const recoverActiveTurn = vi.fn(async () => true)
+    const state = {
+      activeThreadId: 'thread_reset',
+      busy: true,
+      recoverActiveTurn
+    } as unknown as ChatState
+    const reset = Object.assign(new Error('reload snapshot'), {
+      code: 'replay_reset_required',
+      threadId: 'thread_reset',
+      floorSeq: 80
+    })
+    const provider = {
+      subscribeThreadEvents: vi.fn(async (
+        _threadId: string,
+        _sinceSeq: number,
+        recoverySink: ThreadEventSink
+      ) => {
+        recoverySink.onError(reset)
+      })
+    } as unknown as AgentProvider
+    const sink = { onError: vi.fn() } as unknown as ThreadEventSink
+
+    subscribeThreadEventsWithRecovery(
+      provider,
+      state.activeThreadId!,
+      7,
+      sink,
+      new AbortController().signal,
+      () => state
+    )
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(sink.onError).not.toHaveBeenCalled()
+    expect(recoverActiveTurn).toHaveBeenCalledOnce()
+  })
 })

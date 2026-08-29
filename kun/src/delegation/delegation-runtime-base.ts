@@ -41,7 +41,6 @@ import type { WorkspaceAgentCatalogProfile } from './workspace-agents.js'
 import type { SubagentRoutingDocument } from './subagent-router.js'
 import { BUILTIN_SUBAGENT_PROFILES } from './builtin-profiles.js'
 import { BUILTIN_AGENT_CATALOG_BY_ID } from './builtin-agent-catalog.js'
-import { resolveTurnClientSurface } from '../loop/turn-context-resolver.js'
 import { AtomicJsonFile, isManagerAtomicJsonPath } from '../extensions/atomic-json.js'
 import { withManagerDataMutex } from '../manager/data-mutex.js'
 import {
@@ -65,28 +64,20 @@ import {
   defaultExecutor,
   elapsedMs,
   executeWithParentSignal,
-  formatDetachedChildDisplayText,
   notifyLifecycle,
   sameChildActivity,
   subtractChildUsage,
   toUsageSnapshot
 } from './delegation-runtime-support.js'
-import {
-  formatDetachedChildNotice,
-  hasResumableChildSnapshot,
-  proactiveRetryStatus
-} from './delegation-proactive-retry.js'
+import { hasResumableChildSnapshot, proactiveRetryStatus } from './delegation-proactive-retry.js'
 import {
   CHILD_RESULT_PREVIEW_CHARS,
   ChildResultExecutionError
 } from './child-result-materializer.js'
 
-import {
-  ChildQueueTimeoutError,
-  ScopedSlotScheduler,
-  SlotScheduler,
-  type SlotLease
-} from './delegation-slot-waiter.js'
+import { ChildQueueTimeoutError } from './delegation-slot-waiter.js'
+import { ChildAdmissionScheduler, type SlotLease } from './delegation-child-admission.js'
+import { DetachedChildHandoffCoordinator } from './delegation-detached-handoff.js'
 
 export type RunTurnFn = (threadId: string, turnId: string) => Promise<unknown>
 
@@ -107,8 +98,9 @@ export type ForegroundChildControl = {
 
 export abstract class DelegationRuntimeBase {
   private memoryPressureParallelLimit: number | undefined
-  private readonly ordinarySlots = new SlotScheduler(() => this.enabled() ? this.parallelLimit : 0)
-  private readonly fastContextSlots = new ScopedSlotScheduler(() => this.enabled() ? 1 : 0)
+  private readonly childAdmission = new ChildAdmissionScheduler(
+    () => this.enabled() ? this.parallelLimit : 0
+  )
   protected childSeq = 0
   protected readonly childSeqById = new Map<string, number>()
   /**
@@ -131,6 +123,7 @@ export abstract class DelegationRuntimeBase {
   /** A persistent child thread accepts at most one appended follow-up turn at a time. */
   protected readonly resumingChildren = new Set<string>()
   protected runTurn: RunTurnFn | null = null
+  protected readonly detachedHandoffs: DetachedChildHandoffCoordinator
 
   constructor(protected options: {
     config: SubagentsCapabilityConfig
@@ -145,7 +138,16 @@ export abstract class DelegationRuntimeBase {
     executor?: ChildRunExecutor
     recordExternalUsage?: (threadId: string, usage: UsageSnapshot) => void
     proactiveRetryWait?: (delayMs: number, signal: AbortSignal) => Promise<boolean>
-  }) {}
+  }) {
+    this.detachedHandoffs = new DetachedChildHandoffCoordinator({
+      store: options.store.handoffs,
+      threadStore: options.threadStore,
+      turns: options.turns,
+      runTurn: () => this.runTurn,
+      proactiveRetry: () => this.options.config.proactiveRetry,
+      nowIso: () => this.now()
+    })
+  }
 
   bindAgentLoop(input: { runTurn: RunTurnFn }): void {
     this.runTurn = input.runTurn
@@ -156,13 +158,12 @@ export abstract class DelegationRuntimeBase {
       ...this.options,
       config
     }
-    this.ordinarySlots.refresh()
-    this.fastContextSlots.refresh()
+    this.childAdmission.refresh()
   }
 
   setMemoryPressureParallelLimit(limit?: number): void {
     this.memoryPressureParallelLimit = limit === undefined ? undefined : Math.max(1, Math.floor(limit))
-    this.ordinarySlots.refresh()
+    this.childAdmission.refresh()
   }
 
   enabled(): boolean {
@@ -176,16 +177,14 @@ export abstract class DelegationRuntimeBase {
     ))
   }
 
-  /** Acquire the ordinary global lane or the Fast Context parent-session lane. */
+  /** Acquire a lane plus the shared child ceiling. */
   protected acquireSlot(input: {
     fastContext: boolean
     parentThreadId: string
     signal: AbortSignal
     queueTimeoutMs?: number
   }): Promise<SlotLease> {
-    return input.fastContext
-      ? this.fastContextSlots.acquire(input.parentThreadId, input.signal, input.queueTimeoutMs)
-      : this.ordinarySlots.acquire(input.signal, input.queueTimeoutMs)
+    return this.childAdmission.acquire(input)
   }
 
   /** Configured profiles, surfaced to the delegate_task tool schema/UI. */
@@ -302,7 +301,7 @@ export abstract class DelegationRuntimeBase {
     })
     return {
       enabled: this.options.config.enabled,
-      active: this.ordinarySlots.activeCount + this.fastContextSlots.activeCount,
+      active: this.childAdmission.activeCount,
       childRuns,
       aggregates: aggregateChildRuns(childRuns)
     }
@@ -385,41 +384,11 @@ export abstract class DelegationRuntimeBase {
   }
 
   protected async notifyDetachedChild(record: ChildRunRecord): Promise<void> {
-    if (record.status === 'aborted' && record.terminationReason !== 'user_stop') return
-    if (record.status !== 'completed' && record.status !== 'failed' && record.status !== 'aborted') return
-    if (!this.options.threadStore || !this.options.turns || !this.runTurn) return
-    const thread = await this.options.threadStore.get(record.parentThreadId)
-    if (!thread) return
-    const notice = formatDetachedChildNotice(
-      record,
-      proactiveRetryStatus(record, this.options.config.proactiveRetry)
-    )
-    const displayText = formatDetachedChildDisplayText(record)
-    if (thread.status === 'running') {
-      const runningTurn = [...thread.turns].reverse().find((turn) => turn.status === 'running')
-      if (runningTurn) {
-        await this.options.turns.steerTurn({
-          threadId: record.parentThreadId,
-          turnId: runningTurn.id,
-          text: notice,
-          displayText,
-          messageSource: 'background_subagent'
-        })
-        return
-      }
-    }
-    const sourceTurn = thread.turns.find((turn) => turn.id === record.parentTurnId) ?? thread.turns.at(-1)
-    const started = await this.options.turns.startTurn({
-      threadId: record.parentThreadId,
-      request: {
-        prompt: notice,
-        ...(sourceTurn ? { clientSurface: resolveTurnClientSurface(sourceTurn) } : {}),
-        ...(sourceTurn?.disableUserInput ? { disableUserInput: true } : {}),
-        displayText,
-        messageSource: 'background_subagent'
-      }
-    })
-    void this.runTurn(record.parentThreadId, started.turnId)
+    await this.detachedHandoffs.deliverRecord(record)
+  }
+
+  async retryDetachedChildHandoffs(): Promise<number> {
+    return this.detachedHandoffs.replayPending()
   }
 
   protected now(): string {
@@ -673,6 +642,7 @@ export abstract class DelegationRuntimeBase {
       }
       state.record = next
       committed = next
+      await this.detachedHandoffs.prepare(next)
       await this.options.store.upsert(next)
       await this.recordChildEvent(next)
     })

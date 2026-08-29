@@ -99,6 +99,22 @@ export type LiveItemCheckpoint = {
   representedSeq: number
 }
 
+export type EventHistoryPageOptions = {
+  sinceSeq: number
+  /** Opaque forward-only cursor returned by the previous page. */
+  cursor?: string
+  maxEvents?: number
+  maxBytes?: number
+  maxRecordBytes?: number
+}
+
+export type EventHistoryPage = {
+  events: RuntimeEvent[]
+  nextCursor?: string
+  hasMore: boolean
+  eventBytes: number
+}
+
 export type ItemTextSearchOptions = {
   maxBytes?: number
   /** Epoch deadline after which the scan must stop and report no match. */
@@ -178,6 +194,8 @@ export interface SessionStore {
   /** Flush pending scheduled compaction for one thread or the whole store. */
   flushScheduledCompaction?(threadId?: string): Promise<void>
   loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]>
+  /** Bounded replay page used by cross-process stores and long backlogs. */
+  loadEventPage?(threadId: string, options: EventHistoryPageOptions): Promise<EventHistoryPage>
   /**
    * Optional cross-process live feed. The normal EventBus remains the fast
    * path for events produced by this runtime; shared stores use this feed to

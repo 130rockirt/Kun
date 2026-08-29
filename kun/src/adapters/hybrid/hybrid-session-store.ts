@@ -2,6 +2,8 @@ import type { RuntimeEvent } from '../../contracts/events.js'
 import type { TurnItem } from '../../contracts/items.js'
 import type { AgentSession } from '../../domain/session.js'
 import type {
+  EventHistoryPage,
+  EventHistoryPageOptions,
   ItemHistoryCompactionResult,
   ItemHistoryCommit,
   ItemHistoryPage,
@@ -99,6 +101,18 @@ export class HybridSessionStore implements SessionStore {
     return this.delegate.loadEventsSince(threadId, sinceSeq)
   }
 
+  async loadEventPage(threadId: string, options: EventHistoryPageOptions): Promise<EventHistoryPage> {
+    return this.delegate.loadEventPage(threadId, options)
+  }
+
+  async trimEventsFromSeq(threadId: string, fromSeqInclusive: number): Promise<{ afterBytes: number }> {
+    return this.delegate.trimEventsFromSeq(threadId, fromSeqInclusive)
+  }
+
+  async eventReplayFloorSeq(threadId: string): Promise<number> {
+    return this.delegate.eventReplayFloorSeq(threadId)
+  }
+
   iterateEventsSince(
     threadId: string,
     sinceSeq: number,
@@ -174,4 +188,6 @@ export class HybridSessionStore implements SessionStore {
   clearThreadMemory(threadId: string): void {
     this.delegate.clearThreadMemory(threadId)
   }
+
+  close(): Promise<void> { return this.delegate.close() }
 }

@@ -20,6 +20,7 @@ describe('runtime-sse-ipc', () => {
   let mockLogError: any
   let mockEvent: any
   let mockFetch: any
+  let destroySender: () => void
 
   beforeEach(() => {
     vi.useFakeTimers()
@@ -44,12 +45,15 @@ describe('runtime-sse-ipc', () => {
     mockEnsureRuntime = vi.fn().mockImplementation(async (settings) => settings)
     mockLogError = vi.fn()
 
-    mockEvent = {
-      sender: {
-        isDestroyed: () => false,
-        send: vi.fn()
-      }
-    }
+    const destroyedListeners: Array<() => void> = []
+    mockEvent = { sender: {
+      isDestroyed: () => false,
+      send: vi.fn(),
+      once: vi.fn((name: string, listener: () => void) => {
+        if (name === 'destroyed') destroyedListeners.push(listener)
+      })
+    } }
+    destroySender = () => destroyedListeners.splice(0).forEach((listener) => listener())
 
     mockFetch = vi.fn()
     vi.stubGlobal('fetch', mockFetch)
@@ -222,6 +226,43 @@ describe('runtime-sse-ipc', () => {
       cursor: 42
     })
     await handlers.get('runtime:sse:stop')!(mockEvent, started.streamId)
+  })
+
+  it('surfaces replay reset as a control error and never reconnects the stale cursor', async () => {
+    registerRuntimeSseIpc({
+      ipcMain: mockIpcMain,
+      store: mockStore,
+      ensureRuntime: mockEnsureRuntime,
+      assertRendererRuntimeReady: () => undefined,
+      logError: mockLogError
+    })
+    const startHandler = handlers.get('runtime:sse:start')
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: mockReadableStream([
+        'event: replay_reset_required\ndata: {"threadId":"thread-reset","floorSeq":80}\n\n'
+      ])
+    })
+
+    const started = await startHandler!(mockEvent, {
+      threadId: 'thread-reset',
+      sinceSeq: 7
+    })
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    expect(mockEvent.sender.send).toHaveBeenCalledWith('runtime:sse-error', {
+      streamId: started.streamId,
+      code: 'replay_reset_required',
+      threadId: 'thread-reset',
+      floorSeq: 80,
+      message: 'Runtime event history was compacted; reload the thread snapshot.'
+    })
+    expect(mockEvent.sender.send).not.toHaveBeenCalledWith(
+      'runtime:sse-event',
+      expect.anything()
+    )
   })
 
   it('retries a bounded number of times on 404 before surfacing the error', async () => {
@@ -500,5 +541,33 @@ describe('runtime-sse-ipc', () => {
     expect(mockStore.load).not.toHaveBeenCalled()
     expect(mockEnsureRuntime).not.toHaveBeenCalled()
     expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('aborts all SSE workers owned by a destroyed renderer', async () => {
+    registerRuntimeSseIpc({
+      ipcMain: mockIpcMain,
+      store: mockStore,
+      ensureRuntime: mockEnsureRuntime,
+      assertRendererRuntimeReady: () => undefined,
+      logError: mockLogError
+    })
+    let fetchSignal: AbortSignal | undefined
+    mockFetch.mockImplementation(async (_url: unknown, init: RequestInit) => {
+      fetchSignal = init.signal as AbortSignal
+      return await new Promise<Response>((_resolve, reject) => {
+        fetchSignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+      })
+    })
+
+    await handlers.get('runtime:sse:start')!(mockEvent, {
+      threadId: 'thread-renderer-owned', sinceSeq: 0
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchSignal?.aborted).toBe(false)
+    destroySender()
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(fetchSignal?.aborted).toBe(true)
+    expect(mockFetch).toHaveBeenCalledTimes(1)
   })
 })

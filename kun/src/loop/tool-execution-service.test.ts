@@ -7,7 +7,7 @@ import type { CanvasReceiptRegistry } from '../services/canvas-receipt-registry.
 import type { TurnService } from '../services/turn-service.js'
 import { InflightTracker } from './inflight-tracker.js'
 import { ToolCancellationRegistry } from './tool-cancellation-registry.js'
-import { ToolExecutionService } from './tool-execution-service.js'
+import { TOOL_ABORT_OUTCOME_UNKNOWN_CODE, ToolExecutionService } from './tool-execution-service.js'
 import { InMemoryArtifactStore, type ArtifactStore } from '../artifacts/artifact-store.js'
 
 const call = {
@@ -33,6 +33,7 @@ function makeService(input: {
   toolCancellation?: ToolCancellationRegistry
   receipts?: CanvasReceiptRegistry
   artifactStore?: ArtifactStore
+  abortGraceMs?: number
 } = {}) {
   const lifecycle: string[] = []
   const events: Array<Record<string, unknown>> = []
@@ -66,7 +67,8 @@ function makeService(input: {
     ...(input.onPlanWritten ? { onPlanWritten: input.onPlanWritten } : {}),
     ...(input.toolCancellation ? { toolCancellation: input.toolCancellation } : {}),
     ...(input.receipts ? { receipts: input.receipts } : {}),
-    ...(input.artifactStore ? { artifactStore: input.artifactStore } : {})
+    ...(input.artifactStore ? { artifactStore: input.artifactStore } : {}),
+    ...(input.abortGraceMs !== undefined ? { abortGraceMs: input.abortGraceMs } : {})
   })
   return { service, lifecycle, events, turns }
 }
@@ -232,6 +234,36 @@ describe('ToolExecutionService', () => {
     expect(result.item.kind === 'tool_result' ? result.item.output : null).toMatchObject({
       code: 'tool_cancelled_by_user'
     })
+  })
+
+  it('settles an abort-ignoring tool as unknown after the bounded grace period', async () => {
+    const registry = new ToolCancellationRegistry()
+    let started!: () => void
+    const toolStarted = new Promise<void>((resolve) => { started = resolve })
+    const setup = makeService({
+      toolCancellation: registry,
+      abortGraceMs: 1,
+      execute: async () => {
+        started()
+        return await new Promise<never>(() => undefined)
+      }
+    })
+    const execution = setup.service.executeSafely({
+      threadId: 'thread_1', turnId: 'turn_1', call,
+      context: { ...context, abortSignal: new AbortController().signal }
+    })
+    await toolStarted
+    expect(registry.request(
+      { threadId: 'thread_1', turnId: 'turn_1', callId: 'call_1' },
+      '2026-08-30T00:00:00.000Z'
+    )).toBe('cancellation_requested')
+
+    const result = await execution
+    expect(result.item.kind === 'tool_result' ? result.item.output : null).toMatchObject({
+      code: TOOL_ABORT_OUTCOME_UNKNOWN_CODE,
+      guidance: expect.stringContaining('Inspect state before retrying')
+    })
+    expect(registry.list()).toEqual([])
   })
 
   it('waits for a pending checkpoint before the first workspace mutation', async () => {

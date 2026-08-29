@@ -11,7 +11,10 @@ const harness = vi.hoisted(() => {
   let latest: unknown
   let tail = Promise.resolve()
   const stopSharedAndWait = vi.fn(async () => undefined)
-  const classifyHotApply = vi.fn(() => ({ result: 'applied' as const, message: '' }))
+  const classifyHotApply = vi.fn<() => {
+    result: 'applied' | 'failed'
+    message: string
+  }>(() => ({ result: 'applied', message: '' }))
   const reconcile = vi.fn(async (settings: AppSettingsV1, isCurrent: () => boolean) => ({
     current: isCurrent(),
     ...(settings.agents.kun.browserUse.enabled

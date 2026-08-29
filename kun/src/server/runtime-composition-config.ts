@@ -32,7 +32,6 @@ import {
   DEFAULT_APPROVAL_REVIEWER,
   AgentLoop,
   type AgentLoopOptions,
-  type DelegationRuntime,
   modelCapabilitiesForModel,
   modelContextProfilesFromConfig,
   DEFAULT_QUALITY_CONFIG,
@@ -58,30 +57,7 @@ import {
 import { stageBrowserUseHostBinding } from './runtime-browser-use-binding.js'
 import { buildModelClientRouterInput, hydrateLegacyCredentialOptions, modelContextProfilesByProvider } from './runtime-factory-model.js'
 import { createPersistentAttachmentStore, createPersistentMemoryStore } from './runtime-factory-storage.js'
-
-type DelegationConfig = ReturnType<typeof mergeBuiltinSubagentProfiles>
-
-/**
- * Provider builders snapshot a few config-backed DelegationRuntime properties
- * while constructing their schemas. Expose the staged values without mutating
- * the live runtime before the new runtime generation is committed.
- */
-function delegationRuntimeConfigView(
-  runtime: DelegationRuntime | undefined,
-  config: DelegationConfig | undefined
-): DelegationRuntime | undefined {
-  if (!runtime || !config) return undefined
-  return new Proxy(runtime, {
-    get(target, property) {
-      if (property === 'enabled') return () => config.enabled
-      if (property === 'useExistingAgents') return config.useExistingAgents
-      if (property === 'defaultProfileName') return config.defaultProfile
-      if (property === 'defaultToolPolicy') return config.defaultToolPolicy
-      const value = Reflect.get(target, property, target)
-      return typeof value === 'function' ? value.bind(target) : value
-    }
-  })
-}
+import { delegationRuntimeConfigView } from './runtime-delegation-config-view.js'
 
 export function createRuntimeConfigController(
   extensions: Awaited<ReturnType<typeof createRuntimeExtensionComposition>>
@@ -536,6 +512,7 @@ export function createRuntimeConfigController(
 	      memoryStore: nextMemoryStore
 	    }
 	    const nextLoop = new AgentLoop(nextLoopOptions)
+	    const previousLoop = loop
 	    const previousMcpProviders = mcpProviders
 	    const graphChanged = !isDeepStrictEqual(activeOptions.graph, nextOptions.graph)
 	    const nextApprovalReviewClients = buildApprovalReviewClients(nextOptions, nextModelClients)
@@ -646,6 +623,8 @@ export function createRuntimeConfigController(
     registryComposition.capabilities = capabilities
     agent.loopOptions = loopOptions
     agent.loop = loop
+	    previousLoop.shutdownGoalResume()
+	    previousLoop.shutdownInterruptedResume()
 	    stagedGenerationCommitted = true
 	    stagedBrowserUseBinding.commit()
 	    if (graphChanged) {

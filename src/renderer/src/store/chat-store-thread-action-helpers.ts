@@ -50,7 +50,7 @@ export function subscribeThreadEventsWithRecovery(
     },
     onError: (error, options) => {
       terminalError = error
-      sink.onError(error, options)
+      if (!isReplayReset(error, threadId)) sink.onError(error, options)
     }
   }
   void provider.subscribeThreadEvents(threadId, sinceSeq, recoverySink, signal)
@@ -90,7 +90,9 @@ function scheduleSseRecovery(
   const baseDelay = status === 401 || status === 403
     ? SSE_RECOVERY_AUTH_DELAY_MS
     : SSE_RECOVERY_INITIAL_DELAY_MS
-  const delay = Math.min(baseDelay * (2 ** (next.attempts - 1)), SSE_RECOVERY_MAX_DELAY_MS)
+  const delay = isReplayReset(error, threadId)
+    ? 0
+    : Math.min(baseDelay * (2 ** (next.attempts - 1)), SSE_RECOVERY_MAX_DELAY_MS)
   next.timer = setTimeout(() => {
     const scheduled = sseRecoveries.get(threadId)
     if (scheduled?.subscription !== subscription || scheduled.timer !== next.timer) return
@@ -106,4 +108,13 @@ function scheduleSseRecovery(
 function sseStatus(error: Error | undefined): number | undefined {
   const value = error as (Error & { status?: unknown }) | undefined
   return typeof value?.status === 'number' ? value.status : undefined
+}
+
+function isReplayReset(error: Error | undefined, threadId: string): boolean {
+  const value = error as (Error & { code?: unknown; threadId?: unknown; floorSeq?: unknown }) | undefined
+  return value?.code === 'replay_reset_required' &&
+    value.threadId === threadId &&
+    typeof value.floorSeq === 'number' &&
+    Number.isSafeInteger(value.floorSeq) &&
+    value.floorSeq >= 0
 }
