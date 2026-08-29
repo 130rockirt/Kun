@@ -200,6 +200,13 @@ export type GraphLeadSuspensionResult =
 export type GraphLeadResumeResult = 'resumed' | 'already_running'
 
 export const HOST_SHUTDOWN_TURN_SUSPENSION_CODE = 'host_shutdown_turn_suspension'
+export const OWNER_LEASE_EXPIRED_TURN_ABORT_CODE = 'owner_lease_expired'
+
+export type OwnerLeaseExpiredTurnAbortReason = {
+  code: typeof OWNER_LEASE_EXPIRED_TURN_ABORT_CODE
+  ownerFlavor: string
+  ownerInstanceId: string
+}
 
 export function hostShutdownTurnSuspensionReason(): { code: string } {
   return { code: HOST_SHUTDOWN_TURN_SUSPENSION_CODE }
@@ -214,6 +221,36 @@ export function isHostShutdownTurnSuspension(signal: AbortSignal): boolean {
     'code' in reason &&
     reason.code === HOST_SHUTDOWN_TURN_SUSPENSION_CODE
   )
+}
+
+export function ownerLeaseExpiredTurnAbortReason(input: {
+  ownerFlavor: string
+  ownerInstanceId: string
+}): OwnerLeaseExpiredTurnAbortReason {
+  return {
+    code: OWNER_LEASE_EXPIRED_TURN_ABORT_CODE,
+    ownerFlavor: input.ownerFlavor,
+    ownerInstanceId: input.ownerInstanceId
+  }
+}
+
+export function ownerLeaseExpiredTurnAbortFrom(
+  signal: AbortSignal
+): OwnerLeaseExpiredTurnAbortReason | null {
+  const reason = signal.reason
+  if (!reason || typeof reason !== 'object') return null
+  if (!('code' in reason) || reason.code !== OWNER_LEASE_EXPIRED_TURN_ABORT_CODE) return null
+  if (!('ownerFlavor' in reason) || typeof reason.ownerFlavor !== 'string') return null
+  if (!('ownerInstanceId' in reason) || typeof reason.ownerInstanceId !== 'string') return null
+  return {
+    code: OWNER_LEASE_EXPIRED_TURN_ABORT_CODE,
+    ownerFlavor: reason.ownerFlavor,
+    ownerInstanceId: reason.ownerInstanceId
+  }
+}
+
+export function ownerLeaseExpiredTurnMessage(reason: OwnerLeaseExpiredTurnAbortReason): string {
+  return `Turn owner ${reason.ownerFlavor}/${reason.ownerInstanceId} stopped heartbeating.`
 }
 
 /**

@@ -15,8 +15,10 @@ import { SessionUsageQuerySchema } from './shared-data-store-contracts.js'
 import type { ManagerSharedDataStore } from './shared-data-store.js'
 import {
   buildServiceManagerRouter,
+  RUNTIME_HEARTBEAT_TTL_MS,
   RuntimeSlotBusyError,
   ServiceManagerState,
+  THREAD_EXECUTION_LEASE_TTL_MS,
   ThreadLeaseBusyError
 } from './service-manager.js'
 
@@ -416,6 +418,36 @@ describe('service manager control plane', () => {
     const expired = state.expireStale(new Date('2026-08-01T00:00:21.000Z'))
     expect(expired).toMatchObject([{ threadId: 'thread-orphan', turnId: 'turn-orphan' }])
     expect(state.lease('thread-orphan', new Date('2026-08-01T00:00:21.000Z'))).toBeNull()
+  })
+
+  it('keeps a live owner lease past the former thread-only deadline', () => {
+    const state = new ServiceManagerState()
+    const started = new Date('2026-08-01T00:00:00.000Z')
+    state.register(registration('production'), started)
+    state.acquireLease({
+      threadId: 'thread-stalled',
+      turnId: 'turn-stalled',
+      ownerFlavor: 'production',
+      ownerInstanceId: 'production-runtime'
+    }, started)
+
+    const recoveredAt = new Date(started.getTime() + 16_000)
+    expect(state.lease('thread-stalled', recoveredAt)).not.toBeNull()
+    expect(state.heartbeat('production', 'production-runtime', recoveredAt)).toBe(true)
+    const renewed = state.renewLease({
+      threadId: 'thread-stalled',
+      turnId: 'turn-stalled',
+      ownerFlavor: 'production',
+      ownerInstanceId: 'production-runtime'
+    }, recoveredAt)
+    expect(Date.parse(renewed!.expiresAt) - recoveredAt.getTime())
+      .toBe(THREAD_EXECUTION_LEASE_TTL_MS)
+
+    const ownerStaleAt = new Date(recoveredAt.getTime() + RUNTIME_HEARTBEAT_TTL_MS + 1)
+    expect(Date.parse(renewed!.expiresAt)).toBeGreaterThan(ownerStaleAt.getTime())
+    expect(state.expireStale(ownerStaleAt)).toMatchObject([{
+      threadId: 'thread-stalled', turnId: 'turn-stalled'
+    }])
   })
 
   it('expires only the exact Runtime owner recorded by verified forced handoff', () => {

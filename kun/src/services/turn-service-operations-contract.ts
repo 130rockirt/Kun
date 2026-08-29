@@ -169,7 +169,7 @@ export interface TurnServiceOperations {
   }): Promise<GraphLeadResumeResult>;
   isTurnExecutionActive(turnId: string): boolean;
   getAbortController(turnId: string): AbortSignal | undefined;
-  abortTurnExecution(turnId: string): boolean;
+  abortTurnExecution(turnId: string, reason?: unknown): boolean;
   abortThreadExecution(threadId: string): number;
   reconcileOrphanedTurns(): Promise<string[]>;
   getTurn(threadId: string, turnId: string): Promise<Turn | null>;

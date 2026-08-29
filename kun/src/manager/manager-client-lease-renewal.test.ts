@@ -3,6 +3,7 @@ import {
   ManagerThreadExecutionLeaseClient,
   type ServiceManagerConnection
 } from './manager-client.js'
+import { THREAD_EXECUTION_LEASE_TTL_MS } from './service-manager.js'
 
 const manager = {
   discovery: {
@@ -119,7 +120,7 @@ describe('ManagerThreadExecutionLeaseClient renewal', () => {
     client.setLeaseLostHandler(leaseLost)
 
     const lease = await client.acquire('thread-1', 'turn-1')
-    await vi.advanceTimersByTimeAsync(14_900)
+    await vi.advanceTimersByTimeAsync(THREAD_EXECUTION_LEASE_TTL_MS - 100)
     expect(leaseLost).not.toHaveBeenCalled()
 
     await vi.advanceTimersByTimeAsync(200)
@@ -151,12 +152,12 @@ describe('ManagerThreadExecutionLeaseClient renewal', () => {
     client.setLeaseLostHandler(leaseLost)
 
     await client.acquire('thread-1', 'turn-1')
-    // Renewal at t=5s pushes the expiry from t=15s to t=20s.
+    // Renewal at t=5s pushes the expiry forward by one lease lifetime.
     await vi.advanceTimersByTimeAsync(5_000)
     networkDown = true
 
     // Past the original expiry: the turn must still be alive.
-    await vi.advanceTimersByTimeAsync(10_400)
+    await vi.advanceTimersByTimeAsync(THREAD_EXECUTION_LEASE_TTL_MS - 4_600)
     expect(leaseLost).not.toHaveBeenCalled()
 
     // Past the renewed expiry: the local deadline aborts the turn.
@@ -194,10 +195,10 @@ describe('ManagerThreadExecutionLeaseClient renewal', () => {
     const lostB = vi.fn()
     clientB.setLeaseLostHandler(lostB)
 
-    // Runtime A holds the thread, then loses connectivity past the 15s TTL.
+    // Runtime A holds the thread, then loses connectivity past the lease TTL.
     const leaseA = await clientA.acquire('thread-1', 'turn-a')
     networkDown = true
-    await vi.advanceTimersByTimeAsync(15_000)
+    await vi.advanceTimersByTimeAsync(THREAD_EXECUTION_LEASE_TTL_MS)
     expect(lostA).toHaveBeenCalledOnce()
     expect(lostA).toHaveBeenCalledWith(leaseA)
     const attemptsAAtLoss = renewAttempts['runtime-a']
@@ -228,7 +229,7 @@ function leaseResponse(
       ownerFlavor: 'production',
       ownerInstanceId: overrides.ownerInstanceId ?? 'runtime-1',
       acquiredAt: new Date(now).toISOString(),
-      expiresAt: new Date(now + (seconds + 15) * 1_000).toISOString()
+      expiresAt: new Date(now + seconds * 1_000 + THREAD_EXECUTION_LEASE_TTL_MS).toISOString()
     }
   }), {
     status: 200,

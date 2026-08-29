@@ -68,10 +68,10 @@ getAbortController(this: TurnService, turnId: string): AbortSignal | undefined {
   },
 
 /** Abort active turn work without changing its persisted lifecycle state. */
-abortTurnExecution(this: TurnService, turnId: string): boolean {
+abortTurnExecution(this: TurnService, turnId: string, reason?: unknown): boolean {
     const controller = this['inflightTurns'].get(turnId)
     if (!controller || controller.signal.aborted) return false
-    controller.abort()
+    controller.abort(reason)
     return true
   },
 

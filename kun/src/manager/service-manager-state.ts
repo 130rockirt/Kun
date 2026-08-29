@@ -103,7 +103,11 @@ export type RuntimeSlot = {
 }
 
 export const RUNTIME_HEARTBEAT_TTL_MS = 20_000
-export const THREAD_EXECUTION_LEASE_TTL_MS = 15_000
+// Thread renewal uses the same event loop as the runtime heartbeat. Keep its
+// deadline beyond heartbeat liveness so a transient stall cannot expire one
+// turn while Manager still considers the owning runtime alive. A real owner
+// loss is still released by RUNTIME_HEARTBEAT_TTL_MS in expireLeases().
+export const THREAD_EXECUTION_LEASE_TTL_MS = RUNTIME_HEARTBEAT_TTL_MS + 10_000
 
 const StateSnapshotFields = {
   slots: z.array(z.object({

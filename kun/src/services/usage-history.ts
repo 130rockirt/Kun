@@ -9,35 +9,41 @@ import type { ThreadUsageRecord } from './usage-service-query.js'
 
 type UsageThreadSource = {
   id: string
-  thread?: ThreadRecord
+  thread?: UsageAttributionThread
   summary?: ThreadSummary
+}
+
+type UsageAttributionThread = Pick<
+  ThreadRecord,
+  'id' | 'model' | 'providerId' | 'updatedAt'
+> & {
+  turns: Array<Pick<ThreadRecord['turns'][number], 'id' | 'model' | 'providerId'>>
 }
 
 export type UsageHistorySource = {
   threadService: {
     list(options?: { includeArchived?: boolean; includeSide?: boolean }): Promise<ThreadSummary[]>
     get(threadId: string): Promise<ThreadRecord | null>
+    getMetadata?(threadId: string): Promise<ThreadRecord | null>
   }
   sessionStore: SessionStore
   usageService: Pick<UsageService, 'forThread'>
   nowIso: () => string
 }
 
-type ThreadHydrator = (threadId: string) => Promise<ThreadRecord | null>
+type ThreadHydrator = (threadId: string) => Promise<UsageAttributionThread | null>
 
 const usageRecordLoads = new WeakMap<object, Map<string, Promise<ThreadUsageRecord[]>>>()
 const USAGE_FALLBACK_READ_CONCURRENCY = 4
 
 /**
- * Cross-request memo of fully hydrated thread records keyed by
- * `threadId::updatedAt`. Attribution only needs `turns/providerId/model`, all
- * frozen once `updatedAt` stops moving, so a memoized record stays valid until
- * the thread changes. Without this every usage refresh re-read every thread
- * document, which made global history aggregation exceed the desktop GET
- * budget after per-turn provider attribution landed.
+ * Cross-request memo of compact thread/turn attribution keyed by
+ * `threadId::updatedAt`. The projection deliberately excludes prompts and
+ * item history, so it can cover normal multi-thousand-thread workspaces
+ * without retaining fully hydrated thread documents.
  */
-const hydratedThreadMemo = new Map<string, ThreadRecord | null>()
-const HYDRATED_THREAD_MEMO_MAX = 512
+const hydratedThreadMemo = new Map<string, UsageAttributionThread>()
+const HYDRATED_THREAD_MEMO_MAX = 4_096
 
 function hydratedThreadMemoKey(threadId: string, updatedAt: string): string {
   return `${threadId}::${updatedAt}`
@@ -46,21 +52,41 @@ function hydratedThreadMemoKey(threadId: string, updatedAt: string): string {
 function readHydratedThreadMemo(
   threadId: string,
   updatedAt: string | undefined
-): ThreadRecord | null | undefined {
+): UsageAttributionThread | undefined {
   if (!updatedAt) return undefined
-  return hydratedThreadMemo.get(hydratedThreadMemoKey(threadId, updatedAt))
+  const key = hydratedThreadMemoKey(threadId, updatedAt)
+  const cached = hydratedThreadMemo.get(key)
+  if (!cached) return undefined
+  // Refresh recency so repeated scans do not evict the same hot tail on every
+  // fixed-order pass through a workspace larger than the old 512-entry memo.
+  hydratedThreadMemo.delete(key)
+  hydratedThreadMemo.set(key, cached)
+  return cached
 }
 
-function writeHydratedThreadMemo(threadId: string, record: ThreadRecord | null): void {
-  const updatedAt = record?.updatedAt
-  if (!updatedAt) return
+function writeHydratedThreadMemo(threadId: string, record: UsageAttributionThread): void {
+  const updatedAt = record.updatedAt
   const key = hydratedThreadMemoKey(threadId, updatedAt)
-  if (hydratedThreadMemo.has(key)) return
+  if (hydratedThreadMemo.has(key)) hydratedThreadMemo.delete(key)
   if (hydratedThreadMemo.size >= HYDRATED_THREAD_MEMO_MAX) {
     const oldest = hydratedThreadMemo.keys().next().value
     if (oldest !== undefined) hydratedThreadMemo.delete(oldest)
   }
   hydratedThreadMemo.set(key, record)
+}
+
+function usageAttributionFromThread(thread: ThreadRecord): UsageAttributionThread {
+  return {
+    id: thread.id,
+    model: thread.model,
+    ...(thread.providerId ? { providerId: thread.providerId } : {}),
+    updatedAt: thread.updatedAt,
+    turns: (thread.turns ?? []).map((turn) => ({
+      id: turn.id,
+      ...(turn.model ? { model: turn.model } : {}),
+      ...(turn.providerId ? { providerId: turn.providerId } : {})
+    }))
+  }
 }
 
 /**
@@ -99,9 +125,13 @@ async function loadUsageRecords(
   source: UsageHistorySource,
   options: SessionUsageQueryOptions
 ): Promise<ThreadUsageRecord[]> {
-  const explicitThread = options.threadId
-    ? await source.threadService.get(options.threadId)
+  const readThreadMetadata = (threadId: string) => source.threadService.getMetadata
+    ? source.threadService.getMetadata(threadId)
+    : source.threadService.get(threadId)
+  const explicitRecord = options.threadId
+    ? await readThreadMetadata(options.threadId)
     : null
+  const explicitThread = explicitRecord ? usageAttributionFromThread(explicitRecord) : null
   if (options.threadId && !explicitThread) return []
   const threadSummaries = options.threadId
     ? []
@@ -109,10 +139,10 @@ async function loadUsageRecords(
         .filter((thread) => thread.status !== 'deleted')
   const summariesById = new Map(threadSummaries.map((thread) => [thread.id, thread]))
 
-  // Summaries omit `turns`, so per-turn provider/model attribution needs the
-  // full ThreadRecord. The cache deduplicates hydrations within one load and
-  // is shared with the JSONL fallback path.
-  const threadCache = new Map<string, Promise<ThreadRecord | null>>()
+  // Summaries omit `turns`, so per-turn provider/model attribution uses the
+  // metadata-only ThreadRecord projection. The cache deduplicates reads within
+  // one load and is shared with the JSONL fallback path.
+  const threadCache = new Map<string, Promise<UsageAttributionThread | null>>()
   const hydrateThread: ThreadHydrator = (threadId) => {
     const cached = threadCache.get(threadId)
     if (cached) return cached
@@ -123,19 +153,17 @@ async function loadUsageRecords(
       threadCache.set(threadId, settled)
       return settled
     }
-    const load = source.threadService
-      .get(threadId)
+    const load = readThreadMetadata(threadId)
       // A corrupt thread document must degrade to the summary (thread-current
       // provider attribution) instead of failing the whole usage aggregation.
       .then(
         (record) => {
-          writeHydratedThreadMemo(threadId, record)
-          return record
+          if (!record) return null
+          const attribution = usageAttributionFromThread(record)
+          writeHydratedThreadMemo(threadId, attribution)
+          return attribution
         },
-        () => {
-          writeHydratedThreadMemo(threadId, null)
-          return null
-        }
+        () => null
       )
     threadCache.set(threadId, load)
     return load
@@ -226,9 +254,9 @@ async function loadUsageRecords(
 async function hydrateThreadsWithBounds(
   threadIds: readonly string[],
   hydrateThread: ThreadHydrator
-): Promise<Map<string, ThreadRecord | null>> {
+): Promise<Map<string, UsageAttributionThread | null>> {
   const unique = [...new Set(threadIds)]
-  const hydrated = new Map<string, ThreadRecord | null>()
+  const hydrated = new Map<string, UsageAttributionThread | null>()
   let nextIndex = 0
   const workerCount = Math.min(USAGE_FALLBACK_READ_CONCURRENCY, unique.length)
   await Promise.all(Array.from({ length: workerCount }, async () => {
@@ -271,17 +299,18 @@ async function loadUsageRecordsForSource(
   hydrateThread: ThreadHydrator,
   options: SessionUsageQueryOptions
 ): Promise<ThreadUsageRecord[]> {
-  // Hydrate the full record before falling back to the summary: the summary
-  // lacks `turns`, so provider attribution on it would use the thread's
-  // current provider instead of the turn's own route. A failed hydration
-  // degrades to the summary instead of failing the whole aggregation.
-  let hydrated: ThreadRecord | null = null
+  // Read metadata before falling back to the summary: the summary lacks
+  // `turns`, so provider attribution on it would use the thread's current
+  // provider instead of the turn's own route. A failed read degrades to the
+  // summary instead of failing the whole aggregation.
+  let hydrated: UsageAttributionThread | null = null
   try {
     hydrated = await hydrateThread(item.id)
   } catch {
     hydrated = null
   }
-  const thread: ThreadRecord | ThreadSummary | undefined = item.thread ?? hydrated ?? item.summary
+  const thread: UsageAttributionThread | ThreadSummary | undefined =
+    item.thread ?? hydrated ?? item.summary
   if (!thread) return []
   const records: ThreadUsageRecord[] = []
   let latestPersisted = emptyUsageSnapshot()

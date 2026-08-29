@@ -459,7 +459,9 @@ async finishTurn(this: TurnService, input: {
     this['deps'].usage?.endTurn(input.threadId, input.turnId)
     const errorItem = input.error
       ? makeErrorItem({
-          id: `item_${input.turnId}_error`,
+          id: input.code === 'owner_lease_expired'
+            ? `item_${input.turnId}_owner_lease_expired`
+            : `item_${input.turnId}_error`,
           turnId: input.turnId,
           threadId: input.threadId,
           message: input.error,

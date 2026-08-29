@@ -33,6 +33,7 @@ import {
   ScopedMigrationMaintenanceLock,
   ToolCancellationService,
   TurnService,
+  ownerLeaseExpiredTurnAbortReason,
   ReviewService,
   SkillRuntime,
   InstructionRuntime,
@@ -161,7 +162,7 @@ export async function createRuntimeServices(
 	    nowIso
   })
   executionLeases?.setLeaseLostHandler((lease) => {
-    turnService.abortTurnExecution(lease.turnId)
+    turnService.abortTurnExecution(lease.turnId, ownerLeaseExpiredTurnAbortReason(lease))
   })
   const forwardThreadControl = options.serviceManager
     ? (request: Request, threadId: string) => forwardRequestToExecutionOwner({
