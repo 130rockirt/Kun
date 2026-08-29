@@ -69,7 +69,13 @@ const harness = vi.hoisted(() => {
   }
 })
 
-vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }))
+vi.mock('electron', () => ({
+  app: {
+    isPackaged: false,
+    getAppPath: () => '/tmp/kun-runtime-settings-generation-app'
+  },
+  BrowserWindow: { getAllWindows: () => [] }
+}))
 vi.mock('./main-app-context', () => ({
   getClawScheduleMcpLaunchConfig: () => undefined,
   mainState: harness.mainState,
