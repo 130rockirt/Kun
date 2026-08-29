@@ -49,6 +49,7 @@ import {
   listGuiSkills
 } from '../services/skill-service'
 import type { RegisterAppIpcHandlersOptions } from './app-ipc-handler-options'
+import { bundledSkillsDirectory } from '../bundled-skill-resources'
 import { parseIpcPayload, pathExists } from './app-ipc-handler-utils'
 
 export function registerAppWorkspaceIpcHandlers(options: RegisterAppIpcHandlersOptions): void {
@@ -227,7 +228,7 @@ export function registerAppWorkspaceIpcHandlers(options: RegisterAppIpcHandlersO
   ipcMain.handle('skill:list', async (_, payload: unknown) => {
     const request = parseIpcPayload('skill:list', skillListPayloadSchema, payload)
     const settings = await store.load()
-    return listGuiSkills(settings, request.workspaceRoot)
+    return listGuiSkills(settings, request.workspaceRoot, bundledSkillsDirectory())
   })
 
   ipcMain.handle('skill:list-roots', async (_, payload: unknown) => {

@@ -248,11 +248,10 @@ export type SkillListItem = {
   root: string
   entryPath: string
   scope: 'project' | 'global'
+  builtin?: boolean
   legacy: boolean
 }
-
-export type SkillListResult =
-  | { ok: true; skills: SkillListItem[]; validationErrors: Array<{ root: string; message: string }> }
+export type SkillListResult = { ok: true; skills: SkillListItem[]; validationErrors: Array<{ root: string; message: string }> }
   | { ok: false; message: string }
 
 export type SkillRootListItem = {

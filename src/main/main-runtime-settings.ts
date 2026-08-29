@@ -53,9 +53,8 @@ import {
   ensureRuntime,
   resolveManagedKunLaunchSettings
 } from './main-runtime-startup'
-import {
-  reconcileBrowserUseHostForRuntime
-} from './browser-use/browser-use-host'
+import { reconcileBrowserUseHostForRuntime } from './browser-use/browser-use-host'
+import { bundledSkillsDirectory } from './bundled-skill-resources'
 
 export function publishRuntimeSettingsSyncStatus(
   status: Omit<KunRuntimeSettingsSyncStatusPayload, 'at'>
@@ -358,7 +357,8 @@ export async function applyManagedRuntimeSettingsHot(
     scheduleMcp: {
       settings,
       launch: getClawScheduleMcpLaunchConfig()
-    }
+    },
+    builtinSkillsRoot: bundledSkillsDirectory()
   })
   if (!shouldApply()) return 'superseded'
   const browserUseHost = await reconcileBrowserUseHostForRuntime(

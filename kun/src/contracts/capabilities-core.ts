@@ -243,6 +243,8 @@ export const SkillsCapabilityConfig = CapabilityToggleConfig.extend({
   workspaceRoots: z.array(z.string().min(1)).default([]),
   /** Global skill roots (e.g. ~/.kun/skills). Scanned after project roots. */
   globalRoots: z.array(z.string().min(1)).default([]),
+  /** Bundled skill roots. Scanned last so project and global ids override them. */
+  builtinRoots: z.array(z.string().min(1)).default([]),
   /** Read workspace-local `.kun/project.json` Skill policy on demand. */
   projectConfigEnabled: z.boolean().default(true),
   /**
@@ -255,8 +257,12 @@ export const SkillsCapabilityConfig = CapabilityToggleConfig.extend({
   legacySkillMd: z.boolean().default(true)
 }).strict()
 export type ParsedSkillsCapabilityConfig = z.infer<typeof SkillsCapabilityConfig>
-export type SkillsCapabilityConfig = Omit<ParsedSkillsCapabilityConfig, 'projectConfigEnabled'> & {
+export type SkillsCapabilityConfig = Omit<
+  ParsedSkillsCapabilityConfig,
+  'projectConfigEnabled' | 'builtinRoots'
+> & {
   projectConfigEnabled?: boolean
+  builtinRoots?: string[]
 }
 
 export const InstructionsCapabilityConfig = CapabilityToggleConfig.extend({

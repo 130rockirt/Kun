@@ -97,6 +97,7 @@ import {
   skillCapabilityConfigForRuntime
 } from './runtime/kun-runtime-mcp-config'
 import { availableBundledExtensionsDirectory } from './bundled-extension-resources'
+import { bundledSkillsDirectory } from './bundled-skill-resources'
 import { resolveOfficeCliBinary } from './officecli-resources'
 import { subagentProfilesForRuntime } from './runtime/kun-runtime-subagent-config'
 import { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
@@ -486,7 +487,8 @@ async function prepareKunLaunch(
         execPath: process.execPath,
         isPackaged: app.isPackaged
       }
-    }
+    },
+    builtinSkillsRoot: bundledSkillsDirectory()
   })
   processController.lastResolvedBinary = resolution.command === process.execPath
     ? resolution.args.join(' ')

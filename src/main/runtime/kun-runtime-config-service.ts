@@ -107,6 +107,7 @@ export async function syncGuiManagedKunConfig(
     scheduleMcp?: { settings: AppSettingsV1; launch: ClawScheduleMcpLaunchConfig }
     mcpConfigPath?: string
     appSettings?: AppSettingsV1
+    builtinSkillsRoot?: string
     /** Internal bounded retry after a concurrent config.json commit. */
     retryAttempt?: number
   }
@@ -136,7 +137,8 @@ export async function syncGuiManagedKunConfig(
   const search = objectValue(mcp.search)
   const skills = await skillCapabilityConfigForRuntime(
     objectValue(capabilities.skills),
-    appSettings
+    appSettings,
+    options?.builtinSkillsRoot
   )
   const providers = appSettings
     ? providersConfigForRuntime(appSettings)

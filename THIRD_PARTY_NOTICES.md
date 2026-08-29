@@ -37,6 +37,13 @@ MIT-licensed icon primitives are adapted for Kun's progressive Skill loading
 and existing HTML/canvas/SVG artifact pipeline. The complete license is shipped
 at `resources/bundled-skills/diagram-design/LICENSE`.
 
+## KunAgent Skills
+
+Kun includes 34 skills from KunAgent Skills version 1.0.0 (2026), excluding
+`diagram-design`, under the MIT License. Copyright (c) 2026 KunAgent. Each
+bundled skill retains its license at
+`resources/bundled-skills/<skill-id>/LICENSE.txt`.
+
 ## agent-skills adapted subagent instructions
 
 Kun includes standalone subagent instructions adapted from the `agents/` and

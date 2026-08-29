@@ -1,4 +1,3 @@
-import { app } from 'electron'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { ensureBundledSkills } from '../skill-bundled'
@@ -14,10 +13,7 @@ import { registerAppWorkspaceIpcHandlers } from './register-app-workspace-ipc-ha
 
 export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): void {
   // Keep domain registration calls in the original channel order.
-  void ensureBundledSkills(
-    join(homedir(), '.kun'),
-    app.isPackaged ? process.resourcesPath : join(process.cwd(), 'resources')
-  )
+  void ensureBundledSkills(join(homedir(), '.kun'))
   registerAppSettingsIpcHandlers(options)
   registerAppRuntimeIpcHandlers(options)
   registerAppWorkspaceIpcHandlers(options)
