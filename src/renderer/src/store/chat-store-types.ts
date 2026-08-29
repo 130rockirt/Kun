@@ -487,7 +487,11 @@ export type ChatState = {
     docId: string,
     options?: ClearDesignHistoryOptions
   ) => Promise<ClearDesignHistoryResult>
-  selectWriteThread: (threadId: string, workspaceRoot?: string) => Promise<void>
+  selectWriteThread: (
+    threadId: string,
+    workspaceRoot?: string,
+    activeFilePath?: string
+  ) => Promise<void>
   openSettings: (section?: SettingsRouteSection) => void
   /** 离开设置页:直接把 route 恢复为进入设置前的工作台路由,不经过会重新解析/切换会话的 open* 入口。 */
   closeSettings: () => void

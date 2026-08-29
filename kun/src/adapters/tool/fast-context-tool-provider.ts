@@ -11,6 +11,7 @@ import {
 import type { ToolExecutionUpdate, ToolHostContext } from '../../ports/tool-host.js'
 import type { CapabilityToolProvider } from './capability-registry.js'
 import { LocalToolHost } from './local-tool-host.js'
+import { elapsedMs } from '../../delegation/delegation-runtime-support.js'
 
 export const FAST_CONTEXT_TOOL_NAME = 'fast_context' as const
 export const FAST_CONTEXT_PROVIDER_ID = 'fast-context' as const
@@ -157,6 +158,8 @@ type FastContextOutput = {
   failure?: { source: 'model' | 'runtime' | 'contract'; code?: string; category?: string }
   queuedMs?: number
   toolInvocations?: number
+  attemptStartedAt?: string
+  attemptDurationMs?: number
   durationMs?: number
   parentThreadId?: string
   parentTurnId?: string
@@ -173,6 +176,8 @@ type FastContextOutput = {
     parentThreadId?: string
     parentTurnId?: string
     launcher: 'fast_context'
+    attemptStartedAt?: string
+    attemptDurationMs?: number
   }
 }
 
@@ -203,7 +208,11 @@ class FastContextRunState {
       model: this.model,
       parentThreadId: record?.parentThreadId,
       parentTurnId: record?.parentTurnId,
-      launcher: 'fast_context' as const
+      launcher: 'fast_context' as const,
+      attemptStartedAt: record?.startedAt,
+      attemptDurationMs: record?.startedAt
+        ? elapsedMs(record.startedAt, record.updatedAt)
+        : undefined
     })
     return compact({
       status: this.status,
@@ -218,6 +227,10 @@ class FastContextRunState {
       failure: record?.failure,
       queuedMs: record?.queuedMs,
       toolInvocations: record?.toolInvocations,
+      attemptStartedAt: record?.startedAt,
+      attemptDurationMs: record?.startedAt
+        ? elapsedMs(record.startedAt, record.updatedAt)
+        : undefined,
       durationMs: record?.durationMs,
       parentThreadId: record?.parentThreadId,
       parentTurnId: record?.parentTurnId,

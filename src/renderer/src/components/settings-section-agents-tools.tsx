@@ -2,6 +2,8 @@ import type {
   SkillRootListItem
 } from '@shared/kun-gui-api'
 import {
+  CloudOff,
+  ExternalLink,
   FolderOpen,
   Loader2,
   RefreshCw,
@@ -175,6 +177,29 @@ export function AgentsToolsSettingsPanels({ view }: { view: Record<string, any> 
                 aria-labelledby="agents-settings-tab-tools"
                 className={activePanel === 'tools' ? '' : 'hidden'}
               >
+                <SettingsCard title={tCommon('officeWpsConnectionTitle')}>
+                  <SettingRow
+                    title={tCommon('officeWpsConnectionStatus')}
+                    description={tCommon('officeWpsConnectionDetail')}
+                    wideControl
+                    control={
+                      <div className="flex w-full flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 py-3 text-[12px] text-amber-800 dark:text-amber-100">
+                        <span className="inline-flex items-center gap-2 font-medium">
+                          <CloudOff className="h-4 w-4" aria-hidden="true" />
+                          {tCommon('officeWpsConnectionStatus')}
+                        </span>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/30 bg-ds-card px-3 py-1.5 font-semibold text-ds-ink transition hover:bg-ds-hover"
+                          onClick={() => void window.kunGui.openExternal('https://open.wps.cn/')}
+                        >
+                          {tCommon('officeWpsOpenPlatform')}
+                          <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
+                    }
+                  />
+                </SettingsCard>
                 <SettingsCard title={t('mcp')}>
                   <SettingRow
                     title={t('mcpSearchEnabled')}

@@ -556,4 +556,66 @@ describe('thread event sink binding', () => {
     ])
     vi.unstubAllGlobals()
   })
+
+  it('queues lifecycle-before-wrapper updates by parent turn without rewriting history', () => {
+    const historical: ChatBlock = {
+      kind: 'tool',
+      id: 'tool-old',
+      turnId: 'turn-old',
+      summary: 'ppt_agent',
+      status: 'success',
+      detail: JSON.stringify({ childId: 'child-ppt', status: 'completed', resumeCount: 0 }),
+      meta: {
+        toolName: 'ppt_agent',
+        child: {
+          parentThreadId: 'thread-current', parentTurnId: 'turn-old', childId: 'child-ppt',
+          childStatus: 'completed', childSeq: 1, resumeCount: 0
+        }
+      }
+    }
+    const { getState, set, get } = makeSinkHarness({
+      blocks: [historical],
+      currentTurnId: 'turn-resume'
+    })
+    const sink = buildThreadEventSink(set, get, { threadId: 'thread-current' })
+
+    sink.onTool({
+      itemId: 'child_lifecycle_child-ppt',
+      turnId: 'turn-resume',
+      summary: 'ppt_agent',
+      status: 'running',
+      updateOnly: true,
+      detail: JSON.stringify({ childId: 'child-ppt', status: 'running', resumeCount: 1 }),
+      meta: {
+        toolName: 'ppt_agent',
+        child: {
+          parentThreadId: 'thread-current', parentTurnId: 'turn-resume', childId: 'child-ppt',
+          childStatus: 'running', childSeq: 1, resumeCount: 1
+        }
+      }
+    })
+    expect(getState().blocks).toEqual([historical])
+
+    sink.onTool({
+      itemId: 'tool-resume',
+      turnId: 'turn-resume',
+      summary: 'ppt_agent',
+      status: 'running',
+      detail: JSON.stringify({ childId: 'child-ppt', status: 'queued', resumeCount: 1 }),
+      meta: {
+        toolName: 'ppt_agent',
+        child: {
+          parentThreadId: 'thread-current', parentTurnId: 'turn-resume', childId: 'child-ppt',
+          childStatus: 'queued', childSeq: 1, resumeCount: 1
+        }
+      }
+    })
+
+    expect(getState().blocks).toHaveLength(2)
+    expect(getState().blocks[0]).toEqual(historical)
+    expect(getState().blocks[1]).toMatchObject({
+      kind: 'tool', id: 'tool-resume', turnId: 'turn-resume', status: 'running',
+      meta: { child: { parentTurnId: 'turn-resume', childStatus: 'running', resumeCount: 1 } }
+    })
+  })
 })

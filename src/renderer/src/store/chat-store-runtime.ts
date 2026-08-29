@@ -66,10 +66,10 @@ import { useWriteWorkspaceStore } from '../write/write-workspace-store'
 import { recordCanvasTurnTerminal } from '../design/canvas/canvas-turn-terminal-registry'
 import {
   flushLiveProjection,
+  findMatchingToolBlockIndex,
   mergeToolProjectionEvents,
   reduceChatProjection,
-  toolBlockChildId,
-  toolEventChildId
+  toolEventChildProjectionKey
 } from './chat-projection-reducer'
 import {
   completionProjectionEffects,
@@ -436,30 +436,25 @@ export function buildThreadEventSink(
         armBusyWatchdog(set, get)
       }
       set((state) => {
-        const eventChildId = toolEventChildId(event)
-        const existing = state.blocks.some((block) =>
-          block.kind === 'tool' && (
-            block.id === event.itemId ||
-            Boolean(eventChildId && toolBlockChildId(block) === eventChildId)
-          )
-        )
+        const eventChildKey = toolEventChildProjectionKey(event)
+        const existing = findMatchingToolBlockIndex(state.blocks, event) >= 0
         if (!existing && event.updateOnly) {
-          if (eventChildId) {
-            pendingChildToolUpdates.delete(eventChildId)
-            pendingChildToolUpdates.set(eventChildId, event)
+          if (eventChildKey) {
+            pendingChildToolUpdates.delete(eventChildKey)
+            pendingChildToolUpdates.set(eventChildKey, event)
             while (pendingChildToolUpdates.size > MAX_PENDING_CHILD_TOOL_UPDATES) {
-              const oldestChildId = pendingChildToolUpdates.keys().next().value
-              if (!oldestChildId) break
-              pendingChildToolUpdates.delete(oldestChildId)
+              const oldestChildKey = pendingChildToolUpdates.keys().next().value
+              if (!oldestChildKey) break
+              pendingChildToolUpdates.delete(oldestChildKey)
             }
           }
           return {}
         }
         let projectedEvent = event
-        if (!existing && eventChildId) {
-          const pending = pendingChildToolUpdates.get(eventChildId)
+        if (eventChildKey) {
+          const pending = pendingChildToolUpdates.get(eventChildKey)
           if (pending) {
-            pendingChildToolUpdates.delete(eventChildId)
+            pendingChildToolUpdates.delete(eventChildKey)
             projectedEvent = mergeToolProjectionEvents(event, pending)
           }
         }

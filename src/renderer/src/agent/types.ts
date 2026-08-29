@@ -138,6 +138,10 @@ export type RuntimeChildMetadata = {
   prefixReused?: boolean
   inheritedHistoryItems?: number
   toolInvocations?: number
+  /** Start of the current resume attempt; cumulative child timing remains in durationMs. */
+  attemptStartedAt?: string
+  /** Elapsed milliseconds for the current resume attempt. */
+  attemptDurationMs?: number
   durationMs?: number
   queuedMs?: number
   summaryTruncated?: boolean

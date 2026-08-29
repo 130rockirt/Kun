@@ -12,7 +12,11 @@ import {
   type GeneratedDocumentCollection
 } from './generated-document-artifacts'
 import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
-import { ProcessSectionRow, groupProcessSections, summarizeToolBlock } from './message-timeline-process'
+import {
+  ProcessSectionRow,
+  groupProcessSections,
+  summarizeToolBlock
+} from './message-timeline-process'
 import { ComponentPrototypeCard } from './ComponentPrototypeCard'
 import { DiagramPrototypeCard } from './DiagramPrototypeCard'
 import { ConversationVisualizationCard } from './ConversationVisualizationCard'
@@ -38,6 +42,12 @@ import type { TurnUsageSummary } from '../../hooks/use-turn-usage'
 import { TurnUsageRow } from './TurnUsageRow'
 import { hasLivePendingUserInput } from '../../store/chat-store-runtime-helpers'
 import { CircleHelp } from 'lucide-react'
+import { formatDuration } from './message-timeline-tools'
+import {
+  parseDelegateDetail,
+  readChildMeta,
+  resolveStatus
+} from './subagent-call-card-support'
 
 export type ConversationTurnProps = {
   turn: Turn
@@ -212,7 +222,6 @@ export function ConversationTurn({
     isProcessing ||
     workProcessBlocks.length > 0 ||
     (runtimeErrorBlocks.length > 0 && typeof durationMs === 'number')
-  const showLiveProgress = isProcessing
   const liveToolBlock = useMemo(
     () => [...workProcessBlocks].reverse().find(
       (block): block is Extract<ChatBlock, { kind: 'tool' }> =>
@@ -242,7 +251,31 @@ export function ConversationTurn({
   // A live user_input gate means the turn is parked waiting for the user, not
   // computing. Surface that instead of the generic "thinking" label.
   const awaitingUserInput = isProcessing && hasLivePendingUserInput(turn.blocks)
+  const hasDedicatedLiveOwner = isProcessing && (
+    awaitingUserInput ||
+    workProcessBlocks.some((block) =>
+      subagentBlockOwnsLiveStatus(block) ||
+      (block.kind === 'approval' && block.status === 'pending') ||
+      (block.kind === 'approval_review' && block.status === 'in-progress') ||
+      (block.kind === 'user_input' && block.status === 'pending' && block.live === true)
+    )
+  )
+  const showLiveProgress = isProcessing && !hasDedicatedLiveOwner
+  const showWorkMeta = hasProcess && !isProcessing
   const showLiveThinking = Boolean(liveProcessText.trim()) && !liveChildActivityLabel && !liveToolBlock
+  const hasSettledResultEvidence = !isProcessing && Boolean(
+    assistantContentBlocks.length > 0 ||
+    generatedFileBlocks.length > 0 ||
+    generatedDocuments.length > 0 ||
+    reviewBlocks.length > 0 ||
+    planResult ||
+    turnFileChanges.length > 0 ||
+    componentPrototypeBlocks.length > 0 ||
+    diagramPrototypeBlocks.length > 0 ||
+    conversationVisualizationBlocks.length > 0 ||
+    chartBlocks.length > 0 ||
+    Boolean(devPreviewCard)
+  )
   const forkFromTurn = async (): Promise<void> => {
     if (!allowMainThreadActions || !forkTurnId || forking) return
     setForking(true)
@@ -279,15 +312,17 @@ export function ConversationTurn({
         <MessageBubble block={turn.user} allowThreadActions={allowMainThreadActions} />
       ) : null}
 
-      {hasProcess ? (
+      {showWorkMeta || processTimelineEntries.length > 0 ? (
         <div className="flex flex-col gap-1 pb-2">
-          <WorkMetaRow
-            processing={isProcessing}
-            durationMs={durationMs}
-            expanded={isProcessing || workExpanded}
-            collapsible={!isProcessing && workProcessBlocks.length > 0}
-            onToggle={() => setWorkExpandedOverride((value) => !(value ?? false))}
-          />
+          {showWorkMeta ? (
+            <WorkMetaRow
+              processing={false}
+              durationMs={durationMs}
+              expanded={workExpanded}
+              collapsible={workProcessBlocks.length > 0}
+              onToggle={() => setWorkExpandedOverride((value) => !(value ?? false))}
+            />
+          ) : null}
           {processTimelineEntries.length > 0 ? (
             <div className="flex flex-col gap-1">
               {processTimelineEntries.map((entry) => entry.kind === 'runtime_error' ? (
@@ -372,19 +407,6 @@ export function ConversationTurn({
         <TurnUsageRow usage={turnUsage} stale={turnUsageStale} />
       ) : null}
 
-      {allowMainThreadActions && !isProcessing && forkTurnId ? (
-        <div className="flex justify-end pt-6">
-          <button
-            type="button"
-            disabled={archiving}
-            onClick={() => void archiveToTurn()}
-            className="rounded-md px-2 py-1 text-[11px] text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-50"
-          >
-            {archiving ? t('archiveHistoryWorking') : t('archiveHistoryToHere')}
-          </button>
-        </div>
-      ) : null}
-
       {!isProcessing ? (
         <GeneratedFilesPanel blocks={generatedFileBlocks} placement="turn" />
       ) : null}
@@ -451,12 +473,26 @@ export function ConversationTurn({
         />
       ) : null}
 
+      {allowMainThreadActions && hasSettledResultEvidence && forkTurnId ? (
+        <div className="flex justify-end pt-6" data-archive-history-action>
+          <button
+            type="button"
+            disabled={archiving}
+            onClick={() => void archiveToTurn()}
+            className="rounded-md px-2 py-1 text-[11px] text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-50"
+          >
+            {archiving ? t('archiveHistoryWorking') : t('archiveHistoryToHere')}
+          </button>
+        </div>
+      ) : null}
+
       {showLiveProgress ? (
         <LiveTurnProgressRow
           tool={liveToolBlock}
           thinking={showLiveThinking}
           activityLabel={liveChildActivityLabel}
           awaitingUserInput={awaitingUserInput}
+          durationMs={durationMs}
         />
       ) : null}
     </div>
@@ -467,12 +503,14 @@ function LiveTurnProgressRow({
   tool,
   thinking,
   activityLabel,
-  awaitingUserInput = false
+  awaitingUserInput = false,
+  durationMs
 }: {
   tool?: Extract<ChatBlock, { kind: 'tool' }>
   thinking: boolean
   activityLabel?: string
   awaitingUserInput?: boolean
+  durationMs?: number
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const swimMode = useWorkLogoSwimMode(true)
@@ -489,7 +527,7 @@ function LiveTurnProgressRow({
     swimLabelKey as UiPluginLabelKey,
     i18n.language ?? 'zh'
   )
-  const label = awaitingUserInput
+  const activityText = awaitingUserInput
     ? t('awaitingYourInput')
     : activityLabel
     ? t('workingToolAction', { action: activityLabel })
@@ -500,6 +538,9 @@ function LiveTurnProgressRow({
         : ikunModeOn
           ? t(IKUN_WORK_LOGO_VARIANT_LABEL_KEYS[ikunVariant])
           : pluginLabel ?? t(swimLabelKey)
+  const label = typeof durationMs === 'number'
+    ? `${activityText} · ${formatDuration(durationMs)}`
+    : activityText
 
   return (
     <LiveTurnActivityRow
@@ -523,7 +564,7 @@ function LiveTurnActivityRow({
   awaitingUserInput?: boolean
 }): ReactElement {
   return (
-    <div className={liveTurnProgressClass()}>
+    <div className={liveTurnProgressClass()} data-turn-live-status-owner="generic">
       {awaitingUserInput ? (
         <CircleHelp
           className="mr-0.5 h-4 w-4 shrink-0 text-amber-500 motion-safe:animate-pulse"
@@ -571,3 +612,12 @@ export const MemoMessageTurn = memo(ConversationTurn, (prev, next) => (
   prev.turnUsageStale === next.turnUsageStale &&
   prev.viewportRef === next.viewportRef
 ))
+
+function subagentBlockOwnsLiveStatus(block: ChatBlock): boolean {
+  if (block.kind !== 'tool') return false
+  const child = readChildMeta(block)
+  const detail = parseDelegateDetail(block.detail)
+  if (!child.childId && !detail.childId) return false
+  const status = resolveStatus(block, child, detail)
+  return status === 'queued' || status === 'running' || status === 'awaiting-permission'
+}

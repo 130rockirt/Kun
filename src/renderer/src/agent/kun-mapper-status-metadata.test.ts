@@ -353,6 +353,8 @@ describe('Kun extension metadata mapping', () => {
           childStatus: 'running',
           childSeq: 1,
           childProviderId: 'deepseek',
+          attemptStartedAt: '2026-07-28T00:00:05.000Z',
+          attemptDurationMs: 12_000,
           activity: {
             phase: 'tool',
             label: 'Scanning the repository',
@@ -372,6 +374,8 @@ describe('Kun extension metadata mapping', () => {
       child: expect.objectContaining({
         childId: 'child_geo',
         childProviderId: 'deepseek',
+        attemptStartedAt: '2026-07-28T00:00:05.000Z',
+        attemptDurationMs: 12_000,
         activity: {
           phase: 'tool',
           label: 'Scanning the repository',

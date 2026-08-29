@@ -41,6 +41,13 @@ export function WorkspaceOfficePreviewToolbar({
 }): ReactElement {
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-ds-border-muted bg-ds-card px-3 py-2 text-[11px] text-ds-muted">
+      <span
+        className="rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-1 font-medium text-amber-700 dark:text-amber-200"
+        data-office-provider="local"
+        title={i18n.t('officeProviderLocalDetail')}
+      >
+        {i18n.t('officeProviderLocal')}
+      </span>
       <span className="rounded-md border border-ds-border-muted px-2 py-1 font-semibold uppercase">
         {result.sourceFormat}
         {result.convertedFromLegacy ? ` → ${result.renderFormat}` : ''}

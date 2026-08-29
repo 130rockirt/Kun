@@ -446,7 +446,7 @@ export function createNavigationModeActions(
     }
   },
 
-  selectWriteThread: async (threadId, workspaceRoot) => {
+  selectWriteThread: async (threadId, workspaceRoot, activeFilePath) => {
     const targetId = threadId.trim()
     if (!targetId) return
     const thread = get().threads.find((item) => item.id === targetId)
@@ -454,7 +454,12 @@ export function createNavigationModeActions(
       normalizeWorkspaceRoot(thread?.workspace) ||
       (await readActiveWriteWorkspace(get().workspaceRoot))
     if (targetWorkspace) {
-      saveWriteThreadRegistry(markWriteThread(targetWorkspace, targetId))
+      saveWriteThreadRegistry(markWriteThread(
+        targetWorkspace,
+        targetId,
+        readWriteThreadRegistry(),
+        activeFilePath
+      ))
     }
     set({ route: 'write' })
     await get().selectThread(targetId)

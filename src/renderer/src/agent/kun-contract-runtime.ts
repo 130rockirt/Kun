@@ -188,6 +188,8 @@ export type CoreChildRuntimeMetadataJson = {
   prefixReused?: boolean
   inheritedHistoryItems?: number
   toolInvocations?: number
+  attemptStartedAt?: string
+  attemptDurationMs?: number
   durationMs?: number
   queuedMs?: number
   summaryTruncated?: boolean

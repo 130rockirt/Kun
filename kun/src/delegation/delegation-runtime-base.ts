@@ -338,6 +338,8 @@ export abstract class DelegationRuntimeBase {
         ...(record.prefixReused !== undefined ? { prefixReused: record.prefixReused } : {}),
         ...(record.inheritedHistoryItems !== undefined ? { inheritedHistoryItems: record.inheritedHistoryItems } : {}),
         ...(record.toolInvocations !== undefined ? { toolInvocations: record.toolInvocations } : {}),
+        ...(record.startedAt ? { attemptStartedAt: record.startedAt } : {}),
+        ...(record.startedAt ? { attemptDurationMs: elapsedMs(record.startedAt, record.updatedAt) } : {}),
         ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
         ...(record.queuedMs !== undefined ? { queuedMs: record.queuedMs } : {}),
         ...(record.summaryTruncated ? { summaryTruncated: true } : {}),

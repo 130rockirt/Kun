@@ -158,6 +158,8 @@ const RuntimeEventBase = z.object({
     prefixReused: z.boolean().optional(),
     inheritedHistoryItems: z.number().int().nonnegative().optional(),
     toolInvocations: z.number().int().nonnegative().optional(),
+    attemptStartedAt: z.string().optional(),
+    attemptDurationMs: z.number().int().nonnegative().optional(),
     durationMs: z.number().int().nonnegative().optional(),
     queuedMs: z.number().int().nonnegative().optional(),
     summaryTruncated: z.boolean().optional(),

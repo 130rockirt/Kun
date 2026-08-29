@@ -163,7 +163,7 @@ export function MessageTimeline({
   const heroRoute: 'chat' | 'claw' = route === 'claw' ? 'claw' : 'chat'
   const hasContent = blocks.length > 0 || live || liveReasoning
   const endRef = useRef<HTMLDivElement>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null), contentRef = useRef<HTMLDivElement>(null)
   const turnRefMap = useRef(new Map<string, HTMLDivElement>())
   const [activeTurnKey, setActiveTurnKey] = useState<string | null>(null)
   const [jumpRailLayout, setJumpRailLayout] = useState<{
@@ -199,8 +199,7 @@ export function MessageTimeline({
     loadEarlierTurns,
     collapseEarlierTurns
   } = useTimelineScroll({
-    containerRef,
-    endRef,
+    containerRef, contentRef, endRef,
     activeThreadId,
     pageSize: TURN_PAGE_SIZE,
     totalTurns: turns.length,
@@ -444,7 +443,7 @@ export function MessageTimeline({
           ) : null}
         </div>
       ) : null}
-      <div className={`ds-message-timeline-content ds-chat-column-inset ds-chat-content-max-width mx-auto flex w-full min-w-0 flex-col ${compactCards ? 'gap-5' : 'gap-8'} pt-8 ${
+      <div ref={contentRef} className={`ds-message-timeline-content ds-chat-column-inset ds-chat-content-max-width mx-auto flex w-full min-w-0 flex-col ${compactCards ? 'gap-5' : 'gap-8'} pt-8 ${
         timelineBottomPaddingClass()
       }`}>
         {!hasContent || !activeThreadId ? (

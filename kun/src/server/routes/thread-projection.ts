@@ -288,6 +288,9 @@ function overlayChildRunOnToolResult(
     ? persistedOutput.child as Record<string, unknown>
     : undefined
   const launcher = run.launcher ?? persistedOutput.launcher
+  const attemptDurationMs = run.startedAt
+    ? Math.max(0, Date.parse(run.updatedAt) - Date.parse(run.startedAt))
+    : undefined
   const output: Record<string, unknown> = {
     ...persistedOutput,
     childId: run.id,
@@ -310,6 +313,8 @@ function overlayChildRunOnToolResult(
     resultUnavailableReason: run.resultUnavailableReason,
     error: run.error,
     toolInvocations: run.toolInvocations,
+    attemptStartedAt: run.startedAt,
+    attemptDurationMs: Number.isFinite(attemptDurationMs) ? attemptDurationMs : undefined,
     durationMs: run.durationMs,
     queuedMs: run.queuedMs
   }
@@ -326,7 +331,9 @@ function overlayChildRunOnToolResult(
       terminationReason: run.terminationReason,
       resumable: run.resumable === true,
       resumeCount: run.resumeCount ?? 0,
-      failure: run.failure
+      failure: run.failure,
+      attemptStartedAt: run.startedAt,
+      attemptDurationMs: Number.isFinite(attemptDurationMs) ? attemptDurationMs : undefined
     }
   }
   return {

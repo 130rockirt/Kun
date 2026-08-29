@@ -101,6 +101,7 @@ import {
   writeThreadBelongsToWorkspace,
   writeWorkspaceForThreadId
 } from '../write/write-thread-registry'
+import { useWriteWorkspaceStore } from '../write/write-workspace-store'
 import {
   designDocKey,
   forgetDesignThread,
@@ -357,6 +358,7 @@ export function createMaintenanceRecoveryActions(
       invalidateThreadSnapshot(targetId)
       forgetQueuedMessagesForThread(targetId)
       saveWriteThreadRegistry(forgetWriteThread(targetId))
+      await useWriteWorkspaceStore.getState().forgetWhiteboardThread(targetId)
       saveDesignThreadRegistry(forgetDesignThread(targetId))
       saveThreadForkRegistry(forgetThreadFork(targetId))
       forgetStoredThreadRightPanelExpansion(targetId)

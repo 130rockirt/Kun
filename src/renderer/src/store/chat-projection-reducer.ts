@@ -46,12 +46,11 @@ import { reduceLateChatProjection } from './chat-projection-reducer-late'
 import { reduceEarlyChatProjection } from './chat-projection-reducer-early'
 import {
   flushLiveProjection,
+  findMatchingToolBlockIndex,
   isDetachedSubagentToolEvent,
   isUserInputInterruptError,
   mergeToolProjectionEvents,
   runtimeEventStartedAt,
-  toolBlockChildId,
-  toolEventChildId,
   unseenDeltaText,
   upsertProjectedTimelineBlock,
   upsertTimelineBlock
@@ -59,9 +58,12 @@ import {
 
 export {
   flushLiveProjection,
+  findMatchingToolBlockIndex,
   mergeToolProjectionEvents,
   monotonicToolStatus,
   toolBlockChildId,
+  toolBlockMatchesToolEvent,
+  toolEventChildProjectionKey,
   toolEventChildId
 } from './chat-projection-reducer-support'
 
@@ -343,7 +345,6 @@ export function reduceChatProjection(
         !state.busy && !event.updateOnly && !isDetachedSubagentToolEvent(event)
           ? { busy: true, busyUnconfirmed: false }
           : {}
-      const childId = toolEventChildId(event)
       const chartSpec = parseRendererChartSpec(event.meta?.chartSpec)
       const chartIndex = state.blocks.findIndex((block) => block.id === event.itemId)
       if (chartSpec) {
@@ -358,11 +359,7 @@ export function reduceChatProjection(
         }
         return { ...base, blocks: upsertProjectedTimelineBlock(state, chartBlock), error: context.clearRecoveringError(state.error) }
       }
-      const index = state.blocks.findIndex((block) =>
-        block.kind === 'tool' && (
-          block.id === event.itemId || Boolean(childId && toolBlockChildId(block) === childId)
-        )
-      )
+      const index = findMatchingToolBlockIndex(state.blocks, event)
       if (index >= 0) {
         const current = state.blocks[index]
         if (current.kind !== 'tool') return base

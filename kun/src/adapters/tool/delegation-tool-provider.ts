@@ -17,6 +17,7 @@ import type { ToolExecutionUpdate, ToolHostContext } from '../../ports/tool-host
 import type { CapabilityToolProvider } from './capability-registry.js'
 import { LocalToolHost } from './local-tool-host.js'
 import { proactiveRetryStatus } from '../../delegation/delegation-proactive-retry.js'
+import { elapsedMs } from '../../delegation/delegation-runtime-support.js'
 
 type InlineProfile = {
   id: string
@@ -538,6 +539,10 @@ function childToolResult(
       ...(record.routing ? { routing: routingToolOutput(record.routing) } : {}),
       ...(record.toolPolicy ? { toolPolicy: record.toolPolicy } : {}),
       ...(record.toolInvocations !== undefined ? { toolInvocations: record.toolInvocations } : {}),
+      ...(record.startedAt ? {
+        attemptStartedAt: record.startedAt,
+        attemptDurationMs: elapsedMs(record.startedAt, record.updatedAt)
+      } : {}),
       ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
       ...(record.queuedMs !== undefined ? { queuedMs: record.queuedMs } : {})
     },
