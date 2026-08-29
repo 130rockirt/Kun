@@ -213,6 +213,7 @@ describe('POST /v1/threads/:id/turns admission', () => {
       turnId: admittedBody.turnId,
       ownerFlavor: 'production' as const,
       ownerInstanceId: 'foreign-runtime-instance',
+      fencingToken: 1,
       acquiredAt: '2026-08-09T10:00:00.000Z',
       expiresAt: '2026-08-09T10:00:30.000Z'
     }
@@ -279,6 +280,7 @@ describe('POST /v1/threads/:id/turns admission', () => {
       turnId: 'turn_active',
       ownerFlavor: 'production' as const,
       ownerInstanceId: 'private-runtime-instance',
+      fencingToken: 1,
       acquiredAt: '2026-08-09T10:00:00.000Z',
       expiresAt: '2026-08-09T10:00:30.000Z'
     }

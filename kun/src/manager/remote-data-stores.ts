@@ -61,16 +61,20 @@ import type {
   SessionUsageQueryOptions,
   SessionUsageRecord
 } from '../ports/session-store.js'
+import {
+  SessionUsageAggregateResponseSchema,
+  type SessionUsageAggregateQuery,
+  type SessionUsageAggregateResponse
+} from '../contracts/usage-query.js'
 import type {
   ThreadStore,
   ThreadStoreListOptions,
   ThreadStoreListPage
 } from '../ports/thread-store.js'
-import { requestManagerJson, type ServiceManagerConnection } from './manager-client.js'
+import type { ServiceManagerConnection } from './manager-client.js'
+import { callManagerStore } from './remote-data-store-request.js'
+export { resolveManagerDataRequestTimeoutMs } from './remote-data-store-request.js'
 
-const ResultSchema = z.object({ result: z.unknown() }).strict()
-const MANAGER_DATA_REQUEST_TIMEOUT_MS = 30_000
-const MANAGER_TIMELINE_DATA_REQUEST_TIMEOUT_MS = 120_000
 const ItemSnapshotSchema = z.object({
   revision: z.number().int().nonnegative(),
   items: z.array(TurnItem),
@@ -414,6 +418,15 @@ export class ManagerRemoteSessionStore implements SessionStore {
     return UsageRecordSchema.array().parse(await this.call('loadUsageRecords', options)) as SessionUsageRecord[]
   }
 
+  async aggregateUsage(
+    query: SessionUsageAggregateQuery,
+    liveRecords: SessionUsageRecord[] = []
+  ): Promise<SessionUsageAggregateResponse> {
+    return SessionUsageAggregateResponseSchema.parse(
+      await this.call('aggregateUsage', { query, liveRecords })
+    )
+  }
+
   async loadLatestUsageSnapshots(
     options: { threadIds?: string[] } = {}
   ): Promise<SessionLatestUsageSnapshot[]> {
@@ -655,33 +668,6 @@ export class ManagerRemoteAttachmentStore implements AttachmentStore {
       value: value ?? {}
     })
   }
-}
-
-async function callManagerStore(
-  manager: ServiceManagerConnection,
-  store: 'thread' | 'session' | 'artifact' | 'memory' | 'graph' | 'attachment',
-  operation: string,
-  value?: unknown
-): Promise<unknown> {
-  const response = await requestManagerJson(manager, `/v1/data/${store}/${operation}`, {
-    method: 'POST',
-    body: value ?? {},
-    timeoutMs: resolveManagerDataRequestTimeoutMs(store, operation)
-  })
-  return ResultSchema.parse(response).result
-}
-
-export function resolveManagerDataRequestTimeoutMs(
-  store: 'thread' | 'session' | 'artifact' | 'memory' | 'graph' | 'attachment',
-  operation: string
-): number {
-  if (
-    store === 'session' &&
-    (operation === 'loadItemPage' || operation === 'highestSeq')
-  ) {
-    return MANAGER_TIMELINE_DATA_REQUEST_TIMEOUT_MS
-  }
-  return MANAGER_DATA_REQUEST_TIMEOUT_MS
 }
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {

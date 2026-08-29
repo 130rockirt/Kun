@@ -65,6 +65,7 @@ import {
 import type { TurnServiceDeps, TurnConflictError, TurnCapacityError, TerminalTurnStatus, TurnSettlement, GraphLeadSuspensionResult, GraphLeadResumeResult, HOST_SHUTDOWN_TURN_SUSPENSION_CODE, hostShutdownTurnSuspensionReason, isHostShutdownTurnSuspension, DEFAULT_MAX_CONCURRENT_TURNS, fingerprintStartTurnRequest, canonicalizeFingerprintValue, isActiveTurn, terminalStatus, threadStatusFromTurns, threadStatusAfterTurnTransition, normalizeMaxConcurrentTurns, firstNonBlank, modelForManualCompaction } from './turn-service-core.js'
 
 export interface TurnServiceOperations {
+  withTurnMutationFence<T>(threadId: string, turnId: string, operation: () => T): T;
   updateRuntimeConfig(
     patch: Partial<Pick<TurnServiceDeps, 'model' | 'defaultModel' | 'contextCompaction' | 'maxConcurrentTurns'>>
   ): void;

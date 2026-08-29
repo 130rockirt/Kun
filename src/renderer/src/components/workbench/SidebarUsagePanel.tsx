@@ -42,12 +42,14 @@ export type SidebarUsagePanelStatus = {
 
 type Props = {
   activeThreadId: string | null
+  enabled?: boolean
   refreshKey: unknown
   onStatusChange?: (status: SidebarUsagePanelStatus) => void
 }
 
 export function SidebarUsagePanel({
   activeThreadId,
+  enabled = true,
   refreshKey,
   onStatusChange
 }: Props): ReactElement {
@@ -57,12 +59,12 @@ export function SidebarUsagePanel({
   const [refreshedAt, setRefreshedAt] = useState<string>()
   const threadState = useThreadUsageState(
     activeThreadId,
-    Boolean(activeThreadId),
+    enabled && Boolean(activeThreadId),
     refreshKey
   )
-  const dailyState = useDailyUsageState(true, refreshKey, RANGE_DAYS.all)
+  const dailyState = useDailyUsageState(enabled, refreshKey, RANGE_DAYS.all)
   const modelState = useModelUsageState(
-    true,
+    enabled,
     `${String(refreshKey)}:${rangeKey}`,
     RANGE_DAYS[rangeKey]
   )

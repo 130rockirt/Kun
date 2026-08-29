@@ -258,8 +258,12 @@ export abstract class ManagerSharedDataStoreCore {
     })
   }
 
-  protected async allocateEventSeq(threadId: string): Promise<number> {
+  protected async allocateEventSeq(
+    threadId: string,
+    assertCurrent?: () => void
+  ): Promise<number> {
     return this.enqueueSeq(threadId, async () => {
+      assertCurrent?.()
       let floor = this.seqFloors.get(threadId)
       if (floor === undefined) floor = await this.sessionStore.highestSeq(threadId)
       const next = floor + 1

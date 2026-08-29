@@ -32,6 +32,14 @@ export async function startKunServe(
   // ownership below the HTTP layer also covers direct CLI runtimes and avoids
   // a second claim for serve mode.
   const runtime = await createKunServeRuntime(serveOptions)
+  try {
+    // Usage events are cumulative. Seed the historical baseline before any
+    // request can record a new cumulative event, otherwise delayed carryover
+    // can overwrite or double-count startup traffic.
+    await runtime.prepareForRequests?.()
+  } catch (error) {
+    console.warn('[kun] startup usage carryover failed:', error)
+  }
   let requestShutdown!: () => void
   const shutdownRequested = new Promise<void>((resolve) => { requestShutdown = resolve })
   runtime.requestShutdown = async (requestedInstanceId) => {

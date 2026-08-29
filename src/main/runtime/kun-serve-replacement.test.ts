@@ -9,7 +9,7 @@ const dataDir = '/tmp/kun-replacement-data'
 const manager: ServiceManagerConnection = {
   discovery: {
     version: 1,
-    protocolVersion: 3,
+    protocolVersion: 5,
     instanceId: 'manager-current',
     pid: 900,
     startedAt: '2026-08-13T00:00:00.000Z',

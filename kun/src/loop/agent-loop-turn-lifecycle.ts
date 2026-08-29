@@ -52,7 +52,11 @@ export abstract class AgentLoopTurnLifecycle extends AgentLoopBase {
         return outcome
       })
     }
-    const run = this.runTurnOwned(threadId, turnId)
+    const run = this.opts.turns.withTurnMutationFence(
+      threadId,
+      turnId,
+      () => this.runTurnOwned(threadId, turnId)
+    )
     const active = {
       promise: run,
       signal: this.opts.turns.getAbortController(turnId)

@@ -79,6 +79,7 @@ export function createServerRuntimeComposition(
     supplyChainTrust,
     reviewService,
     backgroundMaintenance,
+    prepareUsageCarryover,
     migrationService,
     migrationImportService,
     knowledgeBaseService
@@ -133,6 +134,7 @@ export function createServerRuntimeComposition(
       activeCaptures: llmDebug?.activeCaptureCount ?? 0
     }),
     startBackgroundMaintenance: () => backgroundMaintenance.start(),
+    prepareForRequests: prepareUsageCarryover,
     inspectThreadStore: () => services.threadStoreGuardian.run(),
     sessionGuardian: services.sessionGuardian,
     threadSnapshots: services.threadSnapshots,

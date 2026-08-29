@@ -320,7 +320,7 @@ tryAdmitTurn(this: TurnService, turnId: string, threadId: string): boolean {
 clearRuntimeTurnState(this: TurnService,
     threadId: string,
     turnId: string,
-    options: { abort?: boolean } = {}
+    options: { abort?: boolean; releaseLease?: boolean } = {}
   ): void {
     this['releaseRuntimeTurnExecution'](threadId, turnId, options)
     this['deps'].steering.clear(turnId)
@@ -329,20 +329,21 @@ clearRuntimeTurnState(this: TurnService,
 releaseRuntimeTurnExecution(this: TurnService,
     threadId: string,
     turnId: string,
-    options: { abort?: boolean } = {}
+    options: { abort?: boolean; releaseLease?: boolean } = {}
   ): void {
     const admittedThreadId = this['admittedTurnThreads'].get(turnId)
-    if (admittedThreadId !== threadId) {
+    if (admittedThreadId === threadId) {
+      if (options.abort) this['inflightTurns'].get(turnId)?.abort()
+      this['inflightTurns'].delete(turnId)
+      this['deps'].inflight.end(turnId)
+      this['admittedTurnThreads'].delete(turnId)
+    } else if (!this['leasedTurns'].has(turnId)) {
       // An external interrupt may already have released admission before the
       // model loop observes the abort and seals its terminal boundary. The
       // loop's later idempotent finish must still clear that transient seal.
       return
     }
-    if (options.abort) this['inflightTurns'].get(turnId)?.abort()
-    this['inflightTurns'].delete(turnId)
-    this['deps'].inflight.end(turnId)
-    this['admittedTurnThreads'].delete(turnId)
-    if (this['leasedTurns'].delete(turnId)) {
+    if (options.releaseLease !== false && this['leasedTurns'].delete(turnId)) {
       void this['deps'].executionLeases?.release(threadId, turnId).catch(() => undefined)
     }
   },

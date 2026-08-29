@@ -65,6 +65,7 @@ describe('managed Runtime restart reconciliation', () => {
       turnId: 'turn-owned-by-sibling',
       ownerFlavor: 'development',
       ownerInstanceId: 'development-live',
+      fencingToken: 1,
       acquiredAt: '2026-08-21T07:59:50.000Z',
       expiresAt: '2026-08-21T08:00:05.000Z'
     }))

@@ -4,6 +4,7 @@ import {
   type ServiceManagerConnection
 } from './manager-client.js'
 import { THREAD_EXECUTION_LEASE_TTL_MS } from './service-manager.js'
+import { mutationFenceForValue } from './turn-mutation-context.js'
 
 const manager = {
   discovery: {
@@ -71,10 +72,22 @@ describe('ManagerThreadExecutionLeaseClient renewal', () => {
     await vi.advanceTimersByTimeAsync(5_000)
 
     expect(leaseLost).toHaveBeenCalledOnce()
-    expect(leaseLost).toHaveBeenCalledWith(lease)
+    expect(leaseLost).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: lease.threadId,
+      turnId: lease.turnId,
+      fencingToken: lease.fencingToken
+    }))
+    expect(mutationFenceForValue({
+      threadId: lease.threadId,
+      turnId: lease.turnId
+    })).toMatchObject({ fencingToken: lease.fencingToken })
     await vi.advanceTimersByTimeAsync(10_000)
     expect(renewAttempts).toBe(1)
     client.shutdown()
+    expect(mutationFenceForValue({
+      threadId: lease.threadId,
+      turnId: lease.turnId
+    })).toBeUndefined()
   })
 
   it('does not overlap renewals while a slow manager request is still pending', async () => {
@@ -124,8 +137,14 @@ describe('ManagerThreadExecutionLeaseClient renewal', () => {
     expect(leaseLost).not.toHaveBeenCalled()
 
     await vi.advanceTimersByTimeAsync(200)
+    expect(leaseLost).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(20_000)
     expect(leaseLost).toHaveBeenCalledOnce()
-    expect(leaseLost).toHaveBeenCalledWith(lease)
+    expect(leaseLost).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: lease.threadId,
+      turnId: lease.turnId,
+      fencingToken: lease.fencingToken
+    }))
     const attemptsAtLoss = renewAttempts
 
     // The dead runtime stops renewing entirely after the local deadline.
@@ -160,8 +179,10 @@ describe('ManagerThreadExecutionLeaseClient renewal', () => {
     await vi.advanceTimersByTimeAsync(THREAD_EXECUTION_LEASE_TTL_MS - 4_600)
     expect(leaseLost).not.toHaveBeenCalled()
 
-    // Past the renewed expiry: the local deadline aborts the turn.
+    // Past the renewed expiry: one bounded authoritative-renewal grace runs.
     await vi.advanceTimersByTimeAsync(5_000)
+    expect(leaseLost).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(20_000)
     expect(leaseLost).toHaveBeenCalledOnce()
     client.shutdown()
   })
@@ -199,8 +220,14 @@ describe('ManagerThreadExecutionLeaseClient renewal', () => {
     const leaseA = await clientA.acquire('thread-1', 'turn-a')
     networkDown = true
     await vi.advanceTimersByTimeAsync(THREAD_EXECUTION_LEASE_TTL_MS)
+    expect(lostA).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(20_000)
     expect(lostA).toHaveBeenCalledOnce()
-    expect(lostA).toHaveBeenCalledWith(leaseA)
+    expect(lostA).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: leaseA.threadId,
+      turnId: leaseA.turnId,
+      fencingToken: leaseA.fencingToken
+    }))
     const attemptsAAtLoss = renewAttempts['runtime-a']
 
     // Runtime B takes over; runtime A must stay silent even after recovery.
@@ -215,6 +242,33 @@ describe('ManagerThreadExecutionLeaseClient renewal', () => {
     clientA.shutdown()
     clientB.shutdown()
   })
+
+  it('releases an older turn fence after the same thread acquires a new turn', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      const body = JSON.parse(String(init?.body ?? '{}')) as { turnId?: string }
+      if (url.endsWith('/acquire')) {
+        return leaseResponse(0, { turnId: body.turnId ?? 'turn-old' })
+      }
+      if (url.endsWith('/release')) {
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected request: ${url}`)
+    }))
+    const client = new ManagerThreadExecutionLeaseClient(manager, 'production', 'runtime-1')
+    const oldLease = await client.acquire('thread-1', 'turn-old')
+    const newLease = await client.acquire('thread-1', 'turn-new')
+
+    await client.release('thread-1', 'turn-old')
+    expect(mutationFenceForValue({ threadId: 'thread-1', turnId: 'turn-old' })).toBeUndefined()
+    expect(mutationFenceForValue({ threadId: 'thread-1', turnId: 'turn-new' }))
+      .toMatchObject({ fencingToken: newLease.fencingToken })
+
+    await client.release('thread-1', 'turn-new')
+    client.shutdown()
+    expect(oldLease.turnId).toBe('turn-old')
+  })
 })
 
 function leaseResponse(
@@ -228,6 +282,7 @@ function leaseResponse(
       turnId: overrides.turnId ?? 'turn-1',
       ownerFlavor: 'production',
       ownerInstanceId: overrides.ownerInstanceId ?? 'runtime-1',
+      fencingToken: 1,
       acquiredAt: new Date(now).toISOString(),
       expiresAt: new Date(now + seconds * 1_000 + THREAD_EXECUTION_LEASE_TTL_MS).toISOString()
     }

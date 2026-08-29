@@ -343,7 +343,12 @@ function CodeRightPanelWorkspace({
       return <McpSkillsPanel workspaceRoot={workspaceRoot} onOpenSettings={mcpSkills.onOpenSettings} />
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.providerQuotas) {
-      return <UsageQuotaPanel activeThreadId={code.activeThreadId} />
+      return (
+        <UsageQuotaPanel
+          activeThreadId={code.activeThreadId}
+          active={visible && code.state.activeId === id}
+        />
+      )
     }
     if (id === BUILTIN_RIGHT_PANEL_IDS.graph) {
       return (

@@ -1,6 +1,7 @@
 import { readFile, rm } from 'node:fs/promises'
 import { relative, resolve, sep } from 'node:path'
 import { z } from 'zod'
+import { TurnMutationFenceSchema } from '../contracts/runtime-flavor.js'
 import { HybridSessionStore } from '../adapters/hybrid/hybrid-session-store.js'
 import { HybridThreadStore } from '../adapters/hybrid/hybrid-thread-store.js'
 import {
@@ -158,9 +159,15 @@ export type ManagerSessionStoreOperation =
   | 'highestSeq'
   | 'allocateEventSeq'
   | 'loadUsageRecords'
+  | 'aggregateUsage'
   | 'loadLatestUsageSnapshots'
   | 'resetMemory'
   | 'clearThreadMemory'
+
+export const ManagerDataRequestEnvelopeSchema = z.object({
+  value: z.unknown(),
+  turnFence: TurnMutationFenceSchema.optional()
+}).strict()
 
 export type ManagerArtifactStoreOperation =
   | 'put'
@@ -248,6 +255,18 @@ export function mutationThreadId(value: unknown): string | null {
     .passthrough()
     .safeParse(value)
   return thread.success ? thread.data.thread.id : null
+}
+
+export function mutationTurnId(value: unknown): string | null {
+  const parsed = z.object({ turnId: z.string().min(1) }).passthrough().safeParse(value)
+  if (parsed.success) return parsed.data.turnId
+  for (const key of ['event', 'item', 'session'] as const) {
+    const nested = z.object({
+      [key]: z.object({ turnId: z.string().min(1) }).passthrough()
+    }).passthrough().safeParse(value)
+    if (nested.success) return nested.data[key].turnId
+  }
+  return null
 }
 
 export function isThreadMutation(operation: ManagerThreadStoreOperation): boolean {

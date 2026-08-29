@@ -23,10 +23,20 @@ export const ThreadExecutionLeaseSchema = z.object({
   turnId: z.string().min(1).max(256),
   ownerFlavor: RuntimeFlavorSchema,
   ownerInstanceId: z.string().min(1).max(256),
+  fencingToken: z.number().int().positive(),
   acquiredAt: z.string().datetime(),
   expiresAt: z.string().datetime()
 })
 export type ThreadExecutionLease = z.infer<typeof ThreadExecutionLeaseSchema>
+
+export const TurnMutationFenceSchema = ThreadExecutionLeaseSchema.pick({
+  threadId: true,
+  turnId: true,
+  ownerFlavor: true,
+  ownerInstanceId: true,
+  fencingToken: true
+}).strict()
+export type TurnMutationFence = z.infer<typeof TurnMutationFenceSchema>
 
 export type RevisionedSnapshot<T> = {
   revision: number

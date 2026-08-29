@@ -46,7 +46,7 @@ import {
   modelConnectionSeedsForOptions
 } from './runtime-factory-model.js'
 import { aggregateCodexProviderLocalCosts } from '../services/provider-local-cost.js'
-import { loadUsageHistory } from '../services/usage-history.js'
+import { loadLiveUsageRemainders, loadUsageHistory } from '../services/usage-history.js'
 import { GatewayCredentialService } from '../services/gateway-credential-service.js'
 
 export async function createRuntimeModelComposition(
@@ -428,14 +428,30 @@ export async function createRuntimeModelComposition(
         proxyUrl: snapshot.proxy.enabled ? snapshot.proxy.url : ''
       }
     },
-    loadLocalCosts: async (profiles) => aggregateCodexProviderLocalCosts({
-      profiles: profiles.map((profile) => ({
+    loadLocalCosts: async (profiles) => {
+      const localCostProfiles = profiles.map((profile) => ({
         id: profile.id,
         ...(profile.presetId ? { presetId: profile.presetId } : {})
-      })),
-      records: await loadUsageHistory(providerUsageHistorySource),
-      now: new Date(nowIso())
-    }),
+      }))
+      const now = nowIso()
+      if (core.sessionStore.aggregateUsage) {
+        const result = await core.sessionStore.aggregateUsage(
+          {
+            groupBy: 'provider_local_cost',
+            profiles: localCostProfiles,
+            now
+          },
+          await loadLiveUsageRemainders(providerUsageHistorySource, {}, true)
+        )
+        if (!('group_by' in result)) return result
+        throw new Error('usage_index_unavailable: unexpected local cost response')
+      }
+      return aggregateCodexProviderLocalCosts({
+        profiles: localCostProfiles,
+        records: await loadUsageHistory(providerUsageHistorySource),
+        now: new Date(now)
+      })
+    },
     subscriptionRuntime: {
       resolveCodexCredential: async (provider, rejectedAccessToken) => {
         if (!provider.credentialSourceId) {

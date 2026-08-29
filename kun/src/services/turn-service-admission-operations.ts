@@ -133,8 +133,8 @@ async startTurn(this: TurnService, input: {
         attemptedTurnId = turnId
         try {
           if (this['deps'].executionLeases) {
-            await this['deps'].executionLeases.acquire(input.threadId, turnId)
-            this['leasedTurns'].add(turnId)
+            const lease = await this['deps'].executionLeases.acquire(input.threadId, turnId)
+            this['leasedTurns'].set(turnId, lease)
           }
           const composerContexts = ComposerContextAttachmentSchema.array().parse(
             input.request.composerContexts ?? []
@@ -277,7 +277,10 @@ async startTurn(this: TurnService, input: {
           // A failed start has no loop to perform lifecycle cleanup. Release
           // its slot immediately; the outer catch best-effort marks any
           // already-persisted turn aborted so it cannot strand the thread.
-          this['clearRuntimeTurnState'](input.threadId, turnId, { abort: true })
+          this['clearRuntimeTurnState'](input.threadId, turnId, {
+            abort: true,
+            releaseLease: false
+          })
           throw error
         }
       })
@@ -390,6 +393,7 @@ async startTurn(this: TurnService, input: {
             turnId: attemptedTurnId
           }).catch(() => undefined)
         }
+        this['clearRuntimeTurnState'](input.threadId, attemptedTurnId, { abort: true })
       }
       throw error
     }

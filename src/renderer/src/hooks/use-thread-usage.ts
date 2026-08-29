@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { requestUsage } from './usage-request-cache'
 import { parseUsageResponse } from './usage-response'
 
 const THREAD_USAGE_RETRY_DELAYS_MS = [250, 750] as const
@@ -205,13 +206,16 @@ export function formatCacheMissReason(reason: string): string {
   }
 }
 
-export async function loadThreadUsage(threadId: string): Promise<ThreadUsageSummary | null> {
+export async function loadThreadUsage(
+  threadId: string,
+  generation?: string | number
+): Promise<ThreadUsageSummary | null> {
   if (typeof window.kunGui?.runtimeRequest !== 'function') return null
   const params = new URLSearchParams({
     group_by: 'thread',
     thread_id: threadId
   })
-  const r = await window.kunGui.runtimeRequest(`/v1/usage?${params.toString()}`, 'GET')
+  const r = await requestUsage(`/v1/usage?${params.toString()}`, 'thread usage', generation)
   if (!r.ok || !r.body.trim()) return null
   const parsed = parseUsageResponse<{
     buckets?: Array<Record<string, unknown>>
@@ -335,7 +339,9 @@ export function useThreadUsageState(
     const threadChanged = activeThreadRef.current !== nextThreadId
     activeThreadRef.current = nextThreadId
     if (!threadId || !enabled) {
-      setState({ usage: null, loading: false, loaded: false })
+      setState((current) => threadChanged
+        ? { usage: null, loading: false, loaded: false }
+        : { ...current, loading: false })
       return
     }
     setState((current) => threadChanged
@@ -343,7 +349,7 @@ export function useThreadUsageState(
       : { ...current, loading: true, loaded: false })
 
     const load = (attempt: number): void => {
-      void loadThreadUsage(threadId)
+      void loadThreadUsage(threadId, `${String(refreshKey)}:${attempt}`)
         .then((usage) => {
           if (cancelled) return
           if (usage) {

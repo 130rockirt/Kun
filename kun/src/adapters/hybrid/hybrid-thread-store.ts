@@ -33,8 +33,14 @@ import {
   type UsageRuntimeEvent
 } from './hybrid-thread-support.js'
 import { loadIndexedUsageRecords } from './hybrid-usage-query.js'
+import type {
+  SessionUsageAggregateQuery,
+  SessionUsageAggregateResponse
+} from '../../contracts/usage-query.js'
+import { UsageQueryExecutor } from '../../manager/usage-query-executor.js'
 import { JsonlFileAccessCoordinator } from '../file/jsonl-file-access.js'
 import { renameFileWithRetry } from '../file/atomic-write.js'
+import { migrateHybridUsageBackfillState } from './hybrid-thread-store-migrations.js'
 
 export { describeSqliteAbiMismatch } from './hybrid-thread-support.js'
 
@@ -62,6 +68,7 @@ export class HybridThreadStore implements ThreadStore {
   private readonly filesystemSummaries: HybridFilesystemSummaryCache
   private readonly sqliteState = new HybridSqliteDegradedState()
   private readonly fileAccess: JsonlFileAccessCoordinator
+  private readonly usageQueries: UsageQueryExecutor
   constructor(options: {
     dataDir: string
     sqlitePath?: string
@@ -74,6 +81,7 @@ export class HybridThreadStore implements ThreadStore {
       fileAccess: this.fileAccess
     })
     this.sqlitePath = resolve(options.sqlitePath ?? join(options.dataDir, 'index.sqlite3'))
+    this.usageQueries = new UsageQueryExecutor(this.sqlitePath)
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
     this.filesystemSummaries = new HybridFilesystemSummaryCache({
       threadIds: () => this.threadIdsFromFilesystem(),
@@ -230,6 +238,7 @@ export class HybridThreadStore implements ThreadStore {
     this.documents.invalidate(threadId)
     this.metadataCompactFloor.delete(threadId)
     this.invalidateFilesystemCache()
+    this.usageQueries.invalidate()
     return true
   }
 
@@ -258,6 +267,7 @@ export class HybridThreadStore implements ThreadStore {
           model = excluded.model, provider_id = excluded.provider_id,
           usage_json = excluded.usage_json
       `).run(usageRowFromEvent(event))
+      this.usageQueries.invalidate()
     } catch (error) {
       warnSqlite('record usage event', error)
     }
@@ -287,12 +297,28 @@ export class HybridThreadStore implements ThreadStore {
       throw error
     }
   }
-
+  async aggregateUsage(
+    query: SessionUsageAggregateQuery,
+    liveRecords: SessionUsageRecord[] = []
+  ): Promise<SessionUsageAggregateResponse> {
+    await this.ready()
+    if (!this.db) throw new Error('usage_index_unavailable: hybrid sqlite unavailable')
+    const scopedThreadIds = 'threadId' in query && query.threadId ? [query.threadId] : undefined
+    if (this.backfill && !this.backfill.isUsageReady(scopedThreadIds)) {
+      this.backfill.start()
+      throw new Error('usage_index_unavailable: usage backfill is still in progress')
+    }
+    return this.usageQueries.execute(query, liveRecords)
+  }
   async loadLatestUsageSnapshots(options: { threadIds?: string[] } = {}): Promise<SessionLatestUsageSnapshot[]> {
     await this.ready()
     if (!this.db) throw new Error('hybrid sqlite unavailable')
     try {
       const threadIds = [...new Set((options.threadIds ?? []).map((id) => id.trim()).filter(Boolean))]
+      if (this.backfill && !this.backfill.isUsageReady(threadIds.length > 0 ? threadIds : undefined)) {
+        this.backfill.start()
+        throw new Error('usage_index_unavailable: usage backfill is still in progress')
+      }
       if (threadIds.length > 0) {
         const placeholders = threadIds.map((_id, index) => `@id${index}`).join(', ')
         const params = Object.fromEntries(threadIds.map((id, index) => [`id${index}`, id]))
@@ -452,29 +478,9 @@ export class HybridThreadStore implements ThreadStore {
     addColumnIfMissing(this.db, 'threads', 'extension_metadata_json TEXT')
     addColumnIfMissing(this.db, 'threads', 'model_request_capture_enabled INTEGER NOT NULL DEFAULT 0')
     addColumnIfMissing(this.db, 'threads', "approval_reviewer TEXT NOT NULL DEFAULT 'user'")
-    this.migrateUsageBackfillState()
+    migrateHybridUsageBackfillState(this.db)
     addColumnIfMissing(this.db, 'threads', 'agent_surface TEXT')
     addColumnIfMissing(this.db, 'usage_events', 'provider_id TEXT')
-  }
-
-  private migrateUsageBackfillState(): void {
-    if (!this.db) return
-    const columns = this.db.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>
-    const names = new Set(columns.map((column) => column.name))
-    const missingCompletion = !names.has('usage_backfilled')
-    const missingHighWater = !names.has('usage_backfill_high_water')
-    if (!missingCompletion && !missingHighWater) return
-    this.db.transaction(() => {
-      if (missingCompletion) {
-        this.db!.exec('ALTER TABLE threads ADD COLUMN usage_backfilled INTEGER NOT NULL DEFAULT 0')
-      }
-      if (missingHighWater) {
-        this.db!.exec('ALTER TABLE threads ADD COLUMN usage_backfill_high_water INTEGER NOT NULL DEFAULT 0')
-        // Earlier versions could mark partially written usage as complete.
-        // Reopen all rows exactly once when this recovery state is introduced.
-        this.db!.exec('UPDATE threads SET usage_backfilled = 0, usage_backfill_high_water = 0')
-      }
-    })()
   }
 
   private cachedStatement(sql: string): Statement {

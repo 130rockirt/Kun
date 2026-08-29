@@ -319,7 +319,7 @@ export function FloatingComposer({
   const threadUsageState = useThreadUsageState(
     activeThreadId,
     showUsageHistoryFooter && Boolean(activeThreadId) && !hydratingActiveThread,
-    `${activeThread?.updatedAt ?? ''}:${busy ? 'busy' : 'idle'}:${usageRefreshKey}`
+    `${activeThreadId ?? ''}:${usageRefreshKey}`
   )
   const threadUsage = threadUsageState.usage
   /**

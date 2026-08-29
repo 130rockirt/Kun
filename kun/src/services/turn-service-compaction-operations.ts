@@ -452,12 +452,12 @@ async finishTurn(this: TurnService, input: {
       return settlement
     }
 
-    this['clearRuntimeTurnState'](input.threadId, input.turnId)
-    await this['finalizePersistedOpenItems'](input.threadId, input.turnId, input.status)
+    try {
+      await this['finalizePersistedOpenItems'](input.threadId, input.turnId, input.status)
     // The turn's usage metrics are now stable; release per-turn aggregation
     // so long-lived threads do not accumulate one entry per historical turn.
-    this['deps'].usage?.endTurn(input.threadId, input.turnId)
-    const errorItem = input.error
+      this['deps'].usage?.endTurn(input.threadId, input.turnId)
+      const errorItem = input.error
       ? makeErrorItem({
           id: input.code === 'owner_lease_expired'
             ? `item_${input.turnId}_owner_lease_expired`
@@ -470,7 +470,7 @@ async finishTurn(this: TurnService, input: {
           ...(input.severity ? { severity: input.severity } : {})
         })
       : null
-    await this['deps'].events.record({
+      await this['deps'].events.record({
       kind: input.status === 'completed' ? 'turn_completed' : input.status === 'aborted' ? 'turn_aborted' : 'turn_failed',
       threadId: input.threadId,
       turnId: input.turnId,
@@ -480,9 +480,12 @@ async finishTurn(this: TurnService, input: {
       ...(input.details !== undefined ? { details: input.details } : {}),
       ...(input.severity ? { severity: input.severity } : {})
     })
-    if (errorItem) {
-      await this['appendItem'](input.threadId, errorItem)
+      if (errorItem) {
+        await this['appendItem'](input.threadId, errorItem)
+      }
+      return settlement
+    } finally {
+      this['clearRuntimeTurnState'](input.threadId, input.turnId)
     }
-    return settlement
   },
 }

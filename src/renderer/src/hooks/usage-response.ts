@@ -1,4 +1,4 @@
-export const USAGE_REQUEST_TIMEOUT_MS = 65_000
+export const USAGE_REQUEST_TIMEOUT_MS = 12_000
 
 export function parseUsageResponse<T>(body: string, label: string): T {
   try {

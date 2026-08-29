@@ -293,6 +293,8 @@ export type ServerRuntime = {
   requestShutdown?(instanceId: string): Promise<boolean>
   /** Starts non-critical historical scans only after the HTTP server is live. */
   startBackgroundMaintenance?(): void
+  /** Restores usage counters before the server accepts turns or usage reads. */
+  prepareForRequests?(): Promise<void>
   /** Runs the bounded thread-store guardian immediately. */
   inspectThreadStore?(): Promise<import('../../services/thread-store-guardian.js').ThreadStoreGuardianResult>
   /** Read-only session storage health scans (guardian). */

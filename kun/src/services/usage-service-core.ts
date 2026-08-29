@@ -79,6 +79,10 @@ export class UsageService {
     return this.counter.forThread(threadId)
   }
 
+  snapshots(): Array<{ threadId: string; usage: UsageSnapshot }> {
+    return this.counter.snapshots()
+  }
+
   total(): UsageSnapshot {
     return this.counter.total()
   }

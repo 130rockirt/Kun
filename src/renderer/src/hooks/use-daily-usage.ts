@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { parseUsageResponse, withUsageRequestTimeout } from './usage-response'
+import { requestUsage } from './usage-request-cache'
+import { parseUsageResponse } from './usage-response'
 
 export const DEFAULT_USAGE_HEATMAP_DAYS = 90
 
@@ -210,12 +211,12 @@ export function normalizeDailyUsageResponse(raw: RawDailyUsageResponse): DailyUs
   }
 }
 
-export async function loadDailyUsage(range: DailyUsageRange): Promise<DailyUsageSummary | null> {
+export async function loadDailyUsage(
+  range: DailyUsageRange,
+  generation?: string | number
+): Promise<DailyUsageSummary | null> {
   if (typeof window.kunGui?.runtimeRequest !== 'function') return null
-  const response = await withUsageRequestTimeout(
-    window.kunGui.runtimeRequest(buildDailyUsagePath(range), 'GET'),
-    'daily usage'
-  )
+  const response = await requestUsage(buildDailyUsagePath(range), 'daily usage', generation)
   if (!response.ok || !response.body.trim()) {
     throw new Error(`daily usage request failed: ${response.status}`)
   }
@@ -242,19 +243,24 @@ export function useDailyUsageState(
   useEffect(() => {
     let cancelled = false
     if (!shouldLoad) {
-      setState({ usage: null, loading: false, loaded: false, error: null })
+      setState((current) => ({ ...current, loading: false, error: null }))
       return
     }
     setState((current) => ({ ...current, loading: true, error: null }))
     const range = defaultDailyUsageRange(new Date(), days)
-    void loadDailyUsage(range)
+    void loadDailyUsage(range, String(refreshKey))
       .then((usage) => {
         if (!cancelled) setState({ usage, loading: false, loaded: true, error: null })
       })
       .catch((error) => {
         if (!cancelled) {
           const message = error instanceof Error ? error.message : String(error)
-          setState({ usage: null, loading: false, loaded: true, error: message })
+          setState((current) => ({
+            ...current,
+            loading: false,
+            loaded: current.loaded,
+            error: message
+          }))
         }
       })
     return () => {

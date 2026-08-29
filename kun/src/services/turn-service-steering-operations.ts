@@ -303,18 +303,21 @@ async interruptTurn(this: TurnService, input: { threadId: string; turnId: string
     }
     if (!transition) return { status: 'aborted' }
 
-    this['clearRuntimeTurnState'](input.threadId, input.turnId, { abort: true })
-    await this['deps'].events.record({
-      kind: 'turn_aborted',
-      threadId: input.threadId,
-      turnId: input.turnId
-    })
-    if (input.discard) {
-      await this['discardTurnItems'](input.threadId, input.turnId)
-    } else {
-      await this['finalizePersistedOpenItems'](input.threadId, input.turnId, 'aborted')
+    try {
+      await this['deps'].events.record({
+        kind: 'turn_aborted',
+        threadId: input.threadId,
+        turnId: input.turnId
+      })
+      if (input.discard) {
+        await this['discardTurnItems'](input.threadId, input.turnId)
+      } else {
+        await this['finalizePersistedOpenItems'](input.threadId, input.turnId, 'aborted')
+      }
+      return { status: 'aborted' }
+    } finally {
+      this['clearRuntimeTurnState'](input.threadId, input.turnId, { abort: true })
     }
-    return { status: 'aborted' }
   },
 
 /** Abort every in-process turn before runtime shutdown closes its stores. */

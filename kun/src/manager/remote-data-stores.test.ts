@@ -2,10 +2,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createThreadRecord, toThreadSummary } from '../domain/thread.js'
 import type { ServiceManagerConnection } from './manager-client.js'
 import {
+  ManagerRemoteArtifactStore,
+  ManagerRemoteAttachmentStore,
+  ManagerRemoteGraphRunStore,
+  ManagerRemoteMemoryStore,
   ManagerRemoteSessionStore,
   ManagerRemoteThreadStore,
   resolveManagerDataRequestTimeoutMs
 } from './remote-data-stores.js'
+import { runWithTurnMutationFence } from './turn-mutation-context.js'
+import {
+  AttachmentsCapabilityConfig,
+  MemoryCapabilityConfig
+} from '../contracts/capabilities.js'
+import { DEFAULT_GRAPH_RUNTIME_CONFIG } from '../config/kun-config.js'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -15,7 +25,7 @@ function managerConnection(): ServiceManagerConnection {
   return {
     discovery: {
       version: 1,
-      protocolVersion: 3,
+      protocolVersion: 5,
       instanceId: 'manager-read-compatibility',
       pid: process.pid,
       startedAt: '2026-08-14T00:00:00.000Z',
@@ -57,6 +67,73 @@ describe('resolveManagerDataRequestTimeoutMs', () => {
 })
 
 describe('ManagerRemoteSessionStore live items', () => {
+  it('attaches the exact turn fence to semantic mutations', async () => {
+    let requestBody = ''
+    vi.stubGlobal('fetch', vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      requestBody = String(init?.body ?? '')
+      return new Response(JSON.stringify({ result: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }))
+    const store = new ManagerRemoteSessionStore(managerConnection())
+    const fence = {
+      threadId: 'thread-fenced',
+      turnId: 'turn-fenced',
+      ownerFlavor: 'production' as const,
+      ownerInstanceId: 'runtime-fenced',
+      fencingToken: 7
+    }
+    await runWithTurnMutationFence(fence, () => store.appendItem(fence.threadId, {
+      id: 'item-fenced',
+      turnId: fence.turnId,
+      threadId: fence.threadId,
+      role: 'assistant',
+      status: 'completed',
+      createdAt: '2026-08-29T00:00:00.000Z',
+      kind: 'assistant_text',
+      text: 'late result'
+    }))
+
+    expect(JSON.parse(requestBody)).toEqual({
+      value: expect.objectContaining({ threadId: fence.threadId }),
+      turnFence: fence
+    })
+  })
+
+  it('does not attach a parent turn fence to a cross-thread item mutation', async () => {
+    let requestBody: unknown
+    vi.stubGlobal('fetch', vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body))
+      return new Response(JSON.stringify({ result: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }))
+    const store = new ManagerRemoteSessionStore(managerConnection())
+    const parentFence = {
+      threadId: 'thread-parent',
+      turnId: 'turn-parent',
+      ownerFlavor: 'production' as const,
+      ownerInstanceId: 'runtime-parent',
+      fencingToken: 3
+    }
+    await runWithTurnMutationFence(parentFence, () => store.appendItem('thread-side', {
+      id: 'item-side',
+      turnId: 'turn-side',
+      threadId: 'thread-side',
+      role: 'assistant',
+      status: 'completed',
+      createdAt: '2026-08-29T00:00:00.000Z',
+      kind: 'assistant_text',
+      text: 'side result'
+    }))
+
+    expect(requestBody).toEqual({
+      value: expect.objectContaining({ threadId: 'thread-side' })
+    })
+  })
+
   it('forwards checkpoint and finalization operations without changing their payloads', async () => {
     const requests: Array<{ url: string; body: unknown }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -86,8 +163,43 @@ describe('ManagerRemoteSessionStore live items', () => {
       expect.stringContaining('/v1/data/session/finalizeLiveItem')
     ])
     expect(requests.map((request) => request.body)).toEqual([
-      { threadId: item.threadId, item, representedSeq: 9 },
-      { threadId: item.threadId, item: { ...item, status: 'completed' } }
+      { value: { threadId: item.threadId, item, representedSeq: 9 } },
+      { value: { threadId: item.threadId, item: { ...item, status: 'completed' } } }
+    ])
+  })
+})
+
+describe('non-fenced Manager stores', () => {
+  it('preserves their original request bodies without the thread/session envelope', async () => {
+    const requests: Array<{ url: string; body: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      requests.push({ url, body: JSON.parse(String(init?.body)) })
+      const result = url.includes('/memory/') ? [] : null
+      return new Response(JSON.stringify({ result }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }))
+    await new ManagerRemoteArtifactStore(managerConnection()).get('artifact-1')
+    await new ManagerRemoteMemoryStore(
+      managerConnection(),
+      MemoryCapabilityConfig.parse({})
+    ).list()
+    await new ManagerRemoteGraphRunStore(
+      managerConnection(),
+      () => DEFAULT_GRAPH_RUNTIME_CONFIG
+    ).get('graph_run_12345678')
+    await new ManagerRemoteAttachmentStore(
+      managerConnection(),
+      AttachmentsCapabilityConfig.parse({})
+    ).get('attachment-1')
+
+    expect(requests.map((entry) => entry.body)).toEqual([
+      { id: 'artifact-1' },
+      { config: MemoryCapabilityConfig.parse({}), value: {} },
+      { config: DEFAULT_GRAPH_RUNTIME_CONFIG, value: { runId: 'graph_run_12345678' } },
+      { config: AttachmentsCapabilityConfig.parse({}), value: { id: 'attachment-1' } }
     ])
   })
 
@@ -111,8 +223,11 @@ describe('ManagerRemoteSessionStore live items', () => {
 
     expect(seen).toEqual([1, 2, 3])
     expect(requestBodies).toMatchObject([
-      { threadId: 'thread_remote_pages', options: { sinceSeq: 0 } },
-      { threadId: 'thread_remote_pages', options: { sinceSeq: 2, cursor: 'v1:1:2:200' } }
+      { value: { threadId: 'thread_remote_pages', options: { sinceSeq: 0 } } },
+      { value: {
+        threadId: 'thread_remote_pages',
+        options: { sinceSeq: 2, cursor: 'v1:1:2:200' }
+      } }
     ])
   })
 })
@@ -162,11 +277,13 @@ describe('ManagerRemoteThreadStore legacy read compatibility', () => {
     })
     expect(requestUrl).toContain('/v1/data/thread/listPage')
     expect(JSON.parse(requestBody)).toEqual({
-      workspace: thread.workspace,
-      limit: 25,
-      cursor: 'opaque-cursor',
-      includeArchived: true,
-      includeSide: true
+      value: {
+        workspace: thread.workspace,
+        limit: 25,
+        cursor: 'opaque-cursor',
+        includeArchived: true,
+        includeSide: true
+      }
     })
   })
 

@@ -3,7 +3,11 @@ import type { UsageEvent } from '../contracts/events.js'
 import { emptyUsageSnapshot } from '../contracts/usage.js'
 import type { ThreadRecord, ThreadSummary } from '../contracts/threads.js'
 import { diffUsage, hasUsage } from '../domain/usage.js'
-import type { SessionStore, SessionUsageQueryOptions } from '../ports/session-store.js'
+import type {
+  SessionStore,
+  SessionUsageQueryOptions,
+  SessionUsageRecord
+} from '../ports/session-store.js'
 import type { UsageService } from './usage-service.js'
 import type { ThreadUsageRecord } from './usage-service-query.js'
 
@@ -27,7 +31,9 @@ export type UsageHistorySource = {
     getMetadata?(threadId: string): Promise<ThreadRecord | null>
   }
   sessionStore: SessionStore
-  usageService: Pick<UsageService, 'forThread'>
+  usageService: Pick<UsageService, 'forThread'> & {
+    snapshots?: UsageService['snapshots']
+  }
   nowIso: () => string
 }
 
@@ -121,6 +127,63 @@ export async function loadUsageHistory(
   return load
 }
 
+/**
+ * Return only the cumulative in-process usage newer than the latest indexed
+ * snapshot. Aggregate workers consume these compact records alongside SQLite
+ * rows so a just-finished request is visible before its event index settles.
+ */
+export async function loadLiveUsageRemainders(
+  source: UsageHistorySource,
+  options: SessionUsageQueryOptions = {},
+  reconcileInWorker = false
+): Promise<SessionUsageRecord[]> {
+  if (typeof source.sessionStore.loadLatestUsageSnapshots !== 'function') return []
+  const candidates = options.threadId
+    ? [{ threadId: options.threadId, usage: source.usageService.forThread(options.threadId) }]
+    : source.usageService.snapshots?.() ?? []
+  if (candidates.length === 0) return []
+  const latest = await source.sessionStore.loadLatestUsageSnapshots({
+    threadIds: candidates.map((candidate) => candidate.threadId)
+  })
+  const latestByThread = new Map(latest.map((record) => [record.threadId, record.usage]))
+  const pending = candidates
+    .map((candidate) => ({
+      threadId: candidate.threadId,
+      cumulativeUsage: candidate.usage,
+      remainder: diffUsage(
+        candidate.usage,
+        latestByThread.get(candidate.threadId) ?? emptyUsageSnapshot()
+      )
+    }))
+    .filter((candidate) => hasUsage(candidate.remainder))
+  const hydrated = await hydrateThreadsWithBounds(
+    pending.map((candidate) => candidate.threadId),
+    async (threadId) => {
+      const record = await (
+        source.threadService.getMetadata?.(threadId) ?? source.threadService.get(threadId)
+      ).catch(() => null)
+      return record && record.status !== 'deleted' ? usageAttributionFromThread(record) : null
+    }
+  )
+  return pending.flatMap((candidate): SessionUsageRecord[] => {
+    const thread = hydrated.get(candidate.threadId)
+    if (!thread) return []
+    const completedAt = thread.updatedAt || source.nowIso()
+    if (!timestampInUsageRange(completedAt, options)) return []
+    const turnId = latestTurnId(thread)
+    const providerId = usageRecordProvider(thread, { turnId })
+    return [{
+      threadId: candidate.threadId,
+      ...(turnId ? { turnId } : {}),
+      model: usageRecordModel(thread, { turnId }),
+      ...(providerId ? { providerId } : {}),
+      completedAt,
+      usage: reconcileInWorker ? candidate.cumulativeUsage : candidate.remainder,
+      ...(reconcileInWorker ? { cumulative: true } : {})
+    }]
+  })
+}
+
 async function loadUsageRecords(
   source: UsageHistorySource,
   options: SessionUsageQueryOptions
@@ -169,82 +232,58 @@ async function loadUsageRecords(
     return load
   }
 
-  if (typeof source.sessionStore.loadUsageRecords === 'function') {
-    try {
-      const allowedThreadIds = new Set(
-        options.threadId ? [options.threadId] : threadSummaries.map((thread) => thread.id)
-      )
-      const indexedRaw = await source.sessionStore.loadUsageRecords(options)
-      // Legacy indexed rows carry no persisted providerId; without a hydrate
-      // they would be attributed to the thread's *current* provider.
-      const hydrationIds: string[] = []
-      for (const record of indexedRaw) {
-        if (!allowedThreadIds.has(record.threadId)) continue
-        if (record.providerId) continue
-        if (explicitThread?.id === record.threadId) continue
-        hydrationIds.push(record.threadId)
-      }
-      const hydrated = await hydrateThreadsWithBounds(hydrationIds, hydrateThread)
-      const records: ThreadUsageRecord[] = indexedRaw
-        .filter((record) =>
-          allowedThreadIds.has(record.threadId) && timestampInUsageRange(record.completedAt, options)
-        )
-        .map((record) => {
-          const thread = explicitThread?.id === record.threadId
-            ? explicitThread
-            : hydrated.get(record.threadId) ?? summariesById.get(record.threadId)
-          const providerId = usageRecordProvider(thread, {
-            turnId: record.turnId,
-            providerId: record.providerId
-          })
-          return {
-            threadId: record.threadId,
-            ...(record.turnId ? { turnId: record.turnId } : {}),
-            ...(record.model ? { model: record.model } : {}),
-            ...(providerId ? { providerId } : {}),
-            completedAt: record.completedAt,
-            usage: record.usage
-          }
-        })
-      const latest = typeof source.sessionStore.loadLatestUsageSnapshots === 'function' &&
-        allowedThreadIds.size > 0
-        ? await source.sessionStore.loadLatestUsageSnapshots({ threadIds: [...allowedThreadIds] })
-        : []
-      const latestByThread = new Map(latest.map((record) => [record.threadId, record.usage]))
-      const liveThreadIds = options.threadId
-        ? [options.threadId]
-        : threadSummaries.map((thread) => thread.id)
-      for (const threadId of liveThreadIds) {
-        const liveRemainder = diffUsage(
-          source.usageService.forThread(threadId),
-          latestByThread.get(threadId) ?? emptyUsageSnapshot()
-        )
-        if (!hasUsage(liveRemainder)) continue
-        const thread = explicitThread?.id === threadId
-          ? explicitThread
-          : await hydrateThread(threadId) ?? summariesById.get(threadId)
-        if (!thread) continue
-        const completedAt = thread.updatedAt || source.nowIso()
-        if (!timestampInUsageRange(completedAt, options)) continue
-        const turnId = latestTurnId(thread)
-        records.push({
-          threadId,
-          ...(turnId ? { turnId } : {}),
-          model: usageRecordModel(thread, { turnId }),
-          ...(usageRecordProvider(thread, { turnId })
-            ? { providerId: usageRecordProvider(thread, { turnId }) }
-            : {}),
-          completedAt,
-          usage: liveRemainder
-        })
-      }
-      return records
-    } catch {
-      // Fall back to JSONL replay when the optional usage index is
-      // unavailable or one of its reads failed mid-aggregation.
-    }
+  if (typeof source.sessionStore.loadUsageRecords !== 'function') {
+    return loadUsageFallback(source, explicitThread, threadSummaries, hydrateThread, options)
   }
 
+  let indexedRaw: Awaited<ReturnType<NonNullable<SessionStore['loadUsageRecords']>>>
+  try {
+    indexedRaw = await source.sessionStore.loadUsageRecords(options)
+  } catch (error) {
+    if (!options.threadId && source.sessionStore.aggregateUsage) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`usage_index_unavailable: ${message}`, { cause: error })
+    }
+    return loadUsageFallback(source, explicitThread, threadSummaries, hydrateThread, options)
+  }
+
+  const allowedThreadIds = new Set(
+    options.threadId ? [options.threadId] : threadSummaries.map((thread) => thread.id)
+  )
+  const hydrationIds = indexedRaw
+    .filter((record) => allowedThreadIds.has(record.threadId) && !record.providerId &&
+      explicitThread?.id !== record.threadId)
+    .map((record) => record.threadId)
+  const hydrated = await hydrateThreadsWithBounds(hydrationIds, hydrateThread)
+  const records: ThreadUsageRecord[] = indexedRaw
+    .filter((record) =>
+      allowedThreadIds.has(record.threadId) && timestampInUsageRange(record.completedAt, options)
+    )
+    .map((record) => {
+      const thread = explicitThread?.id === record.threadId
+        ? explicitThread
+        : hydrated.get(record.threadId) ?? summariesById.get(record.threadId)
+      const providerId = usageRecordProvider(thread, record)
+      return {
+        threadId: record.threadId,
+        ...(record.turnId ? { turnId: record.turnId } : {}),
+        ...(record.model ? { model: record.model } : {}),
+        ...(providerId ? { providerId } : {}),
+        completedAt: record.completedAt,
+        usage: record.usage
+      }
+    })
+  records.push(...await loadLiveUsageRemainders(source, options))
+  return records
+}
+
+function loadUsageFallback(
+  source: UsageHistorySource,
+  explicitThread: UsageAttributionThread | null,
+  threadSummaries: ThreadSummary[],
+  hydrateThread: ThreadHydrator,
+  options: SessionUsageQueryOptions
+): Promise<ThreadUsageRecord[]> {
   const sources: UsageThreadSource[] = explicitThread
     ? [{ id: explicitThread.id, thread: explicitThread }]
     : threadSummaries.map((thread) => ({ id: thread.id, summary: thread }))

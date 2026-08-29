@@ -47,6 +47,7 @@ import { sanitizeStartupFailureMessage } from './startup-failure-content'
 import { resolveManagedRuntimeStartupTarget } from './runtime/managed-runtime-startup-attach'
 import { prefetchCatalogPricing } from './catalog-prefetch'
 import { recoverUpdateBeforeRuntimeStart } from './update-bootstrap-recovery'
+import { installHostPowerRecovery } from './host-power-recovery'
 
 export function startMainApp(): Promise<void> {
   mainState.createWindow = createWindow
@@ -123,6 +124,8 @@ export function startMainApp(): Promise<void> {
   return app.whenReady().then(async () => {
     traceStartup('app.whenReady:start')
     if (!gotSingleInstanceLock) return
+    const disposeHostPowerRecovery = installHostPowerRecovery()
+    app.once('before-quit', disposeHostPowerRecovery)
     if (await recoverUpdateBeforeRuntimeStart()) return
 
     const startup = await startWindowFirstStartup({

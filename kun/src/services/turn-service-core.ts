@@ -14,6 +14,7 @@ import type {
 } from '../contracts/turns.js'
 import type { TurnItem, UserMessageSource } from '../contracts/items.js'
 import type { RuntimeErrorSeverity } from '../contracts/errors.js'
+import type { ThreadExecutionLease } from '../contracts/runtime-flavor.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { MigrationMaintenanceLock } from '../ports/migration-maintenance-lock.js'
@@ -298,8 +299,8 @@ export class TurnService {
   ) => Promise<ThreadRecord>
   declare private rollbackPendingAdmission: (threadId: string, turnId: string) => Promise<boolean>
   declare private tryAdmitTurn: (turnId: string, threadId: string) => boolean
-  declare private clearRuntimeTurnState: (threadId: string, turnId: string, options?: { abort?: boolean } ) => void
-  declare private releaseRuntimeTurnExecution: (threadId: string, turnId: string, options?: { abort?: boolean } ) => void
+  declare private clearRuntimeTurnState: (threadId: string, turnId: string, options?: { abort?: boolean; releaseLease?: boolean } ) => void
+  declare private releaseRuntimeTurnExecution: (threadId: string, turnId: string, options?: { abort?: boolean; releaseLease?: boolean } ) => void
   declare private finalizeOpenItems: (turn: Turn, status: Extract<TurnStatus, 'completed' | 'failed' | 'aborted'>) => Turn
   declare private discardTurnItems: (threadId: string, turnId: string) => Promise<void>
   declare private finalizePersistedOpenItems: (threadId: string, turnId: string, status: Extract<TurnStatus, 'completed' | 'failed' | 'aborted'>) => Promise<void>
@@ -310,7 +311,7 @@ export class TurnService {
   private readonly inflightTurns = new Map<string, AbortController>()
   /** Turn ids that own one global admission slot. */
   private readonly admittedTurnThreads = new Map<string, string>()
-  private readonly leasedTurns = new Set<string>()
+  private readonly leasedTurns = new Map<string, ThreadExecutionLease>()
   /** Steering requests that are restoring a parked Graph lease before enqueueing. */
   private readonly graphSteeringResumeFences = new Map<string, number>()
   private maxConcurrentTurns: number

@@ -14,6 +14,7 @@ import {
   requireManagerJson
 } from './manager-client-support.js'
 import type { ServiceManagerConnection } from './manager-client.js'
+import { forgetTurnLease, rememberTurnLease } from './turn-mutation-context.js'
 
 type ActiveRenewal = {
   lease: ThreadExecutionLease
@@ -22,10 +23,18 @@ type ActiveRenewal = {
   deadlineTimer?: ReturnType<typeof setTimeout>
   renewing: boolean
   transientFailures: number
+  deadlineGraceUsed: boolean
 }
+
+const HOST_RESUME_RENEWAL_GRACE_MS = 20_000
 
 export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePort {
   private readonly renewals = new Map<string, ActiveRenewal>()
+  // Keep the last acquired fence even after renewal is authoritatively lost.
+  // Turn cleanup may still race with async persistence. Those writes must carry
+  // the stale token so Manager rejects them instead of silently accepting an
+  // unfenced mutation.
+  private readonly leasesByTurn = new Map<string, ThreadExecutionLease>()
   private onLeaseLost: ((lease: ThreadExecutionLease) => void) | undefined
 
   constructor(
@@ -56,19 +65,33 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
       await requireManagerJson(response)
     )
     this.startRenewal(parsed.lease)
+    this.leasesByTurn.set(parsed.lease.turnId, parsed.lease)
+    rememberTurnLease(parsed.lease)
     return parsed.lease
   }
 
   async release(threadId: string, turnId: string): Promise<void> {
-    this.stopRenewal(threadId, turnId)
-    await requestManagerJson(
-      this.manager,
-      `/v1/leases/threads/${encodeURIComponent(threadId)}/release`,
-      {
-        method: 'POST',
-        body: { turnId, ownerFlavor: this.flavor, ownerInstanceId: this.instanceId }
-      }
-    )
+    const lease = this.leasesByTurn.get(turnId)
+    if (!lease || lease.threadId !== threadId) return
+    try {
+      await requestManagerJson(
+        this.manager,
+        `/v1/leases/threads/${encodeURIComponent(threadId)}/release`,
+        {
+          method: 'POST',
+          body: {
+            turnId,
+            ownerFlavor: this.flavor,
+            ownerInstanceId: this.instanceId,
+            fencingToken: lease.fencingToken
+          }
+        }
+      )
+    } finally {
+      this.stopRenewal(threadId, turnId)
+      this.leasesByTurn.delete(turnId)
+      forgetTurnLease(lease)
+    }
   }
 
   async owner(threadId: string): Promise<ThreadExecutionLease | null> {
@@ -86,7 +109,9 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
       if (renewal.retryTimer) clearTimeout(renewal.retryTimer)
       if (renewal.deadlineTimer) clearTimeout(renewal.deadlineTimer)
     }
+    for (const lease of this.leasesByTurn.values()) forgetTurnLease(lease)
     this.renewals.clear()
+    this.leasesByTurn.clear()
   }
 
   private startRenewal(lease: ThreadExecutionLease): void {
@@ -97,7 +122,8 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
       lease,
       timer,
       renewing: false,
-      transientFailures: 0
+      transientFailures: 0,
+      deadlineGraceUsed: false
     }
     this.renewals.set(lease.threadId, renewal)
     this.armDeadline(renewal)
@@ -120,7 +146,8 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
           body: {
             turnId: current.lease.turnId,
             ownerFlavor: this.flavor,
-            ownerInstanceId: this.instanceId
+            ownerInstanceId: this.instanceId,
+            fencingToken: current.lease.fencingToken
           }
         }
       )
@@ -151,7 +178,10 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
       )
     }
     latest.lease = lease
+    this.leasesByTurn.set(lease.turnId, lease)
+    rememberTurnLease(lease)
     latest.transientFailures = 0
+    latest.deadlineGraceUsed = false
     this.armDeadline(latest)
   }
 
@@ -192,6 +222,16 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
   private expireRenewal(threadId: string, turnId: string): void {
     const current = this.renewals.get(threadId)
     if (!current || current.lease.turnId !== turnId) return
+    if (!current.deadlineGraceUsed) {
+      current.deadlineGraceUsed = true
+      current.lease = {
+        ...current.lease,
+        expiresAt: new Date(Date.now() + HOST_RESUME_RENEWAL_GRACE_MS).toISOString()
+      }
+      this.armDeadline(current)
+      void this.renew(threadId)
+      return
+    }
     console.warn(
       `[kun] thread lease expired without renewal thread=${threadId} ` +
       `turn=${turnId} expiresAt=${current.lease.expiresAt}`

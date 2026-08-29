@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createThreadRecord } from '../domain/thread.js'
 import { createTurnRecord } from '../domain/turn.js'
 import { testGraphConfig, testGraphPlan } from '../graph/graph-test-fixtures.test-support.js'
@@ -9,7 +9,11 @@ import { DEFAULT_KUN_CAPABILITIES_CONFIG } from '../contracts/capabilities.js'
 import { startNodeHttpServer } from '../server/node-http-server.js'
 import type { ServiceManagerConnection } from './manager-client.js'
 import { ManagerRemoteThreadStore } from './remote-data-stores.js'
-import { buildServiceManagerRouter, ServiceManagerState } from './service-manager.js'
+import {
+  buildServiceManagerRouter,
+  ServiceManagerState,
+  StaleTurnFenceError
+} from './service-manager.js'
 import { ManagerSharedDataStore } from './shared-data-store.js'
 import { requiresAtomicReplace } from './shared-data-store-core.js'
 
@@ -55,6 +59,48 @@ describe('manager shared data store', () => {
 
     await store.executeSession('trimEventsFromSeq', { threadId, fromSeqInclusive: 3 })
     await expect(store.executeSession('eventReplayFloorSeq', { threadId })).resolves.toBe(3)
+    await store.close()
+  })
+
+  it('revalidates a turn fence after a queued mutation reaches the store', async () => {
+    const store = await dataStore()
+    const threadId = 'thread-fence-queue'
+    const originalAppend = store.sessionStore.appendItem.bind(store.sessionStore)
+    let entered!: () => void
+    let unblock!: () => void
+    const didEnter = new Promise<void>((resolve) => { entered = resolve })
+    const blocked = new Promise<void>((resolve) => { unblock = resolve })
+    vi.spyOn(store.sessionStore, 'appendItem').mockImplementation(async (...args) => {
+      entered()
+      await blocked
+      return originalAppend(...args)
+    })
+    const item = {
+      id: 'item-first',
+      turnId: 'turn-first',
+      threadId,
+      role: 'assistant' as const,
+      status: 'completed' as const,
+      createdAt: '2026-08-29T00:00:00.000Z',
+      kind: 'assistant_text' as const,
+      text: 'first'
+    }
+    const first = store.executeSession('appendItem', { threadId, item })
+    await didEnter
+    let current = true
+    const stale = store.executeSession('appendItem', {
+      threadId,
+      item: { ...item, id: 'item-stale', turnId: 'turn-stale', text: 'stale' }
+    }, () => {
+      if (!current) throw new StaleTurnFenceError()
+    })
+    current = false
+    unblock()
+
+    await first
+    await expect(stale).rejects.toBeInstanceOf(StaleTurnFenceError)
+    await expect(store.executeSession('loadItems', { threadId }))
+      .resolves.toMatchObject([{ id: 'item-first' }])
     await store.close()
   })
 
@@ -420,6 +466,7 @@ describe('manager shared data store', () => {
       turnId: turn.id,
       ownerFlavor: 'production' as const,
       ownerInstanceId: 'runtime-dead',
+      fencingToken: 1,
       acquiredAt: '2026-08-06T00:00:00.000Z',
       expiresAt: '2026-08-06T00:01:00.000Z'
     }
@@ -585,7 +632,7 @@ describe('manager shared data store', () => {
       const connection: ServiceManagerConnection = {
         discovery: {
           version: 1,
-          protocolVersion: 3,
+          protocolVersion: 5,
           instanceId: 'manager-a',
           pid: process.pid,
           startedAt: '2026-08-01T00:00:00.000Z',

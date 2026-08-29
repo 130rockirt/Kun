@@ -48,6 +48,7 @@ describe('HybridThreadBackfillCoordinator shutdown', () => {
 
     scan.resolve({ highWater: 3, usage: [{ seq: 3 }] })
     await coordinator.wait()
+    expect(coordinator.isUsageReady()).toBe(true)
     expect(deps.noteExistingHighWater).toHaveBeenCalledWith('thread_1', 3)
     expect(deps.markUsageBackfilled).toHaveBeenCalledWith('thread_1')
   })
@@ -61,6 +62,7 @@ describe('HybridThreadBackfillCoordinator shutdown', () => {
     coordinator.stop()
     ids.resolve(['thread_1'])
     await coordinator.wait()
+    expect(coordinator.isUsageReady()).toBe(false)
 
     expect(deps.scanEvents).not.toHaveBeenCalled()
     expect(deps.insertUsage).not.toHaveBeenCalled()
@@ -85,6 +87,19 @@ describe('HybridThreadBackfillCoordinator shutdown', () => {
 })
 
 describe('HybridThreadBackfillCoordinator failures', () => {
+  it('keeps usage unavailable when index discovery fails', async () => {
+    const failure = new Error('cannot enumerate threads')
+    const deps = makeDeps({ filesystemThreadIds: vi.fn(async () => { throw failure }) })
+    const coordinator = new HybridThreadBackfillCoordinator(deps)
+
+    coordinator.start()
+    await coordinator.wait()
+
+    expect(deps.warn).toHaveBeenCalledWith('background index backfill', failure)
+    expect(coordinator.isUsageReady()).toBe(false)
+    expect(deps.scanEvents).not.toHaveBeenCalled()
+  })
+
   it('skips a thread whose events scan fails and keeps it unmarked', async () => {
     const failure = Object.assign(new Error('permission denied'), { code: 'EACCES' })
     const deps = makeDeps({
@@ -106,8 +121,28 @@ describe('HybridThreadBackfillCoordinator failures', () => {
     expect(deps.noteExistingHighWater).not.toHaveBeenCalledWith('thread_1', expect.anything())
     expect(deps.insertUsage).not.toHaveBeenCalledWith('thread_1', expect.anything(), expect.anything())
     expect(deps.markUsageBackfilled).not.toHaveBeenCalledWith('thread_1')
+    expect(coordinator.isUsageReady()).toBe(false)
     expect(deps.insertUsage).toHaveBeenCalledWith('thread_2', [{ seq: 4 }], 0)
     expect(deps.markUsageBackfilled).toHaveBeenCalledWith('thread_2')
+    expect(coordinator.isUsageReady(['thread_1'])).toBe(false)
+    expect(coordinator.isUsageReady(['thread_2'])).toBe(true)
+  })
+
+  it('retries a transient usage backfill failure on the next start', async () => {
+    const scanEvents = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary read failure'))
+      .mockResolvedValue({ highWater: 2, usage: [{ seq: 2 }] })
+    const deps = makeDeps({ scanEvents })
+    const coordinator = new HybridThreadBackfillCoordinator(deps)
+
+    coordinator.start()
+    await coordinator.wait()
+    expect(coordinator.isUsageReady()).toBe(false)
+
+    coordinator.start()
+    await coordinator.wait()
+    expect(coordinator.isUsageReady()).toBe(true)
+    expect(scanEvents).toHaveBeenCalledTimes(2)
   })
 
   it('leaves a failed usage write unmarked and continues with later threads', async () => {

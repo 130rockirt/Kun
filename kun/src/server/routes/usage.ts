@@ -5,6 +5,7 @@ import {
   buildModelUsageResponse,
   buildThreadUsageResponse,
   buildTurnUsageResponse,
+  loadLiveUsageRemainders,
   loadUsageHistory,
   parseDailyUsageQuery,
   parseModelUsageQuery,
@@ -40,30 +41,67 @@ export async function usageJsonResponse(
   const groupBy = stringParam(query, 'group_by') ?? 'runtime'
   try {
     if (groupBy === 'thread') {
+      const threadId = stringParam(query, 'thread_id')
+      if (runtime.sessionStore.aggregateUsage) {
+        const aggregateQuery = {
+          groupBy: 'thread',
+          ...(threadId ? { threadId } : {})
+        } as const
+        return jsonResponse(await runtime.sessionStore.aggregateUsage(
+          aggregateQuery,
+          await loadLiveUsageRemainders(
+            runtime,
+            { ...(threadId ? { threadId } : {}) },
+            true
+          )
+        ))
+      }
       return jsonResponse(buildThreadUsageResponse(await loadUsageHistory(runtime, {
-        threadId: stringParam(query, 'thread_id')
+        threadId
       })))
     }
     if (groupBy === 'day') {
       const dayQuery = parseDailyUsageQuery(query)
+      const range = usageQueryUtcRange(dayQuery)
+      if (runtime.sessionStore.aggregateUsage) {
+        return jsonResponse(await runtime.sessionStore.aggregateUsage(
+          { ...dayQuery, ...range },
+          await loadLiveUsageRemainders(runtime, range, true)
+        ))
+      }
       return jsonResponse(
         buildDailyUsageResponse(
-          await loadUsageHistory(runtime, usageQueryUtcRange(dayQuery)),
+          await loadUsageHistory(runtime, range),
           dayQuery
         )
       )
     }
     if (groupBy === 'model') {
       const modelQuery = parseModelUsageQuery(query)
+      const range = usageQueryUtcRange(modelQuery)
+      if (runtime.sessionStore.aggregateUsage) {
+        return jsonResponse(await runtime.sessionStore.aggregateUsage(
+          { ...modelQuery, ...range },
+          await loadLiveUsageRemainders(runtime, range, true)
+        ))
+      }
       return jsonResponse(
         buildModelUsageResponse(
-          await loadUsageHistory(runtime, usageQueryUtcRange(modelQuery)),
+          await loadUsageHistory(runtime, range),
           modelQuery
         )
       )
     }
     if (groupBy === 'turn') {
       const turnQuery = parseTurnUsageQuery(query)
+      if (runtime.sessionStore.aggregateUsage) {
+        return jsonResponse(TurnUsageResponseSchema.parse(
+          await runtime.sessionStore.aggregateUsage(
+            turnQuery,
+            await loadLiveUsageRemainders(runtime, { threadId: turnQuery.threadId }, true)
+          )
+        ))
+      }
       const response = buildTurnUsageResponse(
         await loadUsageHistory(runtime, { threadId: turnQuery.threadId }),
         turnQuery
@@ -73,6 +111,15 @@ export async function usageJsonResponse(
   } catch (error) {
     if (error instanceof UsageValidationError) {
       return jsonResponse({ code: error.code, message: error.message }, 400)
+    }
+    const message = error instanceof Error ? error.message : String(error)
+    if (message.includes('usage_query_timeout') || message.includes('usage_index_unavailable')) {
+      return jsonResponse({
+        code: message.includes('usage_query_timeout')
+          ? 'usage_query_timeout'
+          : 'usage_index_unavailable',
+        message: 'Usage history is temporarily unavailable. The previous totals were kept.'
+      }, 503)
     }
     throw error
   }

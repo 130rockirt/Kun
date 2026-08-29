@@ -127,6 +127,26 @@ describe('chat projection turn failure identity', () => {
 })
 
 describe('chat projection terminal settlement by turnId', () => {
+  it('refreshes usage once at the matching terminal boundary', () => {
+    const initial = {
+      ...state(),
+      busy: true,
+      currentTurnId: 'turn_1',
+      threads: [{ ...state().threads[0]!, status: 'running' }]
+    }
+    const completed = project(initial, [{
+      type: 'turn_completed',
+      payload: { status: 'completed', threadId: 'thread_1', turnId: 'turn_1' }
+    }])
+    const replayed = project(completed, [{
+      type: 'turn_completed',
+      payload: { status: 'completed', threadId: 'thread_1', turnId: 'turn_1' }
+    }])
+
+    expect(completed.usageRefreshKey).toBe(initial.usageRefreshKey + 1)
+    expect(replayed.usageRefreshKey).toBe(completed.usageRefreshKey)
+  })
+
   it('repairs latestTurnId/latestTurnStatus when the local status is already idle', () => {
     const projected = project({
       ...state(),

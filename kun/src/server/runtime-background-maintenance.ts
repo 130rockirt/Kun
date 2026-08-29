@@ -1,4 +1,3 @@
-export const USAGE_CARRYOVER_DELAY_MS = 5_000
 export const ATTACHMENT_PRUNE_DELAY_MS = 30_000
 export const ATTACHMENT_PRUNE_INTERVAL_MS = 60 * 60 * 1_000
 export const THREAD_GUARDIAN_DELAY_MS = 45_000
@@ -12,11 +11,9 @@ export type RuntimeBackgroundMaintenance = {
 }
 
 export function createRuntimeBackgroundMaintenance(input: {
-  seedUsage: MaintenanceTask
   pruneAttachments: MaintenanceTask
   inspectThreads: MaintenanceTask
-  onError: (task: 'usage carryover' | 'attachment pruning' | 'thread guardian', error: unknown) => void
-  usageDelayMs?: number
+  onError: (task: 'attachment pruning' | 'thread guardian', error: unknown) => void
   attachmentDelayMs?: number
   attachmentIntervalMs?: number
   guardianDelayMs?: number
@@ -24,23 +21,17 @@ export function createRuntimeBackgroundMaintenance(input: {
 }): RuntimeBackgroundMaintenance {
   let started = false
   let stopped = false
-  let usageTimer: ReturnType<typeof setTimeout> | undefined
   let attachmentTimer: ReturnType<typeof setTimeout> | undefined
   let attachmentInterval: ReturnType<typeof setInterval> | undefined
   let guardianTimer: ReturnType<typeof setTimeout> | undefined
   let guardianInterval: ReturnType<typeof setInterval> | undefined
 
-  const run = (task: 'usage carryover' | 'attachment pruning' | 'thread guardian', action: MaintenanceTask) => {
+  const run = (task: 'attachment pruning' | 'thread guardian', action: MaintenanceTask) => {
     void action().catch((error) => input.onError(task, error))
   }
   const start = () => {
     if (started || stopped) return
     started = true
-    usageTimer = setTimeout(() => {
-      usageTimer = undefined
-      if (!stopped) run('usage carryover', input.seedUsage)
-    }, input.usageDelayMs ?? USAGE_CARRYOVER_DELAY_MS)
-    usageTimer.unref?.()
     attachmentTimer = setTimeout(() => {
       attachmentTimer = undefined
       if (stopped) return
@@ -64,12 +55,10 @@ export function createRuntimeBackgroundMaintenance(input: {
   }
   const stop = () => {
     stopped = true
-    if (usageTimer) clearTimeout(usageTimer)
     if (attachmentTimer) clearTimeout(attachmentTimer)
     if (attachmentInterval) clearInterval(attachmentInterval)
     if (guardianTimer) clearTimeout(guardianTimer)
     if (guardianInterval) clearInterval(guardianInterval)
-    usageTimer = undefined
     attachmentTimer = undefined
     attachmentInterval = undefined
     guardianTimer = undefined

@@ -35,6 +35,7 @@ import {
 } from '../contracts/memory.js'
 import { ThreadSchema } from '../contracts/threads.js'
 import type { ThreadExecutionLease } from '../contracts/runtime-flavor.js'
+import { SessionUsageAggregateRequestSchema } from '../contracts/usage-query.js'
 import type { AgentSession } from '../domain/session.js'
 import { makeErrorItem } from '../domain/item.js'
 import { finishTurn } from '../domain/turn.js'
@@ -96,10 +97,17 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
     })
   }
 
-  async executeThread(operation: ManagerThreadStoreOperation, value: unknown): Promise<unknown> {
+  async executeThread(
+    operation: ManagerThreadStoreOperation,
+    value: unknown,
+    assertCurrent?: () => void
+  ): Promise<unknown> {
     const threadId = mutationThreadId(value)
     if (threadId && isThreadMutation(operation)) {
-      return this.enqueueMutation(threadId, () => this.executeThreadNow(operation, value))
+      return this.enqueueMutation(threadId, () => {
+        assertCurrent?.()
+        return this.executeThreadNow(operation, value)
+      })
     }
     return this.executeThreadNow(operation, value)
   }
@@ -153,12 +161,19 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
     }
   }
 
-  async executeSession(operation: ManagerSessionStoreOperation, value: unknown): Promise<unknown> {
+  async executeSession(
+    operation: ManagerSessionStoreOperation,
+    value: unknown,
+    assertCurrent?: () => void
+  ): Promise<unknown> {
     const threadId = mutationThreadId(value)
     if (threadId && isSessionMutation(operation)) {
-      return this.enqueueMutation(threadId, () => this.executeSessionNow(operation, value))
+      return this.enqueueMutation(threadId, () => {
+        assertCurrent?.()
+        return this.executeSessionNow(operation, value, assertCurrent)
+      })
     }
-    return this.executeSessionNow(operation, value)
+    return this.executeSessionNow(operation, value, assertCurrent)
   }
 
   async executeArtifact(operation: ManagerArtifactStoreOperation, value: unknown): Promise<unknown> {
@@ -410,7 +425,8 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
 
   protected async executeSessionNow(
     operation: ManagerSessionStoreOperation,
-    value: unknown
+    value: unknown,
+    assertCurrent?: () => void
   ): Promise<unknown> {
     switch (operation) {
       case 'appendEvent': {
@@ -606,11 +622,18 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
       }
       case 'allocateEventSeq': {
         const { threadId } = parseThreadId(value)
-        return this.allocateEventSeq(threadId)
+        return this.allocateEventSeq(threadId, assertCurrent)
       }
       case 'loadUsageRecords': {
         const body = SessionUsageQuerySchema.parse(value ?? {})
         return this.sessionStore.loadUsageRecords?.(body) ?? []
+      }
+      case 'aggregateUsage': {
+        const request = SessionUsageAggregateRequestSchema.parse(value)
+        if (!this.sessionStore.aggregateUsage) {
+          throw new Error('usage_index_unavailable: aggregate usage is unsupported')
+        }
+        return this.sessionStore.aggregateUsage(request.query, request.liveRecords)
       }
       case 'loadLatestUsageSnapshots': {
         const body = z.object({ threadIds: z.array(ThreadIdSchema).optional() }).strict().parse(value ?? {})

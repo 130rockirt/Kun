@@ -14,6 +14,7 @@ import type {
 } from '../contracts/turns.js'
 import type { TurnItem, UserMessageSource } from '../contracts/items.js'
 import type { RuntimeErrorSeverity } from '../contracts/errors.js'
+import { runWithTurnMutationFence } from '../manager/turn-mutation-context.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { MigrationMaintenanceLock } from '../ports/migration-maintenance-lock.js'
@@ -59,6 +60,17 @@ import {
 import { type TurnService, type TurnServiceDeps, TurnConflictError, TurnCapacityError, type TerminalTurnStatus, type TurnSettlement, type GraphLeadSuspensionResult, type GraphLeadResumeResult, HOST_SHUTDOWN_TURN_SUSPENSION_CODE, hostShutdownTurnSuspensionReason, isHostShutdownTurnSuspension, DEFAULT_MAX_CONCURRENT_TURNS, fingerprintStartTurnRequest, canonicalizeFingerprintValue, isActiveTurn, terminalStatus, threadStatusFromTurns, threadStatusAfterTurnTransition, normalizeMaxConcurrentTurns, firstNonBlank, modelForManualCompaction } from './turn-service-core.js'
 
 export const turnServiceRuntimeStateOperations = {
+withTurnMutationFence<T>(this: TurnService,
+    threadId: string,
+    turnId: string,
+    operation: () => T
+  ): T {
+    const lease = this['leasedTurns'].get(turnId)
+    return lease && lease.threadId === threadId
+      ? runWithTurnMutationFence(lease, operation)
+      : operation()
+  },
+
 isTurnExecutionActive(this: TurnService, turnId: string): boolean {
     return this['inflightTurns'].has(turnId)
   },

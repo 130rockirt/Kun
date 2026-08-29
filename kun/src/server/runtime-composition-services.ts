@@ -262,8 +262,10 @@ export async function createRuntimeServices(
 	      new Date(now - 24 * 60 * 60 * 1_000).toISOString()
 	    )
 	  }
+  const prepareUsageCarryover = () => seedUsageCarryover({
+    threadStore, sessionStore, usageService
+  })
   const backgroundMaintenance = createRuntimeBackgroundMaintenance({
-    seedUsage: () => seedUsageCarryover({ threadStore, sessionStore, usageService }),
     pruneAttachments: () => pruneUnsentAttachments(attachmentStore),
     inspectThreads: async () => {
       const result = await threadStoreGuardian.run()
@@ -478,6 +480,7 @@ export async function createRuntimeServices(
     reviewService,
     pruneUnsentAttachments,
     backgroundMaintenance,
+    prepareUsageCarryover,
     threadStoreGuardian,
     threadSnapshots,
     sessionGuardian,

@@ -2,14 +2,16 @@ export {
   KUN_MANAGER_CAPABILITIES,
   RUNTIME_HEARTBEAT_TTL_MS,
   THREAD_EXECUTION_LEASE_TTL_MS,
+  HOST_RESUME_GRACE_MS,
   RESOURCE_LEASE_TTL_MS,
   ThreadLeaseBusyError,
   RuntimeSlotBusyError,
   RuntimeRegistrationRequiredError,
+  StaleTurnFenceError,
   ServiceManagerState,
-  reconcileVerifiedForcedRuntimeRecovery,
-  startServiceManager
+  reconcileVerifiedForcedRuntimeRecovery
 } from './service-manager-state.js'
+export { startServiceManager } from './service-manager-startup.js'
 export type {
   ManagerResourceLease,
   ServiceManagerHandle

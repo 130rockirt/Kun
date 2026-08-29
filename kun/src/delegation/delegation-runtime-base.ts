@@ -136,7 +136,12 @@ export abstract class DelegationRuntimeBase {
     nowIso?: () => string
     idGenerator?: () => string
     executor?: ChildRunExecutor
-    recordExternalUsage?: (threadId: string, usage: UsageSnapshot) => void
+    recordExternalUsage?: (
+      threadId: string,
+      usage: UsageSnapshot,
+      attribution?: { model?: string; providerId?: string },
+      cumulativeUsage?: UsageSnapshot
+    ) => unknown
     proactiveRetryWait?: (delayMs: number, signal: AbortSignal) => Promise<boolean>
   }) {
     this.detachedHandoffs = new DetachedChildHandoffCoordinator({
@@ -372,15 +377,25 @@ export abstract class DelegationRuntimeBase {
     return this.nextChildSeq(record.id)
   }
 
-  protected recordExternalUsage(
+  protected async recordExternalUsage(
     record: ChildRunRecord,
     childUsage: ChildRunRecord['usage'] = record.usage
-  ): void {
+  ): Promise<void> {
     const usage = toUsageSnapshot(childUsage)
     if (usage.totalTokens <= 0 && usage.costUsd === undefined && usage.costCny === undefined) return
     // Independent ledger: child usage settles on the child's own side thread,
     // never the parent, so parent cache telemetry and budgets stay clean.
-    this.options.recordExternalUsage?.(record.id, usage)
+    try {
+      await this.options.recordExternalUsage?.(record.id, usage, {
+        ...(record.model ? { model: record.model } : {}),
+        ...(record.providerId ? { providerId: record.providerId } : {})
+      }, toUsageSnapshot(record.usage))
+    } catch (error) {
+      // Accounting is best-effort after the child state has settled. A
+      // storage failure must not rewrite a successfully completed child as a
+      // runtime failure; the settled child record still retains its usage.
+      console.warn(`[kun] child usage settlement failed child=${record.id}:`, error)
+    }
   }
 
   protected async notifyDetachedChild(record: ChildRunRecord): Promise<void> {
@@ -568,7 +583,7 @@ export abstract class DelegationRuntimeBase {
         durationMs: (current.durationMs ?? 0) + elapsedMs(startedAt, finishedAt),
         updatedAt: finishedAt
       }))
-      this.recordExternalUsage(record, subtractChildUsage(record.usage, usageBeforeRun))
+      await this.recordExternalUsage(record, subtractChildUsage(record.usage, usageBeforeRun))
       return record
     } catch (error) {
       const finishedAt = this.now()
@@ -597,7 +612,7 @@ export abstract class DelegationRuntimeBase {
       // (issue #1155). Same delta mechanism as the success path, so resume and
       // retry never double-count, and zero-usage failures stay zero.
       if (usageBeforeRun !== undefined && failedError?.usage !== undefined) {
-        this.recordExternalUsage(record, subtractChildUsage(record.usage, usageBeforeRun))
+        await this.recordExternalUsage(record, subtractChildUsage(record.usage, usageBeforeRun))
       }
       return record
     } finally {

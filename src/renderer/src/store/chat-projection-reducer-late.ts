@@ -230,7 +230,6 @@ export function reduceLateChatProjection(
         }
       }
       return {
-        usageRefreshKey: state.usageRefreshKey + 1,
         lastTurnUsage: { threadId, snapshot: action.payload },
         turnTimingMetrics
       }
@@ -318,6 +317,7 @@ export function reduceLateChatProjection(
     case 'turn_completed':
     case 'turn_aborted': {
       const aborted = action.type === 'turn_aborted'
+      const settledCurrentTurn = state.busy || state.currentTurnId === action.payload.turnId
       const threadId = state.activeThreadId
       const threads = threadId
         ? settleProjectedThreadStatus(
@@ -338,6 +338,7 @@ export function reduceLateChatProjection(
           blocks: context.settlePendingRuntimeWork(state.blocks)
         } : {}),
         ...(state.busy ? { busy: false, busyUnconfirmed: false } : {}),
+        ...(settledCurrentTurn ? { usageRefreshKey: state.usageRefreshKey + 1 } : {}),
         ...(threads !== state.threads ? { threads } : {})
       })
       if (!threadId) return patch
@@ -359,12 +360,14 @@ export function reduceLateChatProjection(
       const conversationScoped = options?.scope === 'conversation'
       const interrupted = context.isInterruptSettledError(error, message)
       const shouldSettle = terminal || !state.busy || interrupted
+      const settledCurrentTurn = state.busy || Boolean(state.currentTurnId)
       const patch = flushLiveProjection(state, context.now, {
         ...finalizeTurnTimingAt(state, context.now),
         error: interrupted || conversationScoped ? null : message,
         runtimeErrorDetail: interrupted || conversationScoped ? null : detail || null
       })
       if (!shouldSettle) return patch
+      if (settledCurrentTurn) patch.usageRefreshKey = state.usageRefreshKey + 1
       patch.busy = false
       patch.busyUnconfirmed = false
       patch.currentTurnId = null

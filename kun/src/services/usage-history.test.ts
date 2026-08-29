@@ -4,6 +4,37 @@ import { loadUsageHistory } from './usage-history.js'
 import { buildThreadUsageResponse } from './usage-service-responses.js'
 
 describe('loadUsageHistory provider attribution', () => {
+  it('uses metadata reads instead of hydrating message history', async () => {
+    const metadata = {
+      id: 'thread-metadata',
+      model: 'model-a',
+      providerId: 'provider-a',
+      updatedAt: '2026-08-22T00:00:01.000Z',
+      turns: [{ id: 'turn-metadata', model: 'model-a', providerId: 'provider-a' }]
+    }
+    const get = vi.fn(async () => { throw new Error('full thread hydration is forbidden') })
+    const getMetadata = vi.fn(async () => metadata)
+    const source = {
+      threadService: { list: async () => [], get, getMetadata },
+      sessionStore: {
+        loadUsageRecords: async () => [{
+          threadId: metadata.id,
+          turnId: 'turn-metadata',
+          completedAt: '2026-08-22T00:00:00.000Z',
+          usage: { ...emptyUsageSnapshot(), promptTokens: 10, totalTokens: 10, turns: 1 }
+        }],
+        loadLatestUsageSnapshots: async () => []
+      },
+      usageService: { forThread: () => emptyUsageSnapshot() },
+      nowIso: () => '2026-08-22T00:00:02.000Z'
+    }
+
+    await expect(loadUsageHistory(source as never, { threadId: metadata.id }))
+      .resolves.toMatchObject([{ providerId: 'provider-a' }])
+    expect(getMetadata).toHaveBeenCalledWith(metadata.id)
+    expect(get).not.toHaveBeenCalled()
+  })
+
   it('recovers providerId from the matching turn for indexed usage records', async () => {
     const thread = {
       id: 'thread-glm',

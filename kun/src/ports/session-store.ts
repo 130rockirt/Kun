@@ -2,6 +2,10 @@ import type { AgentSession } from '../domain/session.js'
 import type { RuntimeEvent } from '../contracts/events.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { UsageSnapshot } from '../contracts/usage.js'
+import type {
+  SessionUsageAggregateQuery,
+  SessionUsageAggregateResponse
+} from '../contracts/usage-query.js'
 
 export type SessionUsageQueryOptions = {
   threadId?: string
@@ -18,6 +22,8 @@ export type SessionUsageRecord = {
   providerId?: string
   completedAt: string
   usage: UsageSnapshot
+  /** Worker-only marker: `usage` is cumulative and must be diffed in SQLite. */
+  cumulative?: boolean
 }
 
 export type SessionLatestUsageSnapshot = {
@@ -244,6 +250,11 @@ export interface SessionStore {
    * usage deltas without replaying the full event log.
    */
   loadUsageRecords?(options?: SessionUsageQueryOptions): Promise<SessionUsageRecord[]>
+  /** Run a bounded usage aggregation without returning the full fact history. */
+  aggregateUsage?(
+    query: SessionUsageAggregateQuery,
+    liveRecords?: SessionUsageRecord[]
+  ): Promise<SessionUsageAggregateResponse>
   /** Optional indexed latest cumulative usage snapshot query. */
   loadLatestUsageSnapshots?(options?: { threadIds?: string[] }): Promise<SessionLatestUsageSnapshot[]>
   /** Forget the per-thread in-memory state without touching disk. */

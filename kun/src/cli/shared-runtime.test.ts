@@ -37,7 +37,7 @@ function managerConnection(dataDir: string): ServiceManagerConnection {
   return {
     discovery: {
       version: 1,
-      protocolVersion: 3,
+      protocolVersion: 5,
       instanceId: 'manager-a',
       pid: process.pid,
       startedAt: '2026-07-22T00:00:00.000Z',

@@ -5,6 +5,10 @@ import {
 import type { EventBus } from '../ports/event-bus.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadLifecycleFence, ThreadLifecycleLease } from './thread-lifecycle-fence.js'
+import {
+  currentTurnMutationFence,
+  runWithTurnMutationFence
+} from '../manager/turn-mutation-context.js'
 
 type RuntimeEventWithoutStamp<Event extends RuntimeEvent> = Omit<Event, 'seq' | 'timestamp'> &
   Partial<Pick<Event, 'seq' | 'timestamp'>>
@@ -58,11 +62,14 @@ export class RuntimeEventRecorder {
     // behind another event must stay stale even if the same id is later
     // recreated after deletion.
     const lease = this.options.lifecycleFence?.acquire(draft.threadId) ?? undefined
+    const turnFence = currentTurnMutationFence()
     if (this.options.lifecycleFence && !lease) {
       return this.makeEvent(draft)
     }
     try {
-      return await this.enqueue(draft.threadId, async () => this.recordCommitted(draft, lease))
+      return await this.enqueue(draft.threadId, () => turnFence
+        ? runWithTurnMutationFence(turnFence, () => this.recordCommitted(draft, lease))
+        : this.recordCommitted(draft, lease))
     } finally {
       lease?.release()
     }
@@ -77,11 +84,13 @@ export class RuntimeEventRecorder {
    */
   async publishTransient(draft: RuntimeEventDraft): Promise<RuntimeEvent> {
     const lease = this.options.lifecycleFence?.acquire(draft.threadId) ?? undefined
+    const turnFence = currentTurnMutationFence()
     if (this.options.lifecycleFence && !lease) {
       return this.makeEvent(draft)
     }
     try {
-      return await this.enqueue(draft.threadId, async () => {
+      return await this.enqueue(draft.threadId, () => {
+        const publish = async () => {
         const event = await this.makeEvent(draft)
         if (lease && !lease.isCurrent()) return event
         await this.options.sessionStore.appendEvent(event.threadId, {
@@ -96,6 +105,8 @@ export class RuntimeEventRecorder {
         if (lease && !lease.isCurrent()) return event
         this.options.eventBus.publish(event)
         return event
+        }
+        return turnFence ? runWithTurnMutationFence(turnFence, publish) : publish()
       })
     } finally {
       lease?.release()

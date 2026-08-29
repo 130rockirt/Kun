@@ -15,6 +15,10 @@ import type {
   SessionUsageQueryOptions,
   SessionUsageRecord
 } from '../../ports/session-store.js'
+import type {
+  SessionUsageAggregateQuery,
+  SessionUsageAggregateResponse
+} from '../../contracts/usage-query.js'
 import { FileSessionStore } from '../file/file-session-store.js'
 import type { HybridThreadStore } from './hybrid-thread-store.js'
 
@@ -169,6 +173,13 @@ export class HybridSessionStore implements SessionStore {
       console.warn(`[kun] sqlite usage index unavailable; using file usage index: ${message}`)
       return this.delegate.loadUsageRecords(options)
     }
+  }
+
+  async aggregateUsage(
+    query: SessionUsageAggregateQuery,
+    liveRecords: SessionUsageRecord[] = []
+  ): Promise<SessionUsageAggregateResponse> {
+    return this.index.aggregateUsage(query, liveRecords)
   }
 
   async loadLatestUsageSnapshots(options?: { threadIds?: string[] }): Promise<SessionLatestUsageSnapshot[]> {

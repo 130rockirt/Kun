@@ -4,6 +4,22 @@ import type { ServerRuntime } from './server-runtime.js'
 import { usageJsonResponse } from './usage.js'
 
 describe('usageJsonResponse', () => {
+  it('returns a recoverable 503 when the isolated usage query times out', async () => {
+    const runtime = runtimeFixture({
+      list: vi.fn(async () => []),
+      loadUsageRecords: vi.fn(async () => []),
+      aggregateUsage: vi.fn(async () => { throw new Error('usage_query_timeout') })
+    })
+
+    const response = await usageJsonResponse(request('thread'), runtime)
+
+    expect(response.status).toBe(503)
+    expect(JSON.parse(response.body)).toEqual({
+      code: 'usage_query_timeout',
+      message: 'Usage history is temporarily unavailable. The previous totals were kept.'
+    })
+  })
+
   it('validates day queries before loading history and forwards the UTC range', async () => {
     const loadUsageRecords = vi.fn(async () => [])
     const runtime = runtimeFixture({ list: vi.fn(async () => []), loadUsageRecords })
@@ -361,6 +377,7 @@ function runtimeFixture(overrides: {
   list: (options?: unknown) => Promise<unknown[]>
   loadEventsSince?: (threadId: string, sinceSeq: number) => Promise<unknown[]>
   loadUsageRecords: (options?: unknown) => Promise<unknown[]>
+  aggregateUsage?: (query: unknown) => Promise<unknown>
 }): ServerRuntime {
   return {
     threadService: {
@@ -369,7 +386,8 @@ function runtimeFixture(overrides: {
     },
     sessionStore: {
       loadEventsSince: overrides.loadEventsSince ?? vi.fn(async () => []),
-      loadUsageRecords: overrides.loadUsageRecords
+      loadUsageRecords: overrides.loadUsageRecords,
+      ...(overrides.aggregateUsage ? { aggregateUsage: overrides.aggregateUsage } : {})
     },
     usageService: {
       forThread: () => emptyUsageSnapshot()

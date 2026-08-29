@@ -4,7 +4,8 @@ import {
   type DailyUsageRange,
   defaultDailyUsageRange
 } from './use-daily-usage'
-import { parseUsageResponse, withUsageRequestTimeout } from './usage-response'
+import { requestUsage } from './usage-request-cache'
+import { parseUsageResponse } from './usage-response'
 
 export type ModelUsageBucket = Omit<DailyUsageBucket, 'date'> & {
   model: string
@@ -159,12 +160,12 @@ export function normalizeModelUsageResponse(raw: RawModelUsageResponse): ModelUs
   }
 }
 
-export async function loadModelUsage(range: DailyUsageRange): Promise<ModelUsageSummary | null> {
+export async function loadModelUsage(
+  range: DailyUsageRange,
+  generation?: string | number
+): Promise<ModelUsageSummary | null> {
   if (typeof window.kunGui?.runtimeRequest !== 'function') return null
-  const response = await withUsageRequestTimeout(
-    window.kunGui.runtimeRequest(buildModelUsagePath(range), 'GET'),
-    'model usage'
-  )
+  const response = await requestUsage(buildModelUsagePath(range), 'model usage', generation)
   if (!response.ok || !response.body.trim()) {
     throw new Error(`model usage request failed: ${response.status}`)
   }
@@ -186,19 +187,24 @@ export function useModelUsageState(enabled: boolean, refreshKey: unknown, days: 
   useEffect(() => {
     let cancelled = false
     if (!enabled) {
-      setState({ usage: null, loading: false, loaded: false, error: null })
+      setState((current) => ({ ...current, loading: false, error: null }))
       return
     }
-    setState({ usage: null, loading: true, loaded: false, error: null })
+    setState((current) => ({ ...current, loading: true, error: null }))
     const range = defaultDailyUsageRange(new Date(), days)
-    void loadModelUsage(range)
+    void loadModelUsage(range, String(refreshKey))
       .then((usage) => {
         if (!cancelled) setState({ usage, loading: false, loaded: true, error: null })
       })
       .catch((error) => {
         if (!cancelled) {
           const message = error instanceof Error ? error.message : String(error)
-          setState({ usage: null, loading: false, loaded: true, error: message })
+          setState((current) => ({
+            ...current,
+            loading: false,
+            loaded: current.loaded,
+            error: message
+          }))
         }
       })
     return () => {
