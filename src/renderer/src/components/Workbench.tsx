@@ -297,10 +297,12 @@ export function Workbench(): ReactElement {
     closeRightPanelTab
   })
   const {
-    composerFileReferences, fileTreeSidePanelOpen, fileTreeSidePanelView, openFilePreviewTargets,
+    composerFileReferences, fileTreeSidePanelOpen, fileTreeSidePanelView,
+    generatedDocumentCollection, openFilePreviewTargets,
     pinnedFilePreviewTargetKeys, preserveFilePreviewTargets, fileTreeWorkspaceRoot,
     clearComposerFileReferences, addComposerFileReference, pickComposerFileReferences,
-    removeComposerFileReference, openWorkspaceFilePreviewTarget, previewWorkspaceFileFromSidebar,
+    removeComposerFileReference, openWorkspaceFilePreviewTarget, openGeneratedDocumentPreview,
+    openGeneratedDocuments, previewWorkspaceFileFromSidebar,
     closeWorkspaceFilePreviewTarget, togglePinnedFilePreviewTarget, closeOtherFilePreviewTargets,
     togglePreserveFilePreviewTargets, addWorkspaceReferenceFromSidebar,
     toggleFileTreeSidePanel, openFileTreeSidePanel, openDesignFileTreeSidePanel, setFileTreeSidePanelView,
@@ -621,6 +623,7 @@ export function Workbench(): ReactElement {
     togglePinnedFilePreviewTarget, closeOtherFilePreviewTargets, togglePreserveFilePreviewTargets,
     activeExtensionRightPanel, codeRightTabs, currentSideConversations, currentSideRunningCount,
     runtimeInfo, fileTreeSidePanelOpen, fileTreeSidePanelView, fileTreeWorkspaceRoot,
+    generatedDocumentCollection, openGeneratedDocumentPreview,
     designWorkspaceRoot, designDocuments, designActiveDocumentId, setFileTreeSidePanelView,
     previewWorkspaceFileFromSidebar, addWorkspaceReferenceFromSidebar,
     openDesignDocumentInWhiteboard, extensionRightRailItems, extensionRightPanelItems,
@@ -663,7 +666,7 @@ export function Workbench(): ReactElement {
     openCodeRightTool, currentSideRunningCount, extensionRightRailItems, selectRightRailExtension,
     imageAnnotationHost, planOverlay, openManagedExtensionView, activeExtensionAuxiliaryPanel,
     workspaceContextMenu, activeGuiPlan,
-    focusedCanvasWorkspace,
+    focusedCanvasWorkspace, openGeneratedDocuments, openGeneratedDocumentPreview,
     onOpenCommandPalette: openWorkbenchCommandPalette
   }} />
     <WorkbenchCommandPaletteRuntime

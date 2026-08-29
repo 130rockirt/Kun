@@ -229,6 +229,8 @@ describe('buildToolPreferenceInstruction', () => {
     expect(instruction).toContain('action="revise_previews"|"retry_failed"')
     expect(instruction).toContain('action="approve_and_build"')
     expect(instruction).toContain('same PPT child')
+    expect(instruction).toContain('phase="source_unavailable"')
+    expect(instruction).toContain('never bypass governance')
     expect(instruction).toContain('exact active user turn')
     expect(instruction).toContain('Never rewrite, summarize, supplement, or invent')
     expect(instruction).toContain('`.kun-ppt.html`')

@@ -63,9 +63,7 @@ export {
 export type { TimelineJumpPreviewMetadata } from './message-timeline-jump-preview'
 export { ConversationTurn } from './message-timeline-conversation-turn'
 export type { ConversationTurnProps } from './message-timeline-conversation-turn'
-
 export { summarizeToolBlock } from './message-timeline-process'
-
 export function timelineTurnIsProcessing(input: {
   busy: boolean
   busyUnconfirmed?: boolean
@@ -112,6 +110,8 @@ export function MessageTimeline({
   onOpenChanges,
   onReviewChanges,
   reviewChangesDisabled = false,
+  onPreviewGeneratedDocument,
+  onOpenGeneratedDocuments,
   compactCards = false,
   onOpenChildThread,
   onComponentPrototypePrompt,
@@ -466,7 +466,6 @@ export function MessageTimeline({
         {activeThread?.forkedFromThreadId ? (
           <ThreadForkBanner parentTitle={forkedFromTitle} />
         ) : null}
-
         {hasEarlierTurns ? (
           <div className="flex items-center justify-center">
             <button
@@ -579,6 +578,9 @@ export function MessageTimeline({
                 onOpenChanges={onOpenChanges}
                 onReviewChanges={onReviewChanges}
                 reviewChangesDisabled={reviewChangesDisabled}
+                threadId={activeThreadId ?? undefined}
+                onPreviewGeneratedDocument={onPreviewGeneratedDocument}
+                onOpenGeneratedDocuments={onOpenGeneratedDocuments}
                 onOpenChildThread={onOpenChildThread}
                 onCancelToolCall={activeThreadId ? handleCancelToolCall : undefined}
                 onComponentPrototypePrompt={onComponentPrototypePrompt}
@@ -648,6 +650,9 @@ export function MessageTimeline({
             onOpenChildThread={onOpenChildThread}
             onCancelToolCall={undefined}
             onComponentPrototypePrompt={onComponentPrototypePrompt}
+            threadId={activeThreadId ?? undefined}
+            onPreviewGeneratedDocument={onPreviewGeneratedDocument}
+            onOpenGeneratedDocuments={onOpenGeneratedDocuments}
             compactCards={compactCards}
             durationMs={
               currentTurnUserId && typeof turnStartedAtByUserId[currentTurnUserId] === 'number'

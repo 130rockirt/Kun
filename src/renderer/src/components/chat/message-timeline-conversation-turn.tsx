@@ -5,8 +5,12 @@ import { formatChildActivityLabel } from './explore-peek-summary'
 import { useChatStore } from '../../store/chat-store'
 import { deriveTurnSections, groupTurnProcessTimeline } from './derive-turn-sections'
 import { GeneratedFilesPanel, MessageBubble } from './message-timeline-bubbles'
-import { PresentationFilesPanel } from './PresentationFilesPanel'
-import { presentationFileArtifactsForTurn } from './presentation-file-artifacts'
+import { GeneratedDocumentFilesPanel } from './GeneratedDocumentFilesPanel'
+import {
+  generatedDocumentArtifactsForTurn,
+  type GeneratedDocumentArtifact,
+  type GeneratedDocumentCollection
+} from './generated-document-artifacts'
 import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
 import { ProcessSectionRow, groupProcessSections, summarizeToolBlock } from './message-timeline-process'
 import { ComponentPrototypeCard } from './ComponentPrototypeCard'
@@ -50,6 +54,12 @@ export type ConversationTurnProps = {
   onOpenChanges?: () => void
   onReviewChanges?: () => void
   reviewChangesDisabled?: boolean
+  threadId?: string
+  onPreviewGeneratedDocument?: (
+    file: GeneratedDocumentArtifact,
+    workspaceRoot: string
+  ) => void
+  onOpenGeneratedDocuments?: (collection: GeneratedDocumentCollection) => void
   onOpenChildThread?: OpenChildThreadHandler
   onCancelToolCall?: (block: ToolBlock) => Promise<boolean>
   onComponentPrototypePrompt?: (prompt: string) => void
@@ -77,6 +87,9 @@ export function ConversationTurn({
   onOpenChanges,
   onReviewChanges,
   reviewChangesDisabled = false,
+  threadId,
+  onPreviewGeneratedDocument,
+  onOpenGeneratedDocuments,
   onOpenChildThread,
   onCancelToolCall,
   onComponentPrototypePrompt,
@@ -136,8 +149,8 @@ export function ConversationTurn({
       }),
     [turn, isProcessing, liveProcessText, liveContent, filePreviewWorkspaceRoot]
   )
-  const presentationFiles = useMemo(
-    () => presentationFileArtifactsForTurn(
+  const generatedDocuments = useMemo(
+    () => generatedDocumentArtifactsForTurn(
       turn.blocks,
       filePreviewWorkspaceRoot,
       isProcessing,
@@ -145,6 +158,14 @@ export function ConversationTurn({
     ),
     [turn.blocks, filePreviewWorkspaceRoot, isProcessing]
   )
+  const generatedDocumentTurnId = (
+    turn.turnId ||
+    turn.user?.turnId ||
+    turn.user?.meta?.turnId ||
+    turn.user?.id ||
+    turn.blocks.find((block) => block.turnId)?.turnId ||
+    ''
+  ).trim()
   const workProcessBlocks = processBlocks
   const workExpanded = workExpandedOverride ?? false
   const reviewBlocks = useMemo(
@@ -368,7 +389,23 @@ export function ConversationTurn({
         <GeneratedFilesPanel blocks={generatedFileBlocks} placement="turn" />
       ) : null}
 
-      <PresentationFilesPanel files={presentationFiles} workspaceRoot={filePreviewWorkspaceRoot} />
+      <GeneratedDocumentFilesPanel
+        files={generatedDocuments}
+        workspaceRoot={filePreviewWorkspaceRoot}
+        onPreview={onPreviewGeneratedDocument
+          ? (file) => onPreviewGeneratedDocument(file, filePreviewWorkspaceRoot)
+          : undefined}
+        onOpenAll={
+          onOpenGeneratedDocuments && threadId && generatedDocumentTurnId
+            ? (files) => onOpenGeneratedDocuments({
+                threadId,
+                turnId: generatedDocumentTurnId,
+                workspaceRoot: filePreviewWorkspaceRoot,
+                files: [...files]
+              })
+            : undefined
+        }
+      />
 
       {reviewBlocks.map((review) => (
         <ReviewSummaryCard key={review.id} review={review} />
@@ -521,6 +558,9 @@ export const MemoMessageTurn = memo(ConversationTurn, (prev, next) => (
   prev.onOpenChanges === next.onOpenChanges &&
   prev.onReviewChanges === next.onReviewChanges &&
   prev.reviewChangesDisabled === next.reviewChangesDisabled &&
+  prev.threadId === next.threadId &&
+  prev.onPreviewGeneratedDocument === next.onPreviewGeneratedDocument &&
+  prev.onOpenGeneratedDocuments === next.onOpenGeneratedDocuments &&
   prev.onOpenChildThread === next.onOpenChildThread &&
   prev.onCancelToolCall === next.onCancelToolCall &&
   prev.onComponentPrototypePrompt === next.onComponentPrototypePrompt &&

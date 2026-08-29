@@ -70,6 +70,7 @@ export function useWorkbenchShellRuntime(context: Context): {
     togglePinnedFilePreviewTarget, closeOtherFilePreviewTargets, togglePreserveFilePreviewTargets,
     activeExtensionRightPanel, codeRightTabs, currentSideConversations, currentSideRunningCount,
     runtimeInfo, fileTreeSidePanelOpen, fileTreeSidePanelView, fileTreeWorkspaceRoot,
+    generatedDocumentCollection, openGeneratedDocumentPreview,
     designWorkspaceRoot, designDocuments, designActiveDocumentId, setFileTreeSidePanelView,
     previewWorkspaceFileFromSidebar, addWorkspaceReferenceFromSidebar,
     openDesignDocumentInWhiteboard, extensionRightRailItems, extensionRightPanelItems,
@@ -327,8 +328,10 @@ export function useWorkbenchShellRuntime(context: Context): {
         designDocuments,
         activeDesignDocumentId: designActiveDocumentId,
         selectedTarget: filePreviewTarget,
+        generatedDocumentCollection,
         onViewChange: setFileTreeSidePanelView,
         onPreviewFile: previewWorkspaceFileFromSidebar,
+        onPreviewGeneratedDocument: openGeneratedDocumentPreview,
         onAddReference: addWorkspaceReferenceFromSidebar,
         onOpenDesignInWhiteboard: openDesignDocumentInWhiteboard
       },

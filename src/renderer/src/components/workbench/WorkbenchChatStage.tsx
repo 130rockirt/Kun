@@ -32,6 +32,10 @@ import { useChatStore } from '../../store/chat-store'
 import { hasLivePendingUserInput } from '../../store/chat-store-runtime-helpers'
 import { shouldUseEmptyTaskLayout } from './workbench-chat-layout'
 import { CircleHelp, Loader2 } from 'lucide-react'
+import type {
+  GeneratedDocumentArtifact,
+  GeneratedDocumentCollection
+} from '../chat/generated-document-artifacts'
 
 const TerminalPanel = lazy(() =>
   import('../terminal/TerminalPanel').then((module) => ({ default: module.TerminalPanel }))
@@ -75,6 +79,11 @@ export type WorkbenchChatStageProps = {
   onOpenChanges: () => void
   onReviewChanges: () => void
   reviewChangesDisabled: boolean
+  onPreviewGeneratedDocument: (
+    file: GeneratedDocumentArtifact,
+    workspaceRoot: string
+  ) => void
+  onOpenGeneratedDocuments: (collection: GeneratedDocumentCollection) => void
   onOpenDevPreview: () => void
   onBackToParent: () => void
   onBeginTerminalResize: PointerEventHandler<HTMLDivElement>
@@ -138,6 +147,8 @@ export function WorkbenchChatStage({
   onOpenChanges,
   onReviewChanges,
   reviewChangesDisabled,
+  onPreviewGeneratedDocument,
+  onOpenGeneratedDocuments,
   onOpenDevPreview,
   onBackToParent,
   onBeginTerminalResize,
@@ -296,6 +307,8 @@ export function WorkbenchChatStage({
               onOpenChanges={onOpenChanges}
               onReviewChanges={onReviewChanges}
               reviewChangesDisabled={reviewChangesDisabled}
+              onPreviewGeneratedDocument={onPreviewGeneratedDocument}
+              onOpenGeneratedDocuments={onOpenGeneratedDocuments}
               onComponentPrototypePrompt={composerProps.setInput}
               devPreviewCard={
                 devPreviewVisible && devPreviewUrl ? (

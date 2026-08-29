@@ -6,6 +6,10 @@ import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import type { GuiPlanToolMeta } from '../../plan/plan-tool'
 import type { EmptyTaskSurfaceControl } from './message-timeline-empty'
 import type { OpenChildThreadHandler } from './SubagentCallCard'
+import type {
+  GeneratedDocumentArtifact,
+  GeneratedDocumentCollection
+} from './generated-document-artifacts'
 
 export type MessageTimelineProps = {
   blocks: ChatBlock[]
@@ -27,6 +31,11 @@ export type MessageTimelineProps = {
   onOpenChanges?: () => void
   onReviewChanges?: () => void
   reviewChangesDisabled?: boolean
+  onPreviewGeneratedDocument?: (
+    file: GeneratedDocumentArtifact,
+    workspaceRoot: string
+  ) => void
+  onOpenGeneratedDocuments?: (collection: GeneratedDocumentCollection) => void
   compactCards?: boolean
   onOpenChildThread?: OpenChildThreadHandler
   onComponentPrototypePrompt?: (prompt: string) => void

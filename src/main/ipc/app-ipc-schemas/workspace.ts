@@ -183,7 +183,7 @@ export const openEditorPathPayloadSchema = z
     editorId: optionalTrimmedString(MAX_EDITOR_ID_LENGTH),
     line: z.number().int().positive().max(1_000_000).optional(),
     column: z.number().int().positive().max(1_000_000).optional(),
-    openPolicy: z.enum(['presentation-artifact']).optional(),
+    openPolicy: z.enum(['presentation-artifact', 'generated-document-artifact']).optional(),
     expectedSha256: z.string().trim().regex(/^[a-f0-9]{64}$/i).optional()
   })
   .strict()

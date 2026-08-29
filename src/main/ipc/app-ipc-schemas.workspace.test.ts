@@ -10,6 +10,7 @@ import {
   clawImInstallPollPayloadSchema,
   conversationExportPayloadSchema,
   isSafeOpenExternalUrl,
+  openEditorPathPayloadSchema,
   shellOpenExternalUrlSchema,
   sseAckPayloadSchema,
   sseStartPayloadSchema,
@@ -100,6 +101,18 @@ describe('app-ipc-schemas workspace and system', () => {
     })
 
     expect(payload.path).toBe('/tmp/workspace/draft.md')
+  })
+
+  it('accepts generated-document open policy and rejects unknown policies', () => {
+    expect(openEditorPathPayloadSchema.parse({
+      path: '/tmp/workspace/report.docx',
+      workspaceRoot: '/tmp/workspace',
+      openPolicy: 'generated-document-artifact'
+    }).openPolicy).toBe('generated-document-artifact')
+    expect(() => openEditorPathPayloadSchema.parse({
+      path: '/tmp/workspace/report.docx',
+      openPolicy: 'any-generated-file'
+    })).toThrow()
   })
 
   it('accepts structured inline completion payloads', () => {

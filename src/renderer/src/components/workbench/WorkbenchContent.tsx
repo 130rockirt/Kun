@@ -43,7 +43,7 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
     extensionSurfaceItems, openExtensionSurface, openCodeRightTool, currentSideRunningCount,
     extensionRightRailItems, selectRightRailExtension, imageAnnotationHost, planOverlay,
     openManagedExtensionView, activeExtensionAuxiliaryPanel, workspaceContextMenu, activeGuiPlan,
-    focusedCanvasWorkspace
+    focusedCanvasWorkspace, openGeneratedDocuments, openGeneratedDocumentPreview
   } = context
   const normalizedRoute = normalizeWorkbenchRoute(route)
   const activeConversationThread = threads.find((thread: any) => thread.id === activeThreadId)
@@ -207,6 +207,8 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
             onOpenChanges: () => setRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.changes),
             onReviewChanges: () => void reviewActiveThread({ kind: 'uncommittedChanges' }),
             reviewChangesDisabled: busy || runtimeConnection !== 'ready',
+            onPreviewGeneratedDocument: openGeneratedDocumentPreview,
+            onOpenGeneratedDocuments: openGeneratedDocuments,
             onOpenDevPreview: openDevPreview,
             onBackToParent: returnFromSubagent,
             onBeginTerminalResize: beginTerminalResize,
