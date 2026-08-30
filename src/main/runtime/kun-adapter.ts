@@ -347,8 +347,8 @@ function isProviderQuotaPath(pathNorm: string): boolean {
 /**
  * History aggregations replay every thread's usage records and hydrate full
  * thread records for per-turn attribution, so they are not a cheap status
- * route. The generic GET budget aborted them mid-aggregation and surfaced as
- * the sidebar "cannot read usage" banner even though the renderer allowed 65s.
+ * route. Main owns the cancellable 120-second budget so renderer callers do
+ * not report a timeout while the underlying aggregation is still running.
  */
 function isUsageHistoryPath(pathNorm: string): boolean {
   const queryIndex = pathNorm.indexOf('?')

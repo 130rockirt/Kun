@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { requestUsage, resetUsageRequestCacheForTests } from './usage-request-cache'
-import { USAGE_REQUEST_TIMEOUT_MS } from './usage-response'
 
 afterEach(() => {
   vi.useRealTimers()
@@ -41,8 +40,7 @@ describe('usage request cache', () => {
     expect(runtimeRequest).toHaveBeenCalledTimes(3)
   })
 
-  it('does not start another transport when the UI timeout fires first', async () => {
-    vi.useFakeTimers()
+  it('waits for Main to settle the transport instead of applying a renderer timeout', async () => {
     let resolve!: (value: { ok: boolean; status: number; body: string }) => void
     const transport = new Promise<{ ok: boolean; status: number; body: string }>((done) => {
       resolve = done
@@ -54,12 +52,10 @@ describe('usage request cache', () => {
     })
 
     const first = requestUsage('/v1/usage?group_by=day', 'daily usage', 1)
-    const timedOut = expect(first).rejects.toThrow('timed out')
-    await vi.advanceTimersByTimeAsync(USAGE_REQUEST_TIMEOUT_MS)
-    await timedOut
     const retry = requestUsage('/v1/usage?group_by=day', 'daily usage', 2)
     expect(runtimeRequest).toHaveBeenCalledOnce()
     resolve({ ok: true, status: 200, body: '{"ok":true}' })
+    await expect(first).resolves.toMatchObject({ status: 200 })
     await expect(retry).resolves.toMatchObject({ status: 200 })
   })
 

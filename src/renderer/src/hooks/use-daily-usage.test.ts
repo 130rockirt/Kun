@@ -5,7 +5,6 @@ import {
   loadDailyUsage,
   normalizeDailyUsageResponse
 } from './use-daily-usage'
-import { USAGE_REQUEST_TIMEOUT_MS } from './usage-response'
 
 type RuntimeRequest = (path: string, method?: string) => Promise<{ ok: boolean; status: number; body: string }>
 
@@ -222,18 +221,18 @@ describe('daily usage helpers', () => {
     ).rejects.toThrow('daily usage request failed: 400')
   })
 
-  it('times out when the runtime bridge does not settle', async () => {
-    vi.useFakeTimers()
-    setRuntimeRequest(() => new Promise<never>(() => undefined))
+  it('waits for the runtime bridge to settle without a renderer timeout', async () => {
+    let resolve!: (value: { ok: boolean; status: number; body: string }) => void
+    setRuntimeRequest(() => new Promise((done) => { resolve = done }))
 
-    const pending = loadDailyUsage({ from: '2026-05-01', to: '2026-05-01', timezone: 'UTC' }).catch(
-      (error: unknown) => error
-    )
-    await vi.advanceTimersByTimeAsync(USAGE_REQUEST_TIMEOUT_MS)
-    const error = await pending
+    const pending = loadDailyUsage({ from: '2026-05-01', to: '2026-05-01', timezone: 'UTC' })
+    resolve({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({ group_by: 'day', buckets: [], totals: {} })
+    })
 
-    expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toBe(`daily usage request timed out after ${USAGE_REQUEST_TIMEOUT_MS}ms`)
+    await expect(pending).resolves.toMatchObject({ groupBy: 'day' })
   })
 
   it('reports invalid JSON daily usage responses with a stable error', async () => {

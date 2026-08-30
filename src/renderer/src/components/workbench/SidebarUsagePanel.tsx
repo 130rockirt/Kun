@@ -1,5 +1,5 @@
 import { AlertCircle, BarChart3, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import {
@@ -21,6 +21,7 @@ import {
   useDailyUsageState
 } from '../../hooks/use-daily-usage'
 import { useModelUsageState } from '../../hooks/use-model-usage'
+import { useUsageAutoRefresh } from '../../hooks/use-usage-auto-refresh'
 
 type UsageRangeKey = 'all' | '90d' | '30d' | '7d'
 
@@ -56,30 +57,26 @@ export function SidebarUsagePanel({
   const { t, i18n } = useTranslation('common')
   const [rangeKey, setRangeKey] = useState<UsageRangeKey>('90d')
   const [modelPage, setModelPage] = useState(0)
-  const [refreshedAt, setRefreshedAt] = useState<string>()
+  const [autoRefreshKey, setAutoRefreshKey] = useState(0)
+  const effectiveRefreshKey = `${String(refreshKey)}:${autoRefreshKey}`
   const threadState = useThreadUsageState(
     activeThreadId,
     enabled && Boolean(activeThreadId),
-    refreshKey
+    effectiveRefreshKey
   )
-  const dailyState = useDailyUsageState(enabled, refreshKey, RANGE_DAYS.all)
+  const dailyState = useDailyUsageState(enabled, effectiveRefreshKey, RANGE_DAYS.all)
   const modelState = useModelUsageState(
     enabled,
-    `${String(refreshKey)}:${rangeKey}`,
+    effectiveRefreshKey,
     RANGE_DAYS[rangeKey]
   )
   const loading =
     dailyState.loading ||
     modelState.loading ||
     (Boolean(activeThreadId) && threadState.loading)
-  const loaded =
-    dailyState.loaded &&
-    modelState.loaded &&
-    (!activeThreadId || threadState.loaded)
-
-  useEffect(() => {
-    if (loaded && !loading) setRefreshedAt(new Date().toISOString())
-  }, [loaded, loading])
+  const refreshedAt = earliestRefreshTime(dailyState.updatedAt, modelState.updatedAt)
+  const autoRefresh = useCallback(() => setAutoRefreshKey((current) => current + 1), [])
+  useUsageAutoRefresh(enabled, refreshKey, autoRefreshKey, refreshedAt, autoRefresh)
 
   useEffect(() => {
     onStatusChange?.({
@@ -241,18 +238,11 @@ export function SidebarUsagePanel({
           {dailyState.error ? (
             <div
               role="alert"
+              title={dailyState.error}
               className="mx-4 mb-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10.5px] leading-4 text-amber-800 dark:border-amber-800/70 dark:bg-amber-950/35 dark:text-amber-200"
             >
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
-              <span>
-                {t('usageHeatmapErrorTitle')}
-                <span
-                  title={dailyState.error}
-                  className="mt-1 block break-all text-[9.5px] text-amber-700/90 dark:text-amber-300/80"
-                >
-                  {dailyState.error}
-                </span>
-              </span>
+              <span>{t(dailyState.usage ? 'usageQuotaCachedRefreshFailed' : 'usageQuotaInitialLoadFailed')}</span>
             </div>
           ) : null}
 
@@ -330,22 +320,20 @@ export function SidebarUsagePanel({
               ))}
             </div>
           </div>
-          {modelState.loading && !modelState.usage ? (
-            <div className="flex min-h-20 items-center justify-center gap-2 text-[11px] text-ds-faint">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.8} />
-              {t('usageHeatmapLoading')}
-            </div>
-          ) : modelState.error ? (
+          {modelState.error ? (
             <p
               role="alert"
               title={modelState.error}
               className="mt-2 text-[10.5px] leading-4 text-amber-700 dark:text-amber-300"
             >
-              {t('usageHeatmapErrorTitle')}
-              <span className="mt-0.5 block break-all text-[9.5px] text-amber-700/90 dark:text-amber-300/80">
-                {modelState.error}
-              </span>
+              {t(modelState.usage ? 'usageQuotaCachedRefreshFailed' : 'usageQuotaInitialLoadFailed')}
             </p>
+          ) : null}
+          {modelState.loading && !modelState.usage ? (
+            <div className="flex min-h-20 items-center justify-center gap-2 text-[11px] text-ds-faint">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.8} />
+              {t('usageHeatmapLoading')}
+            </div>
           ) : visibleModelBuckets.length > 0 ? (
             <>
               <div className={`mt-2.5 space-y-2.5 ${
@@ -435,6 +423,12 @@ export function SidebarUsagePanel({
       </div>
     </div>
   )
+}
+
+function earliestRefreshTime(left?: string, right?: string): string | undefined {
+  if (!left) return right
+  if (!right) return left
+  return Date.parse(left) <= Date.parse(right) ? left : right
 }
 
 type UsageMetric = {

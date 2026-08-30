@@ -133,6 +133,8 @@
   "usageQuotaRefresh": "새로 고침",
   "usageQuotaRefreshing": "새로 고치는 중…",
   "usageQuotaLastRefreshed": "마지막 새로 고침: {{time}}",
+  "usageQuotaCachedRefreshFailed": "새로 고침에 실패했습니다. 마지막으로 성공한 데이터를 표시합니다.",
+  "usageQuotaInitialLoadFailed": "사용량을 일시적으로 불러올 수 없습니다. 위의 새로 고침을 눌러 다시 시도하세요.",
   "providerQuotaTitle": "공급자 할당량",
   "providerQuotaDescription": "잔액과 요금제 한도를 확인합니다. 공급자를 선택하면 세부 정보를 펼칩니다.",
   "providerQuotaRefresh": "새로 고침",

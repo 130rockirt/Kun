@@ -1,5 +1,4 @@
 import type { RuntimeRequestResult } from '@shared/kun-gui-api'
-import { withUsageRequestTimeout } from './usage-response'
 
 const RECENT_USAGE_RESPONSE_TTL_MS = 1_000
 const RECENT_USAGE_RESPONSE_MAX = 32
@@ -25,7 +24,7 @@ const recent = new Map<string, CachedResponse>()
  */
 export function requestUsage(
   path: string,
-  label: string,
+  _label: string,
   generation?: string | number
 ): Promise<RuntimeRequestResult> {
   pruneRecentUsageResponses()
@@ -62,10 +61,7 @@ export function requestUsage(
     }).catch(() => undefined)
   }
   let request: Promise<RuntimeRequestResult>
-  request = withUsageRequestTimeout(
-    transport,
-    label
-  ).then((response) => {
+  request = transport.then((response) => {
     if (response.ok && generation !== undefined) {
       for (const [key, cachedResponse] of recent) {
         if (cachedResponse.path === path && key !== cacheKey) recent.delete(key)

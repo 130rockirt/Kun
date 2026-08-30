@@ -133,6 +133,8 @@
   "usageQuotaRefresh": "Обновить",
   "usageQuotaRefreshing": "Обновление…",
   "usageQuotaLastRefreshed": "Последнее обновление: {{time}}",
+  "usageQuotaCachedRefreshFailed": "Не удалось обновить. Показаны последние успешно загруженные данные.",
+  "usageQuotaInitialLoadFailed": "Данные об использовании временно недоступны. Нажмите «Обновить» выше, чтобы повторить попытку.",
   "providerQuotaTitle": "Квота провайдера",
   "providerQuotaDescription": "Просматривайте баланс и лимиты. Выберите провайдера, чтобы раскрыть детали.",
   "providerQuotaRefresh": "Обновить",

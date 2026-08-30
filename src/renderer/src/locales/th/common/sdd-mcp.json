@@ -133,6 +133,8 @@
   "usageQuotaRefresh": "รีเฟรช",
   "usageQuotaRefreshing": "กำลังรีเฟรช…",
   "usageQuotaLastRefreshed": "รีเฟรชล่าสุด {{time}}",
+  "usageQuotaCachedRefreshFailed": "รีเฟรชไม่สำเร็จ กำลังแสดงข้อมูลล่าสุดที่โหลดสำเร็จ",
+  "usageQuotaInitialLoadFailed": "ไม่สามารถโหลดการใช้งานได้ชั่วคราว โปรดกดรีเฟรชด้านบนเพื่อลองอีกครั้ง",
   "providerQuotaTitle": "โควตาผู้ให้บริการ",
   "providerQuotaDescription": "ดูยอดคงเหลือและขีดจำกัดแผน เลือกผู้ให้บริการเพื่อขยายรายละเอียด",
   "providerQuotaRefresh": "รีเฟรช",

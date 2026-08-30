@@ -133,6 +133,8 @@
   "usageQuotaRefresh": "रीफ़्रेश करें",
   "usageQuotaRefreshing": "रीफ़्रेश हो रहा है…",
   "usageQuotaLastRefreshed": "अंतिम रीफ़्रेश {{time}}",
+  "usageQuotaCachedRefreshFailed": "रीफ़्रेश विफल रहा। अंतिम सफल डेटा दिखाया जा रहा है।",
+  "usageQuotaInitialLoadFailed": "उपयोग अभी उपलब्ध नहीं है। फिर कोशिश करने के लिए ऊपर रीफ़्रेश दबाएँ।",
   "providerQuotaTitle": "प्रदाता कोटा",
   "providerQuotaDescription": "शेष राशि और योजना सीमा देखें। विवरण खोलने के लिए प्रदाता चुनें।",
   "providerQuotaRefresh": "रीफ़्रेश करें",

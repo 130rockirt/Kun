@@ -133,6 +133,8 @@
   "usageQuotaRefresh": "Refresh",
   "usageQuotaRefreshing": "Refreshing…",
   "usageQuotaLastRefreshed": "Last refreshed {{time}}",
+  "usageQuotaCachedRefreshFailed": "Refresh failed. Showing the last successful data.",
+  "usageQuotaInitialLoadFailed": "Usage is temporarily unavailable. Use Refresh above to try again.",
   "providerQuotaTitle": "Provider quota",
   "providerQuotaDescription": "View read-only balances and plan limits. Select a provider to expand details.",
   "providerQuotaRefresh": "Refresh",

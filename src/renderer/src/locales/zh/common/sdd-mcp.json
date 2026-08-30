@@ -133,6 +133,8 @@
   "usageQuotaRefresh": "刷新",
   "usageQuotaRefreshing": "正在刷新…",
   "usageQuotaLastRefreshed": "上次刷新：{{time}}",
+  "usageQuotaCachedRefreshFailed": "刷新失败，正在显示上次成功的数据。",
+  "usageQuotaInitialLoadFailed": "暂时无法加载用量，请点击顶部刷新重试。",
   "providerQuotaTitle": "供应商额度",
   "providerQuotaDescription": "查看供应商余额和套餐限额，点击供应商展开详情。",
   "providerQuotaRefresh": "刷新",

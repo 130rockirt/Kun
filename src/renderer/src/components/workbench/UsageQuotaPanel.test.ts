@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { act, create as createRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetUsageRequestCacheForTests } from '../../hooks/usage-request-cache'
+import { resetUsageSummaryCacheForTests } from '../../hooks/usage-summary-cache'
 import i18n from '../../i18n'
 import { UsageQuotaPanel } from './UsageQuotaPanel'
 
@@ -110,6 +111,7 @@ describe('UsageQuotaPanel', () => {
 
   afterEach(() => {
     resetUsageRequestCacheForTests()
+    resetUsageSummaryCacheForTests()
     vi.unstubAllGlobals()
   })
 

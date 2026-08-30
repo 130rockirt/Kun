@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { requestUsage } from './usage-request-cache'
 import { parseUsageResponse } from './usage-response'
+import { readUsageSummaryCache, writeUsageSummaryCache } from './usage-summary-cache'
 
 export const DEFAULT_USAGE_HEATMAP_DAYS = 90
 
@@ -44,6 +45,8 @@ export type DailyUsageState = {
   loading: boolean
   loaded: boolean
   error: string | null
+  updatedAt?: string
+  stale?: boolean
 }
 
 type RawDailyUsageBucket = {
@@ -237,8 +240,10 @@ export function useDailyUsageState(
     usage: null,
     loading: false,
     loaded: false,
-    error: null
+    error: null,
+    stale: false
   })
+  const previousRefreshKey = useRef(refreshKey)
 
   useEffect(() => {
     let cancelled = false
@@ -246,11 +251,40 @@ export function useDailyUsageState(
       setState((current) => ({ ...current, loading: false, error: null }))
       return
     }
-    setState((current) => ({ ...current, loading: true, error: null }))
+    const explicitRefresh = previousRefreshKey.current !== refreshKey
+    previousRefreshKey.current = refreshKey
     const range = defaultDailyUsageRange(new Date(), days)
+    const path = buildDailyUsagePath(range)
+    const cached = readUsageSummaryCache<DailyUsageSummary>(path)
+    if (cached) {
+      setState({
+        usage: cached.value,
+        loading: cached.stale || explicitRefresh,
+        loaded: true,
+        error: null,
+        updatedAt: cached.updatedAt,
+        stale: cached.stale
+      })
+      if (!cached.stale && !explicitRefresh) return
+    } else {
+      setState((current) => ({ ...current, loading: true, error: null }))
+    }
     void loadDailyUsage(range, String(refreshKey))
       .then((usage) => {
-        if (!cancelled) setState({ usage, loading: false, loaded: true, error: null })
+        if (cancelled) return
+        if (!usage) {
+          setState({ usage: null, loading: false, loaded: true, error: null, stale: false })
+          return
+        }
+        const stored = writeUsageSummaryCache(path, usage)
+        setState({
+          usage,
+          loading: false,
+          loaded: true,
+          error: null,
+          updatedAt: stored.updatedAt,
+          stale: false
+        })
       })
       .catch((error) => {
         if (!cancelled) {
@@ -259,7 +293,8 @@ export function useDailyUsageState(
             ...current,
             loading: false,
             loaded: current.loaded,
-            error: message
+            error: message,
+            stale: Boolean(current.usage)
           }))
         }
       })
