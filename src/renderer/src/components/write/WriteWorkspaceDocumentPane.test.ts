@@ -274,7 +274,6 @@ describe('WriteWorkspaceDocumentPane focus mode', () => {
       onMutationsChange: onSpreadsheetMutations
     })
     expect(renderer.root.findAllByProps({ 'data-office-preview-mock': 'true' })).toHaveLength(0)
-    expect(renderer.root.findByProps({ 'data-office-provider': 'local' }).props.title).toBe('officeProviderLocalDetail')
 
     const onResolveSpreadsheetConflict = vi.fn()
     await act(async () => {

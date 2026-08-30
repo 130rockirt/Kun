@@ -279,13 +279,6 @@ export function WriteWorkspaceDocumentPane({
     ) {
       return (
         <div ref={editorPaneRef} className="flex h-full min-h-0 min-w-0 flex-col">
-          <div
-            className="flex shrink-0 items-center gap-2 border-b border-amber-300/50 bg-amber-50/80 px-4 py-1.5 text-[11px] text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100"
-            data-office-provider="local"
-            title={t('officeProviderLocalDetail')}
-          >
-            <span className="font-semibold">{t('officeProviderLocal')}</span>
-          </div>
           {spreadsheetUnsupportedReason || spreadsheetConflict || spreadsheetSaveError ? (
             <div className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
               <span>{spreadsheetUnsupportedReason || officeRefreshError || spreadsheetSaveError}</span>
