@@ -44,8 +44,10 @@ describe('KunStartupArtwork variants', () => {
     expect(html).toContain('data-testid="kun-startup-artwork"')
     expect(html).toContain('data-testid="kun-startup-kun"')
     expect(html).toContain('data-testid="kun-startup-bird"')
+    expect(html).toContain('data-testid="kun-startup-prop"')
     expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG[variant].avatarUrl}"`)
     expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG[variant].birdUrl}"`)
+    expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG[variant].propUrl}"`)
   })
 
   it('defaults to the signal variant for existing callers', () => {
@@ -54,9 +56,10 @@ describe('KunStartupArtwork variants', () => {
     expect(html).toContain('data-variant="signal"')
     expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG.signal.avatarUrl}"`)
     expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG.signal.birdUrl}"`)
+    expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG.signal.propUrl}"`)
   })
 
-  it.each(['avatarUrl', 'birdUrl'] as const)(
+  it.each(['avatarUrl', 'birdUrl', 'propUrl'] as const)(
     'keeps every configured %s resource unique',
     (resourceKey) => {
       const resourceUrls = KUN_STARTUP_VARIANTS.map(
@@ -66,4 +69,14 @@ describe('KunStartupArtwork variants', () => {
       expect(new Set(resourceUrls).size).toBe(KUN_STARTUP_VARIANTS.length)
     }
   )
+
+  it('keeps the animated prop decorative and controlled by startup motion', () => {
+    const html = renderToStaticMarkup(createElement(KunStartupArtwork, {
+      motion: 'running',
+      variant: 'cast'
+    }))
+
+    expect(html).toContain('kun-startup-artwork__prop-wrap kun-startup__motion')
+    expect(html).toMatch(/class="kun-startup-artwork__prop"[^>]*alt=""/)
+  })
 })

@@ -21,4 +21,14 @@ describe('Kun startup motion styles', () => {
       expect(css).toContain(`[data-startup-variant='${variant}'] .kun-startup__progress-indicator`)
     }
   })
+
+  it('gives every randomized scene a unique animated prop', async () => {
+    const css = await readStylesheetBundle(new URL('./startup-gate.css', import.meta.url))
+
+    for (const variant of ['signal', 'wave', 'dash', 'focus', 'cast']) {
+      expect(css).toContain(`animation: kun-startup-prop-${variant}`)
+      expect(css).toContain(`@keyframes kun-startup-prop-${variant}`)
+    }
+    expect(css).toMatch(/\.kun-startup-artwork__prop-wrap\s*{[\s\S]*?opacity:/)
+  })
 })

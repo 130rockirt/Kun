@@ -27,6 +27,18 @@ export function KunStartupArtwork({
       <span className="kun-startup-artwork__ground-glow kun-startup__motion" />
       <span className="kun-startup-artwork__variant-aura kun-startup__motion" />
       <span className="kun-startup-artwork__variant-streaks kun-startup__motion" />
+      <span className="kun-startup-artwork__prop-wrap kun-startup__motion">
+        <img
+          className="kun-startup-artwork__prop"
+          src={variantConfig.propUrl}
+          width="384"
+          height="384"
+          alt=""
+          draggable={false}
+          data-variant={variant}
+          data-testid="kun-startup-prop"
+        />
+      </span>
 
       <div
         className="kun-startup-artwork__orbit"

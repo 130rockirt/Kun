@@ -1,4 +1,5 @@
 @import './startup-gate-motion.css';
+@import './startup-gate-props.css';
 
 .kun-startup {
   display: flex;
