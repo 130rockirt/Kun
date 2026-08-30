@@ -4,7 +4,7 @@ import type {
   DesktopStartupStatePayload
 } from '@shared/desktop-startup-state'
 import { requestApplicationReload } from './lib/application-reload'
-import startupCompanionsUrl from './assets/startup/kun-startup-companions.png'
+import { KunStartupArtwork } from './components/startup/KunStartupArtwork'
 import {
   mergeStartupPhase,
   startupPhaseLabel,
@@ -274,14 +274,7 @@ export function StartupGate({
     return (
       <main className="kun-startup" data-recovery="true">
         <section className="kun-startup__content" role="alert" aria-live="assertive">
-          <div className="kun-startup__artwork" aria-hidden="true">
-            <img
-              className="kun-startup__companions"
-              src={startupCompanionsUrl}
-              alt=""
-              data-testid="kun-startup-companions"
-            />
-          </div>
+          <KunStartupArtwork motion="paused" />
           <div className="kun-startup__copy">
             <h1 className="kun-startup__title">{startupPhaseLabel(phase)}</h1>
             {phaseDetail ? <p className="kun-startup__detail">{phaseDetail}</p> : null}
@@ -307,15 +300,7 @@ export function StartupGate({
         aria-live="polite"
         aria-busy="true"
       >
-        <div className="kun-startup__artwork" aria-hidden="true">
-          <span className="kun-startup__data-spark" />
-          <img
-            className="kun-startup__companions"
-            src={startupCompanionsUrl}
-            alt=""
-            data-testid="kun-startup-companions"
-          />
-        </div>
+        <KunStartupArtwork motion="running" />
         <div className="kun-startup__copy">
           <h1 className="kun-startup__title">{statusTitle}</h1>
           {phaseDetail ? <p className="kun-startup__detail">{phaseDetail}</p> : null}
@@ -325,10 +310,10 @@ export function StartupGate({
           role="progressbar"
           aria-label="Kun startup progress"
         >
-          <span className="kun-startup__progress-indicator" />
+          <span className="kun-startup__progress-indicator kun-startup__motion" />
         </div>
         <p className="kun-startup__hint">
-          Kun and Chick are preparing your workspace.
+          Kun is preparing your workspace.
         </p>
       </section>
     </main>
