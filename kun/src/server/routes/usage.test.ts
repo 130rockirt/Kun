@@ -4,20 +4,74 @@ import type { ServerRuntime } from './server-runtime.js'
 import { usageJsonResponse } from './usage.js'
 
 describe('usageJsonResponse', () => {
-  it('returns a recoverable 503 when the isolated usage query times out', async () => {
+  it('returns a recoverable 503 when the usage index and JSONL fallback both fail', async () => {
     const runtime = runtimeFixture({
-      list: vi.fn(async () => []),
-      loadUsageRecords: vi.fn(async () => []),
+      get: vi.fn(async () => ({ id: 'thread-1', model: 'fixture-model', updatedAt: '2026-08-09T00:00:00.000Z' })),
+      list: vi.fn(async () => [{ id: 'thread-1', status: 'active', updatedAt: '2026-08-09T00:00:00.000Z' }]),
+      loadUsageRecords: vi.fn(async () => { throw new Error('usage_index_unavailable: index down') }),
       aggregateUsage: vi.fn(async () => { throw new Error('usage_query_timeout') })
     })
 
-    const response = await usageJsonResponse(request('thread'), runtime)
+    const response = await usageJsonResponse(request('day', '2026-08-01', '2026-08-09'), runtime)
 
     expect(response.status).toBe(503)
     expect(JSON.parse(response.body)).toEqual({
-      code: 'usage_query_timeout',
+      code: 'usage_index_unavailable',
       message: 'Usage history is temporarily unavailable. The previous totals were kept.'
     })
+  })
+
+  it('falls back to JSONL history when the usage index aggregate is degraded', async () => {
+    const loadUsageRecords = vi.fn(async () => [{
+      threadId: 'thread-1',
+      model: 'fixture-model',
+      completedAt: '2026-08-09T00:00:00.000Z',
+      usage: { ...emptyUsageSnapshot(), promptTokens: 5, totalTokens: 5, turns: 1 }
+    }])
+    const runtime = runtimeFixture({
+      list: vi.fn(async () => [{ id: 'thread-1', status: 'active', updatedAt: '2026-08-09T00:00:00.000Z' }]),
+      loadUsageRecords,
+      aggregateUsage: vi.fn(async () => { throw new Error('usage_index_unavailable: hybrid sqlite unavailable') })
+    })
+
+    const daily = await usageJsonResponse(request('day', '2026-08-01', '2026-08-09'), runtime)
+
+    expect(daily.status).toBe(200)
+    expect(aggregateCalls(runtime)).toBe(1)
+    const dailyBody = JSON.parse(daily.body) as { buckets: Array<Record<string, unknown>> }
+    expect(dailyBody.buckets).toContainEqual(expect.objectContaining({
+      date: '2026-08-09',
+      input_tokens: 5,
+      turns: 1
+    }))
+
+    const model = await usageJsonResponse(request('model', '2026-08-01', '2026-08-09'), runtime)
+
+    expect(model.status).toBe(200)
+    const modelBody = JSON.parse(model.body) as { buckets: Array<Record<string, unknown>> }
+    expect(modelBody.buckets).toContainEqual(expect.objectContaining({ model: 'fixture-model' }))
+  })
+
+  it('falls back to JSONL history when the manager reports an internal usage failure', async () => {
+    const loadUsageRecords = vi.fn(async () => [{
+      threadId: 'thread-1',
+      model: 'fixture-model',
+      completedAt: '2026-08-09T00:00:00.000Z',
+      usage: { ...emptyUsageSnapshot(), promptTokens: 7, totalTokens: 7, turns: 1 }
+    }])
+    const runtime = runtimeFixture({
+      list: vi.fn(async () => [{ id: 'thread-1', status: 'active', updatedAt: '2026-08-09T00:00:00.000Z' }]),
+      loadUsageRecords,
+      aggregateUsage: vi.fn(async () => {
+        throw new Error('Kun Service Manager request failed with HTTP 500: {"code":"internal_error","message":"Internal server error."}')
+      })
+    })
+
+    const response = await usageJsonResponse(request('day', '2026-08-01', '2026-08-09'), runtime)
+
+    expect(response.status).toBe(200)
+    const body = JSON.parse(response.body) as { buckets: Array<Record<string, unknown>> }
+    expect(body.buckets).toContainEqual(expect.objectContaining({ input_tokens: 7 }))
   })
 
   it('validates day queries before loading history and forwards the UTC range', async () => {
@@ -370,6 +424,11 @@ function request(groupBy: 'thread' | 'day' | 'model' | 'turn', from?: string, to
   if (to) params.set('to', to)
   if (groupBy !== 'thread' && groupBy !== 'turn') params.set('timezone', 'UTC')
   return new Request(`http://kun.local/v1/usage?${params.toString()}`)
+}
+
+function aggregateCalls(runtime: ServerRuntime): number {
+  return (runtime.sessionStore as { aggregateUsage?: { mock?: { calls: unknown[] } } })
+    .aggregateUsage?.mock?.calls.length ?? 0
 }
 
 function runtimeFixture(overrides: {

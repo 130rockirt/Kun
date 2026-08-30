@@ -77,7 +77,19 @@ export async function requestManagerResponse(
 export async function requireManagerJson(response: Response): Promise<unknown> {
   if (!response.ok) {
     const body = await response.text().catch(() => '')
-    throw new Error(`Kun Service Manager request failed with HTTP ${response.status}: ${body.slice(0, 1_024)}`)
+    const detail = body.slice(0, 1_024)
+    const error = new Error(`Kun Service Manager request failed with HTTP ${response.status}: ${detail}`)
+    // Preserve the manager's typed error code (e.g. usage_index_unavailable)
+    // so callers can match on it instead of relying on free-text substrings.
+    try {
+      const parsed = JSON.parse(body) as { code?: unknown }
+      if (typeof parsed.code === 'string' && parsed.code) {
+        ;(error as Error & { code?: string }).code = parsed.code
+      }
+    } catch {
+      // Non-JSON error body; the message above already carries the detail.
+    }
+    throw error
   }
   return response.json()
 }

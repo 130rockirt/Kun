@@ -16,6 +16,19 @@ import {
 import type { ServerRuntime } from './server-runtime.js'
 import { jsonResponse, type JsonResponse } from '../response.js'
 
+/**
+ * The SQLite usage index is a rebuildable projection; JSONL events remain the
+ * canonical history. When the index is unavailable (worker timeout, missing
+ * database, or a manager-side failure), fall back to the JSONL history read
+ * so the usage panels keep working instead of surfacing a 500.
+ */
+function isUsageIndexDegraded(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes('usage_index_unavailable') ||
+    message.includes('usage_query_timeout') ||
+    message.includes('Kun Service Manager request failed')
+}
+
 /** Runtime-cumulative response retained for backward compatibility. */
 export type UsageEndpointResponse = {
   total: ReturnType<UsageService['total']>
@@ -47,14 +60,18 @@ export async function usageJsonResponse(
           groupBy: 'thread',
           ...(threadId ? { threadId } : {})
         } as const
-        return jsonResponse(await runtime.sessionStore.aggregateUsage(
-          aggregateQuery,
-          await loadLiveUsageRemainders(
-            runtime,
-            { ...(threadId ? { threadId } : {}) },
-            true
-          )
-        ))
+        try {
+          return jsonResponse(await runtime.sessionStore.aggregateUsage(
+            aggregateQuery,
+            await loadLiveUsageRemainders(
+              runtime,
+              { ...(threadId ? { threadId } : {}) },
+              true
+            )
+          ))
+        } catch (error) {
+          if (!isUsageIndexDegraded(error)) throw error
+        }
       }
       return jsonResponse(buildThreadUsageResponse(await loadUsageHistory(runtime, {
         threadId
@@ -64,10 +81,14 @@ export async function usageJsonResponse(
       const dayQuery = parseDailyUsageQuery(query)
       const range = usageQueryUtcRange(dayQuery)
       if (runtime.sessionStore.aggregateUsage) {
-        return jsonResponse(await runtime.sessionStore.aggregateUsage(
-          { ...dayQuery, ...range },
-          await loadLiveUsageRemainders(runtime, range, true)
-        ))
+        try {
+          return jsonResponse(await runtime.sessionStore.aggregateUsage(
+            { ...dayQuery, ...range },
+            await loadLiveUsageRemainders(runtime, range, true)
+          ))
+        } catch (error) {
+          if (!isUsageIndexDegraded(error)) throw error
+        }
       }
       return jsonResponse(
         buildDailyUsageResponse(
@@ -80,10 +101,14 @@ export async function usageJsonResponse(
       const modelQuery = parseModelUsageQuery(query)
       const range = usageQueryUtcRange(modelQuery)
       if (runtime.sessionStore.aggregateUsage) {
-        return jsonResponse(await runtime.sessionStore.aggregateUsage(
-          { ...modelQuery, ...range },
-          await loadLiveUsageRemainders(runtime, range, true)
-        ))
+        try {
+          return jsonResponse(await runtime.sessionStore.aggregateUsage(
+            { ...modelQuery, ...range },
+            await loadLiveUsageRemainders(runtime, range, true)
+          ))
+        } catch (error) {
+          if (!isUsageIndexDegraded(error)) throw error
+        }
       }
       return jsonResponse(
         buildModelUsageResponse(
@@ -95,12 +120,16 @@ export async function usageJsonResponse(
     if (groupBy === 'turn') {
       const turnQuery = parseTurnUsageQuery(query)
       if (runtime.sessionStore.aggregateUsage) {
-        return jsonResponse(TurnUsageResponseSchema.parse(
-          await runtime.sessionStore.aggregateUsage(
-            turnQuery,
-            await loadLiveUsageRemainders(runtime, { threadId: turnQuery.threadId }, true)
-          )
-        ))
+        try {
+          return jsonResponse(TurnUsageResponseSchema.parse(
+            await runtime.sessionStore.aggregateUsage(
+              turnQuery,
+              await loadLiveUsageRemainders(runtime, { threadId: turnQuery.threadId }, true)
+            )
+          ))
+        } catch (error) {
+          if (!isUsageIndexDegraded(error)) throw error
+        }
       }
       const response = buildTurnUsageResponse(
         await loadUsageHistory(runtime, { threadId: turnQuery.threadId }),
