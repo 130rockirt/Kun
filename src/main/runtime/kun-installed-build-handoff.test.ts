@@ -19,6 +19,17 @@ const controlDir = '/tmp/kun-control'
 const dataDir = '/tmp/kun-data'
 const settingsPath = '/tmp/Kun/kun-settings.json'
 
+async function processIdentityFor(pid: number) {
+  return {
+    pid,
+    commandLine: pid === 900
+      ? 'kun-service-manager'
+      : pid === 902 ? 'kun-dv-runtime' : 'kun-runtime',
+    executablePath: 'C:\\Program Files\\nodejs\\node.exe',
+    startedAtMs: Date.parse('2026-08-21T00:00:00.000Z')
+  }
+}
+
 function manager(
   overrides: Partial<ManagerHandoffDiscoveryRecord> = {}
 ): ManagerHandoffDiscoveryRecord {
@@ -68,6 +79,153 @@ function input(overrides: { dataDirs?: string[] } = {}) {
 }
 
 describe('installed build handoff coordinator', () => {
+  it('clears a recycled Runtime PID under the Manager lock without stopping the process', async () => {
+    const stale = runtime('production', { pid: 12948 })
+    let current: RuntimeHandoffDiscoveryRecord | null = stale
+    let lockHeld = false
+    const stopRuntime = vi.fn()
+    const removeRuntime = vi.fn(async (_dir, instanceId) => {
+      expect(lockHeld).toBe(true)
+      expect(instanceId).toBe(stale.instanceId)
+      current = null
+      return true
+    })
+    const overrides = {
+      withManagerLock: async <T>(_dir: string, action: () => Promise<T>) => {
+        lockHeld = true
+        try { return await action() } finally { lockHeld = false }
+      },
+      readManager: async () => null,
+      readRuntime: async (_dir: string, flavor?: 'production' | 'development') =>
+        flavor === 'production' ? current : null,
+      processAlive: (pid: number) => pid === stale.pid,
+      processIdentity: async (pid: number) => ({
+        pid,
+        commandLine: 'C:\\Windows\\System32\\SNAPOS64.exe',
+        executablePath: 'C:\\Windows\\System32\\SNAPOS64.exe',
+        startedAtMs: Date.parse(stale.startedAt) + 120_000
+      }),
+      withAncillaryWriter: async <T>(_dir: string, action: () => Promise<T>) => action(),
+      removeRuntime,
+      stopRuntime: stopRuntime as never,
+      stopManager: vi.fn() as never
+    }
+
+    await expect(probeInstalledBuildHandoff(input(), overrides)).resolves.toBe('mismatched')
+    expect(removeRuntime).not.toHaveBeenCalled()
+
+    await expect(drainKunOwnersForHandoff(input(), overrides)).resolves.toMatchObject({
+      owners: expect.arrayContaining([
+        expect.objectContaining({ kind: 'runtime', flavor: 'production', result: 'not-found' })
+      ])
+    })
+    expect(removeRuntime).toHaveBeenCalledOnce()
+    expect(stopRuntime).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when a live Runtime PID cannot be inspected', async () => {
+    const target = runtime('production')
+    const removeRuntime = vi.fn()
+    const failure = await probeInstalledBuildHandoff(input(), {
+      readManager: async () => null,
+      readRuntime: async (_dir, flavor) => flavor === 'production' ? target : null,
+      processAlive: () => true,
+      processIdentity: async () => null,
+      removeRuntime,
+      stopRuntime: vi.fn() as never,
+      stopManager: vi.fn() as never
+    }).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(KunHandoffError)
+    expect(failure).toMatchObject({ code: 'probe_failed', phase: 'discover', retryable: true })
+    expect(removeRuntime).not.toHaveBeenCalled()
+  })
+
+  it('clears a recycled Manager PID without stopping the unrelated process', async () => {
+    const stale = manager({ pid: 12948 })
+    let current: ManagerHandoffDiscoveryRecord | null = stale
+    let lockHeld = false
+    const stopManager = vi.fn()
+    const removeManager = vi.fn(async (_dir, instanceId) => {
+      expect(lockHeld).toBe(true)
+      expect(instanceId).toBe(stale.instanceId)
+      current = null
+      return true
+    })
+    const overrides = {
+      withManagerLock: async <T>(_dir: string, action: () => Promise<T>) => {
+        lockHeld = true
+        try { return await action() } finally { lockHeld = false }
+      },
+      readManager: async () => current,
+      readRuntime: async () => null,
+      processAlive: (pid: number) => pid === stale.pid,
+      processIdentity: async (pid: number) => ({
+        pid,
+        commandLine: 'C:\\Windows\\System32\\SNAPOS64.exe',
+        executablePath: 'C:\\Windows\\System32\\SNAPOS64.exe',
+        startedAtMs: Date.parse(stale.startedAt) + 120_000
+      }),
+      removeManager,
+      stopRuntime: vi.fn() as never,
+      stopManager: stopManager as never
+    }
+
+    await drainKunOwnersForHandoff(input(), overrides)
+    expect(removeManager).toHaveBeenCalledOnce()
+    expect(stopManager).not.toHaveBeenCalled()
+  })
+
+  it('unregisters a recycled Manager slot without stopping its unrelated PID', async () => {
+    const currentManager = manager()
+    const staleSlot = runtime('production', { pid: 12948 })
+    let managerAlive = true
+    let currentSlot: RuntimeHandoffDiscoveryRecord | null = staleSlot
+    const stopRuntime = vi.fn()
+    const unregisterRuntime = vi.fn(async () => {
+      currentSlot = null
+      return true
+    })
+    const fetchMock = vi.fn(async () => Response.json({
+      instanceId: currentManager.instanceId,
+      pid: currentManager.pid,
+      startedAt: currentManager.startedAt,
+      slots: currentSlot
+        ? [{ registration: { ...currentSlot, flavor: 'production' } }]
+        : []
+    }))
+
+    await drainKunOwnersForHandoff({
+      ...input(),
+      fetch: fetchMock as unknown as typeof fetch
+    }, {
+      withManagerLock: async <T>(_dir: string, action: () => Promise<T>) => action(),
+      readManager: async () => managerAlive ? currentManager : null,
+      readRuntime: async () => null,
+      processAlive: (pid) => pid === staleSlot.pid || managerAlive && pid === currentManager.pid,
+      processIdentity: async (pid) => pid === currentManager.pid
+        ? processIdentityFor(pid)
+        : {
+            pid,
+            commandLine: 'C:\\Windows\\System32\\SNAPOS64.exe',
+            executablePath: 'C:\\Windows\\System32\\SNAPOS64.exe',
+            startedAtMs: Date.parse(staleSlot.startedAt) + 120_000
+          },
+      unregisterRuntime,
+      stopRuntime: stopRuntime as never,
+      stopManager: (async () => {
+        managerAlive = false
+        return { stopped: true, forced: false }
+      }) as never
+    })
+
+    expect(unregisterRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      flavor: 'production',
+      instanceId: staleSlot.instanceId
+    }))
+    expect(stopRuntime).not.toHaveBeenCalled()
+  })
+
   it('drains both Runtime flavors and an older-schema Manager under one lock', async () => {
     const currentManager = manager()
     const currentRuntimes = new Map([
@@ -112,6 +270,7 @@ describe('installed build handoff coordinator', () => {
       readRuntime: async (_dir, flavor) => currentRuntimes.get(flavor ?? 'production') ?? null,
       processAlive: (pid) => managerAlive && pid === currentManager.pid ||
         [...currentRuntimes.values()].some((record) => record.pid === pid),
+      processIdentity: processIdentityFor,
       recordForcedOwner: vi.fn(async () => ({ markerId: 'marker' })) as never,
       stopRuntime: stopRuntime as never,
       stopManager: stopManager as never,
@@ -151,6 +310,7 @@ describe('installed build handoff coordinator', () => {
       readManager: async () => managerAlive ? currentManager : null,
       readRuntime: async () => null,
       processAlive: (pid) => pid === slot.pid ? runtimeAlive : managerAlive,
+      processIdentity: processIdentityFor,
       stopRuntime: stopRuntime as never,
       stopManager: (async () => {
         managerAlive = false
@@ -178,6 +338,7 @@ describe('installed build handoff coordinator', () => {
       readManager: async () => null,
       readRuntime: async (_dir, flavor) => flavor === 'production' ? current : null,
       processAlive: (pid) => current?.pid === pid,
+      processIdentity: processIdentityFor,
       stopRuntime: (async (_dir: string, target: { discovery: RuntimeHandoffDiscoveryRecord }) => {
         stopped.push(target.discovery.instanceId)
         current = target.discovery.instanceId === first.instanceId ? second : null
@@ -218,6 +379,7 @@ describe('installed build handoff coordinator', () => {
         readRuntime: async (dir, flavor) =>
           flavor === 'production' ? runtimes.get(dir) ?? null : null,
         processAlive: (pid) => [...runtimes.values()].some((entry) => entry.pid === pid),
+        processIdentity: processIdentityFor,
         recordForcedOwner: recordVerifiedForcedRuntimeOwner,
         stopRuntime: (async (dir: string, target: { discovery: RuntimeHandoffDiscoveryRecord }) => {
           stopped.push([dir, target.discovery.instanceId])
@@ -265,6 +427,7 @@ describe('installed build handoff coordinator', () => {
       readRuntime: async () => null,
       processAlive: (pid: number) =>
         pid === slot.pid ? runtimeAlive : pid === currentManager.pid && managerAlive,
+      processIdentity: processIdentityFor,
       stopRuntime: stopRuntime as never,
       stopManager: vi.fn(async () => {
         managerAlive = false
@@ -300,6 +463,7 @@ describe('installed build handoff coordinator', () => {
       readManager: async () => currentManager,
       readRuntime: async () => null,
       processAlive: (pid) => pid === currentManager.pid || pid === slot.pid,
+      processIdentity: processIdentityFor,
       stopRuntime: vi.fn() as never,
       stopManager: vi.fn() as never
     })).resolves.toBe('matched')
@@ -313,6 +477,7 @@ describe('installed build handoff coordinator', () => {
       readRuntime: async (_dir: string, flavor?: 'production' | 'development') =>
         flavor === 'production' ? legacyRuntime : null,
       processAlive: (pid: number) => pid === legacyManager.pid || pid === legacyRuntime.pid,
+      processIdentity: processIdentityFor,
       stopRuntime: vi.fn() as never,
       stopManager: vi.fn() as never
     }
@@ -358,6 +523,7 @@ describe('installed build handoff coordinator', () => {
       readManager: async () => manager({ settingsPath: '/tmp/Other/settings.json' }),
       readRuntime: async () => null,
       processAlive: () => true,
+      processIdentity: processIdentityFor,
       stopRuntime: stopRuntime as never,
       stopManager: stopManager as never
     }).catch((error: unknown) => error)
@@ -370,12 +536,23 @@ describe('installed build handoff coordinator', () => {
 
   it('wraps an ambiguous Runtime failure and preserves the Manager', async () => {
     const target = runtime('production')
+    const currentManager = manager()
     const stopManager = vi.fn()
-    const failure = await drainKunOwnersForHandoff(input(), {
+    const fetchMock = vi.fn(async () => Response.json({
+      instanceId: currentManager.instanceId,
+      pid: currentManager.pid,
+      startedAt: currentManager.startedAt,
+      slots: []
+    }))
+    const failure = await drainKunOwnersForHandoff({
+      ...input(),
+      fetch: fetchMock as unknown as typeof fetch
+    }, {
       withManagerLock: async <T>(_dir: string, action: () => Promise<T>) => action(),
-      readManager: async () => manager(),
+      readManager: async () => currentManager,
       readRuntime: async (_dir, flavor) => flavor === 'production' ? target : null,
       processAlive: () => true,
+      processIdentity: processIdentityFor,
       stopRuntime: (async () => { throw new Error('identity proof failed') }) as never,
       stopManager: stopManager as never
     }).catch((error: unknown) => error)
