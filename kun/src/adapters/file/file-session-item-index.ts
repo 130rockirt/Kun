@@ -6,20 +6,19 @@ import { timelineSafeItem } from '../../services/item-history-page.js'
 import { atomicWriteFile } from './atomic-write.js'
 import { ITEM_HISTORY_MAX_RECORD_BYTES } from './file-session-live-items.js'
 import { ensureItemTailReady } from './file-session-item-tail.js'
+import {
+  identityFromStat,
+  ItemIndexView,
+  ItemIndexViewCache,
+  sameIdentity,
+  type ItemIndexRow,
+  type ItemIndexSourceIdentity,
+  type ItemIndexViewStats
+} from './file-session-item-index-view.js'
 
 const INDEX_VERSION = 3
-const INDEX_MAX_BYTES = 32 * 1024 * 1024
+const DEFAULT_INDEX_MAX_BYTES = 32 * 1024 * 1024
 const SCAN_CHUNK_BYTES = 64 * 1024
-
-type ItemIndexRow = {
-  itemId: string
-  turnId: string
-  kind: TurnItem['kind']
-  isPublic: boolean
-  baseline: boolean
-  offset: number
-  recordBytes: number
-}
 
 type ItemIndexState = {
   version: 3
@@ -36,6 +35,17 @@ type ItemIndexState = {
 export class FileSessionItemIndex {
   private readonly rebuilds = new Map<string, Promise<void>>()
   private readonly verifiedItemTails = new Set<string>()
+  private readonly views: ItemIndexViewCache
+  private readonly indexMaxBytes: number
+
+  constructor(options: {
+    cacheMaxEntries?: number
+    cacheMaxBytes?: number
+    indexMaxBytes?: number
+  } = {}) {
+    this.views = new ItemIndexViewCache(options.cacheMaxEntries, options.cacheMaxBytes)
+    this.indexMaxBytes = options.indexMaxBytes ?? DEFAULT_INDEX_MAX_BYTES
+  }
 
   async append(input: {
     sourcePath: string
@@ -52,6 +62,7 @@ export class FileSessionItemIndex {
       path: input.sourcePath,
       evidencePath: input.evidencePath
     })
+    const generation = this.views.currentGeneration(input.sourcePath)
     const before = await stat(input.sourcePath).catch(() => null)
     const offset = before?.size ?? 0
     await appendFile(input.sourcePath, `${input.record}\n`, { encoding: 'utf8', mode: 0o600 })
@@ -61,7 +72,7 @@ export class FileSessionItemIndex {
         ? !state || state.sourceBytes === 0
         : Boolean(state && state.sourceBytes === offset && sourceMatches(before, state))
       if (!canExtend) {
-        await this.invalidate(input.indexPath, input.statePath)
+        await this.invalidate(input.sourcePath, input.indexPath, input.statePath)
         return
       }
       const row = rowForItem(input.item, offset, Buffer.byteLength(input.record, 'utf8'))
@@ -81,8 +92,20 @@ export class FileSessionItemIndex {
         },
         baselineCount: (state?.baselineCount ?? 0) + (isBaselineItem(input.item) ? 1 : 0)
       } satisfies ItemIndexState))
+      if (before && state) {
+        this.views.applyAppend({
+          sourcePath: input.sourcePath,
+          before: identityFromStat(before),
+          after: identityFromStat(after),
+          expectedRows: state.rowCount,
+          expectedGeneration: generation,
+          row
+        })
+      } else {
+        this.views.clearSource(input.sourcePath)
+      }
     } catch (error) {
-      await this.invalidate(input.indexPath, input.statePath)
+      await this.invalidate(input.sourcePath, input.indexPath, input.statePath)
       console.warn(`[kun] item history index append deferred: ${errorMessage(error)}`)
     }
   }
@@ -97,9 +120,28 @@ export class FileSessionItemIndex {
     if (!source) return { items: [], hasMore: false, itemBytes: 0 }
     const state = await readIndexState(input.statePath)
     if (!state || !sourceMatches(source, state)) return null
-    const rows = await readIndexRows(input.indexPath, state.rowCount)
-    if (!rows || rows.length !== state.rowCount) return null
-    return readIndexedPage(input.sourcePath, rows, input.options)
+    const identity = identityFromStat(source)
+    const view = await this.views.hydrate(
+      input.sourcePath,
+      identity,
+      state.rowCount,
+      async () => {
+        const loaded = await readIndexView(input.indexPath, state.rowCount, this.indexMaxBytes)
+        if (!loaded) return null
+        const [currentSource, currentState] = await Promise.all([
+          stat(input.sourcePath).catch(() => null),
+          readIndexState(input.statePath)
+        ])
+        return currentSource && currentState &&
+          sourceMatches(currentSource, currentState) &&
+          sameIdentity(identityFromStat(currentSource), identity) &&
+          currentState.rowCount === state.rowCount
+          ? loaded
+          : null
+      }
+    )
+    if (!view) return null
+    return readIndexedPage(input.sourcePath, view, input.options)
   }
 
   async rebuild(input: {
@@ -110,6 +152,7 @@ export class FileSessionItemIndex {
     evidencePath: string
     withSourceRead?: <T>(operation: () => Promise<T>) => Promise<T>
   }): Promise<{ rawCount: number; uniqueCount: number; canonicalBytes: number }> {
+    const generation = this.views.currentGeneration(input.sourcePath)
     const rebuilt = await withSourceRead(input, async () => {
       await ensureItemTailReady({
         verified: this.verifiedItemTails,
@@ -120,24 +163,28 @@ export class FileSessionItemIndex {
       const before = await stat(input.sourcePath).catch(() => null)
       if (!before) return null
       const rows: ItemIndexRow[] = []
+      const view = new ItemIndexView()
       const latest = new Map<string, number>()
       for await (const record of scanItemRecords(input.sourcePath)) {
-        rows.push(rowForItem(record.item, record.offset, record.recordBytes))
+        const row = rowForItem(record.item, record.offset, record.recordBytes)
+        rows.push(row)
+        view.applyRow(row)
         latest.set(record.item.id, record.recordBytes)
       }
       const after = await stat(input.sourcePath).catch(() => null)
-      if (!after || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+      if (!after || !sameIdentity(identityFromStat(after), identityFromStat(before))) {
         throw new Error('item history changed during index rebuild')
       }
-      return { rows, latest, source: after }
+      return { rows, view, latest, source: after }
     })
     if (!rebuilt) {
-      await this.invalidate(input.indexPath, input.statePath)
+      await this.invalidate(input.sourcePath, input.indexPath, input.statePath)
       return { rawCount: 0, uniqueCount: 0, canonicalBytes: 0 }
     }
     let canonicalBytes = 0
     for (const bytes of rebuilt.latest.values()) canonicalBytes += bytes + 1
     await writeIndexFiles(input.indexPath, input.statePath, rebuilt.rows, rebuilt.source)
+    this.views.publish(input.sourcePath, identityFromStat(rebuilt.source), rebuilt.view, generation)
     return { rawCount: rebuilt.rows.length, uniqueCount: rebuilt.latest.size, canonicalBytes }
   }
 
@@ -167,6 +214,15 @@ export class FileSessionItemIndex {
   clear(): void {
     this.rebuilds.clear()
     this.verifiedItemTails.clear()
+    this.views.clear()
+  }
+
+  clearSource(sourcePath: string): void {
+    this.views.clearSource(sourcePath)
+  }
+
+  cacheStats(): ItemIndexViewStats {
+    return this.views.stats()
   }
 
   async replaceForItems(input: {
@@ -175,26 +231,31 @@ export class FileSessionItemIndex {
     statePath: string
     items: readonly TurnItem[]
   }): Promise<void> {
+    const generation = this.views.currentGeneration(input.sourcePath)
     const source = await stat(input.sourcePath).catch(() => null)
     if (!source) {
-      await this.invalidate(input.indexPath, input.statePath)
+      await this.invalidate(input.sourcePath, input.indexPath, input.statePath)
       return
     }
     let offset = 0
+    const view = new ItemIndexView()
     const rows = input.items.map((item) => {
       const recordBytes = Buffer.byteLength(JSON.stringify(item), 'utf8')
       const row = rowForItem(item, offset, recordBytes)
       offset += recordBytes + 1
+      view.applyRow(row)
       return row
     })
     if (offset !== source.size) {
-      await this.invalidate(input.indexPath, input.statePath)
+      await this.invalidate(input.sourcePath, input.indexPath, input.statePath)
       return
     }
     await writeIndexFiles(input.indexPath, input.statePath, rows, source)
+    this.views.publish(input.sourcePath, identityFromStat(source), view, generation)
   }
 
-  invalidate(indexPath: string, statePath: string): Promise<void> {
+  invalidate(sourcePath: string, indexPath: string, statePath: string): Promise<void> {
+    this.views.clearSource(sourcePath)
     return Promise.all([
       rm(indexPath, { force: true }),
       rm(statePath, { force: true })
@@ -204,61 +265,58 @@ export class FileSessionItemIndex {
 
 async function readIndexedPage(
   sourcePath: string,
-  rows: readonly ItemIndexRow[],
+  view: ItemIndexView,
   options: ItemHistoryPageOptions
 ): Promise<ItemHistoryPage> {
-  const latest = new Map<string, ItemIndexRow>()
-  const order: string[] = []
-  for (const row of rows) {
-    if (!latest.has(row.itemId)) order.push(row.itemId)
-    latest.set(row.itemId, row)
+  const endExclusive = options.before
+    ? (view.publicPositions.get(options.before) ?? view.publicRows.length)
+    : view.publicRows.length
+  const candidates: Array<{ row: ItemIndexRow; index: number }> = []
+  for (let index = endExclusive - 1; index >= 0 && candidates.length < options.maxItems; index -= 1) {
+    candidates.push({ row: view.publicRows[index]!, index })
   }
-  const publicRows = order.map((id) => latest.get(id)!).filter((row) => row.isPublic)
-  const cursorIndex = options.before
-    ? publicRows.findIndex((row) => row.itemId === options.before)
-    : publicRows.length
-  const endExclusive = cursorIndex >= 0 ? cursorIndex : publicRows.length
+  const anchorIndex = !options.before && options.anchorTurnId
+    ? (view.anchorPositions.get(options.anchorTurnId) ?? -1)
+    : -1
+
   const selected: Array<{ item: TurnItem; index: number; bytes: number }> = []
   let itemBytes = 0
   let windowStartIndex = endExclusive
   const handle = await open(sourcePath, 'r')
   try {
-    for (let index = endExclusive - 1; index >= 0 && selected.length < options.maxItems; index -= 1) {
-      const item = timelineSafeItem(await readIndexedItem(handle, publicRows[index]!), options.maxBytes)
+    for (const candidate of candidates) {
+      const item = timelineSafeItem(await readIndexedItem(handle, candidate.row), options.maxBytes)
       const bytes = Buffer.byteLength(JSON.stringify(item), 'utf8')
       if (selected.length > 0 && itemBytes + bytes > options.maxBytes) break
-      selected.push({ item, index, bytes })
+      selected.push({ item, index: candidate.index, bytes })
       itemBytes += bytes
-      windowStartIndex = index
+      windowStartIndex = candidate.index
     }
     selected.reverse()
 
-    let anchorIndex = -1
-    if (!options.before && options.anchorTurnId) {
-      anchorIndex = publicRows.findIndex(
-        (row) => row.turnId === options.anchorTurnId && row.kind === 'user_message'
-      )
-      if (anchorIndex >= 0 && anchorIndex < windowStartIndex) {
-        const item = timelineSafeItem(await readIndexedItem(handle, publicRows[anchorIndex]!), options.maxBytes)
-        const bytes = Buffer.byteLength(JSON.stringify(item), 'utf8')
-        while (
-          selected.length > 0 &&
-          (selected.length + 1 > options.maxItems || itemBytes + bytes > options.maxBytes)
-        ) {
-          itemBytes -= selected.shift()!.bytes
-          windowStartIndex += 1
-        }
-        selected.unshift({ item, index: anchorIndex, bytes })
-        itemBytes += bytes
-      } else {
-        anchorIndex = -1
+    let anchoredIndex = -1
+    const anchorRow = anchorIndex >= 0 && anchorIndex < windowStartIndex
+      ? view.publicRows[anchorIndex]
+      : undefined
+    if (anchorRow) {
+      const item = timelineSafeItem(await readIndexedItem(handle, anchorRow), options.maxBytes)
+      const bytes = Buffer.byteLength(JSON.stringify(item), 'utf8')
+      while (
+        selected.length > 0 &&
+        (selected.length + 1 > options.maxItems || itemBytes + bytes > options.maxBytes)
+      ) {
+        itemBytes -= selected.shift()!.bytes
+        windowStartIndex += 1
       }
+      selected.unshift({ item, index: anchorIndex, bytes })
+      itemBytes += bytes
+      anchoredIndex = anchorIndex
     }
-    const anchored = anchorIndex >= 0
+    const anchored = anchoredIndex >= 0
     const cursorItem = anchored && selected.length > 1 ? selected[1] : selected[0]
     const boundaryIndex = anchored && selected.length > 1
       ? windowStartIndex
-      : (anchored ? anchorIndex : windowStartIndex)
+      : (anchored ? anchoredIndex : windowStartIndex)
     const hasMore = boundaryIndex > 0
     return {
       items: selected.map((entry) => entry.item),
@@ -281,17 +339,21 @@ async function readIndexedItem(handle: FileHandle, row: ItemIndexRow): Promise<T
   return TurnItemSchema.parse(JSON.parse(buffer.toString('utf8')))
 }
 
-async function readIndexRows(path: string, expectedRows: number): Promise<ItemIndexRow[] | null> {
+async function readIndexView(
+  path: string,
+  expectedRows: number,
+  indexMaxBytes: number
+): Promise<ItemIndexView | null> {
   const info = await stat(path).catch(() => null)
-  if (!info || info.size > INDEX_MAX_BYTES) return null
+  if (!info || info.size > indexMaxBytes) return null
+  const view = new ItemIndexView()
   try {
-    const rows = (await readFile(path, 'utf8'))
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => parseIndexRow(JSON.parse(line)))
-    return rows.length === expectedRows && rows.every(Boolean)
-      ? rows as ItemIndexRow[]
-      : null
+    for await (const line of scanJsonlLines(path, indexMaxBytes)) {
+      const row = parseIndexRow(JSON.parse(line.toString('utf8')))
+      if (!row) return null
+      view.applyRow(row)
+    }
+    return view.rowCount === expectedRows ? view : null
   } catch {
     return null
   }
@@ -311,9 +373,7 @@ async function readIndexState(path: string): Promise<ItemIndexState | null> {
     ) return null
     return {
       ...(value as ItemIndexState),
-      kindCounts: value.kindCounts && typeof value.kindCounts === 'object'
-        ? value.kindCounts
-        : {},
+      kindCounts: value.kindCounts && typeof value.kindCounts === 'object' ? value.kindCounts : {},
       baselineCount: Number.isSafeInteger(value.baselineCount) ? value.baselineCount! : 0
     }
   } catch {
@@ -325,7 +385,7 @@ async function writeIndexFiles(
   indexPath: string,
   statePath: string,
   rows: readonly ItemIndexRow[],
-  source: { size: number; mtimeMs: number; dev: number; ino: number }
+  source: ItemIndexSourceIdentity
 ): Promise<void> {
   const contents = rows.length > 0 ? `${rows.map((row) => JSON.stringify(row)).join('\n')}\n` : ''
   await atomicWriteFile(indexPath, contents)
@@ -343,6 +403,25 @@ async function writeIndexFiles(
     }, {}),
     baselineCount: rows.filter((row) => row.baseline).length
   } satisfies ItemIndexState))
+}
+
+async function* scanJsonlLines(path: string, maxBytes: number): AsyncIterable<Buffer> {
+  let pending = Buffer.alloc(0)
+  let consumed = 0
+  for await (const raw of createReadStream(path, { highWaterMark: SCAN_CHUNK_BYTES })) {
+    const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw)
+    consumed += chunk.length
+    if (consumed > maxBytes) throw new Error(`index exceeds ${maxBytes} bytes`)
+    pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk])
+    let newline = pending.indexOf(0x0a)
+    while (newline >= 0) {
+      const line = pending.subarray(0, newline)
+      if (line.length > 0) yield line
+      pending = pending.subarray(newline + 1)
+      newline = pending.indexOf(0x0a)
+    }
+  }
+  if (pending.length > 0) throw new Error('index has an incomplete trailing record')
 }
 
 async function* scanItemRecords(path: string): AsyncIterable<{
@@ -396,23 +475,22 @@ function parseIndexRow(value: unknown): ItemIndexRow | null {
     typeof row.turnId !== 'string' ||
     typeof row.kind !== 'string' ||
     typeof row.isPublic !== 'boolean' ||
-    !Number.isSafeInteger(row.offset) ||
-    !Number.isSafeInteger(row.recordBytes)
+    !Number.isSafeInteger(row.offset) || row.offset! < 0 ||
+    !Number.isSafeInteger(row.recordBytes) || row.recordBytes! <= 0
   ) return null
   return { ...(row as ItemIndexRow), baseline: row.baseline === true }
 }
 
 function sourceMatches(
-  source: { size: number; mtimeMs: number; dev: number; ino: number } | null,
+  source: ItemIndexSourceIdentity | null,
   state: ItemIndexState
 ): boolean {
-  return Boolean(
-    source &&
-    source.size === state.sourceBytes &&
-    source.mtimeMs === state.sourceMtimeMs &&
-    source.dev === state.sourceDev &&
-    source.ino === state.sourceIno
-  )
+  return Boolean(source && sameIdentity(identityFromStat(source), {
+    size: state.sourceBytes,
+    mtimeMs: state.sourceMtimeMs,
+    dev: state.sourceDev,
+    ino: state.sourceIno
+  }))
 }
 
 function withSourceRead<T>(

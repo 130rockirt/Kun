@@ -365,6 +365,12 @@ describe('FileSessionStore item ordering', () => {
     await store.flushScheduledCompaction(threadId)
     expect((await stat(path)).size).toBeLessThan(before / 10)
     expect((await readFile(path, 'utf-8')).trim().split('\n')).toHaveLength(1)
+    const indexPath = join(root, 'threads', threadId, 'messages-index.jsonl')
+    const statePath = join(root, 'threads', threadId, 'messages-index.state.json')
+    expect((await readFile(indexPath, 'utf-8')).trim().split('\n')).toHaveLength(1)
+    expect(JSON.parse(await readFile(statePath, 'utf-8'))).toMatchObject({ rowCount: 1 })
+    await expect(store.loadItemPage(threadId, { maxItems: 5, maxBytes: 64 * 1024 }))
+      .resolves.toMatchObject({ items: [{ id: 'result_1', status: 'completed' }] })
   })
 
   it('pins the running turn user message on the newest JSONL page', async () => {

@@ -562,6 +562,7 @@ export class FileSessionStore implements SessionStore {
     this.usageIndex.clearThreadMemory(threadId)
     this.usageCompactionDebt.clear(threadId)
     this.liveItems.clearThread(threadId)
+    this.itemIndex.clearSource(this.messagesPath(threadId))
   }
 
   itemCacheStats(): { entries: number; bytes: number; maxBytes: number } {
