@@ -11,7 +11,7 @@ import {
 
 let provider: Pick<
   AgentProvider,
-  'listThreadsPage' | 'listThreads' | 'getThreadState' | 'getThreadStates'
+  'listThreadsPage' | 'listThreads' | 'getThreadSummary' | 'getThreadState' | 'getThreadStates'
 >
 
 vi.mock('../agent/registry', () => ({ getProvider: () => provider }))
@@ -61,7 +61,8 @@ function harness(initialThread: NormalizedThread | NormalizedThread[] = thread()
     unreadThreadIds: {},
     awaitingUserInputThreadIds: {},
     scheduledThreadActivities: {},
-    refreshThreads: vi.fn(async () => undefined)
+    refreshThreads: vi.fn(async () => undefined),
+    clearActiveThreadSelection: vi.fn()
   } as unknown as ChatState
   const set = (partial: Partial<ChatState> | ((value: ChatState) => Partial<ChatState>)): void => {
     state = { ...state, ...(typeof partial === 'function' ? partial(state) : partial) }
@@ -320,6 +321,39 @@ describe('sidebar activity observer', () => {
     await h.action()
     expect(h.get().scheduledThreadActivities).toEqual({})
     expect(h.get().unreadThreadIds).toEqual({ 'thread-1': 'failed' })
+  })
+
+  it('hydrates one unknown pushed thread without refreshing the full list', async () => {
+    const pushed = thread({ id: 'thread-new', latestSeq: 4 })
+    provider = {
+      listThreads: vi.fn(), listThreadsPage: vi.fn(),
+      getThreadSummary: vi.fn(async () => pushed),
+      getThreadState: vi.fn(async () => ({
+        status: 'running', updatedAt: pushed.updatedAt, latestSeq: 4,
+        latestTurnId: 'turn-new', pendingUserInputIds: []
+      }))
+    }
+    const h = harness([])
+
+    await h.action({ threadIds: ['thread-new'], includeSchedule: false })
+
+    expect(provider.listThreadsPage).not.toHaveBeenCalled()
+    expect(provider.getThreadSummary).toHaveBeenCalledWith('thread-new')
+    expect(h.get().threads).toEqual([expect.objectContaining({
+      id: 'thread-new', status: 'running', latestTurnId: 'turn-new'
+    })])
+    expect(h.get().refreshThreads).not.toHaveBeenCalled()
+  })
+
+  it('removes a pushed deleted thread without a list request', async () => {
+    provider = { listThreads: vi.fn(), listThreadsPage: vi.fn(), getThreadState: vi.fn() }
+    const h = harness(thread())
+
+    await h.action({ deletedThreadIds: ['thread-1'], includeSchedule: false })
+
+    expect(h.get().threads).toEqual([])
+    expect(provider.listThreadsPage).not.toHaveBeenCalled()
+    expect(h.get().refreshThreads).not.toHaveBeenCalled()
   })
 
   it('aggregates multiple schedules without letting queued work look running', () => {

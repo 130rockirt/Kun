@@ -214,6 +214,9 @@ export function kunGraphProjectConsolidatePath(projectId: string): string {
   return `${kunGraphProjectPath(projectId)}/consolidate`
 }
 
+export const KUN_THREAD_ACTIVITY_EVENTS_PATH = '/v1/thread-activity/events'
+export const KUN_THREAD_ACTIVITY_EVENTS_TEMPLATE = '/v1/thread-activity/events'
+
 export const KUN_THREADS_PATH = '/v1/threads'
 export const KUN_THREADS_TEMPLATE = '/v1/threads'
 
@@ -229,6 +232,11 @@ export const KUN_THREADS_CONTENT_SEARCH_TEMPLATE = '/v1/threads/content-search'
 export const KUN_THREAD_TEMPLATE = '/v1/threads/{id}'
 export function kunThreadPath(threadId: string): string {
   return `/v1/threads/${encodeURIComponent(threadId)}`
+}
+
+export const KUN_THREAD_SUMMARY_TEMPLATE = '/v1/threads/{id}/summary'
+export function kunThreadSummaryPath(threadId: string): string {
+  return `${kunThreadPath(threadId)}/summary`
 }
 
 export const KUN_THREAD_STATE_TEMPLATE = '/v1/threads/{id}/state'

@@ -1,3 +1,4 @@
+import type { ThreadActivityRegistry } from '../../services/thread-activity-registry.js'
 import type { ThreadService } from '../../services/thread-service.js'
 import type { TurnService } from '../../services/turn-service.js'
 import type { ThreadStore } from '../../ports/thread-store.js'
@@ -176,6 +177,8 @@ export type ServerRuntime = {
   eventBus: EventBus
   sessionStore: SessionStore
   events: RuntimeEventRecorder
+  /** Compact process-wide invalidations used by sidebar observers. */
+  threadActivity?: ThreadActivityRegistry
   /** Active SSE streams, so a successful thread delete can close them. */
   eventStreamRegistry?: ThreadEventStreamRegistry
   /** Optional troubleshooting buffer of the most recent LLM rounds (in-memory). */

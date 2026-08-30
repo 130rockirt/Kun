@@ -400,6 +400,7 @@ export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & ProviderAuthApi & {
   getClawStatus: () => Promise<ClawRuntimeStatus>
   runClawTask: (taskId: string) => Promise<ClawRunResult>
   getScheduleStatus: () => Promise<ScheduleRuntimeStatus>
+  onScheduleStatusChanged: (handler: (status: ScheduleRuntimeStatus) => void) => () => void
   createScheduleTask: (payload: ScheduleTaskCreateInput) => Promise<ScheduleTaskMutationResult>
   updateScheduleTask: (payload: ScheduleTaskUpdateInput) => Promise<ScheduleTaskMutationResult>
   deleteScheduleTask: (taskId: string) => Promise<ScheduleTaskDeleteResult>

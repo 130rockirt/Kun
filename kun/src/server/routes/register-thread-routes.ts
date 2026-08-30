@@ -50,6 +50,8 @@ import { usageJsonResponse } from './usage.js'
 import { listProviderQuotas } from './provider-quotas.js'
 import { llmDebugRoundsResponse } from './debug-llm.js'
 import { modelRequestsResponse } from './model-requests.js'
+import { getThreadSummary } from './thread-summary.js'
+import { threadActivityResponse } from './thread-activity.js'
 import { jsonResponse } from '../response.js'
 import { ERRORS } from './runtime-error.js'
 import type { ServerRuntime } from './server-runtime.js'
@@ -67,6 +69,11 @@ export function registerThreadRoutes(
   runtime: ServerRuntime,
   approvalConsent: ApprovalConsentVerifier
 ): void {
+  router.add('GET', '/v1/thread-activity/events', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    if (!runtime.threadActivity) return ERRORS.unavailable('thread activity is unavailable')
+    return threadActivityResponse(runtime.threadActivity, request)
+  })
   router.add('GET', '/v1/threads', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return listThreads(runtime.threadService, request)
@@ -89,6 +96,11 @@ export function registerThreadRoutes(
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return getThreadStates(request, (threadId) =>
       loadOwnerAwareThreadState(runtime, request, threadId))
+  })
+  // Static summary suffix must stay before the generic `/:id` detail route.
+  router.add('GET', '/v1/threads/:id/summary', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return getThreadSummary(runtime.threadService, ctx.params.id, runtime.sessionStore)
   })
   // This static suffix must be registered before `/:id`, because Router uses
   // first-match ordering for parameterized paths.

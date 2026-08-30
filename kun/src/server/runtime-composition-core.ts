@@ -31,6 +31,7 @@ import {
   type ThreadStore,
   KUN_SYSTEM_PROMPT,
   RuntimeEventRecorder,
+  ThreadActivityRegistry,
   GraphRuntimeComposition,
   LifecycleFencedSessionStore,
   LifecycleFencedThreadStore,
@@ -111,13 +112,18 @@ export async function createRuntimeCore(
     config: activeOptions.observability,
     dataDir: activeOptions.dataDir
   })
+  const threadActivity = new ThreadActivityRegistry()
+  const observers = [
+    threadActivity,
+    ...(agentObservability ? [agentObservability] : [])
+  ]
   const events = new RuntimeEventRecorder({
     eventBus,
     sessionStore,
     allocateSeq,
     nowIso,
     lifecycleFence,
-    ...(agentObservability ? { observers: [agentObservability] } : {})
+    observers
   })
   let prefix = createImmutablePrefix({
     systemPrompt: KUN_SYSTEM_PROMPT,
@@ -277,6 +283,7 @@ export async function createRuntimeCore(
     llmDebug,
     agentObservability,
     events,
+    threadActivity,
     prefix,
     delegatedSessions,
     threadService,

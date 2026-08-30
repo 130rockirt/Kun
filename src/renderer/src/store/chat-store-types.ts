@@ -535,8 +535,13 @@ export type ChatState = {
    */
   removeWorkspace: (workspacePath: string, relatedPaths?: string[]) => Promise<void>
   refreshThreads: () => Promise<void>
-  /** Reconcile lightweight runtime and scheduler activity for sidebar rows. */
-  syncSidebarActivity: () => Promise<boolean>
+  /** Reconcile targeted push invalidations or run a legacy discovery scan. */
+  syncSidebarActivity: (options?: {
+    threadIds?: string[]
+    deletedThreadIds?: string[]
+    includeSchedule?: boolean
+    scheduleStatus?: import('@shared/app-settings').ScheduleRuntimeStatus
+  }) => Promise<boolean>
   /** Append the next older page of threads for a workspace ("show more"). */
   loadMoreThreads: (workspacePath: string) => Promise<void>
   setThreadKnowledgeBases: (threadId: string, mounts: KnowledgeBaseMount[]) => Promise<boolean>

@@ -34,6 +34,7 @@ import {
   kunThreadKnowledgeBasesPath,
   kunThreadToolCancelPath,
   kunThreadPath,
+  kunThreadSummaryPath,
   kunThreadStatePath,
   kunThreadTimelinePath,
   kunThreadSteerPath,
@@ -106,6 +107,17 @@ import {
 } from './kun-runtime-services'
 
 export class KunRuntimeThreadServices extends KunRuntimeProviderServices {
+  async getThreadSummary(threadId: string): Promise<NormalizedThread> {
+    const response = await rendererRuntimeClient.runtimeRequest(kunThreadSummaryPath(threadId), 'GET')
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to load thread summary'))
+    }
+    return threadFromCore(readRuntimeJson<CoreThreadSummaryJson>(
+      response.body,
+      'runtime returned an invalid thread summary response'
+    ))
+  }
+
   async getThreadState(threadId: string): Promise<ThreadRuntimeState> {
     const response = await rendererRuntimeClient.runtimeRequest(kunThreadStatePath(threadId), 'GET')
     if (!response.ok) {

@@ -197,6 +197,8 @@ export interface AgentProvider {
   listThreadsPage?(options?: ThreadListOptions): Promise<ThreadListPage>
   createThread(input: { workspace?: string; title?: string; titleAuto?: boolean; mode?: string; agentSurface?: 'code' | 'write' | 'design'; agentId?: string; providerId?: string; accountId?: string; model?: string; systemPrompt?: string }): Promise<NormalizedThread>
   getThreadDetail(threadId: string, options?: { before?: string }): Promise<ThreadDetail>
+  /** Lean single-thread projection for targeted sidebar hydration. */
+  getThreadSummary?(threadId: string): Promise<NormalizedThread>
   getThreadState(threadId: string): Promise<ThreadRuntimeState>
   /** Optional bounded bulk capability for background observers. */
   getThreadStates?(threadIds: string[]): Promise<ThreadRuntimeStateBatchResult[]>

@@ -8,24 +8,19 @@ import { createDesktopStartupPreloadApi } from './startup-state'
 import { createStorageRelocationWorkbenchApi } from './storage-relocation-workbench'
 
 registerExtensionContentScriptPreload({ contextBridge, ipcRenderer, webFrame })
-
 // The preload runs sandboxed (webPreferences.sandbox = true), so it cannot
 // require node built-ins like node:os. The home dir is passed in from the main
 // process via additionalArguments and read off process.argv instead.
 const HOME_DIR_ARG = '--kun-home-dir='
-const homeDirFromArgs =
-  process.argv.find((arg) => arg.startsWith(HOME_DIR_ARG))?.slice(HOME_DIR_ARG.length) ?? ''
+const homeDirFromArgs = process.argv.find((arg) => arg.startsWith(HOME_DIR_ARG))?.slice(HOME_DIR_ARG.length) ?? ''
 
 const APP_ENVIRONMENT_ARG = '--kun-app-environment='
-const appEnvironment = parseAppEnvironment(
-  process.argv.find((arg) => arg.startsWith(APP_ENVIRONMENT_ARG))?.slice(APP_ENVIRONMENT_ARG.length)
-)
+const appEnvironment = parseAppEnvironment(process.argv
+  .find((arg) => arg.startsWith(APP_ENVIRONMENT_ARG))?.slice(APP_ENVIRONMENT_ARG.length))
 
 const DESKTOP_TITLE_BAR_MODE_ARG = '--kun-desktop-title-bar-mode='
 const desktopTitleBarMode = normalizeDesktopTitleBarMode(
-  process.platform,
-  // Per-window additionalArguments are appended to argv, so prefer the last
-  // occurrence over any similarly named application launch argument.
+  process.platform, // Per-window additionalArguments are appended; prefer the last occurrence.
   [...process.argv]
     .reverse()
     .find((arg) => arg.startsWith(DESKTOP_TITLE_BAR_MODE_ARG))
@@ -163,6 +158,10 @@ const api = {
   getClawStatus: () => ipcRenderer.invoke('claw:status'),
   runClawTask: (taskId) => ipcRenderer.invoke('claw:task:run', taskId),
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
+  onScheduleStatusChanged: (handler) => {
+    const wrapped = (_: Electron.IpcRendererEvent, payload: Parameters<typeof handler>[0]) => handler(payload)
+    ipcRenderer.on('schedule:status-changed', wrapped); return () => ipcRenderer.removeListener('schedule:status-changed', wrapped)
+  },
   createScheduleTask: (payload) => ipcRenderer.invoke('schedule:task:create', payload),
   updateScheduleTask: (payload) => ipcRenderer.invoke('schedule:task:update', payload),
   deleteScheduleTask: (taskId) => ipcRenderer.invoke('schedule:task:delete', taskId),

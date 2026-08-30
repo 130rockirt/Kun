@@ -93,6 +93,11 @@ export function registerAppRuntimeIpcHandlers(options: RegisterAppIpcHandlersOpt
     pollWeixinInstall
   } = options
   const withRegistryCredentials = options.withRegistryCredentials ?? (async (settings) => settings)
+  getScheduleRuntime()?.subscribeStatus((status) => {
+    const window = getMainWindow()
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return
+    window.webContents.send('schedule:status-changed', status)
+  })
   const authProxySelectionSchema = z.object({
     providerId: z.string().trim().min(1),
     useProxy: z.boolean()
