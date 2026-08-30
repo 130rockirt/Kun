@@ -13,6 +13,7 @@ export const EXTENSION_VIEW_SAFE_METHODS = [
   'ui.attachComposerContext',
   'commands.execute',
   'network.fetch',
+  'agent.getRunOptions',
   'agent.createRun',
   'agent.getRun',
   'agent.listRunEvents',

@@ -21,6 +21,7 @@
 
 v1 提供：
 
+- `agent.getRunOptions`
 - `agent.createRun`
 - `agent.listRunEvents`
 - `agent.subscribe`
@@ -31,6 +32,21 @@ v1 提供：
 - `threads.getOwn`
 
 调用身份由 Host session 绑定，不从请求中的 `ownerExtensionId` 读取。请求、结果、事件和错误都经过协商版本 Schema。
+
+`agent.getRunOptions()` 返回当前 Kun 主模型连接上已配置、可供 extension-owned Run 使用的模型。每项只包含安全的 `id`、`displayName`、`selected`、`reasoningEfforts` 和 `defaultReasoningEffort`；不会暴露 Provider 凭据、账号或其它连接。`reasoningEfforts` 使用 Kun 稳定语义值 `auto | off | low | medium | high | max`。适配器可在请求上游时转换成 Provider 的 wire 值，例如将 Codex 的 `max` 转成 `xhigh`。
+
+```ts
+const options = await context.agent.getRunOptions()
+const selected = options.models.find(model => model.selected)!
+
+const { run } = await context.agent.createRun({
+  input: 'Implement the task',
+  model: selected.id,
+  reasoningEffort: selected.defaultReasoningEffort
+})
+```
+
+`model` 和 `reasoningEffort` 只影响新 Run/新 Turn，不能通过 `steer` 修改正在执行的 Run。Host 会拒绝未配置模型、不受该模型支持的推理强度，以及把 Host 模型选择与扩展自有 `providerBinding` 混用的请求。Run 投影中的 `model` 和可选 `reasoningEffort` 是实际已接纳值。
 
 ## 创建 Run
 

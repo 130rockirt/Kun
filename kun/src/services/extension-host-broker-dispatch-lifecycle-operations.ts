@@ -409,6 +409,8 @@ async dispatch(this: ExtensionHostBroker,
         throw new Error(
           'ui.attachComposerContext is available only through an authenticated desktop Extension View'
         )
+      case 'agent.getRunOptions':
+        return this['agentGetRunOptions'](principal)
       case 'agent.createRun':
         await this['ensureProfiles'](principal)
         return this['agentCreateRun'](principal, request.params)

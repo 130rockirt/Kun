@@ -459,6 +459,7 @@ export function createRuntimeConfigController(
 	      const selected = materializedConnections.selected
 	      nextOptions = {
 	        ...nextOptions,
+	        activeProviderId: selected?.profile.id,
 	        ...(selected
 	          ? {
 	              model: selected.model,

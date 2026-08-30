@@ -19,7 +19,7 @@ import { TurnConflictError, type TurnService } from './turn-service.js'
 import type {
   ExtensionAgentProfileRegistry
 } from './extension-agent-profile-registry.js'
-import { DEFAULT_BUDGET, type ExtensionAgentEvent, type ExtensionAgentRunStatus, type ExtensionOwnedThread, type ExtensionPrincipal, MAXIMUM_BUDGET } from './extension-agent-service-core.js'
+import { DEFAULT_BUDGET, type ExtensionAgentEvent, type ExtensionAgentRunStatus, type ExtensionOwnedThread, type ExtensionPrincipal, MAXIMUM_BUDGET } from './extension-agent-service-contracts.js'
 import { ExtensionBrokerError } from './extension-agent-service-event-usage.js'
 
 export function projectThread(

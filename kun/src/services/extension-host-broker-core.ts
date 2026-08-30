@@ -357,6 +357,7 @@ export class ExtensionHostBroker {
   declare private viewStateGet: (typeof extensionHostBrokerJobsUiStorageOperations)['viewStateGet']
   declare private viewStateSet: (typeof extensionHostBrokerJobsUiStorageOperations)['viewStateSet']
   declare private networkFetch: (typeof extensionHostBrokerJobsUiStorageOperations)['networkFetch']
+  declare private agentGetRunOptions: (typeof extensionHostBrokerAgentsOperations)['agentGetRunOptions']
   declare private agentCreateRun: (typeof extensionHostBrokerAgentsOperations)['agentCreateRun']
   declare private agentGetRun: (typeof extensionHostBrokerAgentsOperations)['agentGetRun']
   declare private agentListRunEvents: (typeof extensionHostBrokerAgentsOperations)['agentListRunEvents']

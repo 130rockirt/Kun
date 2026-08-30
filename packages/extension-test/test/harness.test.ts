@@ -52,7 +52,34 @@ describe('ExtensionTestHarness', () => {
       actions: [{ id: 'retry', title: 'Retry' }]
     })])
 
-    const { run } = await harness.client.agent.createRun({ input: 'hello' })
+    await expect(harness.client.agent.getRunOptions()).resolves.toEqual({
+      defaultModel: 'fake-model',
+      models: [{
+        id: 'fake-model',
+        displayName: 'Fake model',
+        selected: true,
+        reasoningEfforts: ['off', 'low', 'medium', 'high', 'max'],
+        defaultReasoningEffort: 'medium'
+      }]
+    })
+    const { run } = await harness.client.agent.createRun({
+      input: 'hello', model: 'fake-model', reasoningEffort: 'high'
+    })
+    expect(run).toMatchObject({
+      model: 'fake-model',
+      reasoningEffort: 'high'
+    })
+    await expect(harness.client.agent.createRun({
+      input: 'unknown model', model: 'unknown-model'
+    })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+    await expect(harness.client.agent.createRun({
+      input: 'unsupported effort', model: 'fake-model', reasoningEffort: 'auto'
+    })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+    await expect(harness.client.agent.createRun({
+      input: 'mixed binding',
+      model: 'fake-model',
+      providerBinding: { providerId: 'fake', accountId: 'account', modelId: 'fake-model' }
+    })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
     const subscription = await harness.client.agent.subscribe({ runId: run.id })
     const events: string[] = []
     subscription.onEvent((event) => events.push(event.type))

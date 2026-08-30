@@ -18,6 +18,49 @@ export type AgentRunState = z.infer<typeof AgentRunStateSchema>
 export const ExtensionVisibilitySchema = z.enum(['private', 'workspace'])
 export type ExtensionVisibility = z.infer<typeof ExtensionVisibilitySchema>
 
+/**
+ * Public reasoning values accepted by Kun's turn admission boundary. Provider
+ * adapters may translate these stable semantic levels to provider-specific
+ * wire values (for example `max` to a Codex `xhigh` request).
+ */
+export const AgentReasoningEffortSchema = z.enum(['auto', 'off', 'low', 'medium', 'high', 'max'])
+export type AgentReasoningEffort = z.infer<typeof AgentReasoningEffortSchema>
+
+export const AgentModelOptionSchema = z.strictObject({
+  id: z.string().min(1).max(512),
+  displayName: z.string().min(1).max(512),
+  selected: z.boolean(),
+  reasoningEfforts: z.array(AgentReasoningEffortSchema).max(6),
+  defaultReasoningEffort: AgentReasoningEffortSchema.optional()
+}).superRefine((option, context) => {
+  if (
+    option.defaultReasoningEffort &&
+    !option.reasoningEfforts.includes(option.defaultReasoningEffort)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['defaultReasoningEffort'],
+      message: 'defaultReasoningEffort must be included in reasoningEfforts'
+    })
+  }
+})
+export type AgentModelOption = z.infer<typeof AgentModelOptionSchema>
+
+export const AgentRunOptionsSchema = z.strictObject({
+  defaultModel: z.string().min(1).max(512),
+  models: z.array(AgentModelOptionSchema).min(1).max(512)
+}).superRefine((options, context) => {
+  const selected = options.models.filter((model) => model.selected)
+  if (selected.length !== 1 || selected[0]?.id !== options.defaultModel) {
+    context.addIssue({
+      code: 'custom',
+      path: ['models'],
+      message: 'exactly one selected model must match defaultModel'
+    })
+  }
+})
+export type AgentRunOptions = z.infer<typeof AgentRunOptionsSchema>
+
 export const AgentBudgetSchema = z.strictObject({
   maxTokens: z.number().int().positive().optional(),
   maxElapsedMs: z.number().int().positive().optional(),
@@ -50,6 +93,8 @@ export const AgentCreateRunRequestSchema = z.strictObject({
   input: AgentInputSchema,
   threadId: z.string().min(1).max(256).optional(),
   workspace: z.string().min(1).max(4096).optional(),
+  model: z.string().trim().min(1).max(512).optional(),
+  reasoningEffort: AgentReasoningEffortSchema.optional(),
   profileId: z.string().min(1).max(256).optional(),
   providerBinding: ProviderBindingSchema.optional(),
   budget: AgentBudgetSchema.optional(),
@@ -79,7 +124,9 @@ export const AgentRunSchema = z.strictObject({
   extensionBudget: AgentBudgetSchema,
   toolCatalogEpoch: z.string().min(1).max(256),
   state: AgentRunStateSchema,
+  model: z.string().min(1).max(512),
   providerBinding: ProviderBindingSchema.optional(),
+  reasoningEffort: AgentReasoningEffortSchema.optional(),
   usage: ModelUsageSchema.optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
