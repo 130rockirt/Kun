@@ -34,7 +34,7 @@ describe('selectKunStartupVariant', () => {
 })
 
 describe('KunStartupArtwork variants', () => {
-  it.each(KUN_STARTUP_VARIANTS)('renders the %s avatar resource', (variant) => {
+  it.each(KUN_STARTUP_VARIANTS)('renders the paired %s character resources', (variant) => {
     const html = renderToStaticMarkup(createElement(KunStartupArtwork, {
       motion: 'running',
       variant
@@ -43,7 +43,9 @@ describe('KunStartupArtwork variants', () => {
     expect(html).toContain(`data-variant="${variant}"`)
     expect(html).toContain('data-testid="kun-startup-artwork"')
     expect(html).toContain('data-testid="kun-startup-kun"')
+    expect(html).toContain('data-testid="kun-startup-bird"')
     expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG[variant].avatarUrl}"`)
+    expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG[variant].birdUrl}"`)
   })
 
   it('defaults to the signal variant for existing callers', () => {
@@ -51,13 +53,17 @@ describe('KunStartupArtwork variants', () => {
 
     expect(html).toContain('data-variant="signal"')
     expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG.signal.avatarUrl}"`)
+    expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG.signal.birdUrl}"`)
   })
 
-  it('keeps every configured avatar resource unique', () => {
-    const avatarUrls = KUN_STARTUP_VARIANTS.map(
-      (variant) => KUN_STARTUP_VARIANT_CONFIG[variant].avatarUrl
-    )
+  it.each(['avatarUrl', 'birdUrl'] as const)(
+    'keeps every configured %s resource unique',
+    (resourceKey) => {
+      const resourceUrls = KUN_STARTUP_VARIANTS.map(
+        (variant) => KUN_STARTUP_VARIANT_CONFIG[variant][resourceKey]
+      )
 
-    expect(new Set(avatarUrls).size).toBe(KUN_STARTUP_VARIANTS.length)
-  })
+      expect(new Set(resourceUrls).size).toBe(KUN_STARTUP_VARIANTS.length)
+    }
+  )
 })

@@ -1,5 +1,4 @@
 import type { ReactElement } from 'react'
-import kunBirdUrl from '../../assets/startup/kun-startup-bird.webp'
 import kunWordmarkUrl from '../../assets/startup/kun-startup-wordmark.webp'
 import {
   KUN_STARTUP_VARIANT_CONFIG,
@@ -76,11 +75,12 @@ export function KunStartupArtwork({
       <span className="kun-startup-artwork__bird-wrap kun-startup__motion">
         <img
           className="kun-startup-artwork__bird"
-          src={kunBirdUrl}
+          src={variantConfig.birdUrl}
           width="384"
-          height="262"
+          height="384"
           alt=""
           draggable={false}
+          data-variant={variant}
           data-testid="kun-startup-bird"
         />
       </span>
