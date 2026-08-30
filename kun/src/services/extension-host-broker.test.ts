@@ -156,6 +156,60 @@ function cancellationContext() {
 }
 
 describe('ExtensionHostBroker', () => {
+  it('keeps extension secrets protected, permission-gated, isolated, and unavailable to Views', async () => {
+      const values = new Map<string, { clientSecret: string }>()
+      const credentials = {
+        protection: async () => ({ mode: 'encrypted-fallback' }),
+        get: vi.fn(async (reference: string) => values.get(reference) ?? null),
+        set: vi.fn(async (reference: string, value: { clientSecret: string }) => {
+          values.set(reference, value)
+        }),
+        delete: vi.fn(async (reference: string) => {
+          values.delete(reference)
+        })
+      }
+      const broker = createBroker({ credentials })
+      const secretPrincipal = {
+        ...principal,
+        grantedPermissions: [...principal.grantedPermissions, 'storage.secrets']
+      }
+      const secretRequest = (method: string, params: unknown, extensionId = secretPrincipal.extensionId) => ({
+        principal: { ...secretPrincipal, extensionId },
+        method,
+        params: JSON.parse(JSON.stringify(params ?? null)),
+        signal: new AbortController().signal,
+        requestId: `request_${method}`
+      })
+
+      await expect(broker.handle(secretRequest('secrets.set', {
+        key: 'relay-device-key',
+        value: 'target-secret'
+      }))).resolves.toBeNull()
+      await expect(broker.handle(secretRequest('secrets.get', {
+        key: 'relay-device-key'
+      }))).resolves.toEqual({ found: true, value: 'target-secret' })
+      await expect(broker.handle(secretRequest('secrets.get', {
+        key: 'relay-device-key'
+      }, 'other.extension'))).resolves.toEqual({ found: false })
+      await expect(broker.handlePrincipal({
+        principal: {
+          extensionId: secretPrincipal.extensionId,
+          extensionVersion: secretPrincipal.version,
+          permissions: [...secretPrincipal.grantedPermissions],
+          workspaceRoots: [],
+          workspaceTrusted: false
+        },
+        method: 'secrets.get',
+        params: { key: 'relay-device-key' },
+        signal: new AbortController().signal,
+        requestId: 'view-secret'
+      })).rejects.toThrow(/Node Extension Host/i)
+      await expect(broker.handle(secretRequest('secrets.delete', {
+        key: 'relay-device-key'
+      }))).resolves.toEqual({ deleted: true })
+      expect(values.size).toBe(0)
+    })
+
   it('keeps main-composer context attachment behind the authenticated desktop View boundary', async () => {
       const broker = createBroker()
       await expect(broker.handle(request('ui.attachComposerContext', {

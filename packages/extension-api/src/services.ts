@@ -140,6 +140,18 @@ export interface StorageApi {
   readonly workspace: ScopedStorageApi
 }
 
+/**
+ * Host-protected, extension-scoped secret storage.
+ *
+ * Secrets are available only to the Node Extension Host. Authenticated Views
+ * must route secret-dependent work through a declared command.
+ */
+export interface SecretStorageApi {
+  get(key: string): Promise<string | undefined>
+  set(key: string, value: string): Promise<void>
+  delete(key: string): Promise<boolean>
+}
+
 export const ConfigurationChangeEventSchema = z.strictObject({
   sectionId: z.string().min(1).max(64),
   key: z.string().min(1).max(256),

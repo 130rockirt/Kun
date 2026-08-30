@@ -125,6 +125,7 @@ import {
   type ModelProvidersApi,
   type NetworkApi,
   type ScopedStorageApi,
+  type SecretStorageApi,
   type StorageApi,
   type ThreadsApi,
   type ToolsApi,
@@ -162,6 +163,7 @@ import {
   createCommandsApi,
   createConfigurationApi,
   createNetworkApi,
+  createSecretStorageApi,
   createStorageApi,
   createUiApi
 } from './client-ui-apis.js'
@@ -182,6 +184,7 @@ export class ExtensionHostClient implements Disposable {
 
   readonly commands: CommandsApi
   readonly storage: StorageApi
+  readonly secrets: SecretStorageApi
   readonly configuration: ConfigurationApi
   readonly network: NetworkApi
   readonly ui: UiApi
@@ -210,6 +213,7 @@ export class ExtensionHostClient implements Disposable {
 
     this.commands = createCommandsApi(transport)
     this.storage = createStorageApi(transport)
+    this.secrets = createSecretStorageApi(transport)
     this.configuration = createConfigurationApi(transport, this.#configuration.event)
     this.network = createNetworkApi(transport)
     this.ui = createUiApi(transport, {

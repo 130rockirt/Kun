@@ -196,10 +196,28 @@ The Changelog records public Extension API, not Kun internal refactors. Each ent
 The public surface snapshots below are computed from package entries, public exports, and reachable `.d.ts` declarations. Update them only after this section explains the compatibility impact; changing a hash is not itself a Changelog entry.
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:a7d676f0869a5c40f73bff7b30e567e7c5efa0536b0650b1fd30ee82551d6cf8 -->
-<!-- sdk-surface-snapshot @kun/extension-react@1.2.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
-<!-- sdk-surface-snapshot @kun/extension-test@1.2.0 sha256:fccbdd3fb3400ce179f8d6c3ae1d191bfe3488ef125577423f3d2b3f4fad851d -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.3.0 sha256:5a220e4e02f33ca0dcd6ff7022fbfe3d05a4666c560e6ca11fad5044d0971684 -->
+<!-- sdk-surface-snapshot @kun/extension-react@1.3.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
+<!-- sdk-surface-snapshot @kun/extension-test@1.3.0 sha256:3160c2d249c18d1510853e477d267d28ffe3cf1cb5503f61c3ea254341b00345 -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
+
+### v1.3.0 — Protected extension secrets
+
+Compatible Kun: `>=0.3.8`.
+
+Added:
+
+- The `storage.secrets` permission and Node-Host-only `context.secrets.get/set/delete`. Values are isolated by profile, extension ID, and key, use the OS credential backend or authenticated encrypted fallback, and are limited to 16 KiB each.
+- `@kun/extension-test` provides the matching in-memory fake with the same permission gate.
+
+Security:
+
+- Extension Views cannot invoke secret methods. View work that needs a secret must route through a declared Node command.
+- Ordinary global/workspace/View state, Host projections, and logs never contain these values. Calls fail closed when protected storage is unavailable.
+
+Migration:
+
+- Only Node extensions that store their own service secrets need `apiVersion: 1.3.0` and `storage.secrets`. v1.2, v1.1, and v1.0 extensions require no changes.
 
 ### v1.2.0 — Media scheduling, local analysis, and project interchange
 

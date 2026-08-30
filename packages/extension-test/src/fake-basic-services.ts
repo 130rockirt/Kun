@@ -117,6 +117,27 @@ export class FakeStorageService {
   }
 }
 
+export class FakeSecretStorageService {
+  readonly values = new Map<string, string>()
+
+  install(transport: FakeHostTransport): void {
+    transport.handle('secrets.get', (params) => {
+      const key = String(JsonObjectSchema.parse(params).key)
+      return this.values.has(key)
+        ? { found: true, value: this.values.get(key) }
+        : { found: false }
+    })
+    transport.handle('secrets.set', (params) => {
+      const parsed = JsonObjectSchema.parse(params)
+      this.values.set(String(parsed.key), String(parsed.value))
+      return null
+    })
+    transport.handle('secrets.delete', (params) => ({
+      deleted: this.values.delete(String(JsonObjectSchema.parse(params).key))
+    }))
+  }
+}
+
 export class FakeWorkspaceService {
   readonly files = new Map<string, WorkspaceFile>()
 

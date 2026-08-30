@@ -361,6 +361,13 @@ async dispatch(this: ExtensionHostBroker,
       case 'storage.delete':
       case 'storage.keys':
         return this['storage'](principal, request.method, request.params)
+      case 'secrets.get':
+      case 'secrets.set':
+      case 'secrets.delete':
+        if (!nodeHost) {
+          throw new Error('Protected extension secrets are available only to the Node Extension Host')
+        }
+        return this['secrets'](principal, request.method, request.params)
       case 'configuration.get':
       case 'configuration.update':
       case 'configuration.keys':

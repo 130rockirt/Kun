@@ -153,6 +153,7 @@ export function requiredExtensionBrokerPermission(method: string, params: JsonVa
     return 'media.read'
   }
   if (method.startsWith('jobs.')) return 'jobs.manage'
+  if (method.startsWith('secrets.')) return 'storage.secrets'
   if (method.startsWith('storage.global')) return 'storage.global'
   if (method.startsWith('storage.workspace')) return 'storage.workspace'
   if (method.startsWith('storage.')) {

@@ -196,10 +196,28 @@ Changelog 记录公开 Extension API，而不是 Kun 内部重构。每项包含
 下面的 public surface 快照由文档门禁从 package 入口、公开 export 和可达 `.d.ts` 计算。只有在本节已经解释兼容性影响后才更新快照；不能把更新 hash 当成 Changelog 条目。
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.2.0 sha256:a7d676f0869a5c40f73bff7b30e567e7c5efa0536b0650b1fd30ee82551d6cf8 -->
-<!-- sdk-surface-snapshot @kun/extension-react@1.2.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
-<!-- sdk-surface-snapshot @kun/extension-test@1.2.0 sha256:fccbdd3fb3400ce179f8d6c3ae1d191bfe3488ef125577423f3d2b3f4fad851d -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.3.0 sha256:5a220e4e02f33ca0dcd6ff7022fbfe3d05a4666c560e6ca11fad5044d0971684 -->
+<!-- sdk-surface-snapshot @kun/extension-react@1.3.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
+<!-- sdk-surface-snapshot @kun/extension-test@1.3.0 sha256:3160c2d249c18d1510853e477d267d28ffe3cf1cb5503f61c3ea254341b00345 -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
+
+### v1.3.0 — 受保护的扩展秘密
+
+Compatible Kun: `>=0.3.8`。
+
+Added:
+
+- `storage.secrets` 权限和 Node Host 专用的 `context.secrets.get/set/delete`。秘密按 profile、扩展 ID 和 key 隔离，使用 OS 凭据后端或经过认证的加密回退，单值上限 16 KiB。
+- `@kun/extension-test` 提供对应的内存 fake，并保持与生产相同的权限门禁。
+
+Security:
+
+- Extension View 不允许调用 secrets 方法；需要秘密的 View 操作必须通过声明过的 Node command。
+- 普通 global/workspace/View state、Host projection 和日志不会包含这些值。保护存储不可用时调用失败关闭。
+
+Migration:
+
+- 只有需要保存自有服务秘密的 Node 扩展才升级到 `apiVersion: 1.3.0` 并新增 `storage.secrets`。v1.2、v1.1 和 v1.0 扩展无需修改。
 
 ### v1.2.0 — 媒体调度、本地分析与项目交换
 

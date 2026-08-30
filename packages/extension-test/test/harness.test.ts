@@ -6,6 +6,7 @@ const permissions = [
   'commands.register',
   'storage.global',
   'storage.workspace',
+  'storage.secrets',
   'agent.run',
   'agent.threads.readOwn',
   'tools.register',
@@ -34,6 +35,9 @@ describe('ExtensionTestHarness', () => {
 
     await harness.client.storage.global.set('answer', 42)
     expect(await harness.client.storage.global.get('answer')).toBe(42)
+    await harness.client.secrets.set('relay-key', 'protected')
+    expect(await harness.client.secrets.get('relay-key')).toBe('protected')
+    expect(harness.storage.global.has('relay-key')).toBe(false)
 
     harness.webview.respondToNextNotification('retry')
     expect(await harness.client.ui.showNotification({
