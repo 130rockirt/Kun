@@ -150,7 +150,7 @@ export class ExtensionTestHarness implements Disposable {
       this.transport,
       {
         extension: this.identity,
-        apiVersion: '1.3.0',
+        apiVersion: '1.4.0',
         capabilities: [
           'artifacts.generated',
           'jobs.observe',
@@ -261,6 +261,7 @@ export class ExtensionTestHarness implements Disposable {
     for (const method of [
       'agent.createRun',
       'agent.getRun',
+      'agent.listRunEvents',
       'agent.subscribe',
       'agent.unsubscribe',
       'agent.steer',

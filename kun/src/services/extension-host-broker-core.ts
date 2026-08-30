@@ -359,6 +359,7 @@ export class ExtensionHostBroker {
   declare private networkFetch: (typeof extensionHostBrokerJobsUiStorageOperations)['networkFetch']
   declare private agentCreateRun: (typeof extensionHostBrokerAgentsOperations)['agentCreateRun']
   declare private agentGetRun: (typeof extensionHostBrokerAgentsOperations)['agentGetRun']
+  declare private agentListRunEvents: (typeof extensionHostBrokerAgentsOperations)['agentListRunEvents']
   declare private agentSubscribe: (typeof extensionHostBrokerAgentsOperations)['agentSubscribe']
   declare private agentUnsubscribe: (typeof extensionHostBrokerAgentsOperations)['agentUnsubscribe']
   declare private agentSteer: (typeof extensionHostBrokerAgentsOperations)['agentSteer']

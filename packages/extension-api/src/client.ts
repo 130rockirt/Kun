@@ -16,6 +16,8 @@ import {
   AgentCancelRequestSchema,
   AgentCreateRunRequestSchema,
   AgentCreateRunResponseSchema,
+  AgentListRunEventsRequestSchema,
+  AgentListRunEventsResponseSchema,
   AgentMutationResultSchema,
   AgentRunEventSchema,
   AgentRunSchema,
@@ -233,6 +235,10 @@ export class ExtensionHostClient implements Disposable {
           AgentCreateRunResponseSchema
         ),
       getRun: (runId) => requestParsed(transport, 'agent.getRun', { runId }, AgentRunSchema),
+      listRunEvents: (request) => requestParsed(
+        transport, 'agent.listRunEvents', AgentListRunEventsRequestSchema.parse(request),
+        AgentListRunEventsResponseSchema
+      ),
       subscribe: async (request) => {
         const parsedRequest = AgentSubscribeRequestSchema.parse(request)
         const response = await requestParsed(

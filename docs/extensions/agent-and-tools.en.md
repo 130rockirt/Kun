@@ -22,6 +22,7 @@ Permissions authorize broker operations only. Every model/tool step rechecks gra
 v1 provides:
 
 - `agent.createRun`
+- `agent.listRunEvents`
 - `agent.subscribe`
 - `agent.steer`
 - `agent.cancel`
@@ -79,7 +80,7 @@ An explicitly supplied `threadId` is resumed only if:
 - no incompatible Run is active;
 - current profile/Provider/account/tool policy permits the new Run.
 
-An extension cannot adopt a main-workbench or foreign-extension thread. Rejection does not reveal foreign content. `threads.listOwn/getOwn` return bounded paginated projections with status, timestamps, profile, and usage, not raw store access or secrets.
+An extension cannot adopt a main-workbench or foreign-extension thread. Rejection does not reveal foreign content. `threads.listOwn/getOwn` return bounded paginated projections; every thread with a run includes a safely projected `latestRun` (status, timestamps, profile, and usage), never raw store access or secrets.
 
 ## Run lifecycle and budgets
 
@@ -95,6 +96,21 @@ A Run has one terminal outcome. When completion, cancellation, tool failure, dis
 Run request budgets cover tokens, elapsed time, model requests, tool invocations, and retained events; Host/user policy separately bounds concurrent Runs. At a hard limit Kun stops new work and emits one `budget-exhausted` outcome. Usage, cache telemetry, and calls are attributed to extension/version/run/thread/profile/Provider/model/account/catalog epoch. When a Run reuses an existing thread, its projection reports the delta from the preceding cumulative snapshot instead of charging prior Runs again.
 
 ## Subscribe and replay
+
+`agent.listRunEvents` reads a bounded chronological page from durable history, with a default of 100 and a maximum of 200 events:
+
+```ts
+const page = await context.agent.listRunEvents({
+  runId: run.id,
+  afterSequence: lastSeenSequence,
+  limit: 100
+})
+lastSeenSequence = page.cursor
+```
+
+The response contains `items`, a numeric `cursor`, `hasMore`, and `historyIncomplete`. The same cursor can continue the next page or seed `agent.subscribe.afterSequence`. `historyIncomplete` means Kun's retention policy removed older underlying events; clients must show the gap and must not infer missing content. Only Runs owned by the calling extension are readable, with both the `agent.run` and `agent.threads.readOwn` boundaries enforced.
+
+Public message events carry a stable `messageId` and `phase: 'delta' | 'replace' | 'complete'`. Append deltas and replace snapshots by `messageId` so hydration and live streaming do not create duplicate bubbles. User and assistant content is a string. Tool content is a Host-generated tool name, state, and generic summary without raw arguments, results, or paths. Internal model context, reasoning, attachment paths, and approval/input credentials are never projected.
 
 `agent.subscribe` uses a dedicated authenticated event boundary, not a runtime bearer token. Events contain owner scope, run ID, thread ID, type, and monotonically increasing sequence.
 

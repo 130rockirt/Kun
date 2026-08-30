@@ -528,7 +528,7 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
       case 'loadEventsSince': {
         const body = z.object({
           threadId: ThreadIdSchema,
-          sinceSeq: z.number().int().nonnegative()
+          sinceSeq: z.number().int().min(-1)
         }).strict().parse(value)
         return this.sessionStore.loadEventsSince(body.threadId, body.sinceSeq)
       }
@@ -536,7 +536,7 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
         const body = z.object({
           threadId: ThreadIdSchema,
           options: z.object({
-            sinceSeq: z.number().int().nonnegative(),
+            sinceSeq: z.number().int().min(-1),
             cursor: z.string().max(256).optional(),
             maxEvents: z.number().int().positive().max(4_096).optional(),
             maxBytes: z.number().int().positive().max(16 * 1024 * 1024).optional(),

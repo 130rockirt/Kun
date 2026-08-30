@@ -196,10 +196,27 @@ Changelog 记录公开 Extension API，而不是 Kun 内部重构。每项包含
 下面的 public surface 快照由文档门禁从 package 入口、公开 export 和可达 `.d.ts` 计算。只有在本节已经解释兼容性影响后才更新快照；不能把更新 hash 当成 Changelog 条目。
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.3.0 sha256:5a220e4e02f33ca0dcd6ff7022fbfe3d05a4666c560e6ca11fad5044d0971684 -->
-<!-- sdk-surface-snapshot @kun/extension-react@1.3.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
-<!-- sdk-surface-snapshot @kun/extension-test@1.3.0 sha256:3160c2d249c18d1510853e477d267d28ffe3cf1cb5503f61c3ea254341b00345 -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.4.0 sha256:19ef9389ae891fb2f25e12460df16fba0f14aaf345ab341d05930413e3400fa0 -->
+<!-- sdk-surface-snapshot @kun/extension-react@1.4.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
+<!-- sdk-surface-snapshot @kun/extension-test@1.4.0 sha256:11e8d34ad986d9b711a23d7e09aec0c8f7e27238cdd8acc014db1a31249a03fe -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
+
+### v1.4.0 — 可恢复的 Agent 会话历史
+
+Compatible Kun: `>=0.3.9`。
+
+Added:
+
+- `context.agent.listRunEvents({ runId, afterSequence?, limit? })` 返回正序、有界的 `{ items, cursor, hasMore, historyIncomplete }`，默认 100 条、最多 200 条；数字 cursor 可直接继续分页或衔接 live subscribe。
+- message 事件支持 `role: 'user'`，并提供稳定 `messageId` 与 `phase: 'delta' | 'replace' | 'complete'`，客户端可合并流式更新而不重复创建消息。
+
+Security:
+
+- 历史读取仅限调用扩展自有 Run。公共投影只包含用户/助手文本、Host 生成的工具状态摘要和既有状态/用量/终态；内部上下文、reasoning、工具参数/结果、文件路径与 gate 凭据继续被过滤。
+
+Migration:
+
+- 需要可恢复会话历史的扩展升级到 `apiVersion: 1.4.0` 和 `engines.kun >=0.3.9`。既有 v1.3 及更早扩展继续兼容。
 
 ### v1.3.0 — 受保护的扩展秘密
 

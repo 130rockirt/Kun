@@ -414,6 +414,8 @@ async dispatch(this: ExtensionHostBroker,
         return this['agentCreateRun'](principal, request.params)
       case 'agent.getRun':
         return this['agentGetRun'](principal, request.params)
+      case 'agent.listRunEvents':
+        return this['agentListRunEvents'](principal, request.params)
       case 'agent.subscribe':
         return this['agentSubscribe'](principal, request.params)
       case 'agent.unsubscribe':

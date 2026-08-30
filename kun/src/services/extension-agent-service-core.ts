@@ -14,12 +14,13 @@ import type { EventBus } from '../ports/event-bus.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadService } from './thread-service.js'
 import { TurnConflictError, type TurnService } from './turn-service.js'
-import type {
-  ExtensionAgentProfileRegistry
-} from './extension-agent-profile-registry.js'
+import type { ExtensionAgentProfileRegistry } from './extension-agent-profile-registry.js'
 import { bufferEvent, compareBufferedEvents, enqueueBufferedEvent, ExtensionBrokerError, iterateSessionEventsSince, ManifestExtensionAgentAuthorizer, summarizeRunEvents } from './extension-agent-service-event-usage.js'
+import { listExtensionRunEvents, pageExtensionOwnedThreads } from './extension-agent-service-listing.js'
 import { ManagedSubscription } from './extension-agent-service-subscription.js'
-import { clampBudget, completeBudget, decodeCursor, encodeCursor, narrowToolScopes, normalizeOwnedWorkspace, opaqueNotFound, projectThread, runStatus, titleFromInput, validateBinding } from './extension-agent-service-projection.js'
+import { clampBudget, completeBudget, decodeCursor, narrowToolScopes, normalizeOwnedWorkspace, opaqueNotFound, projectThread, runStatus, titleFromInput, validateBinding } from './extension-agent-service-projection.js'
+
+export { DEFAULT_HISTORY_LIMIT, MAX_HISTORY_BYTES, MAX_HISTORY_LIMIT } from './extension-agent-service-listing.js'
 
 export const EXTENSION_AGENT_PERMISSIONS = {
   run: 'agent.run',
@@ -45,7 +46,7 @@ export type ExtensionAgentRuntimeConfig = Readonly<{
 }>
 
 export type ExtensionAuthorizationRequest = Readonly<{
-  operation: 'createRun' | 'getRun' | 'listOwn' | 'subscribe' | 'steer' | 'cancel'
+  operation: 'createRun' | 'getRun' | 'listOwn' | 'listRunEvents' | 'subscribe' | 'steer' | 'cancel'
   permission: string
   workspace?: string
   providerId?: string
@@ -68,12 +69,7 @@ export type ExtensionAgentCreateRunRequest = {
   visibility?: ExtensionThreadVisibility
 }
 
-export type ExtensionAgentRunStatus =
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'budget-exhausted'
+export type ExtensionAgentRunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'budget-exhausted'
 
 export type ExtensionAgentRun = {
   id: string
@@ -106,6 +102,7 @@ export type ExtensionOwnedThread = {
   createdAt: string
   updatedAt: string
   runCount: number
+  latestRun?: ExtensionAgentRun
 }
 
 export type ExtensionAgentEvent = {
@@ -122,6 +119,13 @@ export type ExtensionAgentSubscription = {
   readonly lastDeliveredSeq: number
   readonly closed: boolean
   close(): void
+}
+
+export type ExtensionAgentEventPage = {
+  items: ExtensionAgentEvent[]
+  cursor: number
+  hasMore: boolean
+  historyIncomplete: boolean
 }
 
 export type ExtensionAgentServiceOptions = {
@@ -162,19 +166,12 @@ export const MAXIMUM_BUDGET: ExtensionRunBudget = {
 }
 
 export const MAX_LIST_LIMIT = 100
-
 export const MAX_SUBSCRIPTION_QUEUE = 256
-
 export const MAX_SUBSCRIPTION_QUEUE_BYTES = 512 * 1024
-
 export const MAX_EVENT_BYTES = 512 * 1024
-
 export const MAX_REPLAY_BYTES = 512 * 1024
-
 export const MAX_REPLAY_RECORD_BYTES = 4 * 1024 * 1024
-
 export const MAX_LIVE_EVENTS_DURING_REPLAY = 1_024
-
 export const MAX_LIVE_BYTES_DURING_REPLAY = 512 * 1024
 
 export type BufferedAgentEvent = {
@@ -366,6 +363,24 @@ export class ExtensionAgentService {
     return this.projectRun(principal, thread.id, runId)
   }
 
+  async listRunEvents(
+    principal: ExtensionPrincipal,
+    input: { runId: string; afterSequence?: number; limit?: number }
+  ): Promise<ExtensionAgentEventPage> {
+    const { thread } = await this.findOwnedRun(principal, input.runId)
+    for (const permission of [EXTENSION_AGENT_PERMISSIONS.run, EXTENSION_AGENT_PERMISSIONS.readOwnThreads]) {
+      await this.authorize(principal, { operation: 'listRunEvents', permission, workspace: thread.workspace })
+    }
+    return listExtensionRunEvents({
+      sessions: this.options.sessions,
+      principal,
+      threadId: thread.id,
+      runId: input.runId,
+      afterSequence: input.afterSequence,
+      limit: input.limit
+    })
+  }
+
   async getOwnThread(principal: ExtensionPrincipal, threadId: string): Promise<ExtensionOwnedThread> {
     const thread = await this.ownedThread(principal, threadId)
     await this.authorize(principal, {
@@ -373,31 +388,37 @@ export class ExtensionAgentService {
       permission: EXTENSION_AGENT_PERMISSIONS.readOwnThreads,
       workspace: thread.workspace
     })
-    return projectThread(thread)
+    return this.projectOwnedThread(principal, thread)
   }
 
   async listOwnThreads(
     principal: ExtensionPrincipal,
-    input: { limit?: number; cursor?: string; workspace?: string } = {}
+    input: {
+      limit?: number
+      cursor?: string
+      workspace?: string
+      state?: ExtensionAgentRunStatus | 'queued' | 'waiting-approval' | 'waiting-user-input'
+    } = {}
   ): Promise<{ items: ExtensionOwnedThread[]; nextCursor?: string }> {
     await this.authorize(principal, {
       operation: 'listOwn',
       permission: EXTENSION_AGENT_PERMISSIONS.readOwnThreads,
       ...(input.workspace ? { workspace: normalizeOwnedWorkspace(principal, input.workspace) } : {})
     })
-    const all = (await this.options.threads.list({ includeArchived: true, includeSide: true }))
+    const candidates = (await this.options.threads.list({ includeArchived: true, includeSide: true }))
       .filter((thread) => thread.ownerExtensionId === principal.extensionId)
       .filter((thread) => !input.workspace || resolve(thread.workspace) === resolve(input.workspace))
     const offset = decodeCursor(input.cursor)
     const limit = Math.max(1, Math.min(MAX_LIST_LIMIT, Math.floor(input.limit ?? 25)))
-    const page = all.slice(offset, offset + limit)
-    const items = (await Promise.all(page.map((summary) => this.options.threads.get(summary.id))))
-      .filter((thread): thread is ThreadRecord => Boolean(thread))
-      .map(projectThread)
-    return {
-      items,
-      ...(offset + items.length < all.length ? { nextCursor: encodeCursor(offset + items.length) } : {})
-    }
+    return pageExtensionOwnedThreads({
+      candidates,
+      sessions: this.options.sessions,
+      offset,
+      limit,
+      state: input.state,
+      loadThread: (threadId) => this.options.threads.get(threadId),
+      projectThread: (thread, latestSummary) => this.projectOwnedThread(principal, thread, latestSummary)
+    })
   }
 
   async steer(principal: ExtensionPrincipal, runId: string, text: string): Promise<void> {
@@ -440,8 +461,8 @@ export class ExtensionAgentService {
       workspace: thread.workspace
     })
     const afterSeq = input.afterSeq ?? 0
-    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) {
-      throw new ExtensionBrokerError('validation_error', 'afterSeq must be a non-negative safe integer')
+    if (!Number.isSafeInteger(afterSeq) || afterSeq < -1) {
+      throw new ExtensionBrokerError('validation_error', 'afterSeq must be a safe integer greater than or equal to -1')
     }
     const state = new ManagedSubscription(listener, afterSeq, {
       runId: input.runId,
@@ -541,16 +562,25 @@ export class ExtensionAgentService {
     runId: string
   ): Promise<ExtensionAgentRun> {
     const thread = await this.ownedThread(principal, threadId)
+    return this.projectRunFromThread(principal, thread, runId)
+  }
+
+  private async projectRunFromThread(
+    principal: ExtensionPrincipal,
+    thread: ThreadRecord,
+    runId: string,
+    knownSummary?: Awaited<ReturnType<typeof summarizeRunEvents>>
+  ): Promise<ExtensionAgentRun> {
     const turn = thread.turns.find((candidate) => candidate.id === runId)
     if (!turn) throw opaqueNotFound()
-    const { usage, budgetExhausted } = await summarizeRunEvents(
+    const { usage, budgetExhausted } = knownSummary ?? await summarizeRunEvents(
       this.options.sessions,
-      threadId,
+      thread.id,
       runId
     )
     return {
       id: runId,
-      threadId,
+      threadId: thread.id,
       ownerExtensionId: principal.extensionId,
       ownerExtensionVersion: thread.ownerExtensionVersion ?? principal.extensionVersion,
       status: budgetExhausted ? 'budget-exhausted' : runStatus(turn.status),
@@ -569,6 +599,20 @@ export class ExtensionAgentService {
       ...(usage ? { usage } : {}),
       ...(turn.error ? { error: turn.error } : {})
     }
+  }
+
+  private async projectOwnedThread(
+    principal: ExtensionPrincipal,
+    thread: ThreadRecord,
+    latestSummary?: Awaited<ReturnType<typeof summarizeRunEvents>>
+  ): Promise<ExtensionOwnedThread> {
+    const latestTurn = thread.turns.at(-1)
+    return projectThread(
+      thread,
+      latestTurn
+        ? await this.projectRunFromThread(principal, thread, latestTurn.id, latestSummary)
+        : undefined
+    )
   }
 
   private async findOwnedRun(principal: ExtensionPrincipal, runId: string) {
@@ -645,7 +689,7 @@ export class ExtensionAgentService {
       if (snapshot) return snapshot.usage.totalTokens
     }
     let totalTokens = 0
-    for await (const event of iterateSessionEventsSince(this.options.sessions, threadId, 0)) {
+    for await (const event of iterateSessionEventsSince(this.options.sessions, threadId, -1)) {
       if (event.kind === 'usage') totalTokens = event.usage.totalTokens
     }
     return totalTokens

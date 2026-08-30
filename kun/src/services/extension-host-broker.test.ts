@@ -156,6 +156,222 @@ function cancellationContext() {
 }
 
 describe('ExtensionHostBroker', () => {
+  it('returns paged public Agent history with stable replaceable message fields', async () => {
+      const agent = {
+        listRunEvents: vi.fn(async () => ({
+          items: [{
+            seq: 9,
+            timestamp: '2026-08-31T00:00:00.000Z',
+            type: 'item_completed',
+            runId: 'run-1',
+            threadId: 'thread-1',
+            ownerExtensionId: 'acme.broker',
+            payload: {
+              role: 'user',
+              messageId: 'message:user-1',
+              phase: 'complete',
+              content: 'Visible prompt'
+            }
+          }],
+          cursor: 10,
+          hasMore: false,
+          historyIncomplete: true
+        }))
+      }
+      const broker = createBroker({ agent })
+      const response = await broker.handlePrincipal({
+        principal: {
+          extensionId: 'acme.broker',
+          extensionVersion: '1.0.0',
+          permissions: ['agent.run', 'agent.threads.readOwn'],
+          workspaceRoots: [WORKSPACE_ROOT],
+          workspaceTrusted: true,
+          hostLifecycleNonce: 'history-host'
+        },
+        method: 'agent.listRunEvents',
+        params: { runId: 'run-1', afterSequence: 3, limit: 25 },
+        signal: new AbortController().signal,
+        requestId: 'history-request'
+      })
+
+      expect(agent.listRunEvents).toHaveBeenCalledWith(
+        expect.objectContaining({ extensionId: 'acme.broker' }),
+        { runId: 'run-1', afterSequence: 3, limit: 25 }
+      )
+      expect(response).toEqual({
+        items: [{
+          runId: 'run-1',
+          threadId: 'thread-1',
+          sequence: 10,
+          timestamp: '2026-08-31T00:00:00.000Z',
+          type: 'message',
+          role: 'user',
+          messageId: 'message:user-1',
+          phase: 'complete',
+          content: 'Visible prompt'
+        }],
+        cursor: 10,
+        hasMore: false,
+        historyIncomplete: true
+      })
+    })
+
+  it('maps runtime sequence zero and hands its public cursor to subscribe without a gap', async () => {
+      const close = vi.fn()
+      const first = {
+        seq: 0,
+        timestamp: '2026-08-31T00:00:00.000Z',
+        type: 'item_completed',
+        runId: 'run-sequence-zero',
+        threadId: 'thread-sequence-zero',
+        ownerExtensionId: 'acme.broker',
+        payload: {
+          role: 'user',
+          messageId: 'message:user-zero',
+          phase: 'complete',
+          content: 'Sequence zero'
+        }
+      }
+      const second = {
+        ...first,
+        seq: 1,
+        timestamp: '2026-08-31T00:00:01.000Z',
+        payload: {
+          role: 'assistant',
+          messageId: 'message:assistant-one',
+          phase: 'complete',
+          content: 'Sequence one'
+        }
+      }
+      const agent = {
+        listRunEvents: vi.fn(async () => ({
+          items: [first],
+          cursor: 1,
+          hasMore: false,
+          historyIncomplete: false
+        })),
+        subscribe: vi.fn(async (_principal, _input, listener) => {
+          await listener(second)
+          return { lastDeliveredSeq: 1, close }
+        })
+      }
+      const broker = createBroker({ agent })
+      const brokerPrincipal = {
+        extensionId: 'acme.broker',
+        extensionVersion: '1.0.0',
+        permissions: ['agent.run', 'agent.threads.readOwn'],
+        workspaceRoots: [WORKSPACE_ROOT],
+        workspaceTrusted: true,
+        hostLifecycleNonce: 'sequence-zero-host'
+      }
+
+      const history = await broker.handlePrincipal({
+        principal: brokerPrincipal,
+        method: 'agent.listRunEvents',
+        params: { runId: first.runId, afterSequence: 0 },
+        signal: new AbortController().signal,
+        requestId: 'sequence-zero-history'
+      }) as { items: Array<{ sequence: number }>; cursor: number }
+      const live = await broker.handlePrincipal({
+        principal: brokerPrincipal,
+        method: 'agent.subscribe',
+        params: { runId: first.runId, afterSequence: history.cursor },
+        signal: new AbortController().signal,
+        requestId: 'sequence-zero-subscribe'
+      }) as { subscriptionId: string; replay: Array<{ sequence: number }> }
+
+      expect(history.items.map(({ sequence }) => sequence)).toEqual([1])
+      expect(agent.subscribe).toHaveBeenCalledWith(
+        expect.objectContaining({ extensionId: 'acme.broker' }),
+        { runId: first.runId, afterSeq: 0 },
+        expect.any(Function)
+      )
+      expect([...history.items, ...live.replay].map(({ sequence }) => sequence)).toEqual([1, 2])
+
+      await broker.handlePrincipal({
+        principal: brokerPrincipal,
+        method: 'agent.unsubscribe',
+        params: { subscriptionId: live.subscriptionId },
+        signal: new AbortController().signal,
+        requestId: 'sequence-zero-unsubscribe'
+      })
+      expect(close).toHaveBeenCalledOnce()
+    })
+
+  it('returns paginated owned threads with their completed latest run', async () => {
+      const latestRun = {
+        id: 'run-latest-completed',
+        threadId: 'thread-latest-completed',
+        ownerExtensionId: 'acme.broker',
+        ownerExtensionVersion: '1.0.0',
+        status: 'completed',
+        createdAt: '2026-08-31T00:00:00.000Z',
+        finishedAt: '2026-08-31T00:01:00.000Z',
+        workspace: WORKSPACE_ROOT,
+        providerBinding: { providerId: 'default', modelId: 'model-1' },
+        effectiveBudget: {
+          maxTokens: 100_000,
+          maxElapsedMs: 900_000,
+          maxConcurrentRuns: 2,
+          maxModelRequests: 64,
+          maxToolInvocations: 128,
+          maxRetainedEvents: 5_000
+        },
+        visibility: 'private'
+      }
+      const agent = {
+        listOwnThreads: vi.fn(async () => ({
+          items: [{
+            id: latestRun.threadId,
+            title: 'Completed conversation',
+            status: 'archived',
+            workspace: WORKSPACE_ROOT,
+            model: 'model-1',
+            providerBinding: latestRun.providerBinding,
+            ownerExtensionVersion: '1.0.0',
+            visibility: 'private',
+            createdAt: latestRun.createdAt,
+            updatedAt: latestRun.finishedAt,
+            runCount: 1,
+            latestRun
+          }],
+          nextCursor: 'next-owned-thread'
+        }))
+      }
+      const broker = createBroker({ agent })
+      const response = await broker.handlePrincipal({
+        principal: {
+          extensionId: 'acme.broker',
+          extensionVersion: '1.0.0',
+          permissions: ['agent.threads.readOwn'],
+          workspaceRoots: [WORKSPACE_ROOT],
+          workspaceTrusted: true,
+          hostLifecycleNonce: 'owned-threads-host'
+        },
+        method: 'threads.listOwn',
+        params: { limit: 1, state: 'completed' },
+        signal: new AbortController().signal,
+        requestId: 'owned-threads-list'
+      })
+
+      expect(agent.listOwnThreads).toHaveBeenCalledWith(
+        expect.objectContaining({ extensionId: 'acme.broker' }),
+        { limit: 1, cursor: undefined, state: 'completed' }
+      )
+      expect(response).toMatchObject({
+        items: [{
+          id: latestRun.threadId,
+          latestRun: {
+            id: latestRun.id,
+            threadId: latestRun.threadId,
+            state: 'completed',
+            terminalAt: latestRun.finishedAt
+          }
+        }],
+        page: { hasMore: true, nextCursor: 'next-owned-thread' }
+      })
+    })
+
   it('keeps extension secrets protected, permission-gated, isolated, and unavailable to Views', async () => {
       const values = new Map<string, { clientSecret: string }>()
       const credentials = {

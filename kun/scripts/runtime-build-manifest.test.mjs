@@ -31,7 +31,7 @@ test('runtime build identity is stable for identical output and changes with emi
     assert.equal(manifest.buildId, await computeRuntimeBuildId(root))
     assert.equal(
       manifest.serviceVersion,
-      process.env.KUN_APP_VERSION || process.env.KUN_RELEASE_VERSION || '0.1.0'
+      process.env.KUN_APP_VERSION || process.env.KUN_RELEASE_VERSION || '0.3.9'
     )
     assert.equal(
       manifest.channel,

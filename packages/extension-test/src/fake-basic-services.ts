@@ -3,6 +3,7 @@ import {
   ComposerContextAttachmentRequestSchema,
   ComposerContextAttachmentSchema,
   AgentCreateRunRequestSchema,
+  AgentListRunEventsRequestSchema,
   AgentRunEventSchema,
   ExtensionApiError,
   ExtensionHostClient,
@@ -186,6 +187,19 @@ export class FakeAgentService {
   install(): void {
     this.transport.handle('agent.createRun', (params) => this.createRun(AgentCreateRunRequestSchema.parse(params)))
     this.transport.handle('agent.getRun', (params) => this.getRun(String(JsonObjectSchema.parse(params).runId)))
+    this.transport.handle('agent.listRunEvents', (params) => {
+      const input = AgentListRunEventsRequestSchema.parse(params)
+      this.getRun(input.runId)
+      const matching = (this.events.get(input.runId) ?? [])
+        .filter((event) => event.sequence > input.afterSequence)
+      const items = matching.slice(0, input.limit)
+      return {
+        items,
+        cursor: items.at(-1)?.sequence ?? input.afterSequence,
+        hasMore: matching.length > items.length,
+        historyIncomplete: false
+      }
+    })
     this.transport.handle('agent.subscribe', (params) => {
       const parsed = JsonObjectSchema.parse(params)
       const runId = String(parsed.runId)
@@ -297,6 +311,9 @@ export class FakeAgentService {
       sequence: list.length + 1,
       timestamp: this.clock.nowIso(),
       type,
+      ...(type === 'message'
+        ? { messageId: `message-${list.length + 1}`, phase: 'complete' }
+        : {}),
       ...fields
     })
     list.push(event)

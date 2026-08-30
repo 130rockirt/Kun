@@ -15,6 +15,7 @@ export const EXTENSION_VIEW_SAFE_METHODS = [
   'network.fetch',
   'agent.createRun',
   'agent.getRun',
+  'agent.listRunEvents',
   'agent.subscribe',
   'agent.unsubscribe',
   'agent.steer',

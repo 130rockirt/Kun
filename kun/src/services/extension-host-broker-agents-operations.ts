@@ -8,6 +8,7 @@ import {
   ArtifactHostActionResultSchema,
   AgentCancelRequestSchema,
   AgentCreateRunRequestSchema,
+  AgentListRunEventsRequestSchema,
   AgentRunEventSchema,
   AgentRunSchema,
   AgentSteerRequestSchema,
@@ -179,6 +180,17 @@ async agentGetRun(this: ExtensionHostBroker, principal: ExtensionPrincipal, para
     return publicAgentRun(await this['options'].agent.getRun(principal, runId))
   },
 
+async agentListRunEvents(this: ExtensionHostBroker, principal: ExtensionPrincipal, params: JsonValue) {
+    const input = AgentListRunEventsRequestSchema.parse(params)
+    const page = await this['options'].agent.listRunEvents(principal, input)
+    return {
+      items: page.items.map(publicAgentEvent),
+      cursor: page.cursor,
+      hasMore: page.hasMore,
+      historyIncomplete: page.historyIncomplete
+    }
+  },
+
 async agentSubscribe(this: ExtensionHostBroker, principal: ExtensionPrincipal, params: JsonValue) {
     const input = AgentSubscribeRequestSchema.parse(params)
     const subscriptionId = `agentsub_${randomUUID()}`
@@ -225,7 +237,7 @@ async agentSubscribe(this: ExtensionHostBroker, principal: ExtensionPrincipal, p
     }
     const subscription = await this['options'].agent.subscribe(principal, {
       runId: input.runId,
-      afterSeq: Math.max(0, input.afterSequence - 1)
+      afterSeq: input.afterSequence - 1
     }, listener)
     if (terminalSeen) subscription.close()
     else this['subscriptions'].set(subscriptionId, {
@@ -267,7 +279,8 @@ async threadsListOwn(this: ExtensionHostBroker, principal: ExtensionPrincipal, p
     const response = await this['options'].agent.listOwnThreads(principal, {
       limit: input.limit,
       cursor: input.cursor,
-      ...(input.workspace ? { workspace: input.workspace } : {})
+      ...(input.workspace ? { workspace: input.workspace } : {}),
+      ...(input.state ? { state: input.state } : {})
     })
     return {
       items: response.items.map((thread) => publicOwnedThread(principal, thread)),

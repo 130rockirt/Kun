@@ -1,6 +1,6 @@
 # Kun Extension API 参考
 
-> Extension API：v1.3.0（稳定）
+> Extension API：v1.4.0（稳定）
 > 适用 Kun：以扩展 Manifest 的 `engines.kun` 与[兼容矩阵](./versioning-and-migrations.md#兼容矩阵)为准
 > English: [Kun Extension API Reference](./api-reference.en.md)
 
@@ -8,7 +8,7 @@
 
 ## 版本与权威来源
 
-三个 SDK 当前版本均为 `1.3.0`，对应 Extension API major 1。Host 继续接受 v1.2、v1.1 与 v1.0 Manifest。v1.3 新增 Node Host 专用的受保护扩展秘密存储，不改变既有 v1.2、v1.1 或 v1.0 方法。Manifest 字段以生成的 [JSON Schema](../../packages/extension-api/schema/kun-extension.schema.json) 和 `ExtensionManifestSchema` 为机器真源；Host API、事件和 payload 以发布包的 `.d.ts` 与 runtime Schema 为真源。
+三个 SDK 当前版本均为 `1.4.0`，对应 Extension API major 1。Host 继续接受 v1.3、v1.2、v1.1 与 v1.0 Manifest。v1.4 新增扩展自有 Run 的分页持久化事件历史，并为 message 事件增加稳定 ID、用户角色和更新阶段；既有 Manifest 无需迁移。Manifest 字段以生成的 [JSON Schema](../../packages/extension-api/schema/kun-extension.schema.json) 和 `ExtensionManifestSchema` 为机器真源；Host API、事件和 payload 以发布包的 `.d.ts` 与 runtime Schema 为真源。
 
 公开入口、export 或可达 `.d.ts` 发生任何变化时，public surface SHA-256 会变化，文档门禁要求同时更新本页和 [API Changelog](./release-troubleshooting-changelog.md#api-changelog)。只改本表的摘要值而不记录兼容性影响，不算完成发布审查。
 
@@ -91,14 +91,14 @@ Manifest 工具的 `outputSchema` 描述并验证 `ToolResult.content`，不是�
 <!-- BEGIN GENERATED SDK EXPORTS -->
 | SDK 包 | 版本 | 公开入口 | 公开导出数 | 公开 surface SHA-256 |
 | --- | --- | --- | --- | --- |
-| `@kun/extension-api` | `1.3.0` | `.`<br>`./manifest.schema.json` | 524 | `5a220e4e02f33ca0dcd6ff7022fbfe3d05a4666c560e6ca11fad5044d0971684` |
-| `@kun/extension-react` | `1.3.0` | `.` | 22 | `e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322` |
-| `@kun/extension-test` | `1.3.0` | `.` | 17 | `3160c2d249c18d1510853e477d267d28ffe3cf1cb5503f61c3ea254341b00345` |
+| `@kun/extension-api` | `1.4.0` | `.`<br>`./manifest.schema.json` | 528 | `19ef9389ae891fb2f25e12460df16fba0f14aaf345ab341d05930413e3400fa0` |
+| `@kun/extension-react` | `1.4.0` | `.` | 22 | `e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322` |
+| `@kun/extension-test` | `1.4.0` | `.` | 17 | `11e8d34ad986d9b711a23d7e09aec0c8f7e27238cdd8acc014db1a31249a03fe` |
 
 | SDK 包 | 源码模块 | 运行时导出 | 类型导出 |
 | --- | --- | --- | --- |
 | `@kun/extension-api` | `accounts` | `AccountSchema`<br>`AccountSessionSchema`<br>`AccountStatusSchema`<br>`AuthenticatedFetchRequestSchema`<br>`AuthenticationProviderDeclarationSchema`<br>`AuthenticationTypeSchema`<br>`CreateAccountSessionRequestSchema`<br>`CredentialReferenceSchema`<br>`ListAccountsRequestSchema`<br>`ProviderBindingSchema`<br>`RevealSecretRequestSchema` | `Account`<br>`AccountSession`<br>`AccountStatus`<br>`AuthenticatedFetchRequest`<br>`AuthenticationProviderDeclaration`<br>`AuthenticationType`<br>`CreateAccountSessionRequest`<br>`CredentialReference`<br>`ListAccountsRequest`<br>`ProviderBinding`<br>`RevealSecretRequest` |
-| `@kun/extension-api` | `agent` | `AgentBudgetSchema`<br>`AgentCancelRequestSchema`<br>`AgentCreateRunRequestSchema`<br>`AgentCreateRunResponseSchema`<br>`AgentInputSchema`<br>`AgentMutationResultSchema`<br>`AgentProfileDeclarationSchema`<br>`AgentRunEventSchema`<br>`AgentRunSchema`<br>`AgentRunStateSchema`<br>`AgentSteerRequestSchema`<br>`AgentSubscribeRequestSchema`<br>`ExtensionThreadProjectionSchema`<br>`ExtensionVisibilitySchema`<br>`ListOwnThreadsRequestSchema`<br>`ListOwnThreadsResponseSchema`<br>`ResolvedAgentProfileSchema` | `AgentBudget`<br>`AgentCancelRequest`<br>`AgentCreateRunRequest`<br>`AgentCreateRunResponse`<br>`AgentInput`<br>`AgentMutationResult`<br>`AgentProfileDeclaration`<br>`AgentProfileDeclarationInput`<br>`AgentRun`<br>`AgentRunEvent`<br>`AgentRunState`<br>`AgentSteerRequest`<br>`AgentSubscribeRequest`<br>`ExtensionThreadProjection`<br>`ExtensionVisibility`<br>`ListOwnThreadsRequest`<br>`ListOwnThreadsResponse`<br>`ResolvedAgentProfile` |
+| `@kun/extension-api` | `agent` | `AgentBudgetSchema`<br>`AgentCancelRequestSchema`<br>`AgentCreateRunRequestSchema`<br>`AgentCreateRunResponseSchema`<br>`AgentInputSchema`<br>`AgentListRunEventsRequestSchema`<br>`AgentListRunEventsResponseSchema`<br>`AgentMutationResultSchema`<br>`AgentProfileDeclarationSchema`<br>`AgentRunEventSchema`<br>`AgentRunSchema`<br>`AgentRunStateSchema`<br>`AgentSteerRequestSchema`<br>`AgentSubscribeRequestSchema`<br>`ExtensionThreadProjectionSchema`<br>`ExtensionVisibilitySchema`<br>`ListOwnThreadsRequestSchema`<br>`ListOwnThreadsResponseSchema`<br>`ResolvedAgentProfileSchema` | `AgentBudget`<br>`AgentCancelRequest`<br>`AgentCreateRunRequest`<br>`AgentCreateRunResponse`<br>`AgentInput`<br>`AgentListRunEventsRequest`<br>`AgentListRunEventsResponse`<br>`AgentMutationResult`<br>`AgentProfileDeclaration`<br>`AgentProfileDeclarationInput`<br>`AgentRun`<br>`AgentRunEvent`<br>`AgentRunState`<br>`AgentSteerRequest`<br>`AgentSubscribeRequest`<br>`ExtensionThreadProjection`<br>`ExtensionVisibility`<br>`ListOwnThreadsRequest`<br>`ListOwnThreadsResponse`<br>`ResolvedAgentProfile` |
 | `@kun/extension-api` | `artifacts` | `ArtifactHostActionRequestSchema`<br>`ArtifactHostActionResultSchema`<br>`ArtifactHostActionSchema`<br>`ArtifactMediaHandleIdSchema`<br>`GeneratedArtifactAvailabilitySchema`<br>`GeneratedArtifactIdSchema`<br>`GeneratedArtifactMediaKindSchema`<br>`GeneratedArtifactProvenanceSchema`<br>`GeneratedArtifactSchema`<br>`GeneratedArtifactsSchema` | `ArtifactHostAction`<br>`ArtifactHostActionRequest`<br>`ArtifactHostActionResult`<br>`ArtifactMediaHandleId`<br>`GeneratedArtifact`<br>`GeneratedArtifactAvailability`<br>`GeneratedArtifactId`<br>`GeneratedArtifactInput`<br>`GeneratedArtifactMediaKind`<br>`GeneratedArtifactProvenance`<br>`GeneratedArtifacts` |
 | `@kun/extension-api` | `chart` | `CHART_MAX_COLUMNS`<br>`CHART_MAX_ENCODED_BYTES`<br>`CHART_MAX_ROWS`<br>`CHART_MAX_SERIES`<br>`CHART_SPEC_VERSION`<br>`ChartAxisSpecV1Schema`<br>`chartColumns`<br>`ChartFormatSchema`<br>`ChartSeriesSpecV1Schema`<br>`ChartSpecSchema`<br>`chartSpecTextSummary`<br>`chartSpecToCsv`<br>`ChartSpecV1Schema`<br>`ChartValueSchema`<br>`MAX_CHART_COLUMNS`<br>`MAX_CHART_ROWS`<br>`MAX_CHART_SERIES`<br>`MAX_CHART_SPEC_BYTES`<br>`parseChartSpec`<br>`safeParseChartSpec` | `ChartAxisSpecV1`<br>`ChartSeriesSpecV1`<br>`ChartSpec`<br>`ChartSpecV1`<br>`ChartValue` |
 | `@kun/extension-api` | `client` | `ExtensionHostClient` | — |

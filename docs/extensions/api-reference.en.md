@@ -1,6 +1,6 @@
 # Kun Extension API Reference
 
-> Extension API: v1.3.0 (stable)
+> Extension API: v1.4.0 (stable)
 > Compatible Kun versions: use the extension Manifest's `engines.kun` and the [compatibility matrix](./versioning-and-migrations.en.md#compatibility-matrix)
 > 中文：[Kun Extension API 参考](./api-reference.md)
 
@@ -8,7 +8,7 @@ This is the standalone public API reference for `@kun/extension-api`, `@kun/exte
 
 ## Versions and authoritative sources
 
-All three SDKs are currently version `1.3.0` for Extension API major 1. Hosts continue to accept v1.2, v1.1, and v1.0 manifests. v1.3 adds protected, Node-Host-only extension secret storage without changing existing v1.2, v1.1, or v1.0 methods. Manifest fields use the generated [JSON Schema](../../packages/extension-api/schema/kun-extension.schema.json) and `ExtensionManifestSchema` as their machine-enforced sources. Published `.d.ts` declarations and runtime Schemas govern Host APIs, events, and payloads.
+All three SDKs are currently version `1.4.0` for Extension API major 1. Hosts continue to accept v1.3, v1.2, v1.1, and v1.0 manifests. v1.4 adds paged durable history for extension-owned Runs plus stable message identities, the user role, and update phases; existing manifests require no migration. Manifest fields use the generated [JSON Schema](../../packages/extension-api/schema/kun-extension.schema.json) and `ExtensionManifestSchema` as their machine-enforced sources. Published `.d.ts` declarations and runtime Schemas govern Host APIs, events, and payloads.
 
 Any public entry-point, export, or reachable `.d.ts` change updates the public surface SHA-256. The documentation gate requires this page and the [API Changelog](./release-troubleshooting-changelog.en.md#api-changelog) to move together. Updating only a digest without documenting compatibility impact does not complete release review.
 
@@ -91,14 +91,14 @@ The following region is calculated by `node scripts/generate-extension-api-refer
 <!-- BEGIN GENERATED SDK EXPORTS -->
 | SDK package | Version | Public entry points | Public exports | Public surface SHA-256 |
 | --- | --- | --- | --- | --- |
-| `@kun/extension-api` | `1.3.0` | `.`<br>`./manifest.schema.json` | 524 | `5a220e4e02f33ca0dcd6ff7022fbfe3d05a4666c560e6ca11fad5044d0971684` |
-| `@kun/extension-react` | `1.3.0` | `.` | 22 | `e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322` |
-| `@kun/extension-test` | `1.3.0` | `.` | 17 | `3160c2d249c18d1510853e477d267d28ffe3cf1cb5503f61c3ea254341b00345` |
+| `@kun/extension-api` | `1.4.0` | `.`<br>`./manifest.schema.json` | 528 | `19ef9389ae891fb2f25e12460df16fba0f14aaf345ab341d05930413e3400fa0` |
+| `@kun/extension-react` | `1.4.0` | `.` | 22 | `e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322` |
+| `@kun/extension-test` | `1.4.0` | `.` | 17 | `11e8d34ad986d9b711a23d7e09aec0c8f7e27238cdd8acc014db1a31249a03fe` |
 
 | SDK package | Source module | Runtime exports | Type exports |
 | --- | --- | --- | --- |
 | `@kun/extension-api` | `accounts` | `AccountSchema`<br>`AccountSessionSchema`<br>`AccountStatusSchema`<br>`AuthenticatedFetchRequestSchema`<br>`AuthenticationProviderDeclarationSchema`<br>`AuthenticationTypeSchema`<br>`CreateAccountSessionRequestSchema`<br>`CredentialReferenceSchema`<br>`ListAccountsRequestSchema`<br>`ProviderBindingSchema`<br>`RevealSecretRequestSchema` | `Account`<br>`AccountSession`<br>`AccountStatus`<br>`AuthenticatedFetchRequest`<br>`AuthenticationProviderDeclaration`<br>`AuthenticationType`<br>`CreateAccountSessionRequest`<br>`CredentialReference`<br>`ListAccountsRequest`<br>`ProviderBinding`<br>`RevealSecretRequest` |
-| `@kun/extension-api` | `agent` | `AgentBudgetSchema`<br>`AgentCancelRequestSchema`<br>`AgentCreateRunRequestSchema`<br>`AgentCreateRunResponseSchema`<br>`AgentInputSchema`<br>`AgentMutationResultSchema`<br>`AgentProfileDeclarationSchema`<br>`AgentRunEventSchema`<br>`AgentRunSchema`<br>`AgentRunStateSchema`<br>`AgentSteerRequestSchema`<br>`AgentSubscribeRequestSchema`<br>`ExtensionThreadProjectionSchema`<br>`ExtensionVisibilitySchema`<br>`ListOwnThreadsRequestSchema`<br>`ListOwnThreadsResponseSchema`<br>`ResolvedAgentProfileSchema` | `AgentBudget`<br>`AgentCancelRequest`<br>`AgentCreateRunRequest`<br>`AgentCreateRunResponse`<br>`AgentInput`<br>`AgentMutationResult`<br>`AgentProfileDeclaration`<br>`AgentProfileDeclarationInput`<br>`AgentRun`<br>`AgentRunEvent`<br>`AgentRunState`<br>`AgentSteerRequest`<br>`AgentSubscribeRequest`<br>`ExtensionThreadProjection`<br>`ExtensionVisibility`<br>`ListOwnThreadsRequest`<br>`ListOwnThreadsResponse`<br>`ResolvedAgentProfile` |
+| `@kun/extension-api` | `agent` | `AgentBudgetSchema`<br>`AgentCancelRequestSchema`<br>`AgentCreateRunRequestSchema`<br>`AgentCreateRunResponseSchema`<br>`AgentInputSchema`<br>`AgentListRunEventsRequestSchema`<br>`AgentListRunEventsResponseSchema`<br>`AgentMutationResultSchema`<br>`AgentProfileDeclarationSchema`<br>`AgentRunEventSchema`<br>`AgentRunSchema`<br>`AgentRunStateSchema`<br>`AgentSteerRequestSchema`<br>`AgentSubscribeRequestSchema`<br>`ExtensionThreadProjectionSchema`<br>`ExtensionVisibilitySchema`<br>`ListOwnThreadsRequestSchema`<br>`ListOwnThreadsResponseSchema`<br>`ResolvedAgentProfileSchema` | `AgentBudget`<br>`AgentCancelRequest`<br>`AgentCreateRunRequest`<br>`AgentCreateRunResponse`<br>`AgentInput`<br>`AgentListRunEventsRequest`<br>`AgentListRunEventsResponse`<br>`AgentMutationResult`<br>`AgentProfileDeclaration`<br>`AgentProfileDeclarationInput`<br>`AgentRun`<br>`AgentRunEvent`<br>`AgentRunState`<br>`AgentSteerRequest`<br>`AgentSubscribeRequest`<br>`ExtensionThreadProjection`<br>`ExtensionVisibility`<br>`ListOwnThreadsRequest`<br>`ListOwnThreadsResponse`<br>`ResolvedAgentProfile` |
 | `@kun/extension-api` | `artifacts` | `ArtifactHostActionRequestSchema`<br>`ArtifactHostActionResultSchema`<br>`ArtifactHostActionSchema`<br>`ArtifactMediaHandleIdSchema`<br>`GeneratedArtifactAvailabilitySchema`<br>`GeneratedArtifactIdSchema`<br>`GeneratedArtifactMediaKindSchema`<br>`GeneratedArtifactProvenanceSchema`<br>`GeneratedArtifactSchema`<br>`GeneratedArtifactsSchema` | `ArtifactHostAction`<br>`ArtifactHostActionRequest`<br>`ArtifactHostActionResult`<br>`ArtifactMediaHandleId`<br>`GeneratedArtifact`<br>`GeneratedArtifactAvailability`<br>`GeneratedArtifactId`<br>`GeneratedArtifactInput`<br>`GeneratedArtifactMediaKind`<br>`GeneratedArtifactProvenance`<br>`GeneratedArtifacts` |
 | `@kun/extension-api` | `chart` | `CHART_MAX_COLUMNS`<br>`CHART_MAX_ENCODED_BYTES`<br>`CHART_MAX_ROWS`<br>`CHART_MAX_SERIES`<br>`CHART_SPEC_VERSION`<br>`ChartAxisSpecV1Schema`<br>`chartColumns`<br>`ChartFormatSchema`<br>`ChartSeriesSpecV1Schema`<br>`ChartSpecSchema`<br>`chartSpecTextSummary`<br>`chartSpecToCsv`<br>`ChartSpecV1Schema`<br>`ChartValueSchema`<br>`MAX_CHART_COLUMNS`<br>`MAX_CHART_ROWS`<br>`MAX_CHART_SERIES`<br>`MAX_CHART_SPEC_BYTES`<br>`parseChartSpec`<br>`safeParseChartSpec` | `ChartAxisSpecV1`<br>`ChartSeriesSpecV1`<br>`ChartSpec`<br>`ChartSpecV1`<br>`ChartValue` |
 | `@kun/extension-api` | `client` | `ExtensionHostClient` | — |

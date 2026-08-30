@@ -58,6 +58,23 @@ describe('ExtensionTestHarness', () => {
     subscription.onEvent((event) => events.push(event.type))
     harness.agent.emit(run.id, 'progress', { message: 'working' })
     expect(events).toEqual(['state', 'progress'])
+    harness.agent.emit(run.id, 'message', { role: 'user', content: 'hello from history' })
+    const firstHistoryPage = await harness.client.agent.listRunEvents({ runId: run.id, limit: 2 })
+    expect(firstHistoryPage).toMatchObject({
+      items: [expect.objectContaining({ type: 'state' }), expect.objectContaining({ type: 'progress' })],
+      cursor: 2,
+      hasMore: true,
+      historyIncomplete: false
+    })
+    await expect(harness.client.agent.listRunEvents({
+      runId: run.id,
+      afterSequence: firstHistoryPage.cursor
+    })).resolves.toMatchObject({
+      items: [expect.objectContaining({
+        type: 'message', role: 'user', messageId: 'message-3', phase: 'complete'
+      })],
+      hasMore: false
+    })
 
     const tool = await harness.client.tools.registerTool(
       { id: 'echo', description: 'Echo input', inputSchema: { type: 'object' }, sideEffects: 'none', idempotent: true },

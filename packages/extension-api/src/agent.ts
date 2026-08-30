@@ -105,13 +105,35 @@ const AgentEventBase = {
 
 export const AgentRunEventSchema = z.discriminatedUnion('type', [
   z.strictObject({ ...AgentEventBase, type: z.literal('state'), state: AgentRunStateSchema }),
-  z.strictObject({ ...AgentEventBase, type: z.literal('message'), role: z.enum(['assistant', 'tool']), content: JsonValueSchema }),
+  z.strictObject({
+    ...AgentEventBase,
+    type: z.literal('message'),
+    role: z.enum(['user', 'assistant', 'tool']),
+    messageId: z.string().min(1).max(256),
+    phase: z.enum(['delta', 'replace', 'complete']),
+    content: JsonValueSchema
+  }),
   z.strictObject({ ...AgentEventBase, type: z.literal('progress'), message: z.string().max(4096), data: JsonValueSchema.optional() }),
   z.strictObject({ ...AgentEventBase, type: z.literal('steering-accepted'), steeringId: z.string().min(1).max(256) }),
   z.strictObject({ ...AgentEventBase, type: z.literal('usage'), usage: ModelUsageSchema }),
   z.strictObject({ ...AgentEventBase, type: z.literal('terminal'), state: z.enum(['completed', 'failed', 'cancelled', 'budget-exhausted']), error: JsonObjectSchema.optional() })
 ])
 export type AgentRunEvent = z.infer<typeof AgentRunEventSchema>
+
+export const AgentListRunEventsRequestSchema = z.strictObject({
+  runId: z.string().min(1).max(256),
+  afterSequence: z.number().int().nonnegative().default(0),
+  limit: z.number().int().min(1).max(200).default(100)
+})
+export type AgentListRunEventsRequest = z.input<typeof AgentListRunEventsRequestSchema>
+
+export const AgentListRunEventsResponseSchema = z.strictObject({
+  items: z.array(AgentRunEventSchema).max(200),
+  cursor: z.number().int().nonnegative(),
+  hasMore: z.boolean(),
+  historyIncomplete: z.boolean()
+})
+export type AgentListRunEventsResponse = z.infer<typeof AgentListRunEventsResponseSchema>
 
 export const AgentSubscribeRequestSchema = z.strictObject({
   runId: z.string().min(1).max(256),

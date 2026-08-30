@@ -73,7 +73,7 @@ export async function summarizeRunEvents(
   const runUsageMetadata: RunUsageMetadata = {}
   let budgetExhausted = false
   let reachedRun = false
-  for await (const event of iterateSessionEventsSince(sessions, threadId, 0)) {
+  for await (const event of iterateSessionEventsSince(sessions, threadId, -1)) {
     if (event.turnId !== runId) {
       if (!reachedRun && event.kind === 'usage') baseline = event.usage
       continue

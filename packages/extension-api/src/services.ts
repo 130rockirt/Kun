@@ -11,6 +11,8 @@ import type {
   AgentCancelRequest,
   AgentCreateRunRequest,
   AgentCreateRunResponse,
+  AgentListRunEventsRequest,
+  AgentListRunEventsResponse,
   AgentMutationResult,
   AgentRun,
   AgentRunEvent,
@@ -280,6 +282,7 @@ export interface AgentRunSubscription extends Disposable {
 export interface AgentApi {
   createRun(request: AgentCreateRunRequest): Promise<AgentCreateRunResponse>
   getRun(runId: string): Promise<AgentRun>
+  listRunEvents(request: AgentListRunEventsRequest): Promise<AgentListRunEventsResponse>
   subscribe(request: AgentSubscribeRequest): Promise<AgentRunSubscription>
   steer(request: AgentSteerRequest): Promise<AgentMutationResult>
   cancel(request: AgentCancelRequest): Promise<AgentMutationResult>

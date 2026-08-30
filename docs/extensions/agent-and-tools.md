@@ -22,6 +22,7 @@
 v1 提供：
 
 - `agent.createRun`
+- `agent.listRunEvents`
 - `agent.subscribe`
 - `agent.steer`
 - `agent.cancel`
@@ -79,7 +80,7 @@ const { run, createdThread } = await context.agent.createRun({
 - 没有不兼容 active run；
 - 当前 profile/provider/account/tool policy 允许新 Run。
 
-扩展不能收养主工作台或其它扩展 thread。拒绝结果不会泄漏 foreign thread 内容。`threads.listOwn/getOwn` 返回分页、有界投影，包括状态、时间、profile 和用量；不提供 raw store access 或秘密。
+扩展不能收养主工作台或其它扩展 thread。拒绝结果不会泄漏 foreign thread 内容。`threads.listOwn/getOwn` 返回分页、有界投影；每个有运行记录的 thread 都包含安全投影后的 `latestRun`（状态、时间、profile 和用量），不提供 raw store access 或秘密。
 
 ## Run 生命周期与预算
 
@@ -95,6 +96,21 @@ Run 只有一个 terminal outcome。completion、cancel、tool failure、disable
 Run 请求预算字段覆盖 tokens、elapsed time、model requests、tool invocations 和 retained events；Host/user policy 另外限制 concurrent runs。达到 hard limit 后 Kun 停止后续工作并发出一次 `budget-exhausted`。用量、cache telemetry 和调用都按 extension/version/run/thread/profile/provider/model/account/catalog epoch 归因；复用已有 thread 时，Run 投影返回相对前一累计快照的本 Run 增量，而不是把旧 Run 用量重复归入当前 Run。
 
 ## 订阅与重放
+
+`agent.listRunEvents` 从持久化事件源读取有界、正序的历史页，默认 100 条、最多 200 条：
+
+```ts
+const page = await context.agent.listRunEvents({
+  runId: run.id,
+  afterSequence: lastSeenSequence,
+  limit: 100
+})
+lastSeenSequence = page.cursor
+```
+
+响应包含 `items`、数字 `cursor`、`hasMore` 和 `historyIncomplete`。同一个 cursor 可继续传给下一页或 `agent.subscribe.afterSequence`。`historyIncomplete` 表示更早的底层事件已按 Kun 留存策略清理；扩展必须在 UI 中明确展示缺口，不能推断或伪造内容。该方法只读取当前扩展拥有的 Run，并同时受 `agent.run` 与 `agent.threads.readOwn` 边界保护。
+
+公共 message 事件包含稳定 `messageId` 与 `phase: 'delta' | 'replace' | 'complete'`。客户端对 delta 追加、对 replace/complete 按 `messageId` 覆盖，从而恢复流式正文而不生成重复气泡。用户与助手正文是字符串；工具消息只包含 Host 生成的工具名、状态和通用摘要，不包含原始参数、结果或路径。内部模型上下文、reasoning、附件路径和审批/输入凭据不会投影。
 
 `agent.subscribe` 使用专用 authenticated event boundary，而不是 runtime bearer token。事件包含 owner scope、run ID、thread ID、type 和单调递增 sequence。
 
