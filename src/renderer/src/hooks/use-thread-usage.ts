@@ -83,10 +83,13 @@ export function isChineseLocale(locale?: string): boolean {
   return normalized === 'zh' || normalized.startsWith('zh-')
 }
 
-function formatMoneyValue(value: number): string {
+function formatMoneyValue(value: number, locale: string): string {
   const safeValue = Number.isFinite(value) ? value : 0
   if (safeValue > 0 && safeValue < 0.0001) return '<0.0001'
-  return safeValue.toFixed(safeValue >= 1 ? 2 : 4)
+  return new Intl.NumberFormat(locale, {
+    minimumFractionDigits: safeValue >= 1 ? 2 : 4,
+    maximumFractionDigits: safeValue >= 1 ? 2 : 4
+  }).format(safeValue)
 }
 
 export function formatCost(
@@ -101,9 +104,9 @@ export function formatCost(
     (includeZero ? costCny >= 0 : costCny > 0)
   if (!hasUsd && !hasCny) return '-'
   if (isChineseLocale(locale)) {
-    return `￥${formatMoneyValue(hasCny ? costCny as number : (costUsd as number) * USD_TO_CNY_REFERENCE_RATE)}`
+    return `￥${formatMoneyValue(hasCny ? costCny as number : (costUsd as number) * USD_TO_CNY_REFERENCE_RATE, locale)}`
   }
-  return `$${formatMoneyValue(hasUsd ? costUsd as number : (costCny as number) / USD_TO_CNY_REFERENCE_RATE)}`
+  return `$${formatMoneyValue(hasUsd ? costUsd as number : (costCny as number) / USD_TO_CNY_REFERENCE_RATE, locale)}`
 }
 
 export type MoneySummaryItem = {

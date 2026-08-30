@@ -1,6 +1,7 @@
 import { createElement } from 'react'
 import { act, create as createRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetUsageRequestCacheForTests } from '../../hooks/usage-request-cache'
 import i18n from '../../i18n'
 import { UsageQuotaPanel } from './UsageQuotaPanel'
 
@@ -25,8 +26,13 @@ function usageResponse(
           cached_tokens: 720,
           cache_miss_tokens: 180,
           total_tokens: 1000,
-          cost_usd: 0.01,
-          cost_cny: 0.072,
+          cost_usd: 1.3583333333,
+          cost_cny: 9.78,
+          value_estimate_usd: 2344.4486111111,
+          value_estimate_cny: 16880.03,
+          value_estimate_coverage: 'complete',
+          value_estimate_priced_requests: 2,
+          value_estimate_unpriced_requests: 0,
           token_economy_savings_tokens: 100,
           turns: 2,
           thread_count: 1,
@@ -72,8 +78,13 @@ function usageResponse(
         cached_tokens: 720,
         cache_miss_tokens: 180,
         total_tokens: 1000,
-        cost_usd: 0.01,
-        cost_cny: 0.072,
+        cost_usd: 1.3583333333,
+        cost_cny: 9.78,
+        value_estimate_usd: 2344.4486111111,
+        value_estimate_cny: 16880.03,
+        value_estimate_coverage: 'complete',
+        value_estimate_priced_requests: 2,
+        value_estimate_unpriced_requests: 0,
         token_economy_savings_tokens: 100,
         turns: 2,
         cache_hit_rate: 0.8,
@@ -98,6 +109,7 @@ describe('UsageQuotaPanel', () => {
   })
 
   afterEach(() => {
+    resetUsageRequestCacheForTests()
     vi.unstubAllGlobals()
   })
 
@@ -235,6 +247,26 @@ describe('UsageQuotaPanel', () => {
     expect(output).not.toContain('deepseek-v4-idle')
     expect(output).not.toContain('0.0%')
     expect(listProviderQuotas).not.toHaveBeenCalled()
+    act(() => renderer.unmount())
+  })
+
+  it('labels Chinese reference estimates separately from recorded cost', async () => {
+    await i18n.changeLanguage('zh')
+    const runtimeRequest = vi.fn(async (path: string) => usageResponse(path))
+    vi.stubGlobal('window', {
+      kunGui: { runtimeRequest, listProviderQuotas: vi.fn(async () => ({ entries: [] })) }
+    })
+
+    let renderer!: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement(UsageQuotaPanel, { activeThreadId: 'thread-a' }))
+    })
+
+    const output = JSON.stringify(renderer.toJSON())
+    expect(output).toContain('￥9.78')
+    expect(output).toContain('参考估值 ≈￥16,880.03')
+    expect(output).toContain('按参考 API 价格和参考汇率估算，并非订阅账户的实际扣费。')
+    expect(output).not.toContain('￥9.78 · ≈￥16880.03')
     act(() => renderer.unmount())
   })
 

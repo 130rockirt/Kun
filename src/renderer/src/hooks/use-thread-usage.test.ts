@@ -115,6 +115,8 @@ describe('thread usage formatting', () => {
     expect(formatCost(null, 'en', 0.88)).toBe('$0.1222')
     expect(formatCost(null, 'ja', 0.88)).toBe('$0.1222')
     expect(formatCost(0.125, 'zh-CN')).toBe('￥0.9000')
+    expect(formatCost(2344.5, 'en')).toBe('$2,344.50')
+    expect(formatCost(0.125, 'zh-CN', 16880.03)).toBe('￥16,880.03')
     expect(formatCost(0.00000001, 'en')).toBe('$<0.0001')
   })
 

@@ -141,6 +141,33 @@ export function SidebarUsagePanel({
         locale
       })
     : []
+  const historyMoneyItems = summarizeThreadMoney({
+    costUsd: totals.costUsd,
+    costCny: totals.costCny,
+    valueEstimateUsd: totals.valueEstimateUsd,
+    valueEstimateCny: totals.valueEstimateCny,
+    valueEstimateCoverage: totals.valueEstimateCoverage,
+    locale
+  })
+  const estimateTitle = t('sessionUsageEstimateTitle')
+  const partialEstimateLabel = t('turnUsageEstimatePartial')
+  const referenceEstimate = (item: MoneySummaryItem): string => `${t('sessionUsageFooterEstimate', { value: item.value })}${
+    item.coverage === 'partial' ? ` · ${partialEstimateLabel}` : ''
+  }`
+  const sessionMoney = moneyMetric(
+    sessionMoneyItems,
+    formatRecordedCost(currentUsage?.costUsd, currentUsage?.costCny, locale),
+    referenceEstimate,
+    estimateTitle
+  )
+  const historyMoney = moneyMetric(
+    historyMoneyItems,
+    formatRecordedCost(totals.costUsd, totals.costCny, locale),
+    referenceEstimate,
+    estimateTitle
+  )
+  const hasReferenceEstimate = [...sessionMoneyItems, ...historyMoneyItems]
+    .some((item) => item.kind === 'estimate')
 
   return (
     <div
@@ -173,11 +200,7 @@ export function SidebarUsagePanel({
                 },
                 {
                   label: t('usageQuotaMetricCost'),
-                  value: formatMoneySummary(sessionMoneyItems, formatRecordedCost(
-                    currentUsage.costUsd,
-                    currentUsage.costCny,
-                    i18n.language
-                  ))
+                  ...sessionMoney
                 },
                 ...(currentCacheHitRate != null
                   ? [{
@@ -249,14 +272,7 @@ export function SidebarUsagePanel({
                   },
                   {
                     label: t('usageQuotaMetricCost'),
-                    value: formatMoneySummary(summarizeThreadMoney({
-                      costUsd: totals.costUsd,
-                      costCny: totals.costCny,
-                      valueEstimateUsd: totals.valueEstimateUsd,
-                      valueEstimateCny: totals.valueEstimateCny,
-                      valueEstimateCoverage: totals.valueEstimateCoverage,
-                      locale
-                    }), formatRecordedCost(totals.costUsd, totals.costCny, i18n.language))
+                    ...historyMoney
                   },
                   {
                     label: t('usageQuotaMetricCacheHit'),
@@ -408,6 +424,11 @@ export function SidebarUsagePanel({
           )}
         </section>
 
+        {hasReferenceEstimate ? (
+          <p className="px-1 text-[9.5px] leading-4 text-ds-faint">
+            {estimateTitle}
+          </p>
+        ) : null}
         <p className="px-1 pb-1 text-[9.5px] leading-4 text-ds-faint">
           {t('usageQuotaLocalNote')}
         </p>
@@ -416,10 +437,32 @@ export function SidebarUsagePanel({
   )
 }
 
+type UsageMetric = {
+  label: string
+  value: string
+  detail?: string
+  detailTitle?: string
+  accent?: boolean
+}
+
+function moneyMetric(
+  items: MoneySummaryItem[],
+  fallback: string,
+  referenceEstimate: (item: MoneySummaryItem) => string,
+  estimateTitle: string
+): Pick<UsageMetric, 'value' | 'detail' | 'detailTitle'> {
+  const actual = items.find((item) => item.kind === 'actual')
+  const estimate = items.find((item) => item.kind === 'estimate')
+  return {
+    value: actual?.value ?? (estimate ? referenceEstimate(estimate) : fallback),
+    ...(actual && estimate ? { detail: referenceEstimate(estimate), detailTitle: estimateTitle } : {})
+  }
+}
+
 function MetricStrip({
   metrics
 }: {
-  metrics: Array<{ label: string; value: string; accent?: boolean }>
+  metrics: UsageMetric[]
 }): ReactElement {
   return (
     <dl className="mx-4 grid grid-cols-2 rounded-xl border border-ds-border-muted bg-ds-surface-subtle/45 sm:grid-cols-4">
@@ -439,11 +482,16 @@ function MetricStrip({
             {metric.label}
           </dt>
           <dd
-            className="mt-0.5 truncate text-[15px] font-semibold leading-5 tabular-nums text-ds-ink"
+            className="mt-0.5 break-words text-[15px] font-semibold leading-5 tabular-nums text-ds-ink"
             title={metric.value}
           >
             {metric.value}
           </dd>
+          {metric.detail ? (
+            <p className="mt-1 break-words text-[9px] leading-3.5 text-ds-muted" title={metric.detailTitle}>
+              {metric.detail}
+            </p>
+          ) : null}
         </div>
       ))}
     </dl>
@@ -453,7 +501,7 @@ function MetricStrip({
 function MetricGrid({
   metrics
 }: {
-  metrics: Array<{ label: string; value: string }>
+  metrics: UsageMetric[]
 }): ReactElement {
   return (
     <dl className="grid gap-1.5 [grid-template-columns:repeat(auto-fit,minmax(6.5rem,1fr))]">
@@ -465,9 +513,14 @@ function MetricGrid({
           <dt className="truncate text-[9.5px] leading-4 text-ds-faint" title={metric.label}>
             {metric.label}
           </dt>
-          <dd className="mt-0.5 truncate text-[14px] font-semibold leading-5 tabular-nums text-ds-ink" title={metric.value}>
+          <dd className="mt-0.5 break-words text-[14px] font-semibold leading-5 tabular-nums text-ds-ink" title={metric.value}>
             {metric.value}
           </dd>
+          {metric.detail ? (
+            <p className="mt-1 break-words text-[9px] leading-3.5 text-ds-muted" title={metric.detailTitle}>
+              {metric.detail}
+            </p>
+          ) : null}
         </div>
       ))}
     </dl>
@@ -643,16 +696,4 @@ function formatRecordedCost(
   const chineseLocale = /^zh(?:-|$)/i.test(locale.trim())
   const hasRecordedCny = typeof costCny === 'number' && Number.isFinite(costCny) && costCny > 0
   return formatCost(costUsd, chineseLocale && !hasRecordedCny ? 'en' : locale, costCny)
-}
-
-/**
- * Join recorded API cost with the subscription reference-price estimate using
- * the same "Estimate ≈" convention as the composer footer. Falls back to the
- * plain recorded-cost string when neither side produced a value.
- */
-function formatMoneySummary(items: MoneySummaryItem[], fallback: string): string {
-  if (items.length === 0) return fallback
-  return items
-    .map((item) => item.kind === 'estimate' ? `≈${item.value}` : item.value)
-    .join(' · ')
 }
