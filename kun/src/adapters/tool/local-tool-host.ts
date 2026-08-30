@@ -120,6 +120,7 @@ function createUserInputTool(name: string): LocalTool {
       required: []
     },
     policy: 'auto',
+    sideEffect: 'read-only',
     execute: async (args, context) => {
       if (!context.awaitUserInput) {
         return {
