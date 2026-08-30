@@ -30,11 +30,13 @@ export const INSTALLER_RECOVERY_ENVIRONMENT_KEYS = [
   'KUN_INSTALLER_INSTALL_MODE',
   'KUN_INSTALLER_INSTALL_REGISTRY_KEY',
   'KUN_INSTALLER_JOURNAL',
+  'KUN_INSTALLER_HEALTH_RESULT',
   'KUN_INSTALLER_PAYLOAD_BACKUP',
   'KUN_INSTALLER_PRESERVE_OTHER_SCOPE',
   'KUN_INSTALLER_PRODUCT_NAME',
   'KUN_INSTALLER_SECONDARY_SOURCE',
   'KUN_INSTALLER_SOURCE',
+  'KUN_INSTALLER_STAGE',
   'KUN_INSTALLER_TARGET',
   'KUN_INSTALLER_TRANSACTION',
   'KUN_INSTALLER_UNINSTALL_REGISTRY_KEY'
@@ -287,16 +289,43 @@ function mapTransactionFieldToEnvironmentKey(key: string): string | null {
     case 'KUN_INSTALLER_INSTALL_MODE': return 'InstallMode'
     case 'KUN_INSTALLER_INSTALL_REGISTRY_KEY': return 'InstallRegistryKey'
     case 'KUN_INSTALLER_JOURNAL': return 'JournalPath'
+    case 'KUN_INSTALLER_HEALTH_RESULT': return 'HealthResult'
     case 'KUN_INSTALLER_PAYLOAD_BACKUP': return 'BackupRoot'
     case 'KUN_INSTALLER_PRESERVE_OTHER_SCOPE': return 'PreserveOtherScope'
     case 'KUN_INSTALLER_PRODUCT_NAME': return 'ProductName'
     case 'KUN_INSTALLER_SECONDARY_SOURCE': return 'SecondarySource'
     case 'KUN_INSTALLER_SOURCE': return 'Source'
+    case 'KUN_INSTALLER_STAGE': return 'StageRoot'
     case 'KUN_INSTALLER_TARGET': return 'Target'
     case 'KUN_INSTALLER_TRANSACTION': return 'TransactionPath'
     case 'KUN_INSTALLER_UNINSTALL_REGISTRY_KEY': return 'UninstallRegistryKey'
     default: return null
   }
+}
+
+function hasCompleteInstallerRecoveryEnvironment(
+  environment: InstallerRecoveryEnvironment,
+  transaction: Record<string, unknown>
+): boolean {
+  const required = [
+    'KUN_INSTALLER_APP_EXECUTABLE',
+    'KUN_INSTALLER_APP_GUID',
+    'KUN_INSTALLER_CANONICAL_LEAF',
+    'KUN_INSTALLER_INSTALL_MODE',
+    'KUN_INSTALLER_INSTALL_REGISTRY_KEY',
+    'KUN_INSTALLER_JOURNAL',
+    'KUN_INSTALLER_SOURCE',
+    'KUN_INSTALLER_STAGE',
+    'KUN_INSTALLER_TARGET',
+    'KUN_INSTALLER_TRANSACTION',
+    'KUN_INSTALLER_UNINSTALL_REGISTRY_KEY'
+  ] as const
+  if (required.some((key) => !environment[key])) return false
+  if (!Array.isArray(transaction.Shortcuts) || transaction.Shortcuts.length === 0) return true
+  const shortcutRoots = environment.KUN_INSTALLER_INSTALL_MODE === 'all'
+    ? ['KUN_INSTALLER_COMMON_DESKTOP', 'KUN_INSTALLER_COMMON_PROGRAMS'] as const
+    : ['KUN_INSTALLER_CURRENT_DESKTOP', 'KUN_INSTALLER_CURRENT_PROGRAMS'] as const
+  return shortcutRoots.every((key) => Boolean(environment[key]))
 }
 
 /**
@@ -349,8 +378,9 @@ export async function readInstallerUpdateTransaction(
       }
     }
     recoveryEnvironment.KUN_INSTALLER_TRANSACTION = transactionPath
-    if (!recoveryEnvironment.KUN_INSTALLER_JOURNAL) continue
-    if (!recoveryEnvironment.KUN_INSTALLER_TARGET) continue
+    if (!hasCompleteInstallerRecoveryEnvironment(recoveryEnvironment, record)) continue
+    const journalPath = recoveryEnvironment.KUN_INSTALLER_JOURNAL
+    if (!journalPath) continue
 
     return {
       transactionPath,
@@ -359,7 +389,7 @@ export async function readInstallerUpdateTransaction(
       oldVersion: match.oldVersion,
       newVersion: match.newVersion,
       backupDir: typeof record.BackupRoot === 'string' ? record.BackupRoot : '',
-      journalPath: recoveryEnvironment.KUN_INSTALLER_JOURNAL,
+      journalPath,
       transactionRoot: dirname(transactionPath),
       recoveryEnvironment
     }

@@ -13,6 +13,7 @@ Set-StrictMode -Version 2.0
 . (Join-Path $PSScriptRoot 'windows-installer-migration-journal.ps1')
 . (Join-Path $PSScriptRoot 'windows-installer-migration-filesystem.ps1')
 . (Join-Path $PSScriptRoot 'windows-installer-migration-actions.ps1')
+. (Join-Path $PSScriptRoot 'windows-installer-migration-recovery-env.ps1')
 . (Join-Path $PSScriptRoot 'windows-installer-migration-transaction.ps1')
 
 function Invoke-InstallerFaultPoint([string]$Point) {
@@ -98,11 +99,13 @@ function Write-AutomaticUpdateResult {
     'KUN_INSTALLER_INSTALL_MODE',
     'KUN_INSTALLER_INSTALL_REGISTRY_KEY',
     'KUN_INSTALLER_JOURNAL',
+    'KUN_INSTALLER_HEALTH_RESULT',
     'KUN_INSTALLER_PAYLOAD_BACKUP',
     'KUN_INSTALLER_PRESERVE_OTHER_SCOPE',
     'KUN_INSTALLER_PRODUCT_NAME',
     'KUN_INSTALLER_SECONDARY_SOURCE',
     'KUN_INSTALLER_SOURCE',
+    'KUN_INSTALLER_STAGE',
     'KUN_INSTALLER_TARGET',
     'KUN_INSTALLER_TRANSACTION',
     'KUN_INSTALLER_UNINSTALL_REGISTRY_KEY'

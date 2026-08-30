@@ -276,6 +276,7 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
       'windows-installer-migration-journal.ps1',
       'windows-installer-migration-filesystem.ps1',
       'windows-installer-migration-actions.ps1',
+      'windows-installer-migration-recovery-env.ps1',
       'windows-installer-migration-transaction.ps1'
     ].map((fileName) =>
       readFileSync(join(process.cwd(), 'build', fileName), 'utf8')
@@ -461,6 +462,10 @@ it('passes the nested OfficeCLI executable through the Windows signing manager',
     expect(migrationScript).toContain('function Test-RetainedInPlaceKnownEntry')
     expect(migrationScript).toContain("Get-EnvironmentValue 'KUN_INSTALLER_IN_PLACE_UPDATE'")
     expect(migrationScript).toContain("Get-EnvironmentValue 'KUN_INSTALLER_AUTOMATIC_UPDATE'")
+    expect(migrationScript).toContain('function Get-InstallerRecoveryFieldMap')
+    expect(migrationScript).toContain("AppExecutable = 'KUN_INSTALLER_APP_EXECUTABLE'")
+    expect(migrationScript).toContain("InstallRegistryKey = 'KUN_INSTALLER_INSTALL_REGISTRY_KEY'")
+    expect(migrationScript).not.toContain('KUN_INSTALLER_" + $name.ToUpper()')
     expect(migrationScript).toContain('function Resolve-RecoveryPayloadExecutable')
     expect(migrationScript).toContain('function Initialize-UpdateTransaction')
     expect(migrationScript).toContain('function Invoke-RollbackUpdateTransaction')

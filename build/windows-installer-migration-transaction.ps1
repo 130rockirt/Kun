@@ -407,14 +407,11 @@ function Initialize-UpdateTransaction {
   # Persist the complete recovery context before any payload moves. The
   # transaction file is the authoritative rollback record; the GUI result
   # file is only an execution summary written after the cutover.
-  foreach ($name in @(
-    'AppExecutable', 'CanonicalLeaf', 'CommonDesktop', 'CommonPrograms',
-    'CurrentDesktop', 'CurrentPrograms', 'InstallRegistryKey',
-    'PreserveOtherScope', 'ProductName', 'SecondarySource', 'UninstallRegistryKey'
-  )) {
-    $transaction.$name = Get-EnvironmentValue ("KUN_INSTALLER_" + $name.ToUpper())
-  }
+  Set-InstallerRecoveryFieldsFromEnvironment $transaction
   $transaction.JournalPath = Get-JournalPath
+  $transaction.StageRoot = $stage
+  $transaction.HealthResult = Get-UpdateHealthResultPath
+  Assert-InstallerRecoveryFields $transaction
   Write-UpdateTransaction $transaction
   Invoke-InstallerFaultPoint 'prepare.after_journal'
   Write-InstallerResult $stage

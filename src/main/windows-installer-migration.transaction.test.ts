@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -159,6 +159,36 @@ afterEach(() => {
 })
 
 windowsOnly('Windows automatic update transaction', () => {
+  it('restores from an environment rebuilt from the transaction without a result file', async () => {
+    const input = fixture()
+    assertSucceeded(run(input, 'Prepare'), 'Prepare')
+    const state = JSON.parse(readFileSync(input.transaction, 'utf8').replace(/^\uFEFF/, ''))
+    expect(state).toMatchObject({
+      AppExecutable: 'Kun.exe', CanonicalLeaf: 'Kun', InstallRegistryKey: 'Software\\KunInstallerTransactionTest\\Install',
+      UninstallRegistryKey: 'Software\\KunInstallerTransactionTest\\Uninstall', CurrentDesktop: input.desktop,
+      CurrentPrograms: input.programs, StageRoot: input.stage, HealthResult: input.health
+    })
+    payload(input.stage, 'Kun.exe')
+    assertSucceeded(run(input, 'SwitchUpdatePayload'), 'SwitchUpdatePayload')
+    const transactionPath = join(input.root, 'recovery', 'abc-update.json')
+    copyFileSync(input.transaction, transactionPath)
+    const { readInstallerUpdateTransaction } = await import('./gui-updater-pending')
+    const rebuilt = await readInstallerUpdateTransaction(
+      { oldVersion: '0.1.0', newVersion: '0.2.0' },
+      { platform: 'win32', recoveryRoot: join(input.root, 'recovery') }
+    )
+    expect(rebuilt).not.toBeNull()
+    const result = spawnSync('powershell.exe', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', helper, '-Action', 'RecoverUpdateTransaction'
+    ], { encoding: 'utf8', env: {
+      SystemRoot: process.env.SystemRoot, Path: process.env.Path, PATHEXT: process.env.PATHEXT,
+      ComSpec: process.env.ComSpec, ...rebuilt!.recoveryEnvironment
+    } })
+    assertSucceeded(result, 'RecoverUpdateTransaction rebuilt from transaction')
+    expect(existsSync(join(input.source, 'DeepSeek GUI.exe'))).toBe(true)
+    expect(transaction(transactionPath)).toMatchObject({ Phase: 'rolled_back', RollbackOutcome: 'succeeded' })
+  })
+
   it('keeps the legacy payload untouched when staged validation fails', () => {
     const input = fixture()
     assertSucceeded(run(input, 'Prepare'), 'Prepare')
