@@ -42,7 +42,8 @@ export const TurnItemBase = z.object({
 
 export const UserInputOptionSchema = z.object({
   label: z.string().min(1),
-  description: z.string()
+  description: z.string(),
+  recommended: z.boolean().optional()
 })
 
 export const UserInputQuestionSchema = z.object({

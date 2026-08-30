@@ -142,6 +142,7 @@
   "userInputBack": "ย้อนกลับ",
   "userInputSubmitAnswers": "ส่งคำตอบ",
   "userInputSubmitting": "กำลังส่ง…",
+  "userInputRecommended": "แนะนำ",
   "userInputMultipleHint": "เลือกอย่างน้อยหนึ่งตัวเลือก แล้วดำเนินการต่อ",
   "userInputCompleteAboveComposer": "ตอบให้เสร็จเหนือช่องป้อนข้อมูล",
   "userInputQuestionCount": "{{count}} คำถาม",

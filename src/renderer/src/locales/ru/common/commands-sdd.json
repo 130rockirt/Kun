@@ -142,6 +142,7 @@
   "userInputBack": "Назад",
   "userInputSubmitAnswers": "Отправить ответы",
   "userInputSubmitting": "Отправка…",
+  "userInputRecommended": "Рекомендуется",
   "userInputMultipleHint": "Выберите один или несколько вариантов и продолжите",
   "userInputCompleteAboveComposer": "Ответьте над полем ввода",
   "userInputQuestionCount": "Вопросов: {{count}}",

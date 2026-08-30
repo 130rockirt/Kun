@@ -144,6 +144,7 @@
   "userInputBack": "上一题",
   "userInputSubmitAnswers": "提交回答",
   "userInputSubmitting": "正在提交…",
+  "userInputRecommended": "推荐",
   "userInputMultipleHint": "可选择多项，选好后继续",
   "userInputCompleteAboveComposer": "请在输入框上方完成选择",
   "userInputQuestionCount": "共 {{count}} 题",

@@ -142,6 +142,7 @@
   "userInputBack": "पीछे",
   "userInputSubmitAnswers": "उत्तर भेजें",
   "userInputSubmitting": "भेजा जा रहा है…",
+  "userInputRecommended": "अनुशंसित",
   "userInputMultipleHint": "एक या अधिक विकल्प चुनें, फिर जारी रखें",
   "userInputCompleteAboveComposer": "इनपुट बॉक्स के ऊपर उत्तर पूरा करें",
   "userInputQuestionCount": "{{count}} प्रश्न",

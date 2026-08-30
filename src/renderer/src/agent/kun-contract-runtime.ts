@@ -284,7 +284,7 @@ export type CoreTurnItemJson = {
     question?: string
     prompt?: string
     message?: string
-    options: Array<{ label: string; description: string }>
+    options: Array<{ label: string; description: string; recommended?: boolean }>
     selectionMode?: 'single' | 'multiple'
     minSelections?: number
     maxSelections?: number
@@ -587,7 +587,7 @@ export type CoreRuntimeEventJson = {
     question?: string
     prompt?: string
     message?: string
-    options: Array<{ label: string; description: string }>
+    options: Array<{ label: string; description: string; recommended?: boolean }>
     selectionMode?: 'single' | 'multiple'
     minSelections?: number
     maxSelections?: number

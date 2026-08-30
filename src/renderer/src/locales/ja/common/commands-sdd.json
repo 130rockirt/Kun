@@ -142,6 +142,7 @@
   "userInputBack": "戻る",
   "userInputSubmitAnswers": "回答を送信",
   "userInputSubmitting": "送信中…",
+  "userInputRecommended": "おすすめ",
   "userInputMultipleHint": "複数選択できます。選択後に続行してください",
   "userInputCompleteAboveComposer": "入力欄の上で回答してください",
   "userInputQuestionCount": "{{count}} 問",

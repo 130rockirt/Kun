@@ -142,6 +142,7 @@
   "userInputBack": "이전",
   "userInputSubmitAnswers": "답변 제출",
   "userInputSubmitting": "제출 중…",
+  "userInputRecommended": "추천",
   "userInputMultipleHint": "하나 이상 선택한 후 계속하세요",
   "userInputCompleteAboveComposer": "입력창 위에서 답변을 완료하세요",
   "userInputQuestionCount": "총 {{count}}개 질문",

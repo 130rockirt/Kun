@@ -132,7 +132,8 @@ export function normalizeUserInputOption(option: unknown): UserInputQuestion['op
   if (!label) return null
   return {
     label,
-    description: typeof raw.description === 'string' ? raw.description : ''
+    description: typeof raw.description === 'string' ? raw.description : '',
+    ...(raw.recommended === true ? { recommended: true } : {})
   }
 }
 

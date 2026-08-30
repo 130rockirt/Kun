@@ -213,6 +213,7 @@ export type RuntimeDisclosureMetadata = {
 export type UserInputOption = {
   label: string
   description: string
+  recommended?: boolean
 }
 
 export type UserInputQuestion = {
