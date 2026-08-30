@@ -551,4 +551,71 @@ describe('controlled workbench contribution rendering', () => {
       await i18n.changeLanguage('en')
     }
   })
+
+  it('refreshes contributions and reopens a View after its lifecycle session is invalidated', async () => {
+    const contribution = registryWithContributions().list('views.rightSidebar')
+      .find((item) => item.id === 'extension:acme.ui/dashboard')!
+    const createSession = vi.spyOn(extensionWorkbenchClient, 'createViewSession')
+      .mockResolvedValueOnce({
+        sessionId: 'session-0123456789',
+        nonce: 'nonce-0123456789',
+        contributionId: contribution.id,
+        extensionId: 'acme.ui',
+        extensionVersion: '1.0.0',
+        src: 'kun-extension://acme.ui/dist/index.html',
+        partition: 'kun-extension-acme-ui-session'
+      })
+      .mockResolvedValueOnce({
+        sessionId: 'session-9876543210',
+        nonce: 'nonce-9876543210',
+        contributionId: contribution.id,
+        extensionId: 'acme.ui',
+        extensionVersion: '1.0.0',
+        src: 'kun-extension://acme.ui/dist/index.html',
+        partition: 'kun-extension-acme-ui-session-next'
+      })
+    vi.spyOn(extensionWorkbenchClient, 'disposeViewSession').mockResolvedValue(undefined)
+    let invalidate!: (event: { sessionId: string }) => void
+    const stopInvalidation = vi.fn()
+    vi.spyOn(extensionWorkbenchClient, 'onViewSessionInvalidated')
+      .mockImplementation((handler) => {
+        invalidate = handler
+        return stopInvalidation
+      })
+    const dispatchEvent = vi.fn()
+    vi.useFakeTimers()
+    vi.stubGlobal('HTMLElement', class {})
+    vi.stubGlobal('document', { activeElement: null })
+    vi.stubGlobal('window', { requestAnimationFrame: vi.fn(), dispatchEvent })
+    let renderer!: ReturnType<typeof createRenderer>
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(ExtensionViewOutlet, {
+          contribution,
+          workspaceRoot: '/workspace'
+        }))
+      })
+
+      await act(async () => {
+        invalidate({ sessionId: 'session-0123456789' })
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000)
+      })
+
+      expect(dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'kun:extensions-changed'
+      }))
+      expect(createSession).toHaveBeenCalledTimes(2)
+      expect(createSession).toHaveBeenNthCalledWith(2, contribution.id, '/workspace')
+      expect(renderer.root.findAllByProps({
+        'data-extension-view-session': 'session-9876543210'
+      })).toHaveLength(1)
+    } finally {
+      if (renderer) act(() => renderer.unmount())
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+      vi.unstubAllGlobals()
+    }
+  })
 })

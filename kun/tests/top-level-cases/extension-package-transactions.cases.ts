@@ -193,6 +193,7 @@ describe('extension package management', () => {
       releasePermissionChange()
       await revoking
       await barrier
+      expect(admissionSettled).toBe(true)
       await expect(admission).rejects.toMatchObject({ code: 'EXTENSION_WORKSPACE_UNTRUSTED' })
     } finally {
       await makeWritable(root)

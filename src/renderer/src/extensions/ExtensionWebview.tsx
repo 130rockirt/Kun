@@ -2,19 +2,29 @@ import { AlertTriangle, RefreshCw, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { HostMessageSchema, type HostMessage } from '@kun/extension-api'
-import type { RegisteredContribution } from './contribution-registry'
+import {
+  workbenchContributionRegistry,
+  type RegisteredContribution
+} from './contribution-registry'
 import {
   extensionWorkbenchClient,
   type ExtensionViewSession
 } from './extension-workbench-client'
 import { boundedPlainText } from './safe-text'
+import { useExtensionContributionLoadState } from './use-contributions'
 
 type WebviewElement = HTMLElement & {
   reload?: () => void
 }
 
+type InvalidatedViewRecovery = {
+  contributionRevision: number
+  sessionContractKey: string
+}
+
 const MAX_INITIAL_VIEW_MESSAGES = 8
 const MAX_INITIAL_VIEW_MESSAGE_BYTES = 64 * 1024
+const INVALIDATED_VIEW_REFRESH_TIMEOUT_MS = 2_000
 
 export function extensionViewSessionContractKey(
   contribution: RegisteredContribution<
@@ -91,11 +101,14 @@ export function ExtensionWebview({
   onClose?: () => void
 }): ReactElement {
   const { t } = useTranslation('common')
-  const [attempt, setAttempt] = useState(0)
+  const contributionLoadState = useExtensionContributionLoadState()
+  const [openGeneration, setOpenGeneration] = useState(0)
+  const [invalidatedRecovery, setInvalidatedRecovery] = useState<InvalidatedViewRecovery | null>(null)
   const [session, setSession] = useState<ExtensionViewSession | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const webviewRef = useRef<WebviewElement | null>(null)
   const originFocusRef = useRef<HTMLElement | null>(null)
+  const retryHostRef = useRef(false)
   const contributionRef = useRef(contribution)
   contributionRef.current = contribution
   const contributionId = contribution.id
@@ -122,7 +135,9 @@ export function ExtensionWebview({
     let opened: ExtensionViewSession | null = null
     setSession(null)
     setFailure(null)
-    const opening = attempt > 0
+    const retryHost = retryHostRef.current
+    retryHostRef.current = false
+    const opening = retryHost
       ? extensionWorkbenchClient.createViewSession(
           contributionId,
           normalizedWorkspaceRoot,
@@ -154,7 +169,49 @@ export function ExtensionWebview({
       const focusTarget = originFocusRef.current
       if (focusTarget?.isConnected) window.requestAnimationFrame(() => focusTarget.focus())
     }
-  }, [attempt, contributionId, normalizedWorkspaceRoot, sessionContractKey])
+  }, [contributionId, normalizedWorkspaceRoot, openGeneration, sessionContractKey])
+
+  useEffect(() => {
+    if (!session) return
+    let invalidated = false
+    const stopInvalidation = extensionWorkbenchClient.onViewSessionInvalidated((event) => {
+      if (invalidated || event.sessionId !== session.sessionId) return
+      invalidated = true
+      setInvalidatedRecovery({
+        contributionRevision: workbenchContributionRegistry.getRevision(),
+        sessionContractKey
+      })
+      window.dispatchEvent(new CustomEvent('kun:extensions-changed'))
+    })
+    return stopInvalidation
+  }, [session, sessionContractKey])
+
+  useEffect(() => {
+    if (
+      !invalidatedRecovery ||
+      contributionLoadState.status !== 'ready' ||
+      workbenchContributionRegistry.getRevision() === invalidatedRecovery.contributionRevision
+    ) {
+      return
+    }
+    setInvalidatedRecovery(null)
+    if (sessionContractKey !== invalidatedRecovery.sessionContractKey) return
+    // Lifecycle recovery must not clear Host crash/backoff state. That
+    // stronger operation remains exclusive to the visible Retry button.
+    retryHostRef.current = false
+    setOpenGeneration((value) => value + 1)
+  }, [contributionLoadState.status, invalidatedRecovery, sessionContractKey])
+
+  useEffect(() => {
+    if (!invalidatedRecovery) return
+    const timer = setTimeout(() => {
+      setInvalidatedRecovery(null)
+      if (sessionContractKey !== invalidatedRecovery.sessionContractKey) return
+      retryHostRef.current = false
+      setOpenGeneration((value) => value + 1)
+    }, INVALIDATED_VIEW_REFRESH_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [invalidatedRecovery, sessionContractKey])
 
   useEffect(() => {
     const webview = webviewRef.current
@@ -222,7 +279,10 @@ export function ExtensionWebview({
           <div className="mt-1 max-w-sm text-[12px] leading-5 text-ds-muted">{failure}</div>
           <button
             type="button"
-            onClick={() => setAttempt((value) => value + 1)}
+            onClick={() => {
+              retryHostRef.current = true
+              setOpenGeneration((value) => value + 1)
+            }}
             className="mt-4 inline-flex items-center gap-2 rounded-lg border border-ds-border px-3 py-1.5 text-[12px] font-semibold text-ds-ink hover:bg-ds-hover"
           >
             <RefreshCw className="h-3.5 w-3.5" />

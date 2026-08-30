@@ -78,6 +78,7 @@ export function registerExtensionViewIpcHandlers(
 ): ExtensionIpcRegistration {
   const eventPumps = new Map<string, AbortController>()
   const runtimeDisposals = new Map<string, Promise<ExtensionRuntimeRequestResult>>()
+  const requestedDisposals = new Set<string>()
   const boundParentIds = new Set<number>()
   let lastTheme = ''
   let lastLocale = ''
@@ -100,6 +101,18 @@ export function registerExtensionViewIpcHandlers(
     options.viewProtocols.dispose(record.sessionId)
     eventPumps.get(record.sessionId)?.abort()
     eventPumps.delete(record.sessionId)
+    const requested = requestedDisposals.delete(record.sessionId)
+    if (!requested) {
+      const parent = options.getMainWindow()?.webContents
+      if (
+        parent?.id === record.parentWebContentsId &&
+        !parent.isDestroyed()
+      ) {
+        parent.send('extension:view-session:invalidated', {
+          sessionId: record.sessionId
+        })
+      }
+    }
     if (runtimeDisposals.has(record.sessionId)) return
     const cleanup = options.runtimeRequest(
       `/v1/extensions/view-sessions/${encodeURIComponent(record.runtimeSessionId)}`,
@@ -214,6 +227,7 @@ export function registerExtensionViewIpcHandlers(
     if (!record || record.parentWebContentsId !== event.sender.id) {
       return runtimeFailure('EXTENSION_VIEW_SESSION_NOT_FOUND', 'View Session was not found.', 404)
     }
+    requestedDisposals.add(request.sessionId)
     options.viewSessions.dispose(request.sessionId)
     return (await runtimeDisposals.get(request.sessionId))?.ok ?? true
   })

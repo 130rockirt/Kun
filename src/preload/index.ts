@@ -572,6 +572,14 @@ const api = {
     ipcRenderer.invoke('extension:view-session:create', request),
   extensionDisposeViewSession: (request) =>
     ipcRenderer.invoke('extension:view-session:dispose', request),
+  onExtensionViewSessionInvalidated: (handler) => {
+    const wrapped = (
+      _: Electron.IpcRendererEvent,
+      payload: Parameters<typeof handler>[0]
+    ) => handler(payload)
+    ipcRenderer.on('extension:view-session:invalidated', wrapped)
+    return () => ipcRenderer.removeListener('extension:view-session:invalidated', wrapped)
+  },
   extensionExternalBrowserControl: (request) =>
     ipcRenderer.invoke('extension:external-browser:control', request),
   onExtensionExternalBrowserState: (handler) => {

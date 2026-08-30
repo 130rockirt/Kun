@@ -505,7 +505,15 @@ export class ExtensionPackageManager {
 
   /** Wait for the package or permission transaction currently fencing this extension. */
   async waitForPendingOperation(extensionId: string): Promise<void> {
-    await (this.operations.get(extensionId) ?? Promise.resolve())
+    // A new transaction can be queued while the promise observed here is
+    // settling. Keep following the serialized tail until it is stable so an
+    // activation cannot slip between two adjacent lifecycle changes.
+    while (true) {
+      const pending = this.operations.get(extensionId)
+      if (pending === undefined) return
+      await pending
+      if (this.operations.get(extensionId) === pending) return
+    }
   }
 
   private async resolveForActivationSerialized(

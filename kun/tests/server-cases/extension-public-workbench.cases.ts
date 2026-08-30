@@ -539,7 +539,36 @@ describe('extension public routes', () => {
     expect(lifecycle.map(({ state }) => state)).toEqual(['created', 'disposed'])
   })
 
-  it('bounds cancelled View activation recovery to one retry', async () => {
+  it('recovers when adjacent lifecycle changes cancel View activation twice', async () => {
+    const fixture = await createFixture()
+    const lifecycle: Array<{ state: string; sessionId: string }> = []
+    fixture.viewSessions.onDidLifecycle(({ state, session }) => {
+      lifecycle.push({ state, sessionId: session.sessionId })
+    })
+    const cancelled = () => Object.assign(
+      new Error('activation was fenced'),
+      { code: 'EXTENSION_ACTIVATION_CANCELLED' }
+    )
+    fixture.manager.activate
+      .mockRejectedValueOnce(cancelled())
+      .mockRejectedValueOnce(cancelled())
+
+    const response = await createSession(buildExtensionPublicRouter(fixture.runtime))
+
+    expect(response.status).toBe(201)
+    expect(fixture.manager.activate).toHaveBeenCalledTimes(3)
+    expect(fixture.runtime.extensionPlatform!.packageManager.waitForPendingOperation)
+      .toHaveBeenCalledTimes(3)
+    expect(lifecycle.map(({ state }) => state)).toEqual([
+      'created',
+      'disposed',
+      'created',
+      'disposed',
+      'created'
+    ])
+  })
+
+  it('bounds repeated cancelled View activation recovery to three retries', async () => {
     const fixture = await createFixture()
     const lifecycle: Array<{ state: string; sessionId: string }> = []
     fixture.viewSessions.onDidLifecycle(({ state, session }) => {
@@ -556,10 +585,14 @@ describe('extension public routes', () => {
       status: 500,
       body: { code: 'extension_operation_failed' }
     })
-    expect(fixture.manager.activate).toHaveBeenCalledTimes(2)
+    expect(fixture.manager.activate).toHaveBeenCalledTimes(4)
     expect(fixture.runtime.extensionPlatform!.packageManager.waitForPendingOperation)
-      .toHaveBeenCalledTimes(2)
+      .toHaveBeenCalledTimes(4)
     expect(lifecycle.map(({ state }) => state)).toEqual([
+      'created',
+      'disposed',
+      'created',
+      'disposed',
       'created',
       'disposed',
       'created',

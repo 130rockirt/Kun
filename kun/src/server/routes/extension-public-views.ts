@@ -139,15 +139,17 @@ export async function createViewSession(
     platform,
     body.data.contributionId,
     workspaceRoot,
-    true
+    MAX_CANCELLED_ACTIVATION_RETRIES
   )
 }
+
+const MAX_CANCELLED_ACTIVATION_RETRIES = 3
 
 async function createActivatedViewSession(
   platform: ExtensionPlatformRuntime,
   contributionId: string,
   workspaceRoot: string | undefined,
-  retryCancelledActivation: boolean
+  cancelledActivationRetries: number
 ): Promise<JsonResponse> {
   const target = await resolveViewTarget(platform, contributionId, workspaceRoot)
   // Create the runtime-owned session first. Its synchronous lifecycle event
@@ -165,13 +167,18 @@ async function createActivatedViewSession(
     return jsonResponse(session, 201)
   } catch (error) {
     platform.viewSessions.disposeSession(session.sessionId)
-    if (retryCancelledActivation && isActivationCancelled(error)) {
+    if (cancelledActivationRetries > 0 && isActivationCancelled(error)) {
       // Permission, enablement, and version changes are serialized by the
       // package manager. Wait for the transaction that fenced this Host, then
       // resolve a new target so the replacement session cannot retain stale
       // workspace grants or package metadata.
       await platform.packageManager.waitForPendingOperation(target.target.extensionId)
-      return createActivatedViewSession(platform, contributionId, workspaceRoot, false)
+      return createActivatedViewSession(
+        platform,
+        contributionId,
+        workspaceRoot,
+        cancelledActivationRetries - 1
+      )
     }
     throw error
   }
