@@ -133,6 +133,7 @@ import {
   createHandoffEventReporter,
   type HandoffEventListener
 } from './runtime/kun-handoff-events'
+import { assertSupportedSettingsVersion } from './settings-store-foundation'
 
 import {
   appendTail,
@@ -166,6 +167,7 @@ export async function resolveKunManagerDataDirFromSettings(
   try {
     const parsed = JSON.parse(await readFile(settingsPath, 'utf8')) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return defaultKunDataDir()
+    assertSupportedSettingsVersion(parsed, settingsPath)
     const settings = normalizeAppSettings(parsed as AppSettingsV1)
     return resolveKunDataDir(resolveKunRuntimeSettings(settings))
   } catch (error) {

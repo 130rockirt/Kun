@@ -59,6 +59,10 @@ import {
   legacyAuthType,
   uniqueModels
 } from './gui-settings-bridge-sync.js'
+import {
+  assertSupportedGuiSettingsVersion,
+  NewerGuiSettingsSchemaError
+} from './gui-settings-schema.js'
 
 export const MAX_GUI_SETTINGS_BYTES = 32 * 1024 * 1024
 export const LEGACY_PROVIDER_SOURCE_PREFIX = 'settings:provider:'
@@ -90,6 +94,7 @@ export const GuiProviderSchema = z.object({
 })
 
 export const GuiSharedSettingsSchema = z.object({
+  version: z.number().int().min(1).optional(),
   provider: z.object({
     // Provider transports evolve independently of the CLI compatibility
     // reader. Parse entries below so one future/invalid provider cannot make
@@ -176,6 +181,14 @@ export async function readGuiSharedSettings(input: {
     try {
       json = JSON.parse(raw)
     } catch {
+      continue
+    }
+    try {
+      assertSupportedGuiSettingsVersion(json, settingsPath)
+    } catch (error) {
+      // A newer primary schema must fail closed. Falling through to a legacy
+      // candidate could silently resurrect stale settings and overwrite data.
+      if (error instanceof NewerGuiSettingsSchemaError) return null
       continue
     }
     const parsed = GuiSharedSettingsSchema.safeParse(json)

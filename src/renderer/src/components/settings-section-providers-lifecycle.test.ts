@@ -1,4 +1,5 @@
 import {
+  DEFAULT_MODEL_PROVIDER_ID,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
   type ModelProviderModelProfileV1,
@@ -588,6 +589,53 @@ describe('provider mutation lifecycle across settings remounts', () => {
     expect(rendererText(renderer)).toContain(provider.name)
     expect(rendererText(renderer)).toContain('delete failed safely')
     expect(update).not.toHaveBeenCalled()
+  })
+
+  it('removes a deleted provider with the latest settings updater after the registry commit', async () => {
+    const { settings, provider } = providerFixture()
+    const deleteRequest = deferred<RuntimeResult>()
+    const deleteStarted = deferred<void>()
+    const runtimeRequest = vi.fn(async (path: string, method: string) => {
+      if (path.includes('/events?')) return new Promise<never>(() => undefined)
+      if (path === '/v1/model-connections' && method === 'GET') {
+        return { ok: true, status: 200, body: JSON.stringify(snapshotFor(provider, 1)) }
+      }
+      if (path.startsWith(`/v1/model-connections/${provider.id}?`) && method === 'DELETE') {
+        deleteStarted.resolve()
+        return deleteRequest.promise
+      }
+      throw new Error(`Unexpected runtime request: ${method} ${path}`)
+    })
+    Object.assign(window.kunGui, { runtimeRequest })
+    const staleUpdate = vi.fn()
+    const latestUpdate = vi.fn()
+    const renderer = await mount(contextFor(settings, provider, staleUpdate))
+    await flush()
+    staleUpdate.mockClear()
+    await clickTab(renderer, 'modelProviderTabAdvanced')
+    await act(async () => findButton(renderer, 'modelProviderRemove').props.onClick())
+    await deleteStarted.promise
+    await act(async () => renderer.update(createElement(ProvidersSettingsSection, {
+      ctx: contextFor(settings, provider, latestUpdate)
+    })))
+
+    deleteRequest.resolve({
+      ok: true,
+      status: 200,
+      body: JSON.stringify(snapshotFor(provider, 2, provider.models, false))
+    })
+    await enqueueSharedModelMutation(async () => undefined)
+    await flush()
+
+    expect(staleUpdate).not.toHaveBeenCalled()
+    const patch = latestUpdate.mock.calls.at(-1)?.[0] as {
+      provider?: { providers?: ModelProviderProfileV1[] }
+      agents?: { kun?: { providerId?: string; model?: string } }
+    }
+    expect(patch.provider?.providers?.some((item) => item.id === provider.id)).toBe(false)
+    expect(patch.agents?.kun).toMatchObject({ providerId: DEFAULT_MODEL_PROVIDER_ID })
+    expect(sharedProviderMutationCoordinator.pendingDeletions.get(provider.id))
+      .toMatchObject({ committedRevision: 2 })
   })
 
   it('does not let an old DELETE generation hide an explicitly re-added provider after remount', async () => {

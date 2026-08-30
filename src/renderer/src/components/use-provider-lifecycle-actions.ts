@@ -33,6 +33,8 @@ import {
 import {
   cursorProviderNeedsMetadataRepair,
   kunProviderSelectionPatch,
+  modelProviderDeletionKunPatch,
+  modelProviderDeletionWritePatch,
   nonEmptyModelId,
   type ProbeState
 } from './settings-section-providers-profile'
@@ -71,7 +73,7 @@ export function catalogResultForProviderImport(
 }
 
 export function useProviderLifecycleActions(scope: Record<string, any>): Record<string, any> {
-  const { t, form, kun, provider, setSharedConnections, setSharedConnectionsError, pendingSharedProviderDeletions, pendingSharedProviderNames, pendingSharedProviderCatalogs, pendingSharedProviderCredentials, catalogMutationTimers, credentialMutationTimers, mounted, setCredentialDrafts, enqueueSharedMutation, selectedProviderId, setSelectedProviderId, activeTab, setActiveTab, previousProviderSelectionRef, setProbeStates, setPendingImport, cursorMetadataRepairAttempts, setDraftProvider, activeKunProviderId, confirmAction, updateModelProviders } = scope
+  const { t, form, kun, provider, setSharedConnections, setSharedConnectionsError, pendingSharedProviderDeletions, pendingSharedProviderNames, pendingSharedProviderCatalogs, pendingSharedProviderCredentials, catalogMutationTimers, credentialMutationTimers, mounted, setCredentialDrafts, enqueueSharedMutation, selectedProviderId, setSelectedProviderId, activeTab, setActiveTab, previousProviderSelectionRef, setProbeStates, setPendingImport, cursorMetadataRepairAttempts, setDraftProvider, activeKunProviderId, confirmAction, updateModelProviders, sharedProjectionInput } = scope
   const modelProviders = scope.modelProviders as ModelProviderProfileV1[]
   const displayProviders = scope.displayProviders as ModelProviderProfileV1[]
   const draftProvider = scope.draftProvider as ModelProviderProfileV1 | null
@@ -299,6 +301,31 @@ export function useProviderLifecycleActions(scope: Record<string, any>): Record<
         setSharedConnections(snapshot)
         setSharedConnectionsError('')
       }
+
+      // Registry deletion must be reflected in AppSettings as part of the
+      // same successful mutation. Otherwise the next shared-settings refresh
+      // sees the stale local provider and recreates the deleted connection.
+      const latest = sharedProjectionInput.current
+      const latestProviders = latest.provider.providers as ModelProviderProfileV1[]
+      const latestKun = latest.kun as typeof kun
+      const remainingProviders = latestProviders.filter((item) => item.id !== id)
+      const fallbackProvider = remainingProviders.find((item) => item.id === DEFAULT_MODEL_PROVIDER_ID) ??
+        remainingProviders[0]
+      const kunPatch = modelProviderDeletionKunPatch({
+        currentKun: latestKun,
+        deletedProviderIds: new Set([id]),
+        fallbackProvider
+      })
+      const latestWriteInline = latest.form?.write?.inlineCompletion
+      const writePatch = modelProviderDeletionWritePatch(latestWriteInline, new Set([id]))
+      updateModelProviders(
+        remainingProviders,
+        Object.keys(kunPatch).length > 0 ? kunPatch : undefined,
+        writePatch
+      )
+      setSelectedProviderId((currentId: string) => currentId === id
+        ? fallbackProvider?.id ?? DEFAULT_MODEL_PROVIDER_ID
+        : currentId)
     } catch (error) {
       if (pendingSharedProviderDeletions.current.get(id)?.generation === generation) {
         pendingSharedProviderDeletions.current.delete(id)
