@@ -345,14 +345,51 @@ export function approvalReviewNativeProviderKind(
 }
 
 export function activeModelConnectionProviderId(
-  options: Pick<KunServeRuntimeOptions, 'credentialSourceId' | 'providers'>
+  options: Pick<KunServeRuntimeOptions, 'activeProviderId' | 'credentialSourceId' | 'providers'>
 ): string {
+  const explicit = options.activeProviderId?.trim() ?? ''
+  if (explicit && options.providers?.[explicit]) return explicit
   const prefix = 'settings:provider:'
   const source = options.credentialSourceId?.trim() ?? ''
   const candidate = source.startsWith(prefix)
     ? source.slice(prefix.length).trim()
     : providerIdFromCredentialSource(source)?.trim() ?? ''
   return candidate && options.providers?.[candidate] ? candidate : 'default'
+}
+
+/**
+ * Secret-free model choices exposed to extension-owned Agent runs. The list is
+ * deliberately scoped to the active Kun connection: selecting a model never
+ * grants an extension access to another provider or account.
+ */
+export function extensionAgentRunOptionsForOptions(options: KunServeRuntimeOptions) {
+  const providerId = activeModelConnectionProviderId(options)
+  const provider = providerId === 'default' ? undefined : options.providers?.[providerId]
+  const models = uniqueModelCatalog([
+    ...(provider?.models ?? []),
+    provider?.selectedModel,
+    options.model
+  ])
+  return {
+    defaultModel: options.model,
+    models: models.map((model) => {
+      const capabilities = provider?.modelCapabilities?.[model] ?? modelCapabilitiesForProviderModel({
+        providerId,
+        presetSource: provider?.presetSource,
+        baseUrl: provider?.baseUrl ?? options.baseUrl,
+        kind: provider?.kind,
+        model
+      })
+      const reasoning = capabilities.reasoning
+      return {
+        id: model,
+        displayName: model,
+        selected: model === options.model,
+        reasoningEfforts: reasoning ? [...reasoning.supportedEfforts] : [],
+        ...(reasoning ? { defaultReasoningEffort: reasoning.defaultEffort } : {})
+      }
+    })
+  }
 }
 
 export function modelConnectionSeedsForOptions(

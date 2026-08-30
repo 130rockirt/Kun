@@ -59,6 +59,7 @@ describe('Agent history schemas', () => {
       extensionBudget: {},
       toolCatalogEpoch: 'epoch:none',
       state: 'completed',
+      model: 'default-model',
       createdAt: '2026-08-31T00:00:00.000Z',
       updatedAt: '2026-08-31T00:01:00.000Z',
       terminalAt: '2026-08-31T00:01:00.000Z'

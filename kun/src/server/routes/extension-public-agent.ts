@@ -191,6 +191,8 @@ export async function createAgentRun(
     input: agentInputText(body.data.input),
     ...(body.data.threadId ? { threadId: body.data.threadId } : {}),
     ...(body.data.workspace ? { workspace: body.data.workspace } : {}),
+    ...(body.data.model ? { model: body.data.model } : {}),
+    ...(body.data.reasoningEffort ? { reasoningEffort: body.data.reasoningEffort } : {}),
     ...(body.data.profileId ? { profileId: body.data.profileId } : {}),
     ...(binding ? { providerBinding: binding } : {}),
     ...(body.data.budget ? {

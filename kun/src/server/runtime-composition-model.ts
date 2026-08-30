@@ -319,6 +319,7 @@ export async function createRuntimeModelComposition(
       const providers = Object.fromEntries(connections.providers.entries())
       const nextOptions: KunServeRuntimeOptions = {
         ...core.activeOptions,
+        activeProviderId: selected?.profile.id,
         ...(selected
           ? {
               model: selected.model,

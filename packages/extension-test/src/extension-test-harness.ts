@@ -259,6 +259,7 @@ export class ExtensionTestHarness implements Disposable {
       return `network:${new URL(request.url).hostname}`
     })
     for (const method of [
+      'agent.getRunOptions',
       'agent.createRun',
       'agent.getRun',
       'agent.listRunEvents',

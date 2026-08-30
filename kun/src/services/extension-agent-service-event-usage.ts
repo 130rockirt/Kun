@@ -17,7 +17,7 @@ import { TurnConflictError, type TurnService } from './turn-service.js'
 import type {
   ExtensionAgentProfileRegistry
 } from './extension-agent-profile-registry.js'
-import { type BufferedAgentEvent, type ExtensionAgentAuthorizer, type ExtensionAgentEvent, type ExtensionAuthorizationRequest, type ExtensionPrincipal, MAX_REPLAY_RECORD_BYTES } from './extension-agent-service-core.js'
+import { type BufferedAgentEvent, type ExtensionAgentAuthorizer, type ExtensionAgentEvent, type ExtensionAuthorizationRequest, type ExtensionPrincipal, MAX_REPLAY_RECORD_BYTES } from './extension-agent-service-contracts.js'
 import { ManagedSubscription } from './extension-agent-service-subscription.js'
 import { normalizeOwnedWorkspace, projectEvent } from './extension-agent-service-projection.js'
 

@@ -16,6 +16,7 @@ import type {
   AgentMutationResult,
   AgentRun,
   AgentRunEvent,
+  AgentRunOptions,
   AgentSubscribeRequest,
   AgentSteerRequest,
   ExtensionThreadProjection,
@@ -280,6 +281,7 @@ export interface AgentRunSubscription extends Disposable {
 }
 
 export interface AgentApi {
+  getRunOptions(): Promise<AgentRunOptions>
   createRun(request: AgentCreateRunRequest): Promise<AgentCreateRunResponse>
   getRun(runId: string): Promise<AgentRun>
   listRunEvents(request: AgentListRunEventsRequest): Promise<AgentListRunEventsResponse>

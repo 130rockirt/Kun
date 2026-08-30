@@ -156,6 +156,80 @@ function cancellationContext() {
 }
 
 describe('ExtensionHostBroker', () => {
+  it('exposes safe run options and forwards host model selection without a provider binding', async () => {
+      const agent = {
+        getRunOptions: vi.fn(async () => ({
+          defaultModel: 'gpt-5.6-sol',
+          models: [{
+            id: 'gpt-5.6-sol',
+            displayName: 'gpt-5.6-sol',
+            selected: true,
+            reasoningEfforts: ['low', 'medium', 'high', 'max'],
+            defaultReasoningEffort: 'high'
+          }]
+        })),
+        createRun: vi.fn(async () => ({
+          id: 'run-model-choice',
+          threadId: 'thread-model-choice',
+          ownerExtensionId: 'acme.broker',
+          ownerExtensionVersion: '1.0.0',
+          status: 'running',
+          createdAt: '2026-08-31T00:00:00.000Z',
+          workspace: WORKSPACE_ROOT,
+          providerBinding: { providerId: 'default', modelId: 'gpt-5.6-sol' },
+          reasoningEffort: 'max',
+          effectiveBudget: {
+            maxTokens: 4096,
+            maxElapsedMs: 300_000,
+            maxConcurrentRuns: 2,
+            maxModelRequests: 12,
+            maxToolInvocations: 20,
+            maxRetainedEvents: 1000
+          },
+          visibility: 'private'
+        }))
+      }
+      const broker = createBroker({ agent })
+      const brokerPrincipal = {
+        extensionId: 'acme.broker',
+        extensionVersion: '1.0.0',
+        permissions: ['agent.run'],
+        workspaceRoots: [WORKSPACE_ROOT],
+        workspaceTrusted: true,
+        hostLifecycleNonce: 'model-options-host'
+      }
+
+      await expect(broker.handlePrincipal({
+        principal: brokerPrincipal,
+        method: 'agent.getRunOptions',
+        params: {},
+        signal: new AbortController().signal,
+        requestId: 'model-options-request'
+      })).resolves.toMatchObject({ defaultModel: 'gpt-5.6-sol' })
+
+      const response = await broker.handlePrincipal({
+        principal: brokerPrincipal,
+        method: 'agent.createRun',
+        params: {
+          input: 'Implement this',
+          workspace: WORKSPACE_ROOT,
+          model: 'gpt-5.6-sol',
+          reasoningEffort: 'max'
+        },
+        signal: new AbortController().signal,
+        requestId: 'model-run-request'
+      }) as { run: { model: string; reasoningEffort?: string } }
+
+      expect(agent.createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ extensionId: 'acme.broker' }),
+        expect.objectContaining({
+          model: 'gpt-5.6-sol',
+          reasoningEffort: 'max'
+        })
+      )
+      expect(response.run).toMatchObject({ model: 'gpt-5.6-sol', reasoningEffort: 'max' })
+    })
+
   it('returns paged public Agent history with stable replaceable message fields', async () => {
       const agent = {
         listRunEvents: vi.fn(async () => ({

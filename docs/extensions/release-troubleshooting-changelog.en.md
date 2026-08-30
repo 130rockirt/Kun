@@ -196,9 +196,9 @@ The Changelog records public Extension API, not Kun internal refactors. Each ent
 The public surface snapshots below are computed from package entries, public exports, and reachable `.d.ts` declarations. Update them only after this section explains the compatibility impact; changing a hash is not itself a Changelog entry.
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.4.0 sha256:19ef9389ae891fb2f25e12460df16fba0f14aaf345ab341d05930413e3400fa0 -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.4.0 sha256:2a1dd3410cd89e76b70c7752cca01442d6c42cb5dd4c78e7a96591ef8aed862b -->
 <!-- sdk-surface-snapshot @kun/extension-react@1.4.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
-<!-- sdk-surface-snapshot @kun/extension-test@1.4.0 sha256:11e8d34ad986d9b711a23d7e09aec0c8f7e27238cdd8acc014db1a31249a03fe -->
+<!-- sdk-surface-snapshot @kun/extension-test@1.4.0 sha256:9aa234e9c62776edab832924aef8f925f68679732e8ab08626c21ffabd42e28e -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
 
 ### v1.4.0 — Recoverable Agent conversation history
@@ -207,11 +207,13 @@ Compatible Kun: `>=0.3.9`.
 
 Added:
 
+- `context.agent.getRunOptions()` returns the active primary connection's safe model catalog and per-model reasoning efforts; `createRun` accepts optional `model` / `reasoningEffort`, and Run projections report the admitted values.
 - `context.agent.listRunEvents({ runId, afterSequence?, limit? })` returns bounded chronological `{ items, cursor, hasMore, historyIncomplete }` pages, defaulting to 100 and capped at 200; the numeric cursor continues another page or seeds a live subscription.
 - Message events now support `role: 'user'` and carry stable `messageId` plus `phase: 'delta' | 'replace' | 'complete'`, allowing clients to merge streaming updates without duplicate messages.
 
 Security:
 
+- The model catalog projects only configured models and capabilities on Kun's active connection, never credentials, accounts, or other Providers. The Host rejects out-of-catalog models and unsupported efforts.
 - History remains owner-only. Public projections include user/assistant text, Host-generated tool state summaries, and existing state/usage/terminal events while filtering internal context, reasoning, tool arguments/results, file paths, and gate credentials.
 
 Migration:

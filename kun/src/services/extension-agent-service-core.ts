@@ -1,197 +1,45 @@
-import { resolve, relative, isAbsolute } from 'node:path'
-import { isPublicRuntimeEvent, type RuntimeEvent } from '../contracts/events.js'
+import { resolve } from 'node:path'
 import type {
   ExtensionAgentProfileSnapshot,
   ExtensionRunBudget,
   ExtensionThreadVisibility,
-  ExtensionToolCatalogEpoch,
-  ThreadRecord,
-  ThreadSummary
+  ThreadRecord
 } from '../contracts/threads.js'
-import type { UsageSnapshot } from '../contracts/usage.js'
 import type { ExtensionProviderBinding } from '../contracts/extension-providers.js'
-import type { EventBus } from '../ports/event-bus.js'
-import type { SessionStore } from '../ports/session-store.js'
-import type { ThreadService } from './thread-service.js'
-import { TurnConflictError, type TurnService } from './turn-service.js'
-import type { ExtensionAgentProfileRegistry } from './extension-agent-profile-registry.js'
+import type { ModelReasoningEffort } from '../contracts/capabilities.js'
+import { TurnConflictError } from './turn-service.js'
 import { bufferEvent, compareBufferedEvents, enqueueBufferedEvent, ExtensionBrokerError, iterateSessionEventsSince, ManifestExtensionAgentAuthorizer, summarizeRunEvents } from './extension-agent-service-event-usage.js'
 import { listExtensionRunEvents, pageExtensionOwnedThreads } from './extension-agent-service-listing.js'
 import { ManagedSubscription } from './extension-agent-service-subscription.js'
 import { clampBudget, completeBudget, decodeCursor, narrowToolScopes, normalizeOwnedWorkspace, opaqueNotFound, projectThread, runStatus, titleFromInput, validateBinding } from './extension-agent-service-projection.js'
+import {
+  DEFAULT_BUDGET,
+  EXTENSION_AGENT_PERMISSIONS,
+  MAXIMUM_BUDGET,
+  MAX_EVENT_BYTES,
+  MAX_LIST_LIMIT,
+  MAX_LIVE_BYTES_DURING_REPLAY,
+  MAX_LIVE_EVENTS_DURING_REPLAY,
+  MAX_REPLAY_BYTES,
+  type BufferedAgentEvent,
+  type ExtensionAgentCreateRunRequest,
+  type ExtensionAgentAuthorizer,
+  type ExtensionAgentEvent,
+  type ExtensionAgentEventPage,
+  type ExtensionAgentModelOption,
+  type ExtensionAgentRun,
+  type ExtensionAgentRunOptions,
+  type ExtensionAgentRunStatus,
+  type ExtensionAgentRuntimeConfig,
+  type ExtensionAgentServiceOptions,
+  type ExtensionAgentSubscription,
+  type ExtensionAuthorizationRequest,
+  type ExtensionOwnedThread,
+  type ExtensionPrincipal
+} from './extension-agent-service-contracts.js'
 
 export { DEFAULT_HISTORY_LIMIT, MAX_HISTORY_BYTES, MAX_HISTORY_LIMIT } from './extension-agent-service-listing.js'
-
-export const EXTENSION_AGENT_PERMISSIONS = {
-  run: 'agent.run',
-  readOwnThreads: 'agent.threads.readOwn'
-} as const
-
-export type ExtensionPrincipal = Readonly<{
-  extensionId: string
-  extensionVersion: string
-  permissions: readonly string[]
-  workspaceRoots: readonly string[]
-  workspaceTrusted: boolean
-  /** Present only for a Node Extension Host and never accepted from a View. */
-  hostLifecycleNonce?: string
-  /** Present only for a sender-bound Webview principal. */
-  viewSessionId?: string
-  /** Present only for a sender-bound Webview principal. */
-  viewContributionId?: string
-}>
-
-export type ExtensionAgentRuntimeConfig = Readonly<{
-  defaultBinding: ExtensionProviderBinding
-}>
-
-export type ExtensionAuthorizationRequest = Readonly<{
-  operation: 'createRun' | 'getRun' | 'listOwn' | 'listRunEvents' | 'subscribe' | 'steer' | 'cancel'
-  permission: string
-  workspace?: string
-  providerId?: string
-  accountId?: string
-  toolScopes?: readonly string[]
-}>
-
-export interface ExtensionAgentAuthorizer {
-  authorize(principal: ExtensionPrincipal, request: ExtensionAuthorizationRequest): Promise<void> | void
-}
-
-export type ExtensionAgentCreateRunRequest = {
-  input: string
-  threadId?: string
-  workspace?: string
-  profileId?: string
-  providerBinding?: ExtensionProviderBinding
-  budget?: Partial<ExtensionRunBudget>
-  allowedTools?: string[]
-  visibility?: ExtensionThreadVisibility
-}
-
-export type ExtensionAgentRunStatus =
-  | 'running'
-  | 'waiting-approval'
-  | 'waiting-user-input'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'budget-exhausted'
-
-export type ExtensionAgentRun = {
-  id: string
-  threadId: string
-  ownerExtensionId: string
-  ownerExtensionVersion: string
-  status: ExtensionAgentRunStatus
-  createdAt: string
-  finishedAt?: string
-  workspace: string
-  profile?: ExtensionAgentProfileSnapshot
-  providerBinding: ExtensionProviderBinding
-  effectiveBudget: ExtensionRunBudget
-  visibility: ExtensionThreadVisibility
-  toolCatalogEpoch?: ExtensionToolCatalogEpoch
-  usage?: UsageSnapshot
-  error?: string
-}
-
-export type ExtensionOwnedThread = {
-  id: string
-  title: string
-  status: ThreadSummary['status']
-  workspace: string
-  model: string
-  providerBinding: ExtensionProviderBinding
-  ownerExtensionVersion: string
-  profileId?: string
-  visibility: ExtensionThreadVisibility
-  createdAt: string
-  updatedAt: string
-  runCount: number
-  latestRun?: ExtensionAgentRun
-}
-
-export type ExtensionAgentEvent = {
-  seq: number
-  timestamp: string
-  type: RuntimeEvent['kind'] | 'subscription_overflow'
-  runId: string
-  threadId: string
-  ownerExtensionId: string
-  payload: Record<string, unknown>
-}
-
-export type ExtensionAgentSubscription = {
-  readonly lastDeliveredSeq: number
-  readonly closed: boolean
-  close(): void
-}
-
-export type ExtensionAgentEventPage = {
-  items: ExtensionAgentEvent[]
-  cursor: number
-  hasMore: boolean
-  historyIncomplete: boolean
-}
-
-export type ExtensionAgentServiceOptions = {
-  threads: ThreadService
-  turns: TurnService
-  sessions: SessionStore
-  eventBus: EventBus
-  profiles: ExtensionAgentProfileRegistry
-  authorizer?: ExtensionAgentAuthorizer
-  runTurn: (threadId: string, turnId: string) => Promise<unknown> | void
-  defaultBinding: ExtensionProviderBinding
-  defaultBudget?: Partial<ExtensionRunBudget>
-  maximumBudget?: Partial<ExtensionRunBudget>
-  headless?: boolean
-  resolveToolCatalogEpoch?: (input: {
-    principal: ExtensionPrincipal
-    workspace: string
-    allowedTools: readonly string[]
-  }) => Promise<ExtensionToolCatalogEpoch | undefined>
-}
-
-export const DEFAULT_BUDGET: ExtensionRunBudget = {
-  maxTokens: 100_000,
-  maxElapsedMs: 15 * 60_000,
-  maxConcurrentRuns: 2,
-  maxModelRequests: 64,
-  maxToolInvocations: 128,
-  maxRetainedEvents: 5_000
-}
-
-export const MAXIMUM_BUDGET: ExtensionRunBudget = {
-  maxTokens: 1_000_000,
-  maxElapsedMs: 60 * 60_000,
-  maxConcurrentRuns: 8,
-  maxModelRequests: 512,
-  maxToolInvocations: 1_024,
-  maxRetainedEvents: 20_000
-}
-
-export const MAX_LIST_LIMIT = 100
-export const MAX_SUBSCRIPTION_QUEUE = 256
-export const MAX_SUBSCRIPTION_QUEUE_BYTES = 512 * 1024
-export const MAX_EVENT_BYTES = 512 * 1024
-export const MAX_REPLAY_BYTES = 512 * 1024
-export const MAX_REPLAY_RECORD_BYTES = 4 * 1024 * 1024
-export const MAX_LIVE_EVENTS_DURING_REPLAY = 1_024
-export const MAX_LIVE_BYTES_DURING_REPLAY = 512 * 1024
-
-export type BufferedAgentEvent = {
-  /**
-   * The persisted sequence is retained even when the event is internal. A
-   * marker without a projected event advances the subscriber cursor without
-   * disclosing a model-only TurnItem.
-   */
-  seq: number
-  timestamp: string
-  event?: ExtensionAgentEvent
-  bytes: number
-}
+export * from './extension-agent-service-contracts.js'
 
 /** Public Agent broker backed exclusively by the existing Kun runtime. */
 export class ExtensionAgentService {
@@ -221,6 +69,82 @@ export class ExtensionAgentService {
     this.publishRuntimeConfig(this.stageRuntimeConfig(input))
   }
 
+  async getRunOptions(principal: ExtensionPrincipal): Promise<ExtensionAgentRunOptions> {
+    await this.authorize(principal, {
+      operation: 'getRunOptions',
+      permission: EXTENSION_AGENT_PERMISSIONS.run
+    })
+    return this.currentRunOptions()
+  }
+
+  private currentRunOptions(): ExtensionAgentRunOptions {
+    const resolved = this.options.resolveRunOptions?.() ?? {
+      defaultModel: this.defaultBinding.modelId,
+      models: [{
+        id: this.defaultBinding.modelId,
+        displayName: this.defaultBinding.modelId,
+        selected: true,
+        reasoningEfforts: []
+      }]
+    }
+    const defaultModel = resolved.defaultModel.trim()
+    if (!defaultModel || defaultModel.length > 512) {
+      throw new ExtensionBrokerError('conflict', 'Kun model selection is unavailable')
+    }
+    const byId = new Map<string, ExtensionAgentModelOption>()
+    for (const option of resolved.models) {
+      const id = option.id.trim()
+      if (!id || id.length > 512 || byId.has(id)) continue
+      const reasoningEfforts = [...new Set(option.reasoningEfforts)]
+      byId.set(id, {
+        id,
+        displayName: option.displayName.trim().slice(0, 512) || id,
+        selected: id === defaultModel,
+        reasoningEfforts,
+        ...(option.defaultReasoningEffort && reasoningEfforts.includes(option.defaultReasoningEffort)
+          ? { defaultReasoningEffort: option.defaultReasoningEffort }
+          : {})
+      })
+    }
+    if (!byId.has(defaultModel)) {
+      byId.set(defaultModel, {
+        id: defaultModel,
+        displayName: defaultModel,
+        selected: true,
+        reasoningEfforts: []
+      })
+    }
+    return { defaultModel, models: [...byId.values()] }
+  }
+
+  private resolveRunSelection(
+    request: Pick<ExtensionAgentCreateRunRequest, 'model' | 'reasoningEffort'>,
+    fallbackModel: string,
+    requireAvailable = false
+  ): { model: string; reasoningEffort?: ModelReasoningEffort } {
+    const options = this.currentRunOptions()
+    const model = request.model?.trim() || fallbackModel.trim()
+    const option = options.models.find((candidate) => candidate.id === model)
+    if (!option && (request.model || requireAvailable)) {
+      throw new ExtensionBrokerError(
+        request.model ? 'validation_error' : 'conflict',
+        request.model
+          ? 'Requested model is not available'
+          : 'The thread model is no longer available on the active Kun connection'
+      )
+    }
+    if (request.reasoningEffort && !option?.reasoningEfforts.includes(request.reasoningEffort)) {
+      throw new ExtensionBrokerError(
+        'validation_error',
+        'Requested reasoning effort is not supported by this model'
+      )
+    }
+    return {
+      model,
+      ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {})
+    }
+  }
+
   async createRun(
     principal: ExtensionPrincipal,
     request: ExtensionAgentCreateRunRequest
@@ -235,6 +159,12 @@ export class ExtensionAgentService {
     const input = request.input.trim()
     if (!input) throw new ExtensionBrokerError('validation_error', 'Agent input is required')
     if (input.length > 1_000_000) throw new ExtensionBrokerError('validation_error', 'Agent input is too large')
+    if ((request.model || request.reasoningEffort) && request.providerBinding) {
+      throw new ExtensionBrokerError(
+        'validation_error',
+        'Host model selection cannot be combined with an extension provider binding'
+      )
+    }
 
     if (request.threadId) {
       const thread = await this.ownedThread(principal, request.threadId)
@@ -256,15 +186,30 @@ export class ExtensionAgentService {
         throw new ExtensionBrokerError('conflict', 'Owned thread already has an active run')
       }
       await this.assertConcurrentBudget(principal, thread.extensionBudget ?? this.defaultBudget)
+      const usesHostConnection =
+        (thread.providerId ?? this.defaultBinding.providerId) === this.defaultBinding.providerId &&
+        !thread.accountId
+      if ((request.model || request.reasoningEffort) && !usesHostConnection) {
+        throw new ExtensionBrokerError(
+          'validation_error',
+          'Host model selection is available only for the active Kun model connection'
+        )
+      }
+      const selection = this.resolveRunSelection(
+        request,
+        thread.turns.at(-1)?.model ?? thread.model,
+        usesHostConnection
+      )
       const tokenBaseline = await this.latestUsageTokens(thread.id)
       const started = await this.options.turns.startTurn({
         threadId: thread.id,
         request: {
           prompt: input,
           clientSurface: 'extension',
-          model: thread.model,
+          model: selection.model,
           ...(thread.providerId ? { providerId: thread.providerId } : {}),
           ...(thread.accountId ? { accountId: thread.accountId } : {}),
+          ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
           ...(this.options.headless ? { disableUserInput: true } : {})
         }
       }, { extensionBudgetTokenBaseline: tokenBaseline })
@@ -289,6 +234,18 @@ export class ExtensionAgentService {
       if (!request.providerBinding) binding = resolvedProfile.providerBinding
     }
     validateBinding(binding)
+
+    const usesHostConnection = binding.providerId === this.defaultBinding.providerId && !binding.accountId
+    if ((request.model || request.reasoningEffort) && !usesHostConnection) {
+      throw new ExtensionBrokerError(
+        'validation_error',
+        'Host model selection is available only for the active Kun model connection'
+      )
+    }
+    const selection = this.resolveRunSelection(request, binding.modelId, usesHostConnection)
+    if (request.model) {
+      binding = { ...binding, modelId: selection.model }
+    }
 
     const allowedTools = narrowToolScopes(profile?.allowedToolScopes ?? [], request.allowedTools)
     await this.authorize(principal, {
@@ -353,6 +310,7 @@ export class ExtensionAgentService {
         model: binding.modelId,
         providerId: binding.providerId,
         ...(binding.accountId ? { accountId: binding.accountId } : {}),
+        ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
         ...(this.options.headless ? { disableUserInput: true } : {})
       }
     }, { extensionBudgetTokenBaseline: 0 })
@@ -600,6 +558,7 @@ export class ExtensionAgentService {
         ...(thread.accountId ? { accountId: thread.accountId } : {}),
         modelId: turn.model ?? thread.model
       },
+      ...(turn.reasoningEffort ? { reasoningEffort: turn.reasoningEffort } : {}),
       effectiveBudget: thread.extensionBudget ?? this.defaultBudget,
       visibility: thread.extensionVisibility ?? 'private',
       ...(thread.toolCatalogEpoch ? { toolCatalogEpoch: structuredClone(thread.toolCatalogEpoch) } : {}),

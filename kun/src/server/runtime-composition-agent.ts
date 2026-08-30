@@ -30,7 +30,8 @@ import type { createRuntimeRegistry } from './runtime-composition-registry.js'
 import {
   agentSdkProviderIdsForOptions,
   antigravityProviderIdsForOptions,
-  cursorSdkProviderIdsForOptions
+  cursorSdkProviderIdsForOptions,
+  extensionAgentRunOptionsForOptions
 } from './runtime-factory-model.js'
 import { resumeInterruptedGraphPlanning } from './runtime-graph-lifecycle.js'
 import { CanvasReceiptRegistry } from '../services/canvas-receipt-registry.js'
@@ -387,6 +388,7 @@ export async function createRuntimeAgentComposition(
 	    profiles: extensionProfiles,
 	    runTurn: runAgentTurn,
 	    defaultBinding: { providerId: 'default', modelId: core.activeOptions.model },
+	    resolveRunOptions: () => extensionAgentRunOptionsForOptions(core.activeOptions),
 	    headless: true,
 	    resolveToolCatalogEpoch: async ({ principal, workspace, allowedTools }) => {
 	      const owned = extensionTools.list(principal.extensionId, workspace)

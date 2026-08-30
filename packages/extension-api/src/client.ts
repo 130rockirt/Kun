@@ -19,6 +19,7 @@ import {
   AgentListRunEventsRequestSchema,
   AgentListRunEventsResponseSchema,
   AgentMutationResultSchema,
+  AgentRunOptionsSchema,
   AgentRunEventSchema,
   AgentRunSchema,
   AgentSteerRequestSchema,
@@ -224,9 +225,8 @@ export class ExtensionHostClient implements Disposable {
       onDidReceiveMessage: this.#messages.event,
       onDidChangeProviderStatus: this.#providerStatus.event
     })
-
-
     this.agent = {
+      getRunOptions: () => requestParsed(transport, 'agent.getRunOptions', {}, AgentRunOptionsSchema),
       createRun: (request) =>
         requestParsed(
           transport,

@@ -38,6 +38,8 @@ export type KunServeRuntimeOptions = {
   bundledExtensionsDir?: string
   runtimeToken: string
   apiKey: string
+  /** Selected model-connection identity, including anonymous providers. */
+  activeProviderId?: string
   credentialSourceId?: string
   geminiAuth?: GeminiCodeAssistCredential
   baseUrl: string

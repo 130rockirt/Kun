@@ -196,9 +196,9 @@ Changelog 记录公开 Extension API，而不是 Kun 内部重构。每项包含
 下面的 public surface 快照由文档门禁从 package 入口、公开 export 和可达 `.d.ts` 计算。只有在本节已经解释兼容性影响后才更新快照；不能把更新 hash 当成 Changelog 条目。
 
 <!-- BEGIN GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
-<!-- sdk-surface-snapshot @kun/extension-api@1.4.0 sha256:19ef9389ae891fb2f25e12460df16fba0f14aaf345ab341d05930413e3400fa0 -->
+<!-- sdk-surface-snapshot @kun/extension-api@1.4.0 sha256:2a1dd3410cd89e76b70c7752cca01442d6c42cb5dd4c78e7a96591ef8aed862b -->
 <!-- sdk-surface-snapshot @kun/extension-react@1.4.0 sha256:e2099a64dc22c05056dca0c599bafdfb22702b6d57e9b60edd2154b165323322 -->
-<!-- sdk-surface-snapshot @kun/extension-test@1.4.0 sha256:11e8d34ad986d9b711a23d7e09aec0c8f7e27238cdd8acc014db1a31249a03fe -->
+<!-- sdk-surface-snapshot @kun/extension-test@1.4.0 sha256:9aa234e9c62776edab832924aef8f925f68679732e8ab08626c21ffabd42e28e -->
 <!-- END GENERATED SDK PUBLIC SURFACE SNAPSHOTS -->
 
 ### v1.4.0 — 可恢复的 Agent 会话历史
@@ -207,11 +207,13 @@ Compatible Kun: `>=0.3.9`。
 
 Added:
 
+- `context.agent.getRunOptions()` 返回当前主模型连接的安全模型目录和逐模型推理强度；`createRun` 新增可选 `model` / `reasoningEffort`，Run 投影返回实际模型与推理强度。
 - `context.agent.listRunEvents({ runId, afterSequence?, limit? })` 返回正序、有界的 `{ items, cursor, hasMore, historyIncomplete }`，默认 100 条、最多 200 条；数字 cursor 可直接继续分页或衔接 live subscribe。
 - message 事件支持 `role: 'user'`，并提供稳定 `messageId` 与 `phase: 'delta' | 'replace' | 'complete'`，客户端可合并流式更新而不重复创建消息。
 
 Security:
 
+- 模型目录只投影活动 Kun 连接上已配置的模型和能力，不包含凭据、账号或其它 Provider；Host 会拒绝目录外模型和不受支持的推理强度。
 - 历史读取仅限调用扩展自有 Run。公共投影只包含用户/助手文本、Host 生成的工具状态摘要和既有状态/用量/终态；内部上下文、reasoning、工具参数/结果、文件路径与 gate 凭据继续被过滤。
 
 Migration:

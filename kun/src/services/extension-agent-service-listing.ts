@@ -6,7 +6,7 @@ import type {
   ExtensionAgentRunStatus,
   ExtensionOwnedThread,
   ExtensionPrincipal
-} from './extension-agent-service-core.js'
+} from './extension-agent-service-contracts.js'
 import {
   ExtensionBrokerError,
   iterateSessionEventsSince,

@@ -6,7 +6,11 @@ import { ContextCompactor } from '../loop/context-compactor.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
 import { SteeringQueue } from '../loop/steering-queue.js'
 import { SequentialIdGenerator } from '../ports/id-generator.js'
-import { ExtensionAgentService, type ExtensionPrincipal } from './extension-agent-service.js'
+import {
+  ExtensionAgentService,
+  type ExtensionAgentRunOptions,
+  type ExtensionPrincipal
+} from './extension-agent-service.js'
 import { ExtensionAgentProfileRegistry } from './extension-agent-profile-registry.js'
 import { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import { ThreadService } from './thread-service.js'
@@ -56,6 +60,25 @@ export function createExtensionAgentHarness(headless = false) {
     }]
   })
   const launched: Array<{ threadId: string; turnId: string }> = []
+  let runOptions: ExtensionAgentRunOptions = {
+    defaultModel: 'default-model',
+    models: [
+      {
+        id: 'default-model',
+        displayName: 'Default model',
+        selected: true,
+        reasoningEfforts: ['off', 'high'],
+        defaultReasoningEffort: 'high'
+      },
+      {
+        id: 'alternate-model',
+        displayName: 'Alternate model',
+        selected: false,
+        reasoningEfforts: ['low', 'medium', 'high', 'max'],
+        defaultReasoningEffort: 'medium'
+      }
+    ]
+  }
   const service = new ExtensionAgentService({
     threads,
     turns,
@@ -64,6 +87,7 @@ export function createExtensionAgentHarness(headless = false) {
     profiles,
     runTurn: (threadId, turnId) => { launched.push({ threadId, turnId }) },
     defaultBinding: { providerId: 'default-provider', modelId: 'default-model' },
+    resolveRunOptions: () => runOptions,
     headless,
     maximumBudget: { maxTokens: 500_000 },
     resolveToolCatalogEpoch: async () => ({
@@ -75,7 +99,15 @@ export function createExtensionAgentHarness(headless = false) {
       createdAt: nowIso()
     })
   })
-  return { service, threads, turns, sessions, events, launched }
+  return {
+    service,
+    threads,
+    turns,
+    sessions,
+    events,
+    launched,
+    setRunOptions: (value: ExtensionAgentRunOptions) => { runOptions = value }
+  }
 }
 
 export function extensionAgentPrincipal(extensionId = 'com.example.agent'): ExtensionPrincipal {
