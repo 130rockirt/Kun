@@ -22,6 +22,7 @@ import {
   setThreadTodos,
   updateThread
 } from './threads.js'
+import { syncThreadTodosFromPlan } from './thread-todos-sync-plan.js'
 import { deleteThreadsByWorkspace } from './threads-bulk-delete.js'
 import { contentSearchThreads } from './thread-content-search.js'
 import { summarizeThread } from './threads-summarize.js'
@@ -195,6 +196,10 @@ export function registerThreadRoutes(
   router.add('POST', '/v1/threads/:id/todos', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return setThreadTodos(runtime.threadService, ctx.params.id, request)
+  })
+  router.add('POST', '/v1/threads/:id/todos/sync-plan', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return syncThreadTodosFromPlan(runtime.threadService, ctx.params.id, request)
   })
   router.add('DELETE', '/v1/threads/:id/todos', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

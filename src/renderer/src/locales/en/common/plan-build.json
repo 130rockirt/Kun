@@ -72,5 +72,16 @@
   "planExtractFailed": "Could not find plan Markdown in the agent response.",
   "planToolResultMissing": "Kun did not return a matching create_plan result for this plan.",
   "planLoadFailed": "Could not load the plan. Use \"Open plan\" to reload it.",
-  "planRequestRequired": "Describe a request first, or use `/plan your request` to create a new plan."
+  "planRequestRequired": "Describe a request first, or use `/plan your request` to create a new plan.",
+  "planViewMode": "Plan view",
+  "planBoardView": "Board",
+  "planDocumentView": "Document",
+  "planBoardPending": "To do",
+  "planBoardInProgress": "In progress",
+  "planBoardCompleted": "Completed",
+  "planBoardProgress": "Completed {{completed}} / {{total}}",
+  "planBoardEmptyColumn": "No tasks",
+  "planBoardNoTasks": "No board tasks in this plan",
+  "planBoardNoTasksHint": "Add Markdown task checkboxes in the document to show them on the board.",
+  "planBoardSyncFailed": "The plan was saved, but task progress could not be synchronized."
 }

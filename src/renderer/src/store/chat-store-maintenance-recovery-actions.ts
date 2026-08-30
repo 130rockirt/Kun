@@ -144,12 +144,7 @@ import {
   syncTurnCompletionPoll,
   watchTurnCompletionNotification
 } from './chat-store-runtime'
-import {
-  extractPlanTodos,
-  mergePlanTodosForRenderer,
-  sameTodoWriteItems,
-  threadTodoWriteItems
-} from '../plan/plan-todo-sync'
+import { threadTodoWriteItems } from '../plan/plan-todo-sync'
 
 type SseAbortRef = { current: AbortController | null }
 

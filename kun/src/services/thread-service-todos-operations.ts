@@ -140,8 +140,10 @@ async syncTodosFromPlan(this: ThreadService, threadId: string, options: SyncPlan
         threadId,
         existing: current.todos ?? null,
         planItems,
+        planId: options.planId,
+        relativePath,
         now,
-        preserveCompleted: options.preserveCompleted ?? true
+        mode: options.mode
       })
       await this['threadStore'].upsert(touchThread({ ...current, todos: next }, now))
       return next

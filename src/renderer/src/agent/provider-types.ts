@@ -356,6 +356,10 @@ export interface AgentProvider {
       source?: ThreadTodoSource
     }>
   ): Promise<ThreadTodoList>
+  syncThreadTodosFromPlan?(
+    threadId: string,
+    plan: { planId: string; relativePath: string; markdown: string }
+  ): Promise<ThreadTodoList>
   clearThreadTodos?(threadId: string): Promise<boolean>
   forkThread?(
     threadId: string,

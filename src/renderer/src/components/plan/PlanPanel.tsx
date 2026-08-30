@@ -27,6 +27,7 @@ import { sddDraftRelativePathForPlanPath } from '@shared/sdd'
 import { useSddTrace } from '../../sdd/use-sdd-trace'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { PlanBuildActions } from './PlanBuildActions'
+import { PlanBoardSurface } from './PlanBoardSurface'
 
 type Props = {
   workspaceRoot: string
@@ -74,6 +75,7 @@ export function PlanPanel({
     saveStatus,
     operationStatus,
     error,
+    surfaceMode,
     setActivePlan,
     setContent,
     setSaveStatus,
@@ -87,6 +89,7 @@ export function PlanPanel({
       saveStatus: s.saveStatus,
       operationStatus: s.operationStatus,
       error: s.error,
+      surfaceMode: s.surfaceMode,
       setActivePlan: s.setActivePlan,
       setContent: s.setContent,
       setSaveStatus: s.setSaveStatus,
@@ -187,7 +190,7 @@ export function PlanPanel({
           path: activePlan.relativePath,
           content: contentToSave
         })
-        .then((result) => {
+        .then(async (result) => {
           const latest = useGuiPlanStore.getState()
           if (latest.activePlan?.id !== activePlan.id) return
           if (!result.ok) {
@@ -195,10 +198,14 @@ export function PlanPanel({
             return
           }
           if (latest.content === contentToSave) {
-            markSaved(contentToSave)
             if (activeThreadId && runtimeReady) {
-              void useChatStore.getState().syncPlanTodosFromMarkdown(activePlan, contentToSave)
+              const synced = await useChatStore.getState().syncPlanTodosFromMarkdown(activePlan, contentToSave)
+              if (!synced) {
+                setSaveStatus('error', t('planBoardSyncFailed'))
+                return
+              }
             }
+            markSaved(contentToSave)
           } else {
             setSaveStatus('dirty')
           }
@@ -407,7 +414,9 @@ export function PlanPanel({
             </p>
           </div>
         ) : (
-          <div className="flex h-full min-h-0 min-w-0">
+          <div className="flex h-full min-h-0 min-w-0 flex-col">
+            <PlanBoardSurface disabled={readOnly || saveStatus === 'saving' || !runtimeReady} />
+            {surfaceMode === 'document' ? (
             <div className="ds-sidebar-surface-body min-h-0 min-w-0 flex-1">
               <WriteRichEditor
                 value={content}
@@ -468,6 +477,7 @@ export function PlanPanel({
                 }
               />
             </div>
+            ) : null}
           </div>
         )}
       </div>

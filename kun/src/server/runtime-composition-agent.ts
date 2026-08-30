@@ -332,7 +332,7 @@ export async function createRuntimeAgentComposition(
 	        planId,
         relativePath,
         markdown,
-	        preserveCompleted: true
+	        mode: 'plan_write'
 	      })
 	    }
 	  }

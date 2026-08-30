@@ -72,5 +72,16 @@
   "planExtractFailed": "无法从智能体回复中提取计划 Markdown。",
   "planToolResultMissing": "Kun 没有为这个计划返回匹配的 create_plan 结果。",
   "planLoadFailed": "计划加载失败，请点击「查看计划」重新加载。",
-  "planRequestRequired": "请先描述需求，或使用 `/plan 你的需求` 创建新计划。"
+  "planRequestRequired": "请先描述需求，或使用 `/plan 你的需求` 创建新计划。",
+  "planViewMode": "计划视图",
+  "planBoardView": "看板",
+  "planDocumentView": "文档",
+  "planBoardPending": "待办",
+  "planBoardInProgress": "进行中",
+  "planBoardCompleted": "已完成",
+  "planBoardProgress": "已完成 {{completed}} / {{total}}",
+  "planBoardEmptyColumn": "暂无任务",
+  "planBoardNoTasks": "当前计划中没有可展示的任务",
+  "planBoardNoTasksHint": "请在文档中添加 Markdown 任务复选框，它们会自动显示在看板中。",
+  "planBoardSyncFailed": "计划已保存，但任务进度同步失败。"
 }

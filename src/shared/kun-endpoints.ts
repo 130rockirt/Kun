@@ -290,6 +290,11 @@ export function kunThreadTodosPath(threadId: string): string {
   return `${kunThreadPath(threadId)}/todos`
 }
 
+export const KUN_THREAD_TODOS_SYNC_PLAN_TEMPLATE = '/v1/threads/{id}/todos/sync-plan'
+export function kunThreadTodosSyncPlanPath(threadId: string): string {
+  return `${kunThreadTodosPath(threadId)}/sync-plan`
+}
+
 export const KUN_THREAD_COMPACT_TEMPLATE = '/v1/threads/{id}/compact'
 export function kunThreadCompactPath(threadId: string): string {
   return `${kunThreadPath(threadId)}/compact`

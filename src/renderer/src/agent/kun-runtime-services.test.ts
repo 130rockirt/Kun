@@ -548,6 +548,27 @@ describe('KunRuntimeProvider', () => {
     )
   })
 
+  it('syncs plan todos through the dedicated runtime endpoint', async () => {
+    const todos = { threadId: 'thr_1', items: [], updatedAt: '2026-08-31T00:00:00.000Z' }
+    const runtimeRequest = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({ todos })
+    }))
+    installDsGui({ runtimeRequest })
+    const provider = new KunRuntimeProvider()
+    const plan = { planId: 'plan_1', relativePath: '.kunsdd/plan/demo.md', markdown: '- [ ] task' }
+
+    await expect(provider.syncThreadTodosFromPlan('thr_1', plan)).resolves.toMatchObject({
+      threadId: 'thr_1', items: []
+    })
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads/thr_1/todos/sync-plan',
+      'POST',
+      JSON.stringify(plan)
+    )
+  })
+
   it('reads session-only Design metadata before cloning a resume target', async () => {
     const metadata = {
       sessionId: 'sess_design',

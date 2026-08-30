@@ -29,6 +29,7 @@ import {
   kunThreadReviewPath,
   kunThreadRewindPath,
   kunThreadTodosPath,
+  kunThreadTodosSyncPlanPath,
   kunThreadInterruptPath,
   kunThreadKnowledgeBaseReindexPath,
   kunThreadKnowledgeBasesPath,
@@ -514,6 +515,28 @@ export class KunRuntimeThreadServices extends KunRuntimeProviderServices {
         code: 'unknown',
         message: 'set thread todos returned an invalid response'
       })
+    }
+    return todosFromCore(body.todos)
+  }
+
+  async syncThreadTodosFromPlan(
+    threadId: string,
+    plan: Parameters<NonNullable<AgentProvider['syncThreadTodosFromPlan']>>[1]
+  ): Promise<NonNullable<NormalizedThread['todos']>> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      kunThreadTodosSyncPlanPath(threadId),
+      'POST',
+      JSON.stringify(plan)
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to sync plan todos'))
+    }
+    const body = readRuntimeJson<CoreThreadTodosResponseJson>(
+      response.body,
+      'runtime returned an invalid thread todos response'
+    )
+    if (!body.todos) {
+      throw runtimeErrorToError({ code: 'unknown', message: 'sync plan todos returned no todos' })
     }
     return todosFromCore(body.todos)
   }

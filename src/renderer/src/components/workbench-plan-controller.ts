@@ -5,11 +5,12 @@ import { useChatStore } from '../store/chat-store'
 import type { ChatState } from '../store/chat-store-types'
 import { buildRefinePlanPrompt } from '../plan/plan-prompts'
 import { preparePlanBuild } from '../plan/prepare-plan-build'
+import { planHasBoardTasks } from '../plan/plan-board-model'
 import { buildSddVerifyPrompt } from '../sdd/sdd-verify-prompt'
 import { sddDraftRelativePathForPlanPath, sddDraftTraceRelativePath } from '@shared/sdd'
 import { buildSddTraceSnapshot, parseSddRequirementBlocks } from '@shared/sdd-trace'
 import {
-  CODE_PANEL_PREFERRED
+  PLAN_BOARD_PREFERRED
 } from './workbench-layout'
 import {
   createGuiPlanArtifact,
@@ -184,7 +185,7 @@ export function useWorkbenchPlanController({
   const lastLoadedPlanBlockIdRef = useRef<string | null>(null)
 
   const openGuiPlanPanel = useCallback((meta?: GuiPlanToolMeta): void => {
-    setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
+    setRightSidebarWidth((width) => Math.max(width, PLAN_BOARD_PREFERRED))
     setRightPanelMode(BUILTIN_RIGHT_PANEL_IDS.plan)
     // Card "open plan" must recover the plan when the store lost it (app
     // restart, another thread's plan taking over the registry); otherwise
@@ -215,6 +216,21 @@ export function useWorkbenchPlanController({
       if (!result.ok) {
         useGuiPlanStore.getState().setSaveStatus('error', result.message)
         return false
+      }
+      const chatState = useChatStore.getState()
+      const hasLinkedTodos = (chatState.activeThreadTodos?.items ?? []).some((item) =>
+        item.source?.kind === 'plan' && item.source.planId === plan.id
+      )
+      if (
+        chatState.activeThreadId &&
+        chatState.runtimeConnection === 'ready' &&
+        (hasLinkedTodos || planHasBoardTasks(contentToSave))
+      ) {
+        const synced = await chatState.syncPlanTodosFromMarkdown(plan, contentToSave)
+        if (!synced) {
+          useGuiPlanStore.getState().setSaveStatus('error', t('planBoardSyncFailed'))
+          return false
+        }
       }
       const latest = useGuiPlanStore.getState()
       if (latest.activePlan?.id === plan.id) {
@@ -360,6 +376,15 @@ export function useWorkbenchPlanController({
           preference.usePromptWorktree,
         branchPrefix: preference?.branchPrefix ?? 'codex/',
         activeThreadId: chatState.activeThreadId,
+        getPlanTodos: orchestration === 'direct'
+          ? () => (useChatStore.getState().activeThreadTodos?.items ?? [])
+              .filter((item) =>
+                item.source?.kind === 'plan' &&
+                item.source.planId === plan.id &&
+                item.source.relativePath === plan.relativePath
+              )
+              .map(({ id, content, status }) => ({ id, content, status }))
+          : undefined,
         save: savePlanContentToDisk,
         currentPlanId: () => useGuiPlanStore.getState().activePlan?.id,
         currentThreadId: () => useChatStore.getState().activeThreadId,

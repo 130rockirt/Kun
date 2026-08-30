@@ -52,6 +52,7 @@ import {
   mergePlanTodos,
   normalizePlanRelativePath,
   normalizeTodoContent,
+  type PlanTodoSyncMode,
   patchPlanTodoStatus,
   todoContentHash
 } from '../shared/todos.js'
@@ -121,7 +122,7 @@ export type SyncPlanTodosOptions = {
   planId: string
   relativePath: string
   markdown: string
-  preserveCompleted?: boolean
+  mode: PlanTodoSyncMode
 }
 
 export class ThreadService {

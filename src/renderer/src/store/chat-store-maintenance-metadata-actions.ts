@@ -139,12 +139,7 @@ import {
   createForkActiveThreadWithOptions,
   type CloneDesignDocumentForFork
 } from './chat-store-maintenance-fork-action'
-import {
-  extractPlanTodos,
-  mergePlanTodosForRenderer,
-  sameTodoWriteItems,
-  threadTodoWriteItems
-} from '../plan/plan-todo-sync'
+import { threadTodoWriteItems } from '../plan/plan-todo-sync'
 
 type SseAbortRef = { current: AbortController | null }
 
@@ -644,30 +639,17 @@ export function createMaintenanceMetadataActions(
   },
 
   syncPlanTodosFromMarkdown: async (plan, markdown) => {
-    const { activeThreadId, activeThreadTodos } = get()
+    const { activeThreadId } = get()
     if (!activeThreadId) return false
     if (get().runtimeConnection !== 'ready') return false
     const p = getProvider()
-    if (typeof p.setThreadTodos !== 'function') return false
-    const now = new Date().toISOString()
-    const planItems = extractPlanTodos({
-      markdown,
-      threadId: activeThreadId,
-      planId: plan.id,
-      relativePath: plan.relativePath,
-      now
-    })
-    const nextTodos = mergePlanTodosForRenderer({
-      threadId: activeThreadId,
-      existing: activeThreadTodos,
-      planItems,
-      now
-    })
-    const currentWriteItems = activeThreadTodos ? threadTodoWriteItems(activeThreadTodos) : []
-    const nextWriteItems = threadTodoWriteItems(nextTodos)
-    if (sameTodoWriteItems(currentWriteItems, nextWriteItems)) return true
+    if (typeof p.syncThreadTodosFromPlan !== 'function') return false
     try {
-      const todos = await p.setThreadTodos(activeThreadId, nextWriteItems)
+      const todos = await p.syncThreadTodosFromPlan(activeThreadId, {
+        planId: plan.id,
+        relativePath: plan.relativePath,
+        markdown
+      })
       applyTodosSnapshot(set, activeThreadId, todos)
       return true
     } catch (e) {
