@@ -17,7 +17,6 @@ import {
   Loader2,
   MessageSquare,
   MoreHorizontal,
-  PencilLine,
   Plus,
   Search,
   X
@@ -28,6 +27,13 @@ import type {
   WriteResourceConversationEntry,
   WriteResourceConversationHistoryModel
 } from './useWriteResourceConversationHistory'
+import {
+  WriteResourceConversationActionsMenu
+} from './WriteResourceConversationActionsMenu'
+import type {
+  WriteResourceConversationAction
+} from './WriteResourceConversationActionsMenu'
+import type { AnchorRect } from './WriteResourceConversationActionsMenu'
 
 type Props = {
   model: WriteResourceConversationHistoryModel
@@ -53,6 +59,8 @@ export function WriteResourceConversationHistoryPopover({
 }: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
   const rootRef = useRef<HTMLDivElement>(null)
+  const menuContainerRef = useRef<HTMLDivElement | null>(null)
+  const [menuAnchorRect, setMenuAnchorRect] = useState<AnchorRect | null>(null)
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [menuThreadId, setMenuThreadId] = useState<string | null>(null)
@@ -76,10 +84,12 @@ export function WriteResourceConversationHistoryPopover({
   useEffect(() => {
     if (!open || typeof document === 'undefined') return
     const closeOnOutsidePointer = (event: MouseEvent): void => {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false)
-        setMenuThreadId(null)
-      }
+      const target = event.target as Node | null
+      if (!target) return
+      if (rootRef.current?.contains(target)) return
+      if (menuContainerRef.current?.contains(target)) return
+      setOpen(false)
+      setMenuThreadId(null)
     }
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key === 'Escape' && !renameState && !archiveState) {
@@ -107,7 +117,45 @@ export function WriteResourceConversationHistoryPopover({
     const next = !open
     setOpen(next)
     setMenuThreadId(null)
+    setMenuAnchorRect(null)
     if (next) void model.loadMissingThreads()
+  }
+
+  const closeActionsMenu = (restoreFocus: boolean): void => {
+    setMenuThreadId(null)
+    setMenuAnchorRect(null)
+    if (restoreFocus) {
+      rootRef.current
+        ?.querySelector<HTMLButtonElement>('button[aria-expanded="true"]')
+        ?.focus()
+    }
+  }
+
+  const selectMenuAction = (
+    action: WriteResourceConversationAction
+  ): void => {
+    const entry = model.entries.find((candidate) => candidate.id === menuThreadId)
+    setMenuThreadId(null)
+    setMenuAnchorRect(null)
+    if (!entry) return
+    const sourceIndex = model.entries.findIndex((candidate) => candidate.id === entry.id)
+    if (action === 'rename') {
+      setRenameState({ entry, value: conversationTitle(entry, sourceIndex, t), submitting: false })
+    } else {
+      setArchiveState({ entry, submitting: false })
+    }
+  }
+
+  const registerMenuContainer = (element: HTMLDivElement | null): void => {
+    menuContainerRef.current = element
+  }
+
+  const handleMenuOutsidePointer = (target: Node | null): void => {
+    if (!target) return
+    if (rootRef.current?.contains(target)) return
+    if (menuContainerRef.current?.contains(target)) return
+    setMenuThreadId(null)
+    setMenuAnchorRect(null)
   }
 
   const lockTitle = model.running
@@ -253,7 +301,17 @@ export function WriteResourceConversationHistoryPopover({
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation()
-                      setMenuThreadId((current) => current === entry.id ? null : entry.id)
+                      if (menuThreadId === entry.id) {
+                        closeActionsMenu(false)
+                        return
+                      }
+                      const rect = (event.currentTarget as HTMLButtonElement | undefined)?.getBoundingClientRect()
+                      setMenuAnchorRect(
+                        rect
+                          ? { left: rect.left ?? 0, right: rect.right ?? 0, top: rect.top ?? 0, bottom: rect.bottom ?? 0 }
+                          : { left: 0, right: 0, top: 0, bottom: 0 }
+                      )
+                      setMenuThreadId(entry.id)
                     }}
                     className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-ds-faint opacity-70 transition hover:bg-ds-card hover:text-ds-ink group-hover:opacity-100"
                     aria-label={t('writeConversationMore')}
@@ -261,34 +319,6 @@ export function WriteResourceConversationHistoryPopover({
                   >
                     <MoreHorizontal className="h-4 w-4" strokeWidth={1.9} />
                   </button>
-                  {menuThreadId === entry.id ? (
-                    <div className="absolute right-2 top-9 z-10 min-w-[136px] rounded-xl border border-ds-border bg-ds-card p-1.5 shadow-[0_12px_36px_rgba(20,47,95,0.2)]">
-                      <button
-                        type="button"
-                        disabled={!canRename || entry.missing}
-                        onClick={() => {
-                          setMenuThreadId(null)
-                          setRenameState({ entry, value: title, submitting: false })
-                        }}
-                        className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11.5px] text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45"
-                      >
-                        <PencilLine className="h-3.5 w-3.5" strokeWidth={1.9} />
-                        {t('sidebarThreadRename')}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!canArchive || entry.missing}
-                        onClick={() => {
-                          setMenuThreadId(null)
-                          setArchiveState({ entry, submitting: false })
-                        }}
-                        className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11.5px] text-red-600 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-45 dark:text-red-300"
-                      >
-                        <Archive className="h-3.5 w-3.5" strokeWidth={1.9} />
-                        {t('sidebarThreadArchive')}
-                      </button>
-                    </div>
-                  ) : null}
                 </div>
               )
             }) : (
@@ -298,6 +328,18 @@ export function WriteResourceConversationHistoryPopover({
               </div>
             )}
           </div>
+
+          {menuThreadId && menuAnchorRect ? (
+            <WriteResourceConversationActionsMenu
+              anchorRect={menuAnchorRect}
+              canRename={canRename && !model.entries.find((entry) => entry.id === menuThreadId)?.missing}
+              canArchive={canArchive && !model.entries.find((entry) => entry.id === menuThreadId)?.missing}
+              onSelect={selectMenuAction}
+              onClose={closeActionsMenu}
+              onOutsidePointer={handleMenuOutsidePointer}
+              registerContainer={registerMenuContainer}
+            />
+          ) : null}
           {(model.running || model.workflowLocked) ? (
             <div className="border-t border-ds-border-muted bg-ds-main/45 px-3 py-2 text-[10.5px] leading-4 text-ds-faint">
               {model.running ? t('writeConversationLockedRunning') : t('writeConversationWorkflowLocked')}
