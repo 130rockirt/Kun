@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { KUN_MANAGED_GITHUB_MCP_MARKER } from './builtin-mcp.js'
 import { MODEL_ENDPOINT_FORMATS } from './model-endpoint-format.js'
 
 export const RUNTIME_CAPABILITY_CONTRACT_VERSION = 1
@@ -157,6 +158,8 @@ export type McpSearchConfig = z.infer<typeof McpSearchConfig>
 export const McpServerConfig = z
   .object({
     enabled: z.boolean().default(true),
+    /** Host ownership marker; user-imported MCP config never receives this field. */
+    managedBy: z.literal(KUN_MANAGED_GITHUB_MCP_MARKER).optional(),
     transport: McpTransportKind,
     command: z.string().min(1).optional(),
     args: z.array(z.string()).default([]),

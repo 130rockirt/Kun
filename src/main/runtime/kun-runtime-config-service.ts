@@ -47,6 +47,11 @@ import {
   type ModelReasoningEffort,
   type KunRuntimeSettingsV1
 } from '../../shared/app-settings'
+import {
+  BUILTIN_GITHUB_MCP_SERVER_ID,
+  buildBuiltinGitHubMcpServer,
+  isBuiltinGitHubMcpServer
+} from '../../shared/github-mcp'
 import { resolveCodexOAuthApiKey } from '../codex-auth'
 import {
   resolveKunMcpJsonPath,
@@ -129,11 +134,13 @@ export async function syncGuiManagedKunConfig(
   const projectMcpServers = appSettings
     ? await approvedProjectMcpServers(appSettings)
     : {}
-  const hasImportedEnabledMcpServer = Object.values(importedMcpServers)
-    .some((server) => objectValue(server).enabled !== false)
   const serve = objectValue(existing?.serve)
   const capabilities = objectValue(existing?.capabilities)
   const mcp = objectValue(capabilities.mcp)
+  const retainedMcpServers = stripGeneratedProjectMcpServers(objectValue(mcp.servers))
+  if (isBuiltinGitHubMcpServer(retainedMcpServers[BUILTIN_GITHUB_MCP_SERVER_ID])) {
+    delete retainedMcpServers[BUILTIN_GITHUB_MCP_SERVER_ID]
+  }
   const search = objectValue(mcp.search)
   const skills = await skillCapabilityConfigForRuntime(
     objectValue(capabilities.skills),
@@ -213,11 +220,10 @@ export async function syncGuiManagedKunConfig(
       ),
       mcp: {
         ...mcp,
-        ...(options?.scheduleMcp || runtime.mcpSearch.enabled || hasImportedEnabledMcpServer || Object.keys(projectMcpServers).length > 0
-          ? { enabled: mcp.enabled === false ? false : true }
-          : {}),
+        enabled: mcp.enabled === false ? false : true,
         servers: {
-          ...stripGeneratedProjectMcpServers(objectValue(mcp.servers)),
+          [BUILTIN_GITHUB_MCP_SERVER_ID]: buildBuiltinGitHubMcpServer(),
+          ...retainedMcpServers,
           ...importedMcpServers,
           ...projectMcpServers,
           ...(options?.scheduleMcp ? {

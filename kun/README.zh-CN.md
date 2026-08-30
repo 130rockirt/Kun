@@ -172,17 +172,18 @@ Kun 使用 JSON 配置文件管理运行时行为，避免重建后重配或硬�
   },
   "capabilities": {
     "mcp": {
-      "enabled": false,
+      "enabled": true,
       "servers": {
         "github": {
           "enabled": true,
-          "transport": "stdio",
-          "command": "npx",
-          "cwd": "/path/to/workspace",
-          "args": ["-y", "@modelcontextprotocol/server-github"],
-          "env": { "GITHUB_TOKEN": "<github-token>" },
-          "trustScope": "workspace",
-          "trustedWorkspaceRoots": ["/path/to/workspace"],
+          "transport": "streamable-http",
+          "url": "https://api.githubcopilot.com/mcp/readonly",
+          "headers": {
+            "Authorization": "Bearer ${GITHUB_PAT_TOKEN}",
+            "X-MCP-Toolsets": "context,repos,issues,pull_requests,users",
+            "X-MCP-Readonly": "true"
+          },
+          "trustScope": "user",
           "timeoutMs": 30000
         },
         "remote-docs": {
@@ -244,6 +245,7 @@ Kun 默认使用混合存储：`threads/{threadId}/messages.jsonl` 与 `events.j
 功能开关是显式设计：
 
 - `capabilities.mcp` 启动配置化 MCP 客户端并将工具加入动态注册表；工作区级服务器要求设置 `trustedWorkspaceRoots`。远程 HTTP/SSE MCP 可配置 `oauth`，Kun 会把 OAuth token 存在数据目录下，而不是写进 config。使用 `GET /v1/mcp/oauth` 可查看脱敏后的 OAuth 状态，使用 `DELETE /v1/mcp/oauth/{serverId}` 可清除某个服务保存的授权。
+- GUI 会默认写入由系统托管的 GitHub 官方只读 MCP。连接时 Kun 优先使用 `GITHUB_PAT_TOKEN`，否则读取 `gh auth token` 的登录凭据；两者都不可用时可先运行 `gh auth login`。Kun 只在进程内存中实例化 Token，持久化 header 仅保留环境变量引用，不会写入明文。用户在 `~/.kun/mcp.json` 中定义同名 `github` server 时，以用户配置为准。
 - `serve.mcpSearch` 可把大量 MCP 工具收敛为 `mcp_search`、`mcp_describe`、`mcp_call` 和 `mcp_refresh_catalog` 四个入口；当工具目录过大时，模型先检索意图相关工具，再描述和调用具体工具，避免每轮都携带完整 MCP schema。
 - `serve.tokenEconomy` / `tokenEconomyMode` 会压缩工具描述、工具结果和历史上下文；保留代码、路径、命令、URL、错误信号等高价值信息，同时省掉重复、超长或二进制 payload。
 - `contextCompaction` 控制长会话压缩的兜底阈值和摘要方式；模型级阈值写在 `models.profiles`。压缩时保留目标、约束、决策、已触碰文件、工具结果和未解决事项。

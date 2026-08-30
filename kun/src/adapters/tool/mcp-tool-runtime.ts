@@ -17,6 +17,7 @@ const DEFAULT_MCP_RECONNECT_MAX_DELAY_MS = 30_000
 
 export function startupConnectionError(error: unknown, server: McpServerConfig): string {
   if (isMcpAuthorizationRequiredError(error)) {
+    if (error.userMessage) return redactSecretText(error.userMessage)
     return 'OAuth authorization required. Use the connector\'s Authorize action to sign in; the runtime will not prompt automatically during startup.'
   }
   return formatMcpConnectionError(error, server)
@@ -479,6 +480,7 @@ export function serverDiagnostic(
   return {
     id: state.serverId,
     enabled: state.server.enabled,
+    ...(state.server.managedBy ? { managedBy: state.server.managedBy } : {}),
     transport: state.server.transport,
     trustScope: state.server.trustScope,
     available: status === 'connected',
@@ -500,6 +502,7 @@ export function syncMcpDiagnostic(
   const diagnostic: McpServerDiagnostic = {
     id: state.serverId,
     enabled: state.server.enabled,
+    ...(state.server.managedBy ? { managedBy: state.server.managedBy } : {}),
     transport: state.server.transport,
     trustScope: state.server.trustScope,
     available: status === 'connected',

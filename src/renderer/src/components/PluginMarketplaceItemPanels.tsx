@@ -201,7 +201,7 @@ export function PluginSection({
             const canToggleSkill = item.kind === 'skill' && item.group === 'personal' && onToggleSkillEnabled
             const toggleBusy = skillToggleBusyId === normalizedSkillId
             const mcpConfig = item.kind === 'mcp' ? mcpServerConfigFromText(mcpConfigText, item.id) : undefined
-            const mcpDisabled = item.kind === 'mcp' && !mcpServerEnabledFromConfig(mcpConfig)
+            const mcpDisabled = item.kind === 'mcp' && !item.systemManaged && !mcpServerEnabledFromConfig(mcpConfig)
             const canToggleMcp = item.kind === 'mcp' && item.group === 'personal' && !!mcpConfig && onToggleMcpEnabled
             const mcpBusy = mcpToggleBusyId === item.id
             return (

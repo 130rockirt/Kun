@@ -23,6 +23,7 @@ import { readBrowserStorageItem, writeBrowserStorageItem } from '../lib/browser-
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import { getProvider } from '../agent/registry'
 import type { SkillListItem, SkillRootListItem } from '@shared/kun-gui-api'
+import { BUILTIN_GITHUB_MCP_SERVER_ID } from '@shared/github-mcp'
 import type {
   CoreRuntimeInfoJson,
   CoreRuntimeToolDiagnosticsJson
@@ -53,6 +54,10 @@ export {
 } from './plugin-marketplace-config'
 export {
   mcpMarketplaceItemsFromConfigAndDiagnostics,
+  hasUserConfiguredGitHubMcp,
+  isSystemManagedMcpServerId,
+  overlaySystemManagedMcpDiagnostics,
+  recommendedMarketplaceItemsForMcpConfig,
   recommendedMarketplaceItemIds,
   skillMarketplaceItemsFromDiscoveredSkills,
   skillRootOptionsFromRoots,
@@ -62,9 +67,12 @@ import { PluginMarketplaceContent } from './PluginMarketplaceContent'
 import { runtimeOverlayErrorMessage } from './PluginMarketplaceRuntimePanels'
 import {
   RECOMMENDED_ITEMS,
+  isSystemManagedMcpServerId,
   itemDescription,
   itemTitle,
   mcpMarketplaceItemsFromConfigAndDiagnostics,
+  overlaySystemManagedMcpDiagnostics,
+  recommendedMarketplaceItemsForMcpConfig,
   skillMarketplaceItemsFromDiscoveredSkills,
   skillNameLooksValid,
   skillRootOptionsFromRoots
@@ -94,6 +102,7 @@ import {
   type Props,
   type SkillRootOption
 } from './plugin-marketplace-config'
+
 export function PluginMarketplaceView({ leftSidebarCollapsed, onToggleLeftSidebar }: Props): ReactElement {
   const { t } = useTranslation('common')
   const workspaceRoot = normalizeWorkspaceRoot(useChatStore((s) => s.workspaceRoot))
@@ -296,24 +305,45 @@ export function PluginMarketplaceView({ leftSidebarCollapsed, onToggleLeftSideba
     }),
     [discoveredSkills, t]
   )
+  const mcpRuntimeLabels = useMemo(() => ({
+    configured: t('pluginMcpSourceConfigured'),
+    connected: t('pluginMcpSourceConnected'),
+    error: t('pluginMcpSourceError'),
+    disabled: t('pluginMcpSourceDisabled')
+  }), [t])
+  const systemManagedGitHubMcp = useMemo(
+    () => isSystemManagedMcpServerId(
+      BUILTIN_GITHUB_MCP_SERVER_ID,
+      mcpConfigText,
+      toolDiagnostics
+    ),
+    [mcpConfigText, toolDiagnostics]
+  )
   const discoveredMcpItems = useMemo(
-    () => mcpMarketplaceItemsFromConfigAndDiagnostics(mcpConfigText, toolDiagnostics, {
-      configured: t('pluginMcpSourceConfigured'),
-      connected: t('pluginMcpSourceConnected'),
-      error: t('pluginMcpSourceError'),
-      disabled: t('pluginMcpSourceDisabled')
-    }).filter((item) => item.id !== GUI_SCHEDULE_MCP_SERVER_ID),
-    [mcpConfigText, t, toolDiagnostics]
+    () => mcpMarketplaceItemsFromConfigAndDiagnostics(
+      mcpConfigText,
+      toolDiagnostics,
+      mcpRuntimeLabels
+    ).filter((item) => !isSystemManagedMcpServerId(item.id, mcpConfigText, toolDiagnostics)),
+    [mcpConfigText, mcpRuntimeLabels, toolDiagnostics]
   )
   const discoveredMcpIds = useMemo(
     () => new Set(discoveredMcpItems.map((item) => item.id)),
     [discoveredMcpItems]
   )
+  const catalogItems = useMemo(
+    () => overlaySystemManagedMcpDiagnostics(
+      recommendedMarketplaceItemsForMcpConfig(mcpConfigText, toolDiagnostics),
+      toolDiagnostics,
+      mcpRuntimeLabels
+    ),
+    [mcpConfigText, mcpRuntimeLabels, toolDiagnostics]
+  )
   const marketplaceItems = useMemo(
     () => activeKind === 'skill'
-      ? [...RECOMMENDED_ITEMS, ...discoveredSkillItems]
-      : [...RECOMMENDED_ITEMS, ...discoveredMcpItems],
-    [activeKind, discoveredMcpItems, discoveredSkillItems]
+      ? [...catalogItems, ...discoveredSkillItems]
+      : [...catalogItems, ...discoveredMcpItems],
+    [activeKind, catalogItems, discoveredMcpItems, discoveredSkillItems]
   )
 
   const isInstalled = useCallback((item: Pick<MarketplaceItem, 'kind' | 'id'> & Partial<Pick<MarketplaceItem, 'group' | 'serverIds'>>): boolean => {
@@ -358,9 +388,14 @@ export function PluginMarketplaceView({ leftSidebarCollapsed, onToggleLeftSideba
     () => buildMcpMarketplaceOverlay({
       runtimeInfo,
       toolDiagnostics,
-      managedServers: [{ id: GUI_SCHEDULE_MCP_SERVER_ID, toolCount: 4 }]
+      managedServers: [
+        { id: GUI_SCHEDULE_MCP_SERVER_ID, toolCount: 4 },
+        ...(systemManagedGitHubMcp
+          ? [{ id: BUILTIN_GITHUB_MCP_SERVER_ID, toolCount: 0 }]
+          : [])
+      ]
     }),
-    [runtimeInfo, toolDiagnostics]
+    [runtimeInfo, systemManagedGitHubMcp, toolDiagnostics]
   )
 
   const appendMcpConfig = async (id: string, config: JsonRecord): Promise<void> => {

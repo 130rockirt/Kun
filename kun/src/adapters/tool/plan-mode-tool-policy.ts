@@ -16,6 +16,42 @@ export const PLAN_MODE_ALLOWED_GENERATION_TOOL_NAMES: ReadonlySet<string> = new 
   'generate_image'
 ])
 
+/** Read-only tools shared by capability discovery and the final model catalog. */
+export const PLAN_MODE_READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'read',
+  'ls',
+  'glob',
+  'grep',
+  'find',
+  'repo_map',
+  'git_inspect',
+  'lsp',
+  'web_search',
+  'web_fetch'
+])
+
+/** Interactive gates that may remain available while a plan is investigated. */
+export const PLAN_MODE_INTERACTIVE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'user_input',
+  'request_user_input'
+])
+
+/** Host-constrained tools which may persist only the reserved plan artifact. */
+export const PLAN_MODE_HOST_CONSTRAINED_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'create_plan'
+])
+
+/**
+ * Single source of truth for named Plan-mode exceptions. Tools may also enter
+ * the catalog by declaring `sideEffect: 'read-only'`, while generated media is
+ * handled by the deliberately separate generation exception above.
+ */
+export const PLAN_MODE_ALLOWED_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...PLAN_MODE_READ_ONLY_TOOL_NAMES,
+  ...PLAN_MODE_INTERACTIVE_TOOL_NAMES,
+  ...PLAN_MODE_HOST_CONSTRAINED_TOOL_NAMES
+])
+
 export function isPlanModeToolContext(
   context: Pick<ToolHostContext, 'threadMode' | 'guiPlan'>
 ): boolean {
