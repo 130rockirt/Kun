@@ -167,6 +167,20 @@ export const McpServerConfig = z
     url: z.string().min(1).optional(),
     headers: StringRecord.default({}),
     env: StringRecord.default({}),
+    /** Non-secret authorization identity and host/resource policy for the managed GitHub MCP. */
+    githubPolicy: z.object({
+      host: z.string().min(1),
+      allowedHosts: z.array(z.string().min(1)).min(1),
+      allowedOrganizations: z.array(z.string().min(1)).default([]),
+      allowedRepositories: z.array(z.string().min(1)).default([]),
+      authorization: z.object({
+        source: z.enum(['GITHUB_PAT_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN', 'github-cli']),
+        host: z.string().min(1),
+        login: z.string().min(1),
+        scopes: z.array(z.string().min(1)).default([]),
+        fingerprint: z.string().regex(/^[0-9a-f]{64}$/i)
+      }).strict().optional()
+    }).strict().optional(),
     // Visibility scope: empty means globally visible; otherwise the server is
     // advertised only when ToolHostContext.workspace is under one of these roots.
     workspaceRoots: z.array(z.string().min(1)).default([]),

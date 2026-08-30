@@ -1,4 +1,5 @@
 import type { McpCapabilityConfig, McpServerConfig } from '../../contracts/capabilities.js'
+import { assertBuiltinGitHubMcpCallAllowed } from '../../contracts/builtin-mcp.js'
 import { redactSecretText } from '../../config/secret-redaction.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import type { CapabilityToolProvider } from './capability-registry.js'
@@ -164,6 +165,7 @@ export function createMcpLocalTool(
           isError: true
         }
       }
+      assertBuiltinGitHubMcpCallAllowed(state.server, descriptor.name, args)
       const result = await callMcpToolWithReconnect(
         state,
         { name: descriptor.name, arguments: args },
@@ -212,8 +214,10 @@ export function createMcpSearchCatalogRecord(
     serverId: state.serverId,
     server: state.server,
     client: {
-      callTool: (input, options) =>
-        callMcpToolWithReconnect(state, input, options?.context, options?.timeout, isMcpReplaySafe(descriptor.annotations))
+      callTool: (input, options) => {
+        assertBuiltinGitHubMcpCallAllowed(state.server, input.name, input.arguments)
+        return callMcpToolWithReconnect(state, input, options?.context, options?.timeout, isMcpReplaySafe(descriptor.annotations))
+      }
     },
     descriptor,
     normalizedName: normalizeMcpToolName(state.serverId, descriptor.name),

@@ -1,42 +1,19 @@
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  Check,
-  ChevronDown,
-  Download,
-  FolderOpen,
-  Info,
-  Loader2,
-  Plus,
-  RefreshCw,
-  Search,
-  Settings
-} from 'lucide-react'
+import { Check, ChevronDown, Download, FolderOpen, Info, Loader2, Plus, RefreshCw, Search, Settings } from 'lucide-react'
 import { rendererRuntimeClient } from '../agent/runtime-client'
-import {
-  loadPreferredSkillRootId,
-  savePreferredSkillRootId,
-  type SkillRootId
-} from '../lib/skill-root-preference'
+import { loadPreferredSkillRootId, savePreferredSkillRootId, type SkillRootId } from '../lib/skill-root-preference'
 import { readBrowserStorageItem, writeBrowserStorageItem } from '../lib/browser-storage'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import { getProvider } from '../agent/registry'
 import type { SkillListItem, SkillRootListItem } from '@shared/kun-gui-api'
 import { BUILTIN_GITHUB_MCP_SERVER_ID } from '@shared/github-mcp'
-import type {
-  CoreRuntimeInfoJson,
-  CoreRuntimeToolDiagnosticsJson
-} from '../agent/kun-contract'
+import type { CoreRuntimeInfoJson, CoreRuntimeToolDiagnosticsJson } from '../agent/kun-contract'
 import { useChatStore } from '../store/chat-store'
 import { NoticeView, TabButton, type MarketplaceNotice } from './PluginMarketplaceParts'
-import {
-  buildMcpMarketplaceOverlay,
-  type McpMarketplaceOverlay,
-  type McpMarketplaceOverlayStatus
-} from './plugin-marketplace-runtime'
+import { buildMcpMarketplaceOverlay, type McpMarketplaceOverlay, type McpMarketplaceOverlayStatus } from './plugin-marketplace-runtime'
 import { SidebarTitlebarToggleButton } from './sidebar/SidebarPrimitives'
-
 export {
   auditMarketplaceInstall,
   auditMcpConfigSupplyChain,
@@ -63,20 +40,11 @@ export {
   skillRootOptionsFromRoots,
   skillRootShortLabel
 } from './plugin-marketplace-catalog'
+import { GitHubMcpAuthorizationDialog } from './GitHubMcpAuthorizationDialog'
+import { useGitHubMcpAuthorization } from './use-github-mcp-authorization'
 import { PluginMarketplaceContent } from './PluginMarketplaceContent'
 import { runtimeOverlayErrorMessage } from './PluginMarketplaceRuntimePanels'
-import {
-  RECOMMENDED_ITEMS,
-  isSystemManagedMcpServerId,
-  itemDescription,
-  itemTitle,
-  mcpMarketplaceItemsFromConfigAndDiagnostics,
-  overlaySystemManagedMcpDiagnostics,
-  recommendedMarketplaceItemsForMcpConfig,
-  skillMarketplaceItemsFromDiscoveredSkills,
-  skillNameLooksValid,
-  skillRootOptionsFromRoots
-} from './plugin-marketplace-catalog'
+import { RECOMMENDED_ITEMS, isSystemManagedMcpServerId, itemDescription, itemTitle, mcpMarketplaceItemsFromConfigAndDiagnostics, overlaySystemManagedMcpDiagnostics, recommendedMarketplaceItemsForMcpConfig, skillMarketplaceItemsFromDiscoveredSkills, skillNameLooksValid, skillRootOptionsFromRoots } from './plugin-marketplace-catalog'
 import {
   auditMarketplaceInstall,
   auditMcpConfigSupplyChain,
@@ -217,6 +185,12 @@ export function PluginMarketplaceView({ leftSidebarCollapsed, onToggleLeftSideba
     if (activeKind !== 'mcp') return
     void refreshMcpRuntimeOverlay()
   }, [activeKind, refreshMcpRuntimeOverlay])
+
+  const githubAuthorization = useGitHubMcpAuthorization({
+    t,
+    setNotice,
+    refreshRuntime: refreshMcpRuntimeOverlay
+  })
 
   const refreshSkillList = useCallback(async (): Promise<void> => {
     if (typeof window.kunGui?.listSkills !== 'function') {
@@ -421,6 +395,10 @@ export function PluginMarketplaceView({ leftSidebarCollapsed, onToggleLeftSideba
   }
 
   const addItem = async (item: MarketplaceItem): Promise<void> => {
+    if (item.id === BUILTIN_GITHUB_MCP_SERVER_ID) {
+      await githubAuthorization.inspect()
+      return
+    }
     if (item.kind === 'mcp' && item.oauth) {
       setNotice(null)
       setOauthPreviewItem(item)
@@ -624,7 +602,8 @@ export function PluginMarketplaceView({ leftSidebarCollapsed, onToggleLeftSideba
   }
 
   return (
-    <PluginMarketplaceContent
+    <>
+      <PluginMarketplaceContent
       leftSidebarCollapsed={leftSidebarCollapsed}
       onToggleLeftSidebar={onToggleLeftSidebar}
       t={t}
@@ -685,6 +664,16 @@ export function PluginMarketplaceView({ leftSidebarCollapsed, onToggleLeftSideba
       mcpConfigText={mcpConfigText}
       mcpToggleBusyId={mcpToggleBusyId}
       toggleMcpEnabled={toggleMcpEnabled}
-    />
+      />
+      <GitHubMcpAuthorizationDialog
+        preflight={githubAuthorization.preflight ?? undefined}
+        busy={githubAuthorization.busy}
+        onCancel={githubAuthorization.close}
+        onBind={(host) => void githubAuthorization.bind(host)}
+        onDisable={() => void githubAuthorization.disable()}
+        onConfirm={(input) => void githubAuthorization.confirm(input)}
+        t={t}
+      />
+    </>
   )
 }

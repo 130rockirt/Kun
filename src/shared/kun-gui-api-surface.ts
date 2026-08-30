@@ -26,17 +26,17 @@ import type {
   WorkflowRuntimeStatus
 } from './app-settings'
 import type { DesktopTitleBarMode } from './desktop-title-bar'
+import type {
+  BuiltinGitHubMcpAuthorizationConfirmation,
+  BuiltinGitHubMcpAuthorizationPreflight,
+  BuiltinGitHubMcpAuthorizationResult,
+  BuiltinGitHubMcpLoginResult
+} from './github-mcp-authorization'
 import type { DesktopStartupStatePayload } from './desktop-startup-state'
 import type { EditorListResult, EditorOpenResult, OpenEditorPathOptions } from './editor'
 import type { GitBranchesResult, GitBranchWorktreesResult, GitWorktreeCheckoutResult } from './git-branches'
 import type { GitCheckpointCreateResult, GitCheckpointRestoreResult } from './git-checkpoint'
-import type {
-  MergeResult,
-  SyncResult,
-  WorktreeChanges,
-  WorktreeInfo,
-  WorktreePoolStatus
-} from './worktree'
+import type { MergeResult, SyncResult, WorktreeChanges, WorktreeInfo, WorktreePoolStatus } from './worktree'
 import type {
   GuiUpdateChannel,
   GuiUpdateDownloadResult,
@@ -462,6 +462,12 @@ export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & ProviderAuthApi & {
   deactivateUiPluginTheme: () => Promise<UiPluginThemeDeactivateIpcResult>
   getKunConfigFile: () => Promise<DeepseekConfigFileResult>
   setKunConfigFile: (content: string) => Promise<DeepseekConfigSaveResult>
+  preflightBuiltinGitHubMcpAuthorization: (host?: string) => Promise<BuiltinGitHubMcpAuthorizationPreflight>
+  startBuiltinGitHubMcpLogin: (host?: string) => Promise<BuiltinGitHubMcpLoginResult>
+  disableBuiltinGitHubMcp: () => Promise<{ disabled: true }>
+  confirmBuiltinGitHubMcpAuthorization: (
+    request: BuiltinGitHubMcpAuthorizationConfirmation
+  ) => Promise<BuiltinGitHubMcpAuthorizationResult>
   openKunConfigDir: () => Promise<PathOpenResult>
   getKunProjectConfigFile: (workspaceRoot: string) => Promise<KunProjectConfigFileResult>
   setKunProjectConfigFile: (workspaceRoot: string, content: string) => Promise<KunProjectConfigFileResult>

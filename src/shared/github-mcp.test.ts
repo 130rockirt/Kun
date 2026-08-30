@@ -10,12 +10,12 @@ import {
 } from './github-mcp'
 
 describe('built-in GitHub MCP', () => {
-  it('uses the official remote server in strict read-only mode', () => {
+  it('defaults to disabled while preserving the official strict read-only descriptor', () => {
     const server = buildBuiltinGitHubMcpServer()
 
     expect(McpServerConfig.safeParse(server).success).toBe(true)
     expect(server).toMatchObject({
-      enabled: true,
+      enabled: false,
       managedBy: BUILTIN_GITHUB_MCP_MANAGED_BY,
       transport: 'streamable-http',
       url: BUILTIN_GITHUB_MCP_URL,

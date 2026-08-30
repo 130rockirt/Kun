@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { McpCapabilityConfig, type McpServerConfig } from '../../contracts/capabilities.js'
+import {
+  KUN_MANAGED_GITHUB_MCP_AUTHORIZATION,
+  KUN_MANAGED_GITHUB_MCP_MARKER,
+  KUN_MANAGED_GITHUB_MCP_TOOLSETS,
+  KUN_MANAGED_GITHUB_MCP_URL
+} from '../../contracts/builtin-mcp.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import {
   buildMcpToolProviders,
@@ -268,6 +274,33 @@ describe('mcp tool provider reliability', () => {
       'mcp_get_prompt'
     ])
     expect(facade?.tools.every((tool) => tool.shouldAdvertise?.(context) === false)).toBe(true)
+  })
+
+  it('never exposes managed GitHub through the unscoped resource and prompt facade', async () => {
+    const listResources = vi.fn(async () => ({ resources: [{ uri: 'github://private' }] }))
+    const client = new MockMcpClient([descriptor], vi.fn(async () => ({ ok: true })), { listResources })
+    const githubServer = McpCapabilityConfig.parse({
+      enabled: true,
+      servers: { github: {
+        enabled: true, managedBy: KUN_MANAGED_GITHUB_MCP_MARKER,
+        transport: 'streamable-http', url: KUN_MANAGED_GITHUB_MCP_URL,
+        headers: { Authorization: KUN_MANAGED_GITHUB_MCP_AUTHORIZATION,
+          'X-MCP-Toolsets': KUN_MANAGED_GITHUB_MCP_TOOLSETS, 'X-MCP-Readonly': 'true' },
+        trustScope: 'user', planModeReadOnlyTools: ['lookup'],
+        githubPolicy: { host: 'github.com', allowedHosts: ['github.com'],
+          allowedOrganizations: ['acme'], allowedRepositories: [],
+          authorization: { source: 'github-cli', host: 'github.com', login: 'octocat',
+            scopes: ['repo'], fingerprint: 'a'.repeat(64) } }
+      } }, search: { enabled: false }
+    })
+    const built = await buildMcpToolProviders(githubServer, {
+      clientFactory: vi.fn(async () => client)
+    })
+    const facade = built.providers.find((provider) => provider.id === 'mcp:facade')
+    const tool = facade?.tools.find((candidate) => candidate.name === 'mcp_list_resources')
+    expect(tool?.shouldAdvertise?.(context)).toBe(false)
+    await expect(tool?.execute({}, context)).resolves.toMatchObject({ isError: true })
+    expect(listResources).not.toHaveBeenCalled()
   })
 
   it('uses search plus facade providers without direct per-server MCP providers in search mode', async () => {

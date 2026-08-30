@@ -138,9 +138,16 @@ export async function syncGuiManagedKunConfig(
   const capabilities = objectValue(existing?.capabilities)
   const mcp = objectValue(capabilities.mcp)
   const retainedMcpServers = stripGeneratedProjectMcpServers(objectValue(mcp.servers))
+  // Replace only the host-authored entry. A user-owned `github` id remains
+  // authoritative and never qualifies for Kun's ambient credential injection.
   if (isBuiltinGitHubMcpServer(retainedMcpServers[BUILTIN_GITHUB_MCP_SERVER_ID])) {
     delete retainedMcpServers[BUILTIN_GITHUB_MCP_SERVER_ID]
   }
+  const hasUserGitHubServer = [retainedMcpServers, importedMcpServers, projectMcpServers]
+    .some((servers) => BUILTIN_GITHUB_MCP_SERVER_ID in servers)
+  const managedGitHubServer = hasUserGitHubServer
+    ? {}
+    : { [BUILTIN_GITHUB_MCP_SERVER_ID]: buildBuiltinGitHubMcpServer(runtime.githubMcp) }
   const search = objectValue(mcp.search)
   const skills = await skillCapabilityConfigForRuntime(
     objectValue(capabilities.skills),
@@ -225,7 +232,7 @@ export async function syncGuiManagedKunConfig(
         ...mcp,
         enabled: mcp.enabled === false ? false : true,
         servers: {
-          [BUILTIN_GITHUB_MCP_SERVER_ID]: buildBuiltinGitHubMcpServer(),
+          ...managedGitHubServer,
           ...retainedMcpServers,
           ...importedMcpServers,
           ...projectMcpServers,
@@ -333,7 +340,7 @@ type KunRuntimeConfigSettings = Pick<KunRuntimeSettingsV1,
   'tokenEconomy' | 'toolOutputLimits' | 'storage' | 'contextCompaction' |
   'runtimeTuning' | 'llmDebug' | 'imageGeneration' | 'textToSpeech' | 'musicGeneration' |
   'videoGeneration' | 'computerUse' | 'browserUse' | 'modelProfiles' | 'memoryEnabled' |
-  'instructions' | 'quality' | 'subagents' | 'graph' | 'fastContext' | 'lab' | 'smallModel' |
+  'instructions' | 'quality' | 'subagents' | 'graph' | 'fastContext' | 'lab' | 'githubMcp' | 'smallModel' |
   'smallModelProviderId' | 'smallModelAccountId' |
   'titleModel' | 'titleProviderId' | 'titleAccountId' |
   'summaryModel' | 'summaryProviderId' | 'summaryAccountId' |

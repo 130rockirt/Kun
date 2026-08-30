@@ -1,5 +1,7 @@
+import { ipcMain } from 'electron'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { registerBuiltinGitHubMcpAuthorizationIpc } from '../github-mcp-authorization-ipc'
 import { ensureBundledSkills } from '../skill-bundled'
 import type { RegisterAppIpcHandlersOptions } from './app-ipc-handler-options'
 import { registerAppContentIpcHandlers } from './register-app-content-ipc-handlers'
@@ -15,6 +17,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   // Keep domain registration calls in the original channel order.
   void ensureBundledSkills(join(homedir(), '.kun'))
   registerAppSettingsIpcHandlers(options)
+  registerBuiltinGitHubMcpAuthorizationIpc({
+    ipcMain,
+    getMainWindow: options.getMainWindow,
+    getSettings: () => options.store.load(),
+    applySettingsPatch: options.applySettingsPatch
+  })
   registerAppRuntimeIpcHandlers(options)
   registerAppWorkspaceIpcHandlers(options)
   registerAppUiPluginIpcHandlers(options)

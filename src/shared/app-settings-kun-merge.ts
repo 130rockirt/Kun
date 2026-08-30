@@ -91,6 +91,10 @@ import {
   normalizeApprovalReviewer
 } from './app-settings-kun-defaults'
 import {
+  DEFAULT_GITHUB_MCP_HOST,
+  normalizeGitHubMcpSettings
+} from './github-mcp-authorization'
+import {
   normalizeKunBrowserUseSettings,
   normalizeKunComputerUseSettings,
   normalizeKunImageGenerationSettings,
@@ -129,6 +133,14 @@ export function mergeKunRuntimeSettings(
   const nextProjectConfig = normalizeKunProjectConfigSettings(
     patch?.projectConfig ?? current.projectConfig
   )
+  const nextGitHubMcp = normalizeGitHubMcpSettings({
+    ...current.githubMcp,
+    ...(patch?.githubMcp ?? {}),
+    authorization: patch?.githubMcp?.authorization === null
+      ? undefined
+      : patch?.githubMcp?.authorization ?? current.githubMcp?.authorization,
+    githubHost: patch?.githubMcp?.githubHost ?? current.githubMcp?.githubHost ?? DEFAULT_GITHUB_MCP_HOST
+  })
   const currentTokenEconomy = normalizeKunTokenEconomySettings(
     current.tokenEconomy,
     current.tokenEconomyMode
@@ -363,6 +375,7 @@ export function mergeKunRuntimeSettings(
     tokenEconomy: nextTokenEconomy,
     toolOutputLimits: nextToolOutputLimits,
     mcpSearch: nextMcpSearch,
+    githubMcp: nextGitHubMcp,
     projectConfig: nextProjectConfig,
     storage: nextStorage,
     contextCompaction: nextContextCompaction,

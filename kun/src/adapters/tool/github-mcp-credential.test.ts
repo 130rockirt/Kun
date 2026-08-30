@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { McpServerConfig } from '../../contracts/capabilities.js'
 import {
   KUN_MANAGED_GITHUB_MCP_MARKER,
+  KUN_MANAGED_GITHUB_MCP_TOOLSETS,
   KUN_MANAGED_GITHUB_MCP_URL
 } from '../../contracts/builtin-mcp.js'
 import {
@@ -9,6 +10,7 @@ import {
   githubCliEnvironment,
   resolveGitHubCliExecutable,
   resolveGitHubCliExecutableDetails,
+  previewBuiltinGitHubMcpCredential,
   resolveBuiltinGitHubMcpCredentials
 } from './github-mcp-credential.js'
 import { serverDiagnostic, startupConnectionError } from './mcp-tool-runtime.js'
@@ -17,27 +19,47 @@ import {
   isMcpAuthorizationRequiredError
 } from './mcp-types.js'
 
-function managedServer() {
+function managedServer(authorization?: {
+  source: 'GITHUB_PAT_TOKEN' | 'GH_TOKEN' | 'GITHUB_TOKEN' | 'github-cli'
+  host: string
+  login: string
+  scopes: string[]
+  fingerprint: string
+}, enabled = true) {
   return McpServerConfig.parse({
-    enabled: true,
+    enabled,
     managedBy: KUN_MANAGED_GITHUB_MCP_MARKER,
     transport: 'streamable-http',
     url: KUN_MANAGED_GITHUB_MCP_URL,
     headers: {
       Authorization: 'Bearer ${GITHUB_PAT_TOKEN}',
+      'X-MCP-Toolsets': KUN_MANAGED_GITHUB_MCP_TOOLSETS,
       'X-MCP-Readonly': 'true'
+    },
+    githubPolicy: {
+      host: 'github.com',
+      allowedHosts: ['github.com'],
+      allowedOrganizations: [],
+      allowedRepositories: [],
+      ...(authorization ? { authorization } : {})
     },
     trustScope: 'user'
   })
 }
 
 describe('built-in GitHub MCP credentials', () => {
-  it('uses the PAT environment variable without mutating persisted config', async () => {
-    const server = managedServer()
+  it('uses an explicitly approved PAT without mutating persisted config', async () => {
+    const options = {
+      env: { GITHUB_PAT_TOKEN: 'environment-secret' },
+      inspectToken: async () => ({ login: 'octocat', scopes: ['repo'] })
+    }
+    const authorization = await previewBuiltinGitHubMcpCredential('github.com', options)
+    expect(authorization).toBeDefined()
+    const server = managedServer(authorization)
     const readGitHubCliToken = vi.fn(async () => 'unused-cli-token')
 
     const resolved = await resolveBuiltinGitHubMcpCredentials('github', server, {
-      env: { GITHUB_PAT_TOKEN: 'environment-secret' },
+      ...options,
       readGitHubCliToken
     })
 
@@ -46,13 +68,29 @@ describe('built-in GitHub MCP credentials', () => {
     expect(readGitHubCliToken).not.toHaveBeenCalled()
   })
 
-  it('falls back to the authenticated GitHub CLI for desktop launches', async () => {
-    const resolved = await resolveBuiltinGitHubMcpCredentials('github', managedServer(), {
+  it('uses an explicitly approved GitHub CLI session for desktop launches', async () => {
+    const options = {
       env: {},
-      readGitHubCliToken: async () => 'cli-secret\n'
-    })
+      readGitHubCliToken: async () => 'cli-secret\n',
+      inspectToken: async () => ({ login: 'octocat', scopes: ['repo'] })
+    }
+    const authorization = await previewBuiltinGitHubMcpCredential('github.com', options)
+    const resolved = await resolveBuiltinGitHubMcpCredentials('github', managedServer(authorization), options)
 
     expect(resolved.headers.Authorization).toBe('Bearer cli-secret')
+  })
+
+  it('does not read credentials while disabled or before explicit authorization', async () => {
+    const readGitHubCliToken = vi.fn(async () => 'cli-secret')
+    await expect(resolveBuiltinGitHubMcpCredentials('github', managedServer(undefined, false), {
+      env: {}, readGitHubCliToken
+    })).resolves.toEqual(managedServer(undefined, false))
+    expect(readGitHubCliToken).not.toHaveBeenCalled()
+
+    await expect(resolveBuiltinGitHubMcpCredentials('github', managedServer(), {
+      env: {}, readGitHubCliToken
+    })).rejects.toSatisfy(isMcpAuthorizationRequiredError)
+    expect(readGitHubCliToken).not.toHaveBeenCalled()
   })
 
   it('prefers fixed install locations before verified PATH entries', () => {
@@ -172,7 +210,9 @@ describe('built-in GitHub MCP credentials', () => {
   })
 
   it('reports an actionable authorization state when no credential is available', async () => {
-    const result = resolveBuiltinGitHubMcpCredentials('github', managedServer(), {
+    const result = resolveBuiltinGitHubMcpCredentials('github', managedServer({
+      source: 'github-cli', host: 'github.com', login: 'octocat', scopes: ['repo'], fingerprint: 'a'.repeat(64)
+    }), {
       env: {},
       readGitHubCliToken: async () => undefined
     })

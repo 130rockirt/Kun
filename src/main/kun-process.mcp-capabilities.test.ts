@@ -150,14 +150,15 @@ afterEach(async () => {
   vi.unstubAllGlobals()
   configureManagerAtomicJsonClient(null)
 })
-
 describe('syncGuiManagedKunConfig', () => {
-  it('injects the built-in GitHub MCP without persisting its PAT', async () => {
+  it('injects the explicitly enabled built-in GitHub MCP without persisting its PAT', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     vi.stubEnv('GITHUB_PAT_TOKEN', 'github-secret-for-test')
     const module = await import('./kun-process')
-
-    await module.syncGuiManagedKunConfig(tempRoot, defaultKunRuntimeSettings(), {
+    const runtime = defaultKunRuntimeSettings()
+    runtime.githubMcp = { ...runtime.githubMcp, enabled: true,
+      authorization: { source: 'GITHUB_PAT_TOKEN', host: 'github.com', login: 'octocat', scopes: ['repo'], fingerprint: 'a'.repeat(64) } }
+    await module.syncGuiManagedKunConfig(tempRoot, runtime, {
       mcpConfigPath: join(tempRoot, 'missing-mcp.json')
     })
 

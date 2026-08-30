@@ -6,7 +6,7 @@ import { registerExtensionContentScriptPreload } from './extension-content-scrip
 import { parseAppEnvironment } from './app-environment'
 import { createDesktopStartupPreloadApi } from './startup-state'
 import { createStorageRelocationWorkbenchApi } from './storage-relocation-workbench'
-
+import { createGitHubMcpAuthorizationPreloadApi } from './github-mcp-authorization'
 registerExtensionContentScriptPreload({ contextBridge, ipcRenderer, webFrame })
 // The preload runs sandboxed (webPreferences.sandbox = true), so it cannot
 // require node built-ins like node:os. The home dir is passed in from the main
@@ -242,6 +242,7 @@ const api = {
     ipcRenderer.invoke('kun:config:read'),
   setKunConfigFile: (content) =>
     ipcRenderer.invoke('kun:config:write', content),
+  ...createGitHubMcpAuthorizationPreloadApi(ipcRenderer),
   openKunConfigDir: () =>
     ipcRenderer.invoke('kun:config:open-dir'),
   getKunProjectConfigFile: (workspaceRoot) =>
@@ -695,5 +696,4 @@ const api = {
     return () => ipcRenderer.removeListener('terminal:exit', wrapped)
   }
 } satisfies KunGuiApi
-
 contextBridge.exposeInMainWorld('kunGui', api)

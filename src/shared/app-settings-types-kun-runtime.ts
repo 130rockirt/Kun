@@ -11,6 +11,7 @@ import type { ComputerUseMode } from '../../kun/src/contracts/capabilities.js'
 import type { BrowserUseMode } from './browser-use'
 import type { ModelEndpointFormat } from '../../kun/src/contracts/model-endpoint-format.js'
 import type { ToolOutputLimitsConfig } from '../../kun/src/contracts/tool-output-limits.js'
+import type { KunGitHubMcpSettingsV1 } from './github-mcp-authorization'
 
 import {
   KunContextCompactionSettingsV1,
@@ -333,6 +334,8 @@ export type KunRuntimeSettingsV1 = {
   insecure: boolean
   /** GUI-managed MCP progressive discovery/search settings written into Kun config.json. */
   mcpSearch: KunMcpSearchSettingsV1
+  /** Explicit opt-in and non-secret policy for the managed read-only GitHub MCP connector. */
+  githubMcp: KunGitHubMcpSettingsV1
   /** User-local, digest-bound grants for repository `.kun/project.json` MCP declarations. */
   projectConfig: KunProjectConfigSettingsV1
   /** Persistent store backend used by Kun. */
