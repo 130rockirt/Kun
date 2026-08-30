@@ -25,6 +25,7 @@ describe('shared model provider preset catalog', () => {
         name: source.name,
         baseUrl: source.baseUrl,
         endpointFormat: source.endpointFormat,
+        useProxy: false,
         models: [...source.models],
         docsUrl: source.docsUrl,
         apiKeyUrl: source.credentialUrl
@@ -35,6 +36,7 @@ describe('shared model provider preset catalog', () => {
         expect(gui?.tokenPlan).toMatchObject({
           baseUrl: source.tokenPlan.baseUrl,
           endpointFormat: source.tokenPlan.endpointFormat,
+          useProxy: false,
           models: [...source.tokenPlan.models],
           apiKeyUrl: source.tokenPlan.credentialUrl
         })
@@ -66,6 +68,7 @@ describe('shared model provider preset catalog', () => {
       apiKey: 'sk-ai-v1-api',
       baseUrl: 'https://zenmux.ai/api/v1',
       endpointFormat: 'chat_completions',
+      useProxy: false,
       models: []
     })
     expect(plan).toMatchObject({
@@ -75,6 +78,7 @@ describe('shared model provider preset catalog', () => {
       apiKey: 'sk-ss-v1-plan',
       baseUrl: 'https://zenmux.ai/api/v1',
       endpointFormat: 'chat_completions',
+      useProxy: false,
       models: []
     })
     expect(preset?.tokenPlan?.keyPrefix).toBe('sk-ss-v1-')

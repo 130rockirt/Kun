@@ -484,6 +484,7 @@ describe('JsonSettingsStore', () => {
               apiKey: 'sk-custom',
               baseUrl: 'https://custom.example/v1',
               endpointFormat: 'messages',
+              useProxy: false,
               models: ['custom-model']
             }
           ]
@@ -509,6 +510,7 @@ describe('JsonSettingsStore', () => {
           apiKey: 'sk-custom',
           baseUrl: 'https://custom.example/v1',
           endpointFormat: 'messages',
+          useProxy: false,
           models: ['custom-model']
         })
       ])
@@ -526,6 +528,7 @@ describe('JsonSettingsStore', () => {
           apiKey: 'sk-custom',
           baseUrl: 'https://custom.example/v1',
           endpointFormat: 'messages',
+          useProxy: false,
           models: ['custom-model']
         })
       ])
@@ -544,6 +547,7 @@ describe('JsonSettingsStore', () => {
       apiKey: 'sk-kimi',
       baseUrl: 'https://api.kimi.com/coding/v1',
       endpointFormat: 'chat_completions' as const,
+      useProxy: false,
       models: ['kimi-for-coding'],
       modelProfiles: {}
     }

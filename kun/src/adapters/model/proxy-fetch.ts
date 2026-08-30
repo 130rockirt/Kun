@@ -14,13 +14,16 @@ async function fetchViaProxy(
   init: Parameters<typeof fetch>[1] | undefined,
   proxyUrl: string
 ): Promise<Response> {
-  const url = new URL(typeof input === 'string' || input instanceof URL ? input.toString() : input.url)
+  const requestInput = new Request(input, init)
+  const url = new URL(requestInput.url)
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(`Unsupported proxied request protocol: ${url.protocol}`)
   }
 
-  const body = await requestBodyToBuffer(init?.body)
-  const headers = headersToRecord(init?.headers)
+  const body = requestInput.body
+    ? Buffer.from(await requestInput.arrayBuffer())
+    : null
+  const headers = headersToRecord(requestInput.headers)
   if (body && !hasHeader(headers, 'content-length')) {
     headers['content-length'] = String(body.byteLength)
   }
@@ -30,7 +33,7 @@ async function fetchViaProxy(
     const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(
       url,
       {
-        method: init?.method ?? 'GET',
+        method: requestInput.method,
         headers,
         agent
       },
@@ -57,7 +60,7 @@ async function fetchViaProxy(
       }
     )
 
-    const signal = init?.signal
+    const signal = requestInput.signal
     let settled = false
     const settleReject = (error: Error): void => {
       if (settled) return
@@ -80,18 +83,7 @@ async function fetchViaProxy(
   })
 }
 
-async function requestBodyToBuffer(body: RequestInit['body'] | null | undefined): Promise<Buffer | null> {
-  if (body === null || body === undefined) return null
-  if (typeof body === 'string') return Buffer.from(body)
-  if (body instanceof URLSearchParams) return Buffer.from(body.toString())
-  if (body instanceof ArrayBuffer) return Buffer.from(body)
-  if (ArrayBuffer.isView(body)) {
-    return Buffer.from(body.buffer, body.byteOffset, body.byteLength)
-  }
-  throw new Error('Unsupported proxied request body type.')
-}
-
-function headersToRecord(headers: RequestInit['headers'] | undefined): Record<string, string> {
+function headersToRecord(headers: HeadersInit | undefined): Record<string, string> {
   const out: Record<string, string> = {}
   if (!headers) return out
   const normalized = new Headers(headers)

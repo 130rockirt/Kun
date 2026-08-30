@@ -312,14 +312,14 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
 
   const { runProbe, importPickedModels } = useProviderProbeOperations({ t, setProbeStates,
     setCursorAccounts, sharedConnectionFor, patchProviderProfile, fetchModelsDevCatalogFor,
-    openModelImport, flushSharedProviderCatalog })
+    openModelImport, flushSharedProviderCatalog, providerProxy })
 
   const { activeProbe, probeBusy, probeNotice, activeBaseUrlInvalid, activeImageBaseUrlInvalid, activeSpeechBaseUrlInvalid, activeSpeechToggleDisabled, activeTextToSpeechBaseUrlInvalid, activeMusicBaseUrlInvalid, activeVideoBaseUrlInvalid, activeMissingCredential, providerSetupNeedsApiKey, activeProbeBlocked, activeCursorAccount, activeCursorAccountFresh, activeCursorApiKeyUrl, activeSharedConnection, activeCredentialNeedsReplacement, activeApiKeyPlaceholder, activeApiKeyValue, activeCredentialRevealBusy, activeTokenPlanRegions, filteredProviders, freeProviders, planProviders, apiProviders, grouped, renderProviderButton, freeAddEntries, planAddEntries, apiAddEntries, showPlanAddGroup, renderAddEntry, pendingImportProvider } = buildProvidersViewModel({ t, showApiKey, modelProviders,
     sharedConnections, revealedCredential, credentialRevealPendingProviderId, setSelectedProviderId,
     addProviderQuery, subscriptionRegion, providerListQuery, probeStates, cursorAccounts,
     pendingImport, draftProvider, displayProviders, activeProvider, sharedConnectionFor,
     hasConfiguredCredential, activeKunProviderId, closeAddProviderDialog, addPresetModelProvider,
-    updateProviderProxy, setGlobalNetworkOpen })
+    updateProviderProxy, updateModelProvider, setGlobalNetworkOpen, providerProxy })
 
   const openSettingsConfigFile = async (): Promise<void> => {
     setSettingsConfigOpenError('')

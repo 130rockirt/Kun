@@ -212,6 +212,7 @@ export function useProviderSharedSynchronization(scope: Record<string, any>): vo
             authType: isSubscriptionProvider(item) ? 'subscription' : 'api-key',
             ...(baseUrlOptional ? {} : { baseUrl: item.baseUrl }),
             endpointFormat: item.endpointFormat,
+            useProxy: item.useProxy,
             ...(item.apiKey.trim() ? { credential: item.apiKey } : {}),
             models: item.models,
             modelCapabilities: sharedCapabilitiesFromProvider(item),
@@ -226,6 +227,7 @@ export function useProviderSharedSynchronization(scope: Record<string, any>): vo
             existing.name !== (item.name.trim() || item.id) ||
             (existing.baseUrl ?? '') !== item.baseUrl ||
             existing.endpointFormat !== item.endpointFormat ||
+            existing.useProxy !== item.useProxy ||
             existing.kind !== (item.kind ?? 'http') ||
             (!hasPendingCatalog && (
               JSON.stringify(existing.models) !== JSON.stringify(item.models) ||
@@ -246,6 +248,7 @@ export function useProviderSharedSynchronization(scope: Record<string, any>): vo
                 authType: isSubscriptionProvider(item) ? 'subscription' : 'api-key',
                 ...(baseUrlOptional ? {} : { baseUrl: item.baseUrl }),
                 endpointFormat: item.endpointFormat,
+                useProxy: item.useProxy,
                 ...(!hasPendingCatalog ? {
                   models: item.models,
                   modelCapabilities,

@@ -8,12 +8,11 @@ import {
   isKunRuntimeInsecure,
   getKunRuntimeSettings,
   getModelProviderSettings,
-  resolveModelProviderProxyUrl,
+  resolveProviderProxyUrl,
   resolveKunRuntimeSettings,
   normalizeAppSettings,
   type ModelProviderProfileV1,
-  type KunRuntimeSettingsV1,
-  type AppSettingsV1
+  type KunRuntimeSettingsV1, type AppSettingsV1
 } from '../shared/app-settings'
 import {
   buildKunServeArgs,
@@ -485,7 +484,7 @@ async function prepareKunLaunch(
   const command = resolveNodeScriptCommand(resolution.command)
   const runtimeApiKey = (await ensureFreshGrokCredentials(runtime.apiKey, {
     fetcher: fetchWithOptionalProxy,
-    proxyUrl: resolveModelProviderProxyUrl(settings)
+    proxyUrl: resolveProviderProxyUrl(settings, runtime.providerId)
   })).apiKey
   const defaultClientApiKey = resolveCodexOAuthApiKey(runtimeApiKey).apiKey
   const activeProviderKind = (getModelProviderSettings(settings).providers as ModelProviderProfileV1[]).find(

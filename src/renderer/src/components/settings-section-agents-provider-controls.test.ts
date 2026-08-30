@@ -241,6 +241,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         apiKey: 'sk-custom',
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'messages',
+        useProxy: false,
         models: ['custom-model-1'],
         modelProfiles: {}
       } satisfies ModelProviderProfileV1
@@ -271,6 +272,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         apiKey: '',
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'messages',
+        useProxy: false,
         models: Array.from({ length: 9 }, (_, index) => `custom-model-${index + 1}`),
         modelProfiles: {},
         image: {
@@ -396,6 +398,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         apiKey: 'sk-test',
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         retry: {
           maxAttempts: 3,
           initialDelayMs: 3000,

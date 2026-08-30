@@ -2,7 +2,8 @@ import { session } from 'electron'
 import {
   isCustomModelEndpointFormat,
   normalizeModelEndpointFormat,
-  resolveModelProviderProxyUrl,
+  ProviderProxyConfigurationError,
+  resolveProviderProxyUrl,
   type AppSettingsV1,
   type ModelEndpointFormat
 } from '../shared/app-settings'
@@ -87,7 +88,25 @@ export async function probeModelProvider(
   fetcher: ProviderProbeFetch = fetchProviderProbe
 ): Promise<ModelProviderProbeResult> {
   const baseUrl = request.baseUrl.trim()
-  const proxyUrl = settings ? resolveModelProviderProxyUrl(settings) : ''
+  let proxyUrl = ''
+  if (settings) {
+    const stored = settings.provider.providers.find((provider) => provider.id === request.providerId)
+    try {
+      proxyUrl = resolveProviderProxyUrl(settings, {
+        id: request.providerId,
+        kind: stored?.kind ?? 'http',
+        useProxy: request.useProxy
+      })
+    } catch (error) {
+      if (error instanceof ProviderProxyConfigurationError) {
+        return {
+          ok: false,
+          message: 'This provider selected the app proxy, but its global proxy configuration is invalid. Open Global network proxy and correct it.'
+        }
+      }
+      throw error
+    }
+  }
   if (!/^https?:\/\//i.test(baseUrl)) {
     return { ok: false, message: 'Base URL must start with http:// or https://.' }
   }
@@ -155,12 +174,6 @@ export async function probeModelProvider(
       usingConfiguredProxy: Boolean(proxyUrl),
       message: describeProviderProbeError(e)
     })
-    if (proxyUrl && await directProviderReachable(url, endpointFormat, request.apiKey, fetcher)) {
-      return {
-        ok: false,
-        message: `${message} The configured model-request proxy failed, but a direct connection reached the provider. Disable or update the proxy in Settings > Providers.`
-      }
-    }
     if (!proxyUrl) {
       const systemProxyUrl = await resolveElectronSystemProxyUrl(url)
       if (
@@ -214,15 +227,6 @@ export function describeProviderProbeError(error: unknown): string {
   }
   const unique = parts.filter((part, index) => parts.indexOf(part) === index)
   return unique.join(': ') || 'unknown network error'
-}
-
-async function directProviderReachable(
-  url: string,
-  endpointFormat: ModelEndpointFormat,
-  apiKey: string,
-  fetcher: ProviderProbeFetch
-): Promise<boolean> {
-  return providerReachable(url, endpointFormat, apiKey, fetcher, '')
 }
 
 async function providerReachable(

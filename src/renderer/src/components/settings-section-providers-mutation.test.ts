@@ -56,6 +56,7 @@ describe('pending provider profile metadata', () => {
       id: 'custom-provider-2', accountId: 'account:custom-provider-2',
       name: 'Custom Provider', kind: 'http' as const, authType: 'api-key' as const,
       baseUrl: 'https://old.example.com/v1', endpointFormat: 'chat_completions' as const,
+      useProxy: false,
       configured: true, models: ['model-a'], modelCapabilities: { 'model-a': { id: 'model-a', ...textModelProfile } }
     } satisfies SharedModelConnection
     const pending = {
@@ -65,7 +66,7 @@ describe('pending provider profile metadata', () => {
       baseModels: ['model-a'], baseModelProfiles: { 'model-a': textModelProfile },
       localModels: ['model-a'], localModelProfiles: { 'model-a': textModelProfile }, committedRevision: 5
     }
-    const snapshot = (provider: SharedModelConnection) => ({ schemaVersion: 1 as const, revision: 5, providers: [provider] })
+    const snapshot = (provider: SharedModelConnection) => ({ schemaVersion: 1 as const, proxyRoutingVersion: 1 as const, revision: 5, providers: [provider] })
 
     expect(reconcilePendingSharedProviderCatalogs(snapshot(connection), new Map([[connection.id, pending]]))
       .has(connection.id)).toBe(true)
@@ -222,6 +223,7 @@ describe('shared model connection mutation ordering', () => {
     }
     const snapshot = (revision: number) => ({
       schemaVersion: 1,
+      proxyRoutingVersion: 1 as const,
       revision,
       providers: [provider]
     })
@@ -287,6 +289,7 @@ describe('shared model connection settings projection', () => {
 
     const projected = projectSharedModelConnections(current, {
       schemaVersion: 1,
+      proxyRoutingVersion: 1 as const,
       revision: 4,
       providers: [{
         id: 'codex',
@@ -296,6 +299,7 @@ describe('shared model connection settings projection', () => {
         authType: 'subscription',
         baseUrl: 'https://example.test/codex',
         endpointFormat: 'responses',
+        useProxy: false,
         configured: true,
         models: ['gpt-live'],
         selectedModel: 'gpt-live'
@@ -329,6 +333,7 @@ describe('shared model connection settings projection', () => {
       current,
       {
         schemaVersion: 1,
+        proxyRoutingVersion: 1 as const,
         revision: 7,
         providers: [{
           id: current.providers[0]!.id,
@@ -338,6 +343,7 @@ describe('shared model connection settings projection', () => {
           authType: 'api-key',
           baseUrl: 'https://old.example/v1',
           endpointFormat: 'chat_completions',
+          useProxy: false,
           configured: true,
           models: [...current.providers[0]!.models]
         }]
@@ -375,6 +381,7 @@ describe('shared model connection settings projection', () => {
 
     const projected = projectSharedModelConnections(current, {
       schemaVersion: 1,
+      proxyRoutingVersion: 1 as const,
       revision: 7,
       providers: [{
         id: 'custom',
@@ -384,6 +391,7 @@ describe('shared model connection settings projection', () => {
         authType: 'api-key',
         baseUrl: 'https://new.example/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         configured: true,
         models: ['new-model']
       }]
@@ -408,6 +416,7 @@ describe('shared model connection settings projection', () => {
 
     const projected = projectSharedModelConnections(current, {
       schemaVersion: 1,
+      proxyRoutingVersion: 1 as const,
       revision: 3,
       providers: []
     })
@@ -428,6 +437,7 @@ describe('shared model connection settings projection', () => {
 
     const projected = projectSharedModelConnections(current, {
       schemaVersion: 1,
+      proxyRoutingVersion: 1 as const,
       revision: 4,
       providers: []
     })
@@ -448,6 +458,7 @@ describe('shared model connection settings projection', () => {
 
     const projected = projectSharedModelConnections(current, {
       schemaVersion: 1,
+      proxyRoutingVersion: 1 as const,
       revision: 5,
       providers: []
     })
@@ -459,6 +470,7 @@ describe('shared model connection settings projection', () => {
   it('clears the GUI provider without emitting an invalid empty model', () => {
     const projected = projectSharedModelConnections(defaultModelProviderSettings(), {
       schemaVersion: 1,
+      proxyRoutingVersion: 1 as const,
       revision: 5,
       providers: [],
       proxy: { enabled: false, url: '' },
@@ -485,6 +497,7 @@ describe('shared model connection settings projection', () => {
 
     const projected = projectSharedModelConnections(current, {
       schemaVersion: 1,
+      proxyRoutingVersion: 1 as const,
       revision: 9,
       providers: [],
       routePools: [],
@@ -498,6 +511,7 @@ describe('shared model connection settings projection', () => {
   it('drops invalid shared capability limits before projecting AppSettings', () => {
     const projected = projectSharedModelConnections(defaultModelProviderSettings(), {
       schemaVersion: 1,
+      proxyRoutingVersion: 1 as const,
       revision: 6,
       providers: [{
         id: 'zenmux',
@@ -507,6 +521,7 @@ describe('shared model connection settings projection', () => {
         authType: 'api-key',
         baseUrl: 'https://zenmux.ai/api/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         configured: true,
         models: ['qwen/qwen3.5-flash'],
         modelCapabilities: {
@@ -536,6 +551,7 @@ describe('shared model connection settings projection', () => {
     const current = defaultModelProviderSettings()
     const projected = projectSharedModelConnections(current, {
       schemaVersion: 1,
+      proxyRoutingVersion: 1 as const,
       revision: 8,
       providers: [{
         id: 'custom-provider-2',
@@ -545,6 +561,7 @@ describe('shared model connection settings projection', () => {
         authType: 'api-key',
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         configured: true,
         models: ['custom-model'],
         selectedModel: 'custom-model'

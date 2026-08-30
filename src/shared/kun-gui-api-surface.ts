@@ -54,6 +54,7 @@ import type {
 import type { StorageRelocationApi } from './storage-relocation'
 import type { UninstallApi } from './uninstall'
 import type { RuntimeDataRecoveryApi } from './runtime-data-recovery'
+import type { ProviderAuthApi } from './kun-gui-api-provider-auth'
 import type { ProviderMutationFlushRequestHandler } from './provider-mutation-barrier'
 import type {
   ClipboardImageReadResult,
@@ -203,9 +204,6 @@ import {
   ClawImInstallPollResult,
   ClawImInstallQrResult,
   ClawImTelegramConnectResult,
-  CodexAuthPollResult,
-  CodexAuthStartResult,
-  CodexBrowserAuthResult,
   ComputerUsePermissionKind,
   ComputerUsePermissions,
   ConfirmDialogOptions,
@@ -254,7 +252,7 @@ import {
   UpstreamModelsResult,
   WorkspacePickResult
 } from './kun-gui-api-contracts'
-export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & {
+export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & ProviderAuthApi & {
   platform: string
   /** Immutable mode selected before the BrowserWindow and renderer are created. */
   desktopTitleBarMode: DesktopTitleBarMode
@@ -429,10 +427,6 @@ export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & {
     allowedChatIds?: string,
     proxy?: ClawImTelegramProxyV1
   ) => Promise<ClawImTelegramConnectResult>
-  startCodexAuth: () => Promise<CodexAuthStartResult>
-  pollCodexAuth: (deviceCode: string, userCode: string) => Promise<CodexAuthPollResult>
-  startCodexBrowserAuth: () => Promise<CodexBrowserAuthResult>
-  startGrokBrowserAuth: () => Promise<GrokBrowserAuthResult>
   /** Paste the authorization code (or callback URL) from accounts.x.ai. */
   submitGrokBrowserAuthCode: (code: string) => Promise<GrokBrowserAuthResult>
   cancelGrokBrowserAuth: () => Promise<GrokBrowserAuthCancelResult>

@@ -207,6 +207,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
             authType: request.authType,
             baseUrl: request.baseUrl,
             endpointFormat: request.endpointFormat,
+            useProxy: false,
             configured: true,
             models: request.models,
             selectedModel: request.selectedModel
@@ -227,6 +228,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         apiKey: 'sk-custom',
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         kind: 'http',
         models: ['custom-model'],
         modelProfiles: {
@@ -246,12 +248,14 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         authType: 'api-key',
         baseUrl: target.baseUrl,
         endpointFormat: target.endpointFormat,
+        useProxy: false,
         configured: true,
         models: target.models,
         selectedModel: target.models[0]
       })
       const snapshot = (revision: number, name: string) => ({
         schemaVersion: 1,
+        proxyRoutingVersion: 1,
         revision,
         providers: [sharedProvider(name)],
         defaultProviderId: target.id,
@@ -350,6 +354,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         apiKey: '',
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         kind: 'http',
         models: ['old-model'],
         modelProfiles: {}
@@ -362,6 +367,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         authType: 'api-key',
         baseUrl: target.baseUrl,
         endpointFormat: target.endpointFormat,
+        useProxy: false,
         configured: true,
         models,
         selectedModel: models[0]

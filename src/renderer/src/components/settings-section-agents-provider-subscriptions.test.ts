@@ -215,6 +215,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
             authType: request.authType,
             baseUrl: request.baseUrl,
             endpointFormat: request.endpointFormat,
+            useProxy: false,
             configured: true,
             models: request.models,
             selectedModel: request.selectedModel
@@ -289,6 +290,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
           authType: 'subscription',
           baseUrl: profile.baseUrl,
           endpointFormat: profile.endpointFormat,
+          useProxy: false,
           configured: true,
           models: profile.models,
           selectedModel: profile.models[0]
@@ -347,6 +349,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
           authType: 'subscription',
           baseUrl: profile.baseUrl,
           endpointFormat: profile.endpointFormat,
+          useProxy: false,
           configured: true,
           models: profile.models,
           selectedModel: profile.models[0]
@@ -459,6 +462,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         apiKey: 'sk-inspection',
         baseUrl: 'https://api.inspection.example/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         models: ['inspection-model'],
         modelProfiles: {}
       } satisfies ModelProviderProfileV1
@@ -576,6 +580,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         apiKey: 'sk-custom',
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         kind: 'http',
         models: ['custom-model'],
         modelProfiles: {}
@@ -588,6 +593,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         authType: 'api-key',
         baseUrl: target.baseUrl,
         endpointFormat: target.endpointFormat,
+        useProxy: false,
         configured: true,
         models: target.models,
         selectedModel: target.models[0]

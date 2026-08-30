@@ -386,9 +386,11 @@ export type ModelProviderModelGroup = {
 }
 
 export type ModelProviderProbeRequest = {
+  providerId: string
   baseUrl: string
   apiKey: string
   endpointFormat: ModelEndpointFormat
+  useProxy: boolean
 }
 
 export type ModelProviderProbeResult =
@@ -511,6 +513,8 @@ export type ClawImInstallPollResult =
 export type CodexAuthStartResult =
   | { ok: true; url: string; deviceCode: string; userCode: string; interval: number }
   | { ok: false; message: string }
+
+export type ProviderAuthProxySelection = { providerId: string; useProxy: boolean }
 
 export type CodexOAuthCredentials = {
   kind: 'codex-oauth'

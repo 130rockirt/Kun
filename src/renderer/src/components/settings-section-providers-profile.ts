@@ -28,6 +28,7 @@ import {
   defaultMiniMaxMediaGenerationKunPatch,
   modelProviderPresetProfile,
   modelProviderTokenPlanProfile,
+  normalizeProxyUrl,
   resolveModelProviderPresetSource
 } from '@shared/app-settings'
 import type {
@@ -519,8 +520,22 @@ export function isAcceptableHttpUrl(value: string): boolean {
   }
 }
 
-export function providerConnectionFingerprint(provider: ModelProviderProfileV1): string {
-  return [provider.baseUrl, provider.apiKey, provider.endpointFormat].join('\0')
+export function providerConnectionFingerprint(
+  provider: ModelProviderProfileV1,
+  proxy?: { enabled: boolean; url: string }
+): string {
+  const normalizedProxy = proxy?.enabled ? normalizeProxyUrl(proxy.url) : ''
+  const safeProxyIdentity = normalizedProxy
+    ? normalizedProxy.replace(/\/\/[^/@]+@/u, '//')
+    : proxy?.enabled ? 'invalid-proxy' : ''
+  return [
+    provider.baseUrl,
+    provider.apiKey,
+    provider.endpointFormat,
+    provider.useProxy ? 'proxy-selected' : 'direct',
+    proxy?.enabled ? 'proxy-enabled' : 'proxy-disabled',
+    safeProxyIdentity
+  ].join('\0')
 }
 
 export type ProbeState = {

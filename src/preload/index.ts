@@ -187,14 +187,14 @@ const api = {
     ipcRenderer.invoke('claw:im-install:poll', { provider, deviceCode }),
   connectTelegramBot: (botToken, allowedChatIds, proxy) =>
     ipcRenderer.invoke('claw:im-install:telegram-token', { botToken, allowedChatIds, proxy }),
-  startCodexAuth: () =>
-    ipcRenderer.invoke('codex:auth:start'),
-  pollCodexAuth: (deviceCode, userCode) =>
-    ipcRenderer.invoke('codex:auth:poll', { deviceCode, userCode }),
-  startCodexBrowserAuth: () =>
-    ipcRenderer.invoke('codex:auth:browser'),
-  startGrokBrowserAuth: () =>
-    ipcRenderer.invoke('grok:auth:browser'),
+  startCodexAuth: (selection) =>
+    ipcRenderer.invoke('codex:auth:start', selection),
+  pollCodexAuth: (deviceCode, userCode, selection) =>
+    ipcRenderer.invoke('codex:auth:poll', { deviceCode, userCode, ...selection }),
+  startCodexBrowserAuth: (selection) =>
+    ipcRenderer.invoke('codex:auth:browser', selection),
+  startGrokBrowserAuth: (selection) =>
+    ipcRenderer.invoke('grok:auth:browser', selection),
   submitGrokBrowserAuthCode: (code) =>
     ipcRenderer.invoke('grok:auth:browser:paste', { code }),
   cancelGrokBrowserAuth: () =>

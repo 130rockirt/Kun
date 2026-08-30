@@ -62,14 +62,14 @@ export function isOpenCodeFreeProvider(provider: Pick<ModelProviderProfileV1, 'i
 }
 
 export function buildProvidersViewModel(scope: Record<string, any>): Record<string, any> {
-  const { t, showApiKey, sharedConnections, revealedCredential, credentialRevealPendingProviderId, setSelectedProviderId, addProviderQuery, subscriptionRegion, providerListQuery, probeStates, cursorAccounts, pendingImport, draftProvider, activeProvider, sharedConnectionFor, hasConfiguredCredential, activeKunProviderId, closeAddProviderDialog, addPresetModelProvider, updateProviderProxy, setGlobalNetworkOpen } = scope
+  const { t, showApiKey, sharedConnections, revealedCredential, credentialRevealPendingProviderId, setSelectedProviderId, addProviderQuery, subscriptionRegion, providerListQuery, probeStates, cursorAccounts, pendingImport, draftProvider, activeProvider, sharedConnectionFor, hasConfiguredCredential, activeKunProviderId, closeAddProviderDialog, addPresetModelProvider, updateProviderProxy, updateModelProvider, setGlobalNetworkOpen, providerProxy } = scope
   const modelProviders = scope.modelProviders as ModelProviderProfileV1[]
   const displayProviders = scope.displayProviders as ModelProviderProfileV1[]
   const activeProbe = activeProvider ? probeStates[activeProvider.id] : undefined
   const activeProbeFresh = Boolean(
     activeProvider &&
     activeProbe &&
-    activeProbe.fingerprint === providerConnectionFingerprint(activeProvider)
+    activeProbe.fingerprint === providerConnectionFingerprint(activeProvider, providerProxy)
   )
   const probeBusy = Boolean(activeProbeFresh && activeProbe?.status === 'busy')
   const probeNotice: InlineNotice | null = (() => {
@@ -95,6 +95,7 @@ export function buildProvidersViewModel(scope: Record<string, any>): Record<stri
               label: t('modelProviderUseDetectedProxy'),
               onClick: () => {
                 updateProviderProxy({ enabled: true, url: suggestedProxyUrl })
+                updateModelProvider(activeProvider.id, { useProxy: true })
                 setGlobalNetworkOpen(true)
               }
             }

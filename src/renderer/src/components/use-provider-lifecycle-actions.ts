@@ -175,6 +175,7 @@ export function useProviderLifecycleActions(scope: Record<string, any>): Record<
       apiKey: '',
       baseUrl: 'https://api.example.com/v1',
       endpointFormat: 'chat_completions',
+      useProxy: false,
       retry: defaultModelRequestRetrySettings(),
       models: [],
       modelProfiles: {}
@@ -215,6 +216,7 @@ export function useProviderLifecycleActions(scope: Record<string, any>): Record<
       ...presetProvider,
       name: existingProvider.name.trim() || presetProvider.name,
       apiKey: existingProvider.apiKey,
+      useProxy: existingProvider.useProxy,
       models: mergeProviderModelIds(presetProvider.models, existingProvider.models),
       modelProfiles: {
         ...existingProvider.modelProfiles,

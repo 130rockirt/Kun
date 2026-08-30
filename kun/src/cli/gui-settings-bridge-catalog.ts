@@ -304,6 +304,7 @@ export function modelConnectionSnapshotFromGuiSettings(
     : undefined
   return ModelConnectionSnapshotSchema.parse({
     schemaVersion: 1,
+    proxyRoutingVersion: 1,
     revision: 0,
     providers: catalogs.map((provider) => ({
       id: provider.id,
@@ -315,6 +316,7 @@ export function modelConnectionSnapshotFromGuiSettings(
       authType: legacyAuthType(provider),
       ...(httpUrl(provider.baseUrl) ? { baseUrl: provider.baseUrl } : {}),
       endpointFormat: provider.endpointFormat,
+      useProxy: false,
       configured: true,
       models: provider.models,
       modelCapabilities: Object.fromEntries(

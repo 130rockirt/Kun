@@ -37,6 +37,7 @@ import {
 import { FastContextSettingsPanel } from './settings-section-assistant-fast-context'
 import { PptAgentSettingsPanel } from './settings-section-lab-ppt'
 import { ProviderModelsManager } from './settings-section-provider-models'
+import { providerProxyTestLabels } from './provider-proxy-test-labels'
 import {
   ProvidersSettingsSection,
   antigravityProviderCatalogPatch
@@ -152,6 +153,7 @@ const labels: Record<string, string> = {
   modelProviderTestFailed: 'Connection failed: {{message}}',
   modelProviderSystemProxyDetected: 'System proxy {{proxy}} can reach this provider.',
   modelProviderUseDetectedProxy: 'Use detected proxy',
+  ...providerProxyTestLabels,
   modelProviderCopyError: 'Copy error',
   modelProviderErrorCopied: 'Copied',
   modelProviderPresetMissingKeyForProbe: 'Enter this provider API key first.',

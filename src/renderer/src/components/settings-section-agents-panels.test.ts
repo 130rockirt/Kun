@@ -326,6 +326,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       apiKey: '',
       baseUrl: '',
       endpointFormat: 'chat_completions',
+      useProxy: false,
       models: ['gpt-5.4'],
       presetSource: { presetId: 'codex', mode: 'api' },
       modelProfiles: { 'gpt-5.4': codexModelProfile }

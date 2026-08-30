@@ -30,6 +30,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       apiKey: '',
       baseUrl: 'https://api.example.com/v1',
       endpointFormat: 'responses',
+      useProxy: false,
       models: [],
       modelProfiles: {}
     } satisfies ModelProviderProfileV1
@@ -60,6 +61,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
             apiKey: '',
             baseUrl: 'https://api.example.com/v1',
             endpointFormat: 'responses',
+            useProxy: false,
             models: [],
             modelProfiles: {}
           }
@@ -95,6 +97,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         id: 'xiaomi',
         baseUrl: 'https://api.xiaomimimo.com/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         models: expect.arrayContaining(['mimo-v2.5'])
       })
     ]))
@@ -155,6 +158,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       apiKey: '',
       baseUrl: '',
       endpointFormat: 'chat_completions',
+      useProxy: false,
       models: ['gpt-5.4'],
       presetSource: { presetId: 'codex', mode: 'api' },
       modelProfiles: { 'gpt-5.4': codexModelProfile }

@@ -106,9 +106,11 @@ import { MODEL_ENDPOINT_FORMATS } from '../../../shared/app-settings'
 import { MAX_BODY_BYTES, MAX_URL_LENGTH, trimmedString } from './common'
 export const providerProbePayloadSchema = z
   .object({
+    providerId: trimmedString(128),
     baseUrl: trimmedString(MAX_URL_LENGTH),
     apiKey: z.string().max(8_192),
-    endpointFormat: z.enum(MODEL_ENDPOINT_FORMATS)
+    endpointFormat: z.enum(MODEL_ENDPOINT_FORMATS),
+    useProxy: z.boolean()
   })
   .strict()
 

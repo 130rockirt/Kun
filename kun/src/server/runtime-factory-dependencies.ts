@@ -251,6 +251,7 @@ export {
   materializeLegacyProviderCredential
 } from '../services/legacy-provider-credential-migration.js'
 export { CodexOAuthCredentialRefresher } from '../services/codex-oauth-credential-refresher.js'
+export { createProxyFetch } from '../adapters/model/proxy-fetch.js'
 export { GrokOAuthCredentialRefresher } from '../services/grok-oauth-credential-refresher.js'
 export { ExtensionViewSessionService } from '../services/extension-view-session-service.js'
 export { ExtensionViewHostGenerationTracker } from '../extensions/view-host-generation-tracker.js'

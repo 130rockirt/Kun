@@ -152,7 +152,10 @@ export async function syncGuiManagedKunConfig(
     : undefined
   const routePools = appSettings ? routePoolsConfigForRuntime(appSettings) : undefined
   const localModelGateway = appSettings ? localModelGatewayConfigForRuntime(appSettings) : undefined
-  const defaultModelProxyUrl = appSettings
+  // The top-level value remains the shared Registry master/fallback. Every
+  // managed Provider below carries its own explicit effective route, so the
+  // selected compatibility client cannot inherit this value accidentally.
+  const appProxyUrl = appSettings
     ? resolveModelProviderProxyUrl(appSettings)
     : undefined
   const workflowHooks = buildWorkflowHookEntries(appSettings?.workflow)
@@ -173,7 +176,7 @@ export async function syncGuiManagedKunConfig(
       approvalPolicy: runtime.approvalPolicy,
       sandboxMode: runtime.sandboxMode,
       approvalReviewer: runtime.approvalReviewer,
-      modelProxyUrl: defaultModelProxyUrl || undefined,
+      modelProxyUrl: appProxyUrl,
       retry: runtime.retry,
       tokenEconomy: tokenEconomyConfigForRuntime(runtime.tokenEconomy, objectValue(serve.tokenEconomy)),
       toolOutputLimits: toolOutputLimitsConfigForRuntime(runtime.toolOutputLimits),
@@ -324,7 +327,7 @@ function defaultCredentialSourceId(settings: AppSettingsV1): string | undefined 
 }
 
 type KunRuntimeConfigSettings = Pick<KunRuntimeSettingsV1,
-  'apiKey' | 'baseUrl' | 'endpointFormat' | 'model' |
+  'apiKey' | 'baseUrl' | 'endpointFormat' | 'model' | 'providerId' |
   'approvalPolicy' | 'sandboxMode' | 'approvalReviewer' |
   'mcpSearch' | 'retry' |
   'tokenEconomy' | 'toolOutputLimits' | 'storage' | 'contextCompaction' |

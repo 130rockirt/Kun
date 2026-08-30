@@ -61,6 +61,7 @@ describe('ChatGPT subscription migration', () => {
         apiKey: 'oauth-json',
         baseUrl: 'https://chatgpt.com/backend-api/codex',
         endpointFormat: 'responses',
+        useProxy: false,
         models: ['gpt-5.4-mini', 'gpt-5.5', 'gpt-5.3-codex-spark', 'gpt-5.4'],
         modelProfiles: {}
       }]
@@ -98,6 +99,7 @@ describe('ChatGPT subscription migration', () => {
         apiKey: 'oauth-json',
         baseUrl: 'https://chatgpt.com/backend-api/codex',
         endpointFormat: 'custom_endpoint',
+        useProxy: false,
         models: ['gpt-5.4-mini'],
         modelProfiles: {
           'gpt-5.4-mini': {
@@ -125,6 +127,7 @@ describe('ChatGPT subscription migration', () => {
         apiKey: 'oauth-json',
         baseUrl: 'https://chatgpt.com/backend-api/codex',
         endpointFormat: 'responses',
+        useProxy: false,
         models: ['gpt-5.5', 'team-model'],
         modelProfiles: {}
       }]
@@ -236,6 +239,7 @@ describe('Grok subscription media capabilities', () => {
         apiKey: 'sk-custom',
         baseUrl: 'https://chat.example/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         models: ['custom-chat'],
         modelProfiles: {},
         image,

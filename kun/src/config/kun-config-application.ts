@@ -178,6 +178,8 @@ export const ServeProviderConfigSchema = z
       .default(DEFAULT_MODEL_ENDPOINT_FORMAT)
       .optional(),
     retry: ModelRequestRetryConfigSchema.optional(),
+    /** Durable Provider intent; effective routing is materialized separately. */
+    useProxy: z.boolean().optional(),
     modelProxyUrl: z.string().optional(),
     modelProfiles: z.record(z.string().min(1), ModelContextProfileConfigSchema).optional(),
     headers: z.record(z.string(), z.string()).optional(),

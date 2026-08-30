@@ -26,6 +26,7 @@ import {
   materializeLegacyProviderCredential,
   CodexOAuthCredentialRefresher,
   GrokOAuthCredentialRefresher,
+  createProxyFetch,
   isModelConnectionCredentialSourceId,
   ModelConnectionRegistry,
   ModelConnectionOAuthService,
@@ -135,11 +136,20 @@ export async function createRuntimeModelComposition(
       }
     }
   }
+  const fetchForCredentialSource = async (sourceId: string): Promise<typeof fetch> => {
+    const materialized = await modelConnections.materialize()
+    const provider = [...materialized.providers.values()].find(
+      (candidate) => candidate.credentialSourceId === sourceId
+    )
+    return createProxyFetch(provider?.modelProxyUrl ?? '') ?? fetch
+  }
   const grokCredentialRefresher = new GrokOAuthCredentialRefresher(
-    requestCredentialStore
+    requestCredentialStore,
+    { fetchForSource: fetchForCredentialSource }
   )
   const codexCredentialRefresher = new CodexOAuthCredentialRefresher(
-    requestCredentialStore
+    requestCredentialStore,
+    { fetchForSource: fetchForCredentialSource }
   )
   const resolveLegacyRequestCredentials = async (
     sourceId: string,
@@ -316,6 +326,7 @@ export async function createRuntimeModelComposition(
               credentialSourceId: selected.config.credentialSourceId,
               baseUrl: selected.config.baseUrl ?? core.activeOptions.baseUrl,
               endpointFormat: selected.config.endpointFormat ?? core.activeOptions.endpointFormat,
+              modelProxyUrl: selected.config.modelProxyUrl,
               headers: selected.config.headers,
               geminiAuth: selected.config.geminiAuth
             }
@@ -328,7 +339,7 @@ export async function createRuntimeModelComposition(
               geminiAuth: undefined
             }),
         providers,
-        modelProxyUrl: connections.proxy.enabled ? connections.proxy.url : undefined,
+        modelProxyUrl: selected?.config.modelProxyUrl,
         routePools: connections.routePools,
         localModelGateway: connections.localModelGateway
       }
@@ -374,9 +385,7 @@ export async function createRuntimeModelComposition(
     if (!apiKey) {
       throw new Error(`Model connection ${providerId} has no usable credential`)
     }
-    // Media tools share the provider-level global proxy with chat model
-    // requests so a proxy-restricted provider stays reachable end to end.
-    const proxyUrl = materialized.proxy.enabled ? materialized.proxy.url.trim() : ''
+    const proxyUrl = provider.modelProxyUrl ?? ''
     return {
       apiKey,
       ...(headers ? { headers } : {}),
@@ -417,6 +426,7 @@ export async function createRuntimeModelComposition(
           kind: profile.kind,
           ...(profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
           apiKey,
+          proxyUrl: config?.modelProxyUrl ?? '',
           ...(headers ? { headers } : {}),
           ...(config?.credentialSourceId
             ? { credentialSourceId: config.credentialSourceId }
@@ -424,8 +434,7 @@ export async function createRuntimeModelComposition(
         }
       }))
       return {
-        profiles,
-        proxyUrl: snapshot.proxy.enabled ? snapshot.proxy.url : ''
+        profiles
       }
     },
     loadLocalCosts: async (profiles) => {
@@ -453,9 +462,9 @@ export async function createRuntimeModelComposition(
       })
     },
     subscriptionRuntime: {
-      resolveCodexCredential: async (provider, rejectedAccessToken) => {
+      resolveCodexCredential: async (provider, rejectedAccessToken, context) => {
         if (!provider.credentialSourceId) {
-          return resolveDefaultCodexQuotaCredential(provider, rejectedAccessToken)
+          return resolveDefaultCodexQuotaCredential(provider, rejectedAccessToken, context)
         }
         try {
           const resolved = await resolveLegacyRequestCredentials(
@@ -473,9 +482,9 @@ export async function createRuntimeModelComposition(
           return undefined
         }
       },
-      resolveGrokCredential: async (provider, rejectedAccessToken) => {
+      resolveGrokCredential: async (provider, rejectedAccessToken, context) => {
         if (!provider.credentialSourceId) {
-          return resolveDefaultGrokQuotaCredential(provider, rejectedAccessToken)
+          return resolveDefaultGrokQuotaCredential(provider, rejectedAccessToken, context)
         }
         try {
           const resolved = await resolveLegacyRequestCredentials(

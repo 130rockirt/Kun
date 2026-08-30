@@ -189,7 +189,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       const target = {
         id: 'shared-provider', name: 'Shared Provider', apiKey: '',
         baseUrl: 'https://api.example.com/v1', endpointFormat: 'chat_completions',
-        models: ['old-model'], modelProfiles: {}
+        useProxy: false, models: ['old-model'], modelProfiles: {}
       } satisfies ModelProviderProfileV1
       const snapshot = (revision: number, models = target.models) => ({
         schemaVersion: 1,
@@ -331,6 +331,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         apiKey: 'sk-probe',
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         models: ['probe-model'],
         modelProfiles: {}
       } satisfies ModelProviderProfileV1
@@ -396,6 +397,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         apiKey: 'sk-probe',
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         models: [],
         modelProfiles: {}
       } satisfies ModelProviderProfileV1
@@ -452,6 +454,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         apiKey: 'sk-probe',
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         models: ['model-a', 'model-b'],
         modelProfiles: {}
       } satisfies ModelProviderProfileV1
@@ -644,6 +647,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         apiKey: 'sk-probe',
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'chat_completions',
+        useProxy: false,
         models: [],
         modelProfiles: {}
       } satisfies ModelProviderProfileV1

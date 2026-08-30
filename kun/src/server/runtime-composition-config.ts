@@ -466,14 +466,13 @@ export function createRuntimeConfigController(
 	              credentialSourceId: selected.config.credentialSourceId,
 	              baseUrl: selected.config.baseUrl ?? nextOptions.baseUrl,
 	              endpointFormat: selected.config.endpointFormat ?? nextOptions.endpointFormat,
+	              modelProxyUrl: selected.config.modelProxyUrl,
 	              headers: selected.config.headers,
 	              geminiAuth: selected.config.geminiAuth
 	            }
 	          : {}),
 	        providers: Object.fromEntries(materializedConnections.providers.entries()),
-	        modelProxyUrl: materializedConnections.proxy.enabled
-	          ? materializedConnections.proxy.url
-	          : undefined,
+	        modelProxyUrl: selected?.config.modelProxyUrl,
 	        routePools: materializedConnections.routePools,
 	        localModelGateway: materializedConnections.localModelGateway
 	      }

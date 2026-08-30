@@ -390,6 +390,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         baseUrl: 'https://api.example.com/v1',
         endpointFormat: 'chat_completions',
         kind: 'http',
+        useProxy: false,
         models: ['custom-model'],
         modelProfiles: {}
       } satisfies ModelProviderProfileV1
