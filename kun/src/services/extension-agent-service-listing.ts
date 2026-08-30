@@ -41,7 +41,10 @@ export async function listExtensionRunEvents(input: {
 
   const afterSeq = afterSequence - 1
   const replayFloor = await input.sessions.eventReplayFloorSeq?.(input.threadId) ?? 0
-  const historyIncomplete = replayFloor > 0 && afterSeq < replayFloor - 1
+  // Durable session sequences begin at one. A replay floor of one is the
+  // intact beginning of a new thread, not evidence that sequence zero was
+  // pruned. Only a floor above that baseline can prove retained history moved.
+  const historyIncomplete = replayFloor > 1 && afterSeq < replayFloor - 1
   const items: ExtensionAgentEvent[] = []
   let cursor = afterSequence
   let bytes = 0
