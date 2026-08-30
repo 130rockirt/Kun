@@ -101,9 +101,9 @@ export type SettingsCredentialMigration = {
     }
   ) => Promise<SettingsCredentialMigrationResult>
   /**
-   * Repairs an already-migrated OAuth source whose protected value was
-   * previously flattened to an access token. Implementations must only use
-   * the backup as a recovery candidate and must not restore cleared sources.
+   * Repairs an already-migrated credential from the protected one-time backup.
+   * Implementations must only restore a source that is still durably present
+   * but unreadable, or an OAuth source known to have been flattened.
    */
   repairRefreshableCredentialsFromBackup?: (
     settings: AppSettingsV1,

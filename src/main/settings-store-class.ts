@@ -373,12 +373,12 @@ export class JsonSettingsStore {
     try {
       const repairedSourceIds = await repair.call(credentialMigration, settings, backup)
       if (repairedSourceIds.length > 0) {
-        console.info('[kun-gui] Recovered refreshable OAuth credentials from the protected migration backup.', {
+        console.info('[kun-gui] Recovered provider credentials from the protected migration backup.', {
           sourceIds: repairedSourceIds
         })
       }
     } catch (error) {
-      console.warn('[kun-gui] Refreshable OAuth credential recovery was skipped.', {
+      console.warn('[kun-gui] Protected credential recovery was skipped.', {
         message: error instanceof Error ? error.message : String(error)
       })
     }

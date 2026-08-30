@@ -13,6 +13,7 @@ import {
 import {
   clearPendingSharedProviderDeletionForExplicitAdd,
   createSharedModelMutationQueue,
+  mergeProviderDraftForDisplay,
   projectSharedModelConnections,
   reconcilePendingSharedProviderCatalogs,
   selectSharedModelConnection,
@@ -34,6 +35,18 @@ const textModelProfile: ModelProviderModelProfileV1 = {
   supportsToolCalling: true,
   messageParts: ['text']
 }
+
+describe('provider draft projection', () => {
+  it('replaces a committed same-id row instead of rendering a duplicate draft', () => {
+    const providers = defaultModelProviderSettings().providers
+    const draft = { ...providers[0]!, name: 'Draft provider', apiKey: 'pending-secret' }
+    const displayed = mergeProviderDraftForDisplay(providers, draft)
+
+    expect(displayed).toHaveLength(providers.length)
+    expect(displayed.filter((provider) => provider.id === draft.id)).toEqual([draft])
+    expect(new Set(displayed.map((provider) => provider.id)).size).toBe(displayed.length)
+  })
+})
 
 describe('credential retry policy', () => {
   it('uses capped exponential backoff with bounded jitter', () => {
