@@ -333,16 +333,6 @@ function showTrayMenu(): void {
 
 export function syncTray(settings: AppSettingsV1): void {
   mainState.appBehavior = settings.appBehavior
-  if (mainState.appBehavior.closeAction === 'quit') {
-    destroyTrayQuotaPopover()
-    if (mainState.tray) {
-      mainState.tray.destroy()
-      mainState.tray = null
-      mainState.trayMenu = null
-    }
-    mainState.trayAvailable = false
-    return
-  }
 
   try {
     if (!mainState.tray) {
