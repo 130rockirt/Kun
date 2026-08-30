@@ -1,4 +1,4 @@
-import { readFile, realpath } from 'node:fs/promises'
+import { realpath } from 'node:fs/promises'
 import { z } from 'zod'
 import {
   RuntimeFlavorSchema,
@@ -629,16 +629,5 @@ async function canonicalRealPath(path: string): Promise<string | null> {
     return await realpath(path)
   } catch {
     return null
-  }
-}
-
-export async function readPersistedManagerState(path: string): Promise<ServiceManagerState> {
-  try {
-    return ServiceManagerState.restore(JSON.parse(await readFile(path, 'utf8')))
-  } catch (error) {
-    if (String((error as { code?: unknown })?.code ?? '') === 'ENOENT') {
-      return new ServiceManagerState()
-    }
-    throw error
   }
 }

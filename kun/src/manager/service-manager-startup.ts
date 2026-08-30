@@ -1,6 +1,4 @@
-import { chmod } from 'node:fs/promises'
 import { join } from 'node:path'
-import { atomicWriteFile } from '../adapters/file/atomic-write.js'
 import { acquireRuntimeDataDirLease } from '../server/runtime-data-dir-lease.js'
 import { startNodeHttpServer, type NodeHttpServerHandle } from '../server/node-http-server.js'
 import { KUN_VERSION } from '../version.js'
@@ -14,10 +12,13 @@ import { RevisionedDocumentStore } from './revisioned-document-store.js'
 import { buildServiceManagerRouter } from './service-manager-router.js'
 import {
   reconcileVerifiedForcedRuntimeRecovery,
-  readPersistedManagerState,
   ServiceManagerState,
   type ServiceManagerHandle
 } from './service-manager-state.js'
+import {
+  readPersistedManagerState,
+  writePersistedManagerState
+} from './service-manager-state-persistence.js'
 import { ManagerSharedDataStore } from './shared-data-store.js'
 
 export async function startServiceManager(input: {
@@ -54,10 +55,7 @@ export async function startServiceManager(input: {
     if (statePersistenceError !== undefined) return
     const snapshot = state.durableSnapshot()
     statePersistence = statePersistence.then(async () => {
-      await atomicWriteFile(managerStatePath, `${JSON.stringify(snapshot, null, 2)}\n`)
-      await chmod(managerStatePath, 0o600).catch((error) => {
-        if (process.platform !== 'win32') throw error
-      })
+      await writePersistedManagerState(managerStatePath, snapshot)
     }).catch((error) => {
       statePersistenceError = error
       console.error('[kun-manager] failed to persist manager lease state:', error)

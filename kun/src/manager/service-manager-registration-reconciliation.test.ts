@@ -18,7 +18,7 @@ afterEach(async () => {
 })
 
 describe('Runtime registration expired-lease barrier', () => {
-  it('settles the predecessor turn before registering its replacement', async () => {
+  it('reclaims a dead owner and settles its turn before registering a replacement', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-registration-reconcile-'))
     roots.push(root)
     const sharedData = await ManagerSharedDataStore.create(join(root, 'data'))
@@ -40,14 +40,13 @@ describe('Runtime registration expired-lease barrier', () => {
 
     const now = new Date()
     const state = new ServiceManagerState()
-    state.register(registration('runtime-old', now.toISOString()), now)
+    state.register(registration('runtime-old', now.toISOString(), 2_147_483_647), now)
     state.acquireLease({
       threadId: thread.id,
       turnId: turn.id,
       ownerFlavor: 'production',
       ownerInstanceId: 'runtime-old'
     }, now)
-    state.unregister('production', 'runtime-old')
     const reconcile = vi.spyOn(sharedData, 'reconcileExpiredLease')
     const router = buildServiceManagerRouter({
       managerToken: 'manager-secret',
@@ -84,13 +83,52 @@ describe('Runtime registration expired-lease barrier', () => {
     })
     await sharedData.close()
   })
+
+  it('does not admit a replacement when dead-owner reconciliation fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-registration-reconcile-'))
+    roots.push(root)
+    const sharedData = await ManagerSharedDataStore.create(join(root, 'data'))
+    const now = new Date()
+    const state = new ServiceManagerState()
+    state.register(registration('runtime-old', now.toISOString(), 2_147_483_647), now)
+    state.acquireLease({
+      threadId: 'thread-reconcile-failure',
+      turnId: 'turn-reconcile-failure',
+      ownerFlavor: 'production',
+      ownerInstanceId: 'runtime-old'
+    }, now)
+    vi.spyOn(sharedData, 'reconcileExpiredLease')
+      .mockRejectedValue(new Error('injected reconciliation failure'))
+    const router = buildServiceManagerRouter({
+      managerToken: 'manager-secret',
+      instanceId: 'manager-1',
+      startedAt: now.toISOString(),
+      state,
+      sharedData,
+      flushState: async () => undefined
+    })
+
+    await expect(dispatchRequest(router, new Request(
+      'http://127.0.0.1/v1/runtimes/production/register',
+      {
+        method: 'PUT',
+        headers: {
+          authorization: 'Bearer manager-secret',
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify(registration('runtime-new', now.toISOString()))
+      }
+    ))).rejects.toThrow('injected reconciliation failure')
+    expect(state.registration('production')).toBeNull()
+    await sharedData.close()
+  })
 })
 
-function registration(instanceId: string, startedAt: string) {
+function registration(instanceId: string, startedAt: string, pid = process.pid) {
   return {
     flavor: 'production' as const,
     instanceId,
-    pid: process.pid,
+    pid,
     startedAt,
     host: '127.0.0.1',
     port: 18899,

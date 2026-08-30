@@ -9,11 +9,11 @@ import {
   ServiceManagerState
 } from './service-manager.js'
 
-function registration(instanceId = 'production-runtime') {
+function registration(instanceId = 'production-runtime', pid = process.pid) {
   return {
     flavor: 'production' as const,
     instanceId,
-    pid: process.pid,
+    pid,
     startedAt: '2026-08-01T00:00:00.000Z',
     host: '127.0.0.1',
     port: 18899,
@@ -57,6 +57,28 @@ function routerFetch(router: ReturnType<typeof buildServiceManagerRouter>): type
 }
 
 describe('service manager runtime unregister contract', () => {
+  it('does not retain a replacement registration when persistence fails', async () => {
+    const state = new ServiceManagerState()
+    state.register(registration('production-dead', 2_147_483_647))
+    const router = buildServiceManagerRouter({
+      managerToken: 'manager-secret',
+      instanceId: 'manager-a',
+      startedAt: '2026-08-01T00:00:00.000Z',
+      state,
+      flushState: async () => { throw new Error('disk full') }
+    })
+
+    await expect(dispatchRequest(router, request(
+      '/v1/runtimes/production/register',
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(registration('production-replacement'))
+      }
+    ))).rejects.toThrow('disk full')
+    expect(state.registration('production')).toBeNull()
+  })
+
   it('flushes an exact removal before returning true and keeps it removed after restore', async () => {
     const state = new ServiceManagerState()
     const owner = registration()

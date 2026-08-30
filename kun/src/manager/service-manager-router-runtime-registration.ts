@@ -42,6 +42,14 @@ export function addRuntimeRegistrationRoute(
         )
       }
       try {
+        const owner = input.state.registration(flavor.data)
+        if (
+          owner &&
+          owner.instanceId !== registration.data.instanceId &&
+          !processIsAlive(owner.pid)
+        ) {
+          input.state.unregister(owner.flavor, owner.instanceId)
+        }
         if (input.sharedData) {
           await reconcileExpiredThreadLeases({
             leases: input.state.expireStale(),
@@ -51,7 +59,14 @@ export function addRuntimeRegistrationRoute(
           })
         }
         const registered = input.state.register(registration.data)
-        await input.flushState?.()
+        try {
+          await input.flushState?.()
+        } catch (error) {
+          if (owner?.instanceId !== registered.instanceId) {
+            input.state.unregister(registered.flavor, registered.instanceId)
+          }
+          throw error
+        }
         return jsonResponse({ registration: registered })
       } catch (error) {
         if (error instanceof RuntimeSlotBusyError) {
@@ -65,4 +80,13 @@ export function addRuntimeRegistrationRoute(
       }
     }
   ))
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return String((error as { code?: unknown })?.code ?? '') === 'EPERM'
+  }
 }
