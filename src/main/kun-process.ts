@@ -124,7 +124,6 @@ import {
 import { configureManagerAtomicJsonClient } from '../../kun/src/extensions/atomic-json.js'
 import { handoffExistingKunServiceManagerForDataDir } from './runtime/service-manager-build-handoff'
 import {
-  drainKunOwnersForHandoff,
   drainKunOwnersForHandoffWithLock,
   installedBuildProbeError,
   probeInstalledBuildHandoff
@@ -156,6 +155,7 @@ export { syncGuiManagedKunConfig } from './runtime/kun-runtime-config-service'
 export type { KunUnexpectedExitInfo } from './runtime/kun-process-controller'
 export { resolveKunStartupTimeoutMs } from './runtime/kun-runtime-health-monitor'
 export { handoffExistingKunServiceManagerForDataDir } from './runtime/service-manager-build-handoff'
+export { preparePackagedKunBuildHandoff } from './runtime/kun-packaged-build-handoff'
 
 let serviceManagerSettingsPath: string | undefined
 let mainManagerBinding: ServiceManagerConnection | undefined
@@ -247,30 +247,6 @@ export async function ensureKunServiceManager(input: {
     manager = await ensureServiceManager(managerInput)
   }
   return configureKunManagerDataPlaneForCurrentProcess(manager)
-}
-
-export async function preparePackagedKunBuildHandoff(input: {
-  dataDir: string
-  settingsPath: string
-  onHandoffEvent?: HandoffEventListener
-}): Promise<boolean> {
-  const flavor = resolveCliRuntimeFlavor({ env: process.env })
-  if (!app.isPackaged || flavor !== 'production') return false
-  const buildId = await resolveKunRuntimeBuildId(resolveKunExecutable(appRoot(), ''))
-  const handoffInput = {
-    reason: 'installed-build-change' as const,
-    dataDirs: [input.dataDir],
-    settingsPath: input.settingsPath,
-    controlDir: defaultKunControlDir(),
-    onEvent: createHandoffEventReporter(input.onHandoffEvent),
-    ...(buildId ? { targetBuildId: buildId } : {})
-  }
-  const probe = await probeInstalledBuildHandoff(handoffInput)
-  const probeError = installedBuildProbeError(handoffInput, probe)
-  if (probeError) throw probeError
-  if (probe === 'matched') return false
-  await drainKunOwnersForHandoff(handoffInput)
-  return true
 }
 
 /**

@@ -6,10 +6,11 @@ import {
 import { sameCanonicalPath } from '../../../kun/src/manager/canonical-path.js'
 import {
   listListeningPidsOnPort,
-  processCommandLine,
+  processIdentity,
   terminateVerifiedPid,
   waitForPidExit
 } from '../kun-process-ports'
+import { identityMatchesExpectedManager } from '../kun-process-identity'
 import { KunOwnerVerificationError } from './kun-replacement-error'
 
 const GRACEFUL_EXIT_TIMEOUT_MS = 15_000
@@ -32,7 +33,7 @@ export type KunManagerReplacementDependencies = {
     fetchImpl: typeof fetch
   ) => Promise<void>
   waitForExit: typeof waitForPidExit
-  commandLine: typeof processCommandLine
+  processIdentity: typeof processIdentity
   listenerPids: typeof listListeningPidsOnPort
   terminate: typeof terminateVerifiedPid
   removeDiscovery: typeof removeManagerDiscovery
@@ -42,7 +43,7 @@ const defaultDependencies: KunManagerReplacementDependencies = {
   readDiscovery: readManagerHandoffDiscovery,
   requestShutdown: requestExactManagerShutdown,
   waitForExit: waitForPidExit,
-  commandLine: processCommandLine,
+  processIdentity,
   listenerPids: listListeningPidsOnPort,
   terminate: terminateVerifiedPid,
   removeDiscovery: removeManagerDiscovery
@@ -158,11 +159,11 @@ async function targetStillMatches(
   } catch {
     return false
   }
-  const [command, listeners] = await Promise.all([
-    deps.commandLine(target.pid).catch(() => ''),
+  const [identity, listeners] = await Promise.all([
+    deps.processIdentity(target.pid).catch(() => null),
     deps.listenerPids(target.port).catch((): number[] => [])
   ])
-  return commandLooksLikeManager(command) && listeners.includes(target.pid)
+  return identityMatchesExpectedManager(identity, target) && listeners.includes(target.pid)
 }
 
 async function readTarget(
@@ -202,13 +203,6 @@ function assertManagerScope(
     !sameCanonicalPath(target.settingsPath, scope.settingsPath)) {
     throw new Error('Kun Service Manager replacement target owns a different canonical scope')
   }
-}
-
-function commandLooksLikeManager(command: string): boolean {
-  const normalized = command.trim().replace(/\\/gu, '/').toLowerCase()
-  return normalized === 'kun-service-manager' ||
-    normalized.startsWith('kun-service-manager ') ||
-    normalized.includes('manager-entry.js')
 }
 
 function replacementFailure(pid: number, error: unknown): Error {

@@ -50,7 +50,7 @@ describe('stopSharedRuntimeForReplacement', () => {
     const target = inspection()
     const fetchMock = vi.fn(async () => Response.json({ stopping: true }))
     const removeDiscovery = vi.fn(async () => true)
-    const unregister = vi.fn(async () => undefined)
+    const unregister = vi.fn(async () => true)
 
     await expect(stopSharedRuntimeForReplacement(dataDir, fetchMock as unknown as typeof fetch, {
       runtimeFlavor: 'production',
@@ -93,7 +93,7 @@ describe('stopSharedRuntimeForReplacement', () => {
     const waitForExit = vi.fn(async () => true)
     const terminate = vi.fn()
     const removeDiscovery = vi.fn(async () => true)
-    const unregister = vi.fn(async () => undefined)
+    const unregister = vi.fn(async () => true)
 
     await expect(stopSharedRuntimeForReplacement(dataDir, fetch, {
       runtimeFlavor: 'production',
@@ -140,7 +140,7 @@ describe('stopSharedRuntimeForReplacement', () => {
       return true
     })
     const removeDiscovery = vi.fn(async () => true)
-    const unregister = vi.fn(async () => undefined)
+    const unregister = vi.fn(async () => true)
 
     await expect(stopSharedRuntimeForReplacement(dataDir, fetch, {
       runtimeFlavor: 'production',
@@ -204,7 +204,7 @@ describe('stopSharedRuntimeForReplacement', () => {
       terminate,
       removeDiscovery: vi.fn(async () => true),
       withAncillaryWriter: async (_dataDir, action) => action(),
-      unregister: vi.fn(async () => undefined)
+      unregister: vi.fn(async () => true)
     })).resolves.toEqual({ stopped: true, forced: true })
 
     expect(terminate).toHaveBeenCalledOnce()
@@ -242,7 +242,7 @@ describe('stopSharedRuntimeForReplacement', () => {
       terminate,
       removeDiscovery,
       withAncillaryWriter: async (_dataDir, action) => action(),
-      unregister: vi.fn(async () => undefined)
+      unregister: vi.fn(async () => true)
     })).rejects.toThrow(/could not be safely replaced/)
 
     expect(signalSent).toBe(false)
@@ -261,7 +261,7 @@ describe('stopSharedRuntimeForReplacement', () => {
     let reads = 0
     const terminate = vi.fn()
     const removeDiscovery = vi.fn(async () => true)
-    const unregister = vi.fn(async () => undefined)
+    const unregister = vi.fn(async () => true)
     const requestShutdown = vi.fn(async () => undefined)
 
     await expect(stopSharedRuntimeForReplacement(dataDir, fetch, {

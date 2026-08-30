@@ -7,6 +7,7 @@ const test = require('node:test')
 const {
   NEGATIVE_SCENARIOS,
   POSITIVE_SCENARIOS,
+  RECYCLED_PID_SCENARIOS,
   buildSmokeSettings,
   parseSmokeMarker,
   predecessorBuildId,
@@ -35,10 +36,14 @@ test('release matrix covers both update paths, active work, and auto-start off',
 
 test('negative release matrix names every fail-closed ownership case', () => {
   assert.deepEqual(NEGATIVE_SCENARIOS, [
-    'pid-port-reuse',
-    'non-kun-command',
     'changed-discovery-identity',
     'inspection-denied'
+  ])
+})
+
+test('recycled PID release matrix proves exact stale coordination cleanup', () => {
+  assert.deepEqual(RECYCLED_PID_SCENARIOS, [
+    'runtime-discovery-and-manager-slot'
   ])
 })
 
