@@ -489,9 +489,15 @@ describe('manager shared data store', () => {
       kind: 'error', code: 'owner_lease_expired'
     })
     const persisted = await store.executeThread('get', { threadId: thread.id }) as {
-      turns: Array<{ status: string }>
+      turns: Array<{ status: string; terminalCode?: string; managerLeaseSettlement?: unknown }>
     }
-    expect(persisted.turns[0]?.status).toBe('failed')
+    expect(persisted.turns[0]).toMatchObject({
+      status: 'failed',
+      terminalCode: 'owner_lease_expired',
+      managerLeaseSettlement: expect.objectContaining({
+        ownerInstanceId: 'runtime-dead', fencingToken: 1
+      })
+    })
     expect(await store.reconcileExpiredLease(lease)).toBe(false)
     const events = await store.executeSession('loadEventsSince', { threadId: thread.id, sinceSeq: 0 }) as Array<{
       kind: string

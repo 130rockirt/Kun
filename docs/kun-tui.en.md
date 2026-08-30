@@ -76,6 +76,12 @@ kun runtime restart
 kun runtime stop
 ```
 
+A command running inside an agent tool cannot stop or restart the exact Runtime
+that hosts that tool. Kun rejects it with `runtime_self_control_forbidden` so the
+current conversation is not interrupted before ownership is handed off. Use the
+confirmed GUI restart action or run the command from an independent terminal
+outside that Runtime when explicit lifecycle control is required.
+
 `kun serve` is the explicit foreground/debug mode. It also publishes discovery
 and reports a conflict when a valid service already owns the data directory.
 Use `--url` for an explicit loopback endpoint and `--no-start` to prevent any

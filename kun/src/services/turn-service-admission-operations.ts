@@ -84,15 +84,21 @@ async startTurn(this: TurnService, input: {
     extensionBudgetTokenBaseline?: number
     /** Private host-authored context; never accepted from HTTP or projected to clients. */
     runtimeContext?: import('../domain/internal-turn-runtime-context.js').InternalTurnRuntimeContext
+    /** Atomically bind an automatic restart continuation to its proven failed source. */
+    expectedLatestFailedTurnId?: string
     /** Runs only for a newly admitted turn, never for an idempotent replay. */
-    onAdmitted?: (response: StartTurnResponse) => void
+    onAdmitted?: (response: StartTurnResponse) => void | Promise<void>
   } = {}): Promise<StartTurnResponse> {
     const runtimeContext = options.runtimeContext
       ? InternalTurnRuntimeContext.parse(options.runtimeContext)
       : undefined
     const requestFingerprint = fingerprintStartTurnRequest(input.request)
-    const replay = await this['findIdempotentStart'](input, requestFingerprint)
+    const replay = options.expectedLatestFailedTurnId
+      ? null
+      : await this['findIdempotentStart'](input, requestFingerprint)
     if (replay) return replay
+    const finishAdmission = this['beginExecutionAdmission']()
+    try {
     if (this['deps'].migrationMaintenance?.isLocked()) {
       throw new TurnConflictError('runtime migration maintenance is in progress')
     }
@@ -108,6 +114,17 @@ async startTurn(this: TurnService, input: {
         }
         const thread = await this['deps'].threadStore.get(input.threadId)
         if (!thread) throw new Error(`thread not found: ${input.threadId}`)
+        if (options.expectedLatestFailedTurnId) {
+          const latest = thread.turns.at(-1)
+          if (
+            latest?.id !== options.expectedLatestFailedTurnId ||
+            latest.status !== 'failed'
+          ) {
+            throw new TurnConflictError(
+              `restart recovery source is no longer latest: ${options.expectedLatestFailedTurnId}`
+            )
+          }
+        }
         const replay = this['idempotentStartFromThread'](thread, input.request, requestFingerprint)
         if (replay) return { kind: 'replay' as const, response: replay }
         // Archival is an overlay on the execution-derived thread state. It
@@ -363,13 +380,13 @@ async startTurn(this: TurnService, input: {
           : {})
       }
       try {
-        options.onAdmitted?.(response)
+        await options.onAdmitted?.(response)
       } catch (error) {
         console.warn(
           `[kun] turn dispatch callback failed after admission commit for ${started.turnId}: ` +
           `${error instanceof Error ? error.message : String(error)}`
         )
-        void this.finishTurn({
+        await this.finishTurn({
           threadId: input.threadId,
           turnId: started.turnId,
           status: 'failed',
@@ -396,6 +413,9 @@ async startTurn(this: TurnService, input: {
         this['clearRuntimeTurnState'](input.threadId, attemptedTurnId, { abort: true })
       }
       throw error
+    }
+    } finally {
+      finishAdmission()
     }
   },
 

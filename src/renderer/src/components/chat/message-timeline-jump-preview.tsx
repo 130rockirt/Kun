@@ -251,6 +251,8 @@ export function TimelineRuntimeError({
   const localizedMessage =
     code === 'orphaned_after_restart'
       ? t('turnInterruptedByRestart')
+      : code === 'owner_lease_expired'
+        ? t('turnInterruptedByRuntimeOwnership')
       : code === 'interrupted_turn_auto_resume'
         ? t('autoResumingInterruptedTask')
         : code === 'memory_pressure_critical'
@@ -300,7 +302,9 @@ export function TimelineRuntimeError({
             </pre>
           </details>
         ) : null}
-        {onContinue && code === 'orphaned_after_restart' ? (
+        {onContinue && (
+          code === 'orphaned_after_restart' || code === 'owner_lease_expired'
+        ) ? (
           <button
             type="button"
             data-testid="timeline-runtime-error-continue"

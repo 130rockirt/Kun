@@ -285,6 +285,7 @@
   "userInputNotificationBody": "'{{title}}'을(를) 계속하려면 답변이 필요합니다.",
   "busyTimeout": "No response from the runtime after waiting {{minutes}} minutes. Deep-thinking tasks may take longer. If it stays stuck, you can cancel and retry.",
   "turnInterruptedByRestart": "런타임 재시작으로 작업이 중단되었습니다.",
+  "turnInterruptedByRuntimeOwnership": "런타임이 실행 소유권을 잃어 작업이 중단되었습니다. 안전하게 재개할 수 있습니다.",
   "autoResumingInterruptedTask": "중단된 작업을 재시작 후 자동으로 재개하고 있습니다…",
   "continueInterruptedTask": "작업 계속",
   "continueInterruptedTaskPrompt": "중단된 작업을 계속하세요. 대화 기록과 중단 메모를 검토하고 현재 상태를 확인한 후 원래 요청을 완료하세요.",

@@ -285,6 +285,7 @@
   "userInputNotificationBody": "“{{title}}” के आगे बढ़ने के लिए आपके उत्तर की आवश्यकता है।",
   "busyTimeout": "No response from the runtime after waiting {{minutes}} minutes. Deep-thinking tasks may take longer. If it stays stuck, you can cancel and retry.",
   "turnInterruptedByRestart": "रनटाइम पुनरारंभ के कारण कार्य बाधित हुआ।",
+  "turnInterruptedByRuntimeOwnership": "रनटाइम का निष्पादन स्वामित्व खो जाने के कारण कार्य बाधित हुआ। इसे सुरक्षित रूप से फिर शुरू किया जा सकता है।",
   "autoResumingInterruptedTask": "पुनरारंभ के बाद बाधित कार्य स्वतः फिर से शुरू हो रहा है…",
   "continueInterruptedTask": "कार्य जारी रखें",
   "continueInterruptedTaskPrompt": "बाधित कार्य जारी रखें। वार्तालाप इतिहास और व्यवधान नोट की समीक्षा करें, वर्तमान स्थिति सत्यापित करें और मूल अनुरोध पूरा करें।",

@@ -143,7 +143,7 @@ export type ThreadEventSink = {
   onSeq(seq: number): void
   onDeltas(deltas: ThreadDeltaEvent[]): void
   onAssistantItem?(item: AssistantItemSnapshotPayload): void
-  onUserMessage(ev: UserMessageEventPayload): void
+  onUserMessage(ev: UserMessageEventPayload, seq?: number): void
   onTool(ev: ToolEventPayload): void
   onCompaction(ev: CompactionEventPayload): void
   onReview?(ev: ReviewEventPayload): void

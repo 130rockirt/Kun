@@ -443,8 +443,8 @@ export function buildPrefetchedThreadSnapshot(
     turnReasoningLastAtByUserId: {},
     activeThreadRelation: detail.relation ?? thread.relation ?? 'primary',
     activeThreadParentId: detail.parentThreadId ?? thread.parentThreadId ?? null,
-    activeThreadGoal: detail.goal ?? thread.goal ?? null,
-    activeThreadTodos: detail.todos ?? thread.todos ?? null,
+    activeThreadGoal: detail.goal === undefined ? thread.goal ?? null : detail.goal,
+    activeThreadTodos: detail.todos === undefined ? thread.todos ?? null : detail.todos,
     queuedMessages,
     payloadBytes: normalizedPayloadBytes(detail.payloadBytes)
   }

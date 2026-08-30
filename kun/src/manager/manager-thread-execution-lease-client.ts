@@ -27,6 +27,8 @@ type ActiveRenewal = {
 }
 
 const HOST_RESUME_RENEWAL_GRACE_MS = 20_000
+const LEASE_RELEASE_ATTEMPTS = 3
+type LeaseClientState = 'open' | 'closing' | 'closed'
 
 export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePort {
   private readonly renewals = new Map<string, ActiveRenewal>()
@@ -35,7 +37,12 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
   // the stale token so Manager rejects them instead of silently accepting an
   // unfenced mutation.
   private readonly leasesByTurn = new Map<string, ThreadExecutionLease>()
+  private readonly pendingAcquires = new Set<Promise<ThreadExecutionLease>>()
+  private readonly pendingReleases = new Map<string, Promise<void>>()
+  private readonly pendingTurnReleases = new Map<string, Promise<void>>()
   private onLeaseLost: ((lease: ThreadExecutionLease) => void) | undefined
+  private state: LeaseClientState = 'open'
+  private shutdownPromise: Promise<void> | undefined
 
   constructor(
     private readonly manager: ServiceManagerConnection,
@@ -48,6 +55,20 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
   }
 
   async acquire(threadId: string, turnId: string): Promise<ThreadExecutionLease> {
+    if (this.state !== 'open') throw new Error('thread execution lease client is shutting down')
+    const pending = this.acquireOpen(threadId, turnId)
+    this.pendingAcquires.add(pending)
+    try {
+      return await pending
+    } finally {
+      this.pendingAcquires.delete(pending)
+    }
+  }
+
+  private async acquireOpen(threadId: string, turnId: string): Promise<ThreadExecutionLease> {
+    const releasing = this.pendingTurnReleases.get(threadTurnKey(threadId, turnId))
+    if (releasing) await releasing
+    if (this.state !== 'open') throw new Error('thread execution lease client is shutting down')
     const response = await requestManagerResponse(
       this.manager,
       `/v1/leases/threads/${encodeURIComponent(threadId)}/acquire`,
@@ -64,34 +85,67 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
     const parsed = z.object({ lease: ThreadExecutionLeaseSchema }).parse(
       await requireManagerJson(response)
     )
-    this.startRenewal(parsed.lease)
     this.leasesByTurn.set(parsed.lease.turnId, parsed.lease)
     rememberTurnLease(parsed.lease)
+    if (this.state !== 'open') {
+      await this.release(parsed.lease.threadId, parsed.lease.turnId)
+      throw new Error('thread execution lease client is shutting down')
+    }
+    this.startRenewal(parsed.lease)
     return parsed.lease
   }
 
   async release(threadId: string, turnId: string): Promise<void> {
     const lease = this.leasesByTurn.get(turnId)
     if (!lease || lease.threadId !== threadId) return
-    try {
-      await requestManagerJson(
-        this.manager,
-        `/v1/leases/threads/${encodeURIComponent(threadId)}/release`,
-        {
-          method: 'POST',
-          body: {
-            turnId,
-            ownerFlavor: this.flavor,
-            ownerInstanceId: this.instanceId,
-            fencingToken: lease.fencingToken
+    const releaseKey = leaseGenerationKey(lease)
+    const existing = this.pendingReleases.get(releaseKey)
+    if (existing) return existing
+    const turnKey = threadTurnKey(threadId, turnId)
+    let pending: Promise<void>
+    pending = this.releaseLease(lease).finally(() => {
+      if (this.pendingReleases.get(releaseKey) === pending) {
+        this.pendingReleases.delete(releaseKey)
+      }
+      if (this.pendingTurnReleases.get(turnKey) === pending) {
+        this.pendingTurnReleases.delete(turnKey)
+      }
+    })
+    this.pendingReleases.set(releaseKey, pending)
+    this.pendingTurnReleases.set(turnKey, pending)
+    return pending
+  }
+
+  private async releaseLease(lease: ThreadExecutionLease): Promise<void> {
+    const { threadId, turnId } = lease
+    this.stopRenewal(threadId, turnId, lease.fencingToken)
+    let lastError: unknown
+    for (let attempt = 1; attempt <= LEASE_RELEASE_ATTEMPTS; attempt += 1) {
+      try {
+        await requestManagerJson(
+          this.manager,
+          `/v1/leases/threads/${encodeURIComponent(threadId)}/release`,
+          {
+            method: 'POST',
+            body: {
+              turnId,
+              ownerFlavor: this.flavor,
+              ownerInstanceId: this.instanceId,
+              fencingToken: lease.fencingToken
+            }
           }
-        }
-      )
-    } finally {
-      this.stopRenewal(threadId, turnId)
-      this.leasesByTurn.delete(turnId)
-      forgetTurnLease(lease)
+        )
+        lastError = undefined
+        break
+      } catch (error) {
+        lastError = error
+      }
     }
+    if (lastError !== undefined) throw lastError
+    if (sameLeaseGeneration(this.leasesByTurn.get(turnId), lease)) {
+      this.leasesByTurn.delete(turnId)
+    }
+    forgetTurnLease(lease)
   }
 
   async owner(threadId: string): Promise<ThreadExecutionLease | null> {
@@ -103,18 +157,45 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
     return z.object({ lease: ThreadExecutionLeaseSchema.nullable() }).parse(body).lease
   }
 
-  shutdown(): void {
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise
+    this.state = 'closing'
+    this.stopAllRenewals()
+    this.shutdownPromise = this.finishShutdown()
+    return this.shutdownPromise
+  }
+
+  private async finishShutdown(): Promise<void> {
+    await Promise.allSettled([...this.pendingAcquires])
+    const releases = new Set<Promise<void>>([...this.pendingReleases.values()])
+    for (const lease of this.leasesByTurn.values()) {
+      releases.add(this.release(lease.threadId, lease.turnId))
+    }
+    const results = await Promise.allSettled(releases)
+    this.stopAllRenewals()
+    this.state = 'closed'
+    const errors = results.flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : []
+    )
+    if (errors.length > 0) {
+      throw new AggregateError(
+        [...new Set(errors)],
+        'one or more thread execution leases could not be released during shutdown'
+      )
+    }
+  }
+
+  private stopAllRenewals(): void {
     for (const renewal of this.renewals.values()) {
       clearInterval(renewal.timer)
       if (renewal.retryTimer) clearTimeout(renewal.retryTimer)
       if (renewal.deadlineTimer) clearTimeout(renewal.deadlineTimer)
     }
-    for (const lease of this.leasesByTurn.values()) forgetTurnLease(lease)
     this.renewals.clear()
-    this.leasesByTurn.clear()
   }
 
   private startRenewal(lease: ThreadExecutionLease): void {
+    if (this.state !== 'open') return
     this.stopRenewal(lease.threadId)
     const timer = setInterval(() => void this.renew(lease.threadId), 5_000)
     timer.unref?.()
@@ -130,6 +211,7 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
   }
 
   private async renew(threadId: string): Promise<void> {
+    if (this.state !== 'open') return
     const current = this.renewals.get(threadId)
     if (!current || current.renewing) return
     if (current.retryTimer) {
@@ -164,13 +246,14 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
       this.recordTransientFailure(current, error)
     } finally {
       const latest = this.renewals.get(threadId)
-      if (latest?.lease.turnId === current.lease.turnId) latest.renewing = false
+      if (latest && sameLeaseGeneration(latest.lease, current.lease)) latest.renewing = false
     }
   }
 
   private recordRenewal(current: ActiveRenewal, lease: ThreadExecutionLease): void {
+    if (this.state !== 'open') return
     const latest = this.renewals.get(current.lease.threadId)
-    if (latest?.lease.turnId !== current.lease.turnId) return
+    if (!latest || !sameLeaseGeneration(latest.lease, current.lease)) return
     if (latest.transientFailures > 0) {
       console.warn(
         `[kun] thread lease renewal recovered thread=${current.lease.threadId} ` +
@@ -186,8 +269,9 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
   }
 
   private recordTransientFailure(current: ActiveRenewal, error: unknown): void {
+    if (this.state !== 'open') return
     const latest = this.renewals.get(current.lease.threadId)
-    if (latest?.lease.turnId !== current.lease.turnId) return
+    if (!latest || !sameLeaseGeneration(latest.lease, current.lease)) return
     latest.transientFailures += 1
     if (latest.transientFailures === 1 || latest.transientFailures % 3 === 0) {
       console.warn(
@@ -200,7 +284,7 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
   }
 
   private loseRenewal(lease: ThreadExecutionLease): void {
-    this.stopRenewal(lease.threadId, lease.turnId)
+    this.stopRenewal(lease.threadId, lease.turnId, lease.fencingToken)
     this.onLeaseLost?.(lease)
   }
 
@@ -213,15 +297,19 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
     if (!Number.isFinite(expiresAtMs)) return
     const { threadId, turnId } = current.lease
     current.deadlineTimer = setTimeout(
-      () => this.expireRenewal(threadId, turnId),
+      () => this.expireRenewal(threadId, turnId, current.lease.fencingToken),
       Math.max(0, expiresAtMs - Date.now())
     )
     current.deadlineTimer.unref?.()
   }
 
-  private expireRenewal(threadId: string, turnId: string): void {
+  private expireRenewal(threadId: string, turnId: string, fencingToken: number): void {
     const current = this.renewals.get(threadId)
-    if (!current || current.lease.turnId !== turnId) return
+    if (
+      !current ||
+      current.lease.turnId !== turnId ||
+      current.lease.fencingToken !== fencingToken
+    ) return
     if (!current.deadlineGraceUsed) {
       current.deadlineGraceUsed = true
       current.lease = {
@@ -240,21 +328,51 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
   }
 
   private scheduleRenewalRetry(current: ActiveRenewal): void {
+    if (this.state !== 'open') return
     if (current.retryTimer) return
     const retryMs = Math.min(500 * (2 ** Math.min(current.transientFailures - 1, 3)), 5_000)
     current.retryTimer = setTimeout(() => {
       current.retryTimer = undefined
+      if (!sameLeaseGeneration(this.renewals.get(current.lease.threadId)?.lease, current.lease)) {
+        return
+      }
       void this.renew(current.lease.threadId)
     }, retryMs)
     current.retryTimer.unref?.()
   }
 
-  private stopRenewal(threadId: string, turnId?: string): void {
+  private stopRenewal(threadId: string, turnId?: string, fencingToken?: number): void {
     const current = this.renewals.get(threadId)
-    if (!current || (turnId && current.lease.turnId !== turnId)) return
+    if (
+      !current ||
+      (turnId && current.lease.turnId !== turnId) ||
+      (fencingToken !== undefined && current.lease.fencingToken !== fencingToken)
+    ) return
     clearInterval(current.timer)
     if (current.retryTimer) clearTimeout(current.retryTimer)
     if (current.deadlineTimer) clearTimeout(current.deadlineTimer)
     this.renewals.delete(threadId)
   }
+}
+
+function sameLeaseGeneration(
+  candidate: ThreadExecutionLease | undefined,
+  expected: ThreadExecutionLease
+): boolean {
+  return Boolean(
+    candidate &&
+    candidate.threadId === expected.threadId &&
+    candidate.turnId === expected.turnId &&
+    candidate.ownerFlavor === expected.ownerFlavor &&
+    candidate.ownerInstanceId === expected.ownerInstanceId &&
+    candidate.fencingToken === expected.fencingToken
+  )
+}
+
+function leaseGenerationKey(lease: ThreadExecutionLease): string {
+  return `${lease.threadId}\0${lease.turnId}\0${lease.ownerInstanceId}\0${lease.fencingToken}`
+}
+
+function threadTurnKey(threadId: string, turnId: string): string {
+  return `${threadId}\0${turnId}`
 }

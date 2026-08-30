@@ -67,6 +67,11 @@ kun runtime restart
 kun runtime stop
 ```
 
+Agent 工具中执行的命令不能停止或重启承载该工具的同一个 Runtime；此时命令会以
+`runtime_self_control_forbidden` 拒绝，避免当前会话在租约交接前中断。需要显式管理
+共享 Runtime 时，请使用 GUI 中已确认的重启操作，或从 Runtime 外部的独立终端运行
+上述命令。
+
 `kun serve` 仅用于需要前台日志的调试场景。它也会发布 discovery；同一 data-dir
 已有有效实例时会报冲突，不会杀死未知进程。`--url` 可显式连接一个 loopback
 服务；`--no-start` 可确保命令不会改变服务状态。

@@ -14,6 +14,7 @@ import type { TurnExecutionStatus, TurnRunOutcome } from './turn-execution-types
 import { resolveTurnClientSurface } from './turn-context-resolver.js'
 import type { ToolHostResult } from '../ports/tool-host.js'
 import { launchContinuationTurn } from './continuation-turn-launch.js'
+import type { RestartRecoverySource } from './restart-recovery-source.js'
 
 const GOAL_RESUME_PROMPT = [
   'Continue working toward the active goal.',
@@ -55,13 +56,20 @@ export type GoalTurnCoordinatorDeps = {
 export class GoalTurnCoordinator {
   private readonly madeProgressByTurn = new Set<string>()
   private readonly resumeSuppressedByTurn = new Set<string>()
+  private readonly restartSourceTurnByThread = new Map<string, string>()
   private readonly resume: GoalResumeCoordinator
 
   constructor(private readonly deps: GoalTurnCoordinatorDeps) {
     this.resume = new GoalResumeCoordinator({
       launch: (threadId) => this.launchResumeTurn(threadId),
       getActiveGoalKey: async (threadId) => {
-        const goal = (await this.deps.threadStore.get(threadId))?.goal
+        const thread = await this.deps.threadStore.get(threadId)
+        const expectedSource = this.restartSourceTurnByThread.get(threadId)
+        const latest = thread?.turns.at(-1)
+        if (expectedSource && (latest?.id !== expectedSource || latest.status !== 'failed')) {
+          return null
+        }
+        const goal = thread?.goal
         return goal && goal.status === 'active' ? goalResumeKey(threadId, goal) : null
       },
       isThreadBusy: async (threadId) =>
@@ -72,12 +80,16 @@ export class GoalTurnCoordinator {
 
   shutdown(): void {
     this.resume.shutdown()
+    this.restartSourceTurnByThread.clear()
   }
 
-  async resumeInterruptedGoals(threadIds: readonly string[]): Promise<number> {
+  async resumeInterruptedGoals(sources: readonly RestartRecoverySource[]): Promise<number> {
     let resumed = 0
-    for (const threadId of threadIds) {
-      if (await this.resume.resumeInterrupted(threadId)) resumed += 1
+    for (const source of sources) {
+      const latest = (await this.deps.threadStore.get(source.threadId))?.turns.at(-1)
+      if (latest?.id !== source.turnId || latest.status !== 'failed') continue
+      this.restartSourceTurnByThread.set(source.threadId, source.turnId)
+      if (await this.resume.resumeInterrupted(source.threadId)) resumed += 1
     }
     return resumed
   }
@@ -99,8 +111,17 @@ export class GoalTurnCoordinator {
     finalStatus: TurnExecutionStatus
     timer: GoalElapsedTimer | null
   }): Promise<void> {
+    const restartSource = this.restartSourceTurnByThread.get(input.threadId)
+    if (restartSource && restartSource !== input.turnId) {
+      this.restartSourceTurnByThread.delete(input.threadId)
+    }
     await this.finishElapsedTimer(input.threadId, input.timer).catch(() => undefined)
     await this.evaluateResume(input.threadId, input.turnId, input.finalStatus).catch(() => undefined)
+  }
+
+  /** Account a reliable graceful-suspension slice without terminal resume policy. */
+  async afterSuspended(threadId: string, timer: GoalElapsedTimer | null): Promise<void> {
+    await this.finishElapsedTimer(threadId, timer)
   }
 
   noteToolExecuted(turnId: string, toolName: string, result: ToolHostResult): void {
@@ -215,15 +236,16 @@ export class GoalTurnCoordinator {
   private async launchResumeTurn(threadId: string): Promise<void> {
     const thread = await this.deps.threadStore.get(threadId)
     const goal = thread?.goal
+    const sourceTurnId = this.restartSourceTurnByThread.get(threadId)
     if (!thread || !goal || goal.status !== 'active') return
     const lastTurn = thread.turns[thread.turns.length - 1]
     let started
     try {
-      started = await this.deps.turns.startTurn({
+      const startRequest = {
         threadId,
         request: {
           prompt: GOAL_RESUME_PROMPT,
-          mode: 'agent',
+          mode: 'agent' as const,
           ...(lastTurn ? { clientSurface: resolveTurnClientSurface(lastTurn) } : {}),
           ...(lastTurn?.agentSurface ? { agentSurface: lastTurn.agentSurface } : {}),
           ...(lastTurn?.agentSurface === 'design'
@@ -235,7 +257,12 @@ export class GoalTurnCoordinator {
             : {}),
           ...(lastTurn?.disableUserInput ? { disableUserInput: true } : {})
         }
-      })
+      }
+      started = sourceTurnId
+        ? await this.deps.turns.startTurn(startRequest, {
+            expectedLatestFailedTurnId: sourceTurnId
+          })
+        : await this.deps.turns.startTurn(startRequest)
     } catch (error) {
       if (error instanceof TurnCapacityError) {
         this.resume.defer(threadId)
@@ -243,6 +270,7 @@ export class GoalTurnCoordinator {
       }
       throw error
     }
+    this.restartSourceTurnByThread.delete(threadId)
     launchContinuationTurn({
       threadId, turnId: started.turnId,
       runTurn: this.deps.runTurn,

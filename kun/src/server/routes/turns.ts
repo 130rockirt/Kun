@@ -32,8 +32,8 @@ import {
   type TurnService
 } from '../../services/turn-service.js'
 import { ThreadExecutionBusyError } from '../../ports/thread-execution-lease.js'
-import { isPublicTurnItem } from '../../contracts/items.js'
 import type { ToolCancellationService } from '../../services/tool-cancellation-service.js'
+import { projectPublicTurn } from './thread-projection.js'
 
 export async function startTurn(
   turns: TurnService,
@@ -356,8 +356,5 @@ export async function getTurn(
       404
     )
   }
-  return jsonResponse(TurnSchema.parse({
-    ...turn,
-    items: turn.items.filter(isPublicTurnItem)
-  }))
+  return jsonResponse(TurnSchema.parse(projectPublicTurn(turn)))
 }

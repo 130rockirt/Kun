@@ -61,6 +61,8 @@ export type SharedRuntimeScope = {
   runtimeFlavor?: RuntimeFlavor
   controlDir?: string
   manager?: ServiceManagerConnection
+  /** Non-secret identity of a Runtime hosting this CLI invocation. */
+  callerRuntimeInstanceId?: string
 }
 
 export async function runRuntimeCommand(
@@ -98,10 +100,12 @@ export async function runRuntimeCommand(
   const manager = resolvedManager && sameCanonicalPath(resolvedManager.discovery.dataDir, dataDir)
     ? resolvedManager
     : undefined
+  const hostedInstanceId = environment.KUN_RUNTIME_INSTANCE_ID?.trim()
   const scope: SharedRuntimeScope = {
     runtimeFlavor,
     controlDir,
-    ...(manager ? { manager } : {})
+    ...(manager ? { manager } : {}),
+    ...(hostedInstanceId ? { callerRuntimeInstanceId: hostedInstanceId } : {})
   }
   const unpublishedGuiRuntime = guiSettings && dataDir === guiSettings.dataDir
     ? await hasUnpublishedGuiRuntime(guiSettings, fetchImpl)
@@ -134,6 +138,10 @@ export async function runRuntimeCommand(
     }
     if (unpublishedGuiRuntime) {
       throw new Error('an older GUI runtime is using this data directory; close or update the GUI before stop/restart')
+    }
+    if (hostedInstanceId) {
+      const target = await inspectSharedRuntime(dataDir, fetchImpl, scope)
+      assertRuntimeSelfControlAllowed(target, hostedInstanceId)
     }
     if (command === 'stop') {
       const stopped = await stopSharedRuntime(dataDir, fetchImpl, scope)
@@ -543,6 +551,7 @@ async function stopInspectedSharedRuntime(
   const discoveryDir = runtimeDiscoveryDirectory(dataDir, runtimeFlavor, scope.controlDir)
   const record = inspected.discovery
   const live = inspected.connection
+  assertRuntimeSelfControlAllowed(inspected, scope.callerRuntimeInstanceId)
   try {
     await requestExactRuntimeShutdown(record, fetchImpl)
   } catch (error) {
@@ -575,6 +584,17 @@ async function stopInspectedSharedRuntime(
     await delay(POLL_MS)
   }
   throw new Error(`timed out waiting for Kun runtime process ${record.pid} to exit`)
+}
+
+function assertRuntimeSelfControlAllowed(
+  inspected: SharedRuntimeInspection | null,
+  callerRuntimeInstanceId: string | undefined
+): void {
+  if (!callerRuntimeInstanceId || inspected?.discovery.instanceId !== callerRuntimeInstanceId) return
+  throw new Error(
+    'runtime_self_control_forbidden: cannot stop or restart the Runtime that is executing ' +
+    'this command; use the GUI or an external terminal'
+  )
 }
 
 async function inspectManagerRuntime(

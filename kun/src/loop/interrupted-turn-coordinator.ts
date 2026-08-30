@@ -1,7 +1,7 @@
 import { touchThread } from '../domain/thread.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { RuntimeEventRecorder } from '../services/runtime-event-recorder.js'
-import { TurnCapacityError, type TurnService } from '../services/turn-service.js'
+import type { TurnService } from '../services/turn-service.js'
 import {
   InterruptedTurnResumeCoordinator,
   type InterruptedTurnResumeCoordinatorDeps
@@ -11,6 +11,7 @@ import { resolveTurnClientSurface } from './turn-context-resolver.js'
 import type { ChildRunFailure, ProactiveRetryStatus } from '../contracts/subagent-retry.js'
 import { computeShortHash } from './compaction-marker.js'
 import { launchContinuationTurn } from './continuation-turn-launch.js'
+import type { RestartRecoverySource } from './restart-recovery-source.js'
 
 /**
  * Prompt used for the synthetic continuation turn launched after a restart
@@ -39,6 +40,7 @@ export type InterruptedTurnResumeOptions = Pick<
 
 export type InterruptedSubagentRecoveryCandidate = {
   parentThreadId: string
+  parentTurnId: string
   childId: string
   label?: string
   error?: string
@@ -66,6 +68,7 @@ export type InterruptedTurnCoordinatorDeps = {
 export class InterruptedTurnCoordinator {
   private readonly resume: InterruptedTurnResumeCoordinator
   private readonly childRecoveryByThread = new Map<string, InterruptedSubagentRecoveryCandidate[]>()
+  private readonly recoverySourceTurnByThread = new Map<string, string>()
 
   constructor(private readonly deps: InterruptedTurnCoordinatorDeps) {
     const options = deps.interruptedResume ?? {}
@@ -97,7 +100,7 @@ export class InterruptedTurnCoordinator {
    * skipped; each process start resumes a given thread at most once.
    */
   async resumeInterruptedTurns(
-    threadIds: readonly string[],
+    sources: readonly RestartRecoverySource[],
     childRecoveryCandidates: readonly InterruptedSubagentRecoveryCandidate[] = []
   ): Promise<number> {
     if (!this.enabled) return 0
@@ -107,8 +110,11 @@ export class InterruptedTurnCoordinator {
       this.childRecoveryByThread.set(candidate.parentThreadId, entries)
     }
     let resumed = 0
-    for (const threadId of threadIds) {
-      if (await this.resume.resumeInterrupted(threadId)) resumed += 1
+    for (const source of sources) {
+      const latest = (await this.deps.threadStore.get(source.threadId))?.turns.at(-1)
+      if (latest?.id !== source.turnId || latest.status !== 'failed') continue
+      this.recoverySourceTurnByThread.set(source.threadId, source.turnId)
+      if (await this.resume.resumeInterrupted(source.threadId)) resumed += 1
     }
     return resumed
   }
@@ -118,11 +124,14 @@ export class InterruptedTurnCoordinator {
     const thread = await this.deps.threadStore.get(threadId)
     if (!thread) return false
     if (thread.relation === 'side') return false
+    const sourceTurnId = this.recoverySourceTurnByThread.get(threadId)
+    const latest = thread.turns.at(-1)
+    if (!sourceTurnId || latest?.id !== sourceTurnId || latest.status !== 'failed') return false
     // A still-active goal normally owns restart recovery. A failed child needs
     // the structured parent decision context instead, so reconciliation omits
     // that parent from goal auto-resume and allows this one continuation turn.
     if (
-      thread.goal && thread.goal.status === 'active' &&
+      thread.goal?.status === 'active' &&
       !this.childRecoveryByThread.has(threadId)
     ) return false
     const lastResumeAt = thread.lastAutoResumeAt
@@ -140,45 +149,42 @@ export class InterruptedTurnCoordinator {
       touchThread({ ...thread, lastAutoResumeAt: now }, now)
     ).catch(() => undefined)
     this.childRecoveryByThread.delete(threadId)
+    this.recoverySourceTurnByThread.delete(threadId)
   }
 
   private async launchResumeTurn(threadId: string): Promise<void> {
     const thread = await this.deps.threadStore.get(threadId)
-    if (!thread) return
+    const sourceTurnId = this.recoverySourceTurnByThread.get(threadId)
+    if (!thread || !sourceTurnId) return
     const lastTurn = thread.turns[thread.turns.length - 1]
-    let started
-    try {
-      const recoveryContext = childRecoveryContext(this.childRecoveryByThread.get(threadId) ?? [])
-      const recoveryRequestId = recoveryContext
-        ? `subagent-recovery:${computeShortHash(recoveryContext, 32)}`
-        : undefined
-      started = await this.deps.turns.startTurn({
-        threadId,
-        request: {
-          prompt: INTERRUPTED_RESUME_PROMPT,
-          ...(recoveryRequestId ? { clientRequestId: recoveryRequestId } : {}),
-          mode: 'agent',
-          ...(lastTurn ? { clientSurface: resolveTurnClientSurface(lastTurn) } : {}),
-          ...(lastTurn?.agentSurface ? { agentSurface: lastTurn.agentSurface } : {}),
-          ...(lastTurn?.agentSurface === 'design'
-            ? {
-                messageSource: 'design_continuation' as const,
-                ...(lastTurn.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
-                ...(lastTurn.guiDesignMode ? { guiDesignMode: true } : {})
-              }
-            : {}),
-          ...(lastTurn?.disableUserInput ? { disableUserInput: true } : {})
-        }
-      }, recoveryContext ? {
-        runtimeContext: { kind: 'host-control', content: recoveryContext }
-      } : undefined)
-    } catch (error) {
-      if (error instanceof TurnCapacityError) {
-        this.resume.defer(threadId)
-        return
+    const recoveryContext = childRecoveryContext(this.childRecoveryByThread.get(threadId) ?? [])
+    const recoveryRequestId = recoveryContext
+      ? `subagent-recovery:${computeShortHash(`${sourceTurnId}\0${recoveryContext}`, 32)}`
+      : undefined
+    const started = await this.deps.turns.startTurn({
+      threadId,
+      request: {
+        prompt: INTERRUPTED_RESUME_PROMPT,
+        ...(recoveryRequestId ? { clientRequestId: recoveryRequestId } : {}),
+        mode: 'agent',
+        ...(lastTurn ? { clientSurface: resolveTurnClientSurface(lastTurn) } : {}),
+        ...(lastTurn?.agentSurface ? { agentSurface: lastTurn.agentSurface } : {}),
+        ...(lastTurn?.agentSurface === 'design'
+          ? {
+              messageSource: 'design_continuation' as const,
+              ...(lastTurn.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
+              ...(lastTurn.guiDesignMode ? { guiDesignMode: true } : {})
+            }
+          : {}),
+        ...(lastTurn?.disableUserInput ? { disableUserInput: true } : {})
       }
-      throw error
-    }
+    }, {
+      expectedLatestFailedTurnId: sourceTurnId,
+      ...(recoveryContext
+        ? { runtimeContext: { kind: 'host-control' as const, content: recoveryContext } }
+        : {})
+    })
+    this.recoverySourceTurnByThread.delete(threadId)
     launchContinuationTurn({
       threadId, turnId: started.turnId,
       runTurn: this.deps.runTurn,
@@ -202,6 +208,7 @@ function childRecoveryContext(candidates: readonly InterruptedSubagentRecoveryCa
     '<subagent_recovery_candidates>',
     ...candidates.map((candidate) => JSON.stringify({
       childId: candidate.childId,
+      parentTurnId: candidate.parentTurnId,
       label: candidate.label,
       error: candidate.error,
       failure: candidate.failure,

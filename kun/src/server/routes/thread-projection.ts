@@ -31,11 +31,12 @@ export function projectTimelineThread(thread: ThreadRecord): ThreadRecord {
 }
 
 export function projectTimelineTurn(turn: Turn, items: TurnItem[]): Turn {
+  const publicTurn = projectPublicTurn(turn)
   return {
-    ...turn,
+    ...publicTurn,
     prompt: '',
     steering: [],
-    items,
+    items: items.filter(isPublicTurnItem),
     attachmentIds: turn.attachmentIds.slice(0, 32),
     composerContexts: undefined,
     activeSkillIds: turn.activeSkillIds.slice(0, 32),
@@ -48,6 +49,18 @@ export function projectTimelineTurn(turn: Turn, items: TurnItem[]): Turn {
     guiDesignArtifact: undefined,
     ...(turn.error ? { error: truncateTimelineText(turn.error, 16 * 1024) } : {})
   }
+}
+
+export function projectPublicTurn(turn: Turn): Turn {
+  const {
+    terminalCode: _terminalCode,
+    managerLeaseSettlement: _managerLeaseSettlement,
+    ...publicTurn
+  } = turn
+  return {
+    ...publicTurn,
+    items: turn.items.filter(isPublicTurnItem)
+  } as Turn
 }
 
 function truncateTimelineText(value: string, maxChars: number): string {
@@ -199,10 +212,7 @@ export function hydrateThreadItemsFromSession(
 /** Defense in depth for every HTTP endpoint that returns a ThreadRecord. */
 export function projectPublicThreadRecord(thread: ThreadRecord): ThreadRecord {
   const { revision: _revision, ...publicThread } = thread
-  const turns = thread.turns.map((turn): Turn => ({
-    ...turn,
-    items: turn.items.filter(isPublicTurnItem)
-  }))
+  const turns = thread.turns.map(projectPublicTurn)
   return { ...publicThread, turns }
 }
 

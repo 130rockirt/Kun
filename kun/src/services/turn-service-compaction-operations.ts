@@ -425,7 +425,12 @@ async finishTurn(this: TurnService, input: {
         const turns = current.turns.map((candidate) => {
           if (candidate.id !== input.turnId) return candidate
           const finished = this['finalizeOpenItems'](finishTurn(candidate, input.status), input.status)
-          return input.error ? { ...finished, error: input.error } : finished
+          const terminalCode = input.code?.trim().slice(0, 128)
+          return {
+            ...finished,
+            ...(input.error ? { error: input.error } : {}),
+            ...(terminalCode ? { terminalCode } : {})
+          }
         })
         await this['deps'].threadStore.upsert({
           ...touchThread(current, this['deps'].nowIso()),

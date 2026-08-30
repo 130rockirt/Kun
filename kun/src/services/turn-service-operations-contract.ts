@@ -20,6 +20,7 @@ import type {
 } from '../contracts/turns.js'
 import type { TurnItem, UserMessageSource } from '../contracts/items.js'
 import type { RuntimeErrorSeverity } from '../contracts/errors.js'
+import type { RestartRecoverySource } from '../loop/restart-recovery-source.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { MigrationMaintenanceLock } from '../ports/migration-maintenance-lock.js'
@@ -77,8 +78,10 @@ export interface TurnServiceOperations {
     extensionBudgetTokenBaseline?: number
     /** Private host-authored context; never accepted from HTTP or projected to clients. */
     runtimeContext?: InternalTurnRuntimeContext
+    /** Atomically bind an automatic restart continuation to its proven failed source. */
+    expectedLatestFailedTurnId?: string
     /** Runs only for a newly admitted turn, never for an idempotent replay. */
-    onAdmitted?: (response: StartTurnResponse) => void
+    onAdmitted?: (response: StartTurnResponse) => void | Promise<void>
   } ): Promise<StartTurnResponse>;
   rewindThread(input: {
     threadId: string
@@ -100,7 +103,11 @@ export interface TurnServiceOperations {
   }): Promise<SteeringEntry[]>;
   interruptTurn(input: { threadId: string; turnId: string; discard?: boolean }): Promise<{ status: TurnStatus }>;
   interruptActiveTurns(): Promise<number>;
+  closeAdmissionForShutdown(): Promise<void>;
   suspendActiveTurnsForShutdown(): Promise<number>;
+  reconcileManagerSettledInterruptions(input?: {
+    settledAfter?: string
+  }): Promise<RestartRecoverySource[]>;
   suspendTurnForHostShutdown(input: {
     threadId: string
     turnId: string
@@ -146,12 +153,16 @@ export interface TurnServiceOperations {
     preserveDeliveryCursor?: boolean
     /** Permit parking while durable Graph review/supervision work remains pending. */
     allowPendingSupervision?: boolean
+    /** Keep Manager ownership until host-shutdown suspended accounting completes. */
+    releaseLease?: boolean
   }): Promise<GraphLeadSuspensionResult>;
   suspendGraphPlanningTurn(input: {
     threadId: string
     turnId: string
     /** Host shutdown must park even when in-memory steering is pending. */
     force?: boolean
+    /** Keep Manager ownership until host-shutdown suspended accounting completes. */
+    releaseLease?: boolean
   }): Promise<GraphLeadSuspensionResult>;
   resumeGraphPlanningTurn(input: {
     threadId: string
@@ -172,7 +183,7 @@ export interface TurnServiceOperations {
   getAbortController(turnId: string): AbortSignal | undefined;
   abortTurnExecution(turnId: string, reason?: unknown): boolean;
   abortThreadExecution(threadId: string): number;
-  reconcileOrphanedTurns(): Promise<string[]>;
+  reconcileOrphanedTurns(): Promise<RestartRecoverySource[]>;
   getTurn(threadId: string, turnId: string): Promise<Turn | null>;
   ensureGoalContext(threadId: string, turnId: string, signal?: AbortSignal): Promise<void>;
   updateTurnMetadata(

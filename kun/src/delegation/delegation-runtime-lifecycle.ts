@@ -477,6 +477,7 @@ export class DelegationRuntime extends DelegationRuntimeRun {
   /** Safe child facts injected into parent recovery turns after a restart. */
   async proactiveRetryRecoveryCandidates(): Promise<Array<{
     parentThreadId: string
+    parentTurnId: string
     childId: string
     label?: string
     error?: string
@@ -495,6 +496,7 @@ export class DelegationRuntime extends DelegationRuntimeRun {
       .filter(({ retry }) => retry.eligible)
       .map(({ record, retry }) => ({
         parentThreadId: record.parentThreadId,
+        parentTurnId: record.parentTurnId,
         childId: record.id,
         ...(record.label ? { label: record.label } : {}),
         ...(record.error ? { error: record.error } : {}),

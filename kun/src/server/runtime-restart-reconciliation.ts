@@ -1,8 +1,10 @@
 import type { ServerRuntime } from './routes/server-runtime.js'
+import type { RestartRecoverySource } from '../loop/restart-recovery-source.js'
 
 export type RestartReconciliationReport = {
   orphanedChildren: number
   orphanedThreadIds: string[]
+  managerSettledThreadIds: string[]
   resumeCandidateIds: string[]
   resumedGoals: number
   resumedTurns: number
@@ -20,7 +22,8 @@ type RestartRuntime = Pick<
  * an ordinary interrupted task from a parent waiting on a resumable child.
  */
 export async function reconcileRuntimeAfterRestart(
-  runtime: RestartRuntime
+  runtime: RestartRuntime,
+  options: { managerSettledAfter?: string } = {}
 ): Promise<RestartReconciliationReport> {
   let orphanedChildren = 0
   let childReconciliationFailed = false
@@ -34,9 +37,19 @@ export async function reconcileRuntimeAfterRestart(
     console.warn('[kun] orphaned child-run reconciliation failed:', error)
   }
 
-  const orphanedThreadIds = await runtime.turnService.reconcileOrphanedTurns()
+  const orphanedSources = await runtime.turnService.reconcileOrphanedTurns()
+  const orphanedThreadIds = orphanedSources.map((source) => source.threadId)
   if (orphanedThreadIds.length > 0) {
     console.warn(`[kun] marked orphaned turn(s) on ${orphanedThreadIds.length} thread(s) as failed after restart`)
+  }
+  const managerSettledSources = await runtime.turnService.reconcileManagerSettledInterruptions({
+      settledAfter: options.managerSettledAfter
+    })
+  const managerSettledThreadIds = managerSettledSources.map((source) => source.threadId)
+  if (managerSettledThreadIds.length > 0) {
+    console.warn(
+      `[kun] found ${managerSettledThreadIds.length} Manager-settled interruption(s) after restart`
+    )
   }
 
   let recoveryCandidates: Awaited<ReturnType<NonNullable<RestartRuntime['delegationRuntime']>['proactiveRetryRecoveryCandidates']>> = []
@@ -48,26 +61,57 @@ export async function reconcileRuntimeAfterRestart(
       console.warn('[kun] proactive child-recovery lookup failed:', error)
     }
   }
-  const recoveryParentIds = [...new Set(recoveryCandidates.map((candidate) => candidate.parentThreadId))]
-  const resumeCandidateIds: string[] = []
+  const sourceTurnIdsByThread = new Map<string, Set<string>>()
+  const addSource = (source: RestartRecoverySource): void => {
+    const turnIds = sourceTurnIdsByThread.get(source.threadId) ?? new Set<string>()
+    turnIds.add(source.turnId)
+    sourceTurnIdsByThread.set(source.threadId, turnIds)
+  }
+  for (const source of orphanedSources) addSource(source)
+  for (const source of managerSettledSources) addSource(source)
+  for (const candidate of recoveryCandidates) {
+    addSource({ threadId: candidate.parentThreadId, turnId: candidate.parentTurnId })
+  }
+  const resumeCandidateSources: RestartRecoverySource[] = []
+  const resumeCandidateThreads = new Map<string, Awaited<ReturnType<NonNullable<RestartRuntime['threadStore']>['get']>>>()
   if (!childReconciliationFailed && runtime.threadStore) {
-    for (const threadId of new Set([...orphanedThreadIds, ...recoveryParentIds])) {
+    for (const [threadId, provenTurnIds] of sourceTurnIdsByThread) {
       const thread = await runtime.threadStore.get(threadId).catch(() => null)
       if (!thread || thread.relation === 'side') continue
-      resumeCandidateIds.push(threadId)
+      const latest = thread.turns.at(-1)
+      if (!latest || latest.status !== 'failed' || !provenTurnIds.has(latest.id)) continue
+      resumeCandidateSources.push({ threadId, turnId: latest.id })
+      resumeCandidateThreads.set(threadId, thread)
     }
   }
+  const resumeCandidateIds = resumeCandidateSources.map((source) => source.threadId)
+  const selectedSourceByThread = new Map(
+    resumeCandidateSources.map((source) => [source.threadId, source.turnId] as const)
+  )
+  const eligibleRecoveryCandidates = recoveryCandidates.filter((candidate) =>
+    selectedSourceByThread.get(candidate.parentThreadId) === candidate.parentTurnId
+  )
+  const recoveryParentIds = [
+    ...new Set(eligibleRecoveryCandidates.map((candidate) => candidate.parentThreadId))
+  ]
 
   const recoveryParents = new Set(recoveryParentIds)
-  const goalCandidateIds = resumeCandidateIds.filter((threadId) => !recoveryParents.has(threadId))
-  const resumedGoals = goalCandidateIds.length > 0 && runtime.resumeInterruptedGoals
-    ? await runtime.resumeInterruptedGoals(goalCandidateIds)
+  const goalCandidateSources = resumeCandidateSources.filter((source) =>
+    !recoveryParents.has(source.threadId) &&
+    resumeCandidateThreads.get(source.threadId)?.goal?.status === 'active'
+  )
+  const ordinaryCandidateSources = resumeCandidateSources.filter((source) =>
+    recoveryParents.has(source.threadId) ||
+    resumeCandidateThreads.get(source.threadId)?.goal?.status !== 'active'
+  )
+  const resumedGoals = goalCandidateSources.length > 0 && runtime.resumeInterruptedGoals
+    ? await runtime.resumeInterruptedGoals(goalCandidateSources)
     : 0
   if (resumedGoals > 0) {
     console.warn(`[kun] auto-resumed ${resumedGoals} interrupted goal(s) after restart`)
   }
-  const resumedTurns = resumeCandidateIds.length > 0 && runtime.resumeInterruptedTurns
-    ? await runtime.resumeInterruptedTurns(resumeCandidateIds, recoveryCandidates)
+  const resumedTurns = ordinaryCandidateSources.length > 0 && runtime.resumeInterruptedTurns
+    ? await runtime.resumeInterruptedTurns(ordinaryCandidateSources, eligibleRecoveryCandidates)
     : 0
   if (resumedTurns > 0) {
     console.warn(`[kun] auto-resumed ${resumedTurns} interrupted turn(s) after restart`)
@@ -82,6 +126,7 @@ export async function reconcileRuntimeAfterRestart(
   return {
     orphanedChildren,
     orphanedThreadIds,
+    managerSettledThreadIds,
     resumeCandidateIds,
     resumedGoals,
     resumedTurns,

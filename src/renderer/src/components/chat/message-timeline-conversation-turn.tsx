@@ -78,6 +78,8 @@ export type ConversationTurnProps = {
   compactCards?: boolean
   /** Main-thread actions must stay disabled for isolated side conversations. */
   allowMainThreadActions?: boolean
+  /** Recovery fallback is available only while the whole thread is idle. */
+  allowRecoveryContinue?: boolean
   turnUsage?: TurnUsageSummary
   turnUsageStale?: boolean
 }
@@ -107,6 +109,7 @@ export function ConversationTurn({
   viewportRef,
   compactCards = false,
   allowMainThreadActions = true,
+  allowRecoveryContinue = true,
   turnUsage,
   turnUsageStale = false
 }: ConversationTurnProps): ReactElement {
@@ -438,7 +441,7 @@ export function ConversationTurn({
           key={block.id}
           block={block}
           onContinue={
-            !isProcessing && allowMainThreadActions
+            !isProcessing && allowMainThreadActions && allowRecoveryContinue
               ? () => {
                   void sendMessage(t('continueInterruptedTaskPrompt'))
                 }
@@ -608,6 +611,7 @@ export const MemoMessageTurn = memo(ConversationTurn, (prev, next) => (
   prev.filePreviewWorkspaceRoot === next.filePreviewWorkspaceRoot &&
   prev.compactCards === next.compactCards &&
   prev.allowMainThreadActions === next.allowMainThreadActions &&
+  prev.allowRecoveryContinue === next.allowRecoveryContinue &&
   prev.turnUsage === next.turnUsage &&
   prev.turnUsageStale === next.turnUsageStale &&
   prev.viewportRef === next.viewportRef

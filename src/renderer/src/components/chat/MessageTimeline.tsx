@@ -46,6 +46,10 @@ import {
 import { MemoMessageTurn } from './message-timeline-conversation-turn'
 import type { MessageTimelineProps } from './message-timeline-props'
 import { useTurnUsageState } from '../../hooks/use-turn-usage'
+import {
+  timelineTurnAllowsRecoveryContinue,
+  timelineTurnIsProcessing
+} from './message-timeline-runtime-state'
 
 export {
   TimelineJumpPreviewTitle,
@@ -64,30 +68,10 @@ export type { TimelineJumpPreviewMetadata } from './message-timeline-jump-previe
 export { ConversationTurn } from './message-timeline-conversation-turn'
 export type { ConversationTurnProps } from './message-timeline-conversation-turn'
 export { summarizeToolBlock } from './message-timeline-process'
-export function timelineTurnIsProcessing(input: {
-  busy: boolean
-  busyUnconfirmed?: boolean
-  isLatestTurn: boolean
-  isActiveTurn?: boolean
-  turnPending: boolean
-  hasLiveStream: boolean
-  turnId?: string
-  graphPlanningCorrectionTurnId?: string | null
-}): boolean {
-  if (
-    input.graphPlanningCorrectionTurnId &&
-    input.turnId === input.graphPlanningCorrectionTurnId
-  ) {
-    return false
-  }
-  // An unconfirmed busy flag comes from a persisted snapshot that claims a
-  // running turn; until live events confirm it, render the history settled
-  // instead of replaying live-progress UI over a finished conversation.
-  if (input.busyUnconfirmed && input.busy) return input.turnPending || input.hasLiveStream
-  return (input.busy && (input.isActiveTurn ?? input.isLatestTurn)) ||
-    input.turnPending ||
-    input.hasLiveStream
-}
+export {
+  timelineTurnAllowsRecoveryContinue,
+  timelineTurnIsProcessing
+} from './message-timeline-runtime-state'
 
 const TURN_PAGE_SIZE = 18
 export function MessageTimeline({
@@ -586,6 +570,11 @@ export function MessageTimeline({
                 filePreviewWorkspaceRoot={filePreviewWorkspaceRoot}
                 viewportRef={containerRef}
                 compactCards={compactCards}
+                allowRecoveryContinue={timelineTurnAllowsRecoveryContinue({
+                  busy,
+                  busyUnconfirmed,
+                  isLatestTurn
+                })}
                 turnUsage={turn.turnId ? turnUsage.byTurnId.get(turn.turnId) : undefined}
                 turnUsageStale={turnUsage.stale}
               />
@@ -653,6 +642,7 @@ export function MessageTimeline({
             onPreviewGeneratedDocument={onPreviewGeneratedDocument}
             onOpenGeneratedDocuments={onOpenGeneratedDocuments}
             compactCards={compactCards}
+            allowRecoveryContinue={!busy && !busyUnconfirmed}
             durationMs={
               currentTurnUserId && typeof turnStartedAtByUserId[currentTurnUserId] === 'number'
                 ? Math.max(0, tickNow - turnStartedAtByUserId[currentTurnUserId])

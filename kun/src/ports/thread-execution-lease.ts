@@ -12,5 +12,5 @@ export interface ThreadExecutionLeasePort {
   release(threadId: string, turnId: string): Promise<void>
   owner(threadId: string): Promise<ThreadExecutionLease | null>
   setLeaseLostHandler?(handler: (lease: ThreadExecutionLease) => void): void
-  shutdown?(): void
+  shutdown?(): Promise<void>
 }

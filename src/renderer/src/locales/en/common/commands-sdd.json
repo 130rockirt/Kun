@@ -291,6 +291,7 @@
   "userInputNotificationBody": "“{{title}}” needs your answer to continue.",
   "busyTimeout": "No response from the runtime after waiting {{minutes}} minutes. Deep-thinking tasks may take longer. If it stays stuck, you can cancel and retry.",
   "turnInterruptedByRestart": "Task interrupted by a runtime restart.",
+  "turnInterruptedByRuntimeOwnership": "Task interrupted because the Runtime lost execution ownership. It may be resumed safely.",
   "autoResumingInterruptedTask": "Interrupted task is auto-resuming after the restart…",
   "runtimeRestartingForMemoryPressure": "Agent Runtime is restarting because memory usage reached a critical level. The current task will be recovered after restart.",
   "runtimeMemoryPressureWarning": "Agent Runtime memory usage is high. New subagents are temporarily limited while memory is reclaimed.",

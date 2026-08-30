@@ -17,8 +17,7 @@ import {
   persistSharedMcpConfig
 } from './runtime-factory-config.js'
 import { settleCleanupSteps } from './runtime-factory-cleanup.js'
-import { shutdownGraphExecutionForHost } from './runtime-graph-lifecycle.js'
-import { waitForActiveRuns } from './runtime-graph-lifecycle.js'
+import { shutdownRuntimeExecutionForHost } from './runtime-graph-lifecycle.js'
 import type { ServerRuntime } from './runtime-factory-dependencies.js'
 
 export function createServerRuntimeComposition(
@@ -218,11 +217,11 @@ export function createServerRuntimeComposition(
     runTurn(threadId, turnId) {
       return runAgentTurn(threadId, turnId)
     },
-    resumeInterruptedGoals(threadIds) {
-      return agent.loop.resumeInterruptedGoals(threadIds)
+    resumeInterruptedGoals(sources) {
+      return agent.loop.resumeInterruptedGoals(sources)
     },
-    resumeInterruptedTurns(threadIds, childRecoveryCandidates) {
-      return agent.loop.resumeInterruptedTurns(threadIds, childRecoveryCandidates)
+    resumeInterruptedTurns(sources, childRecoveryCandidates) {
+      return agent.loop.resumeInterruptedTurns(sources, childRecoveryCandidates)
     },
     runReview(input) {
       return runReview(input)
@@ -381,37 +380,42 @@ export function createServerRuntimeComposition(
     shutdown: async () => {
       await settleCleanupSteps([
         async () => {
+          await shutdownRuntimeExecutionForHost({
+            prepare: async () => {
+              agent.shuttingDown = true
+              backgroundMaintenance.stop()
+              modelConnectionOAuth.close()
+              eventStreamRegistry.closeAll()
+              agent.loop.shutdownGoalResume()
+              agent.loop.shutdownInterruptedResume()
+              await turnService.closeAdmissionForShutdown()
+            },
+            graphRuntime,
+            turnService,
+            activeRuntimeRuns,
+            shutdownLeases: async () => { await executionLeases?.shutdown() }
+          })
+        },
+        async () => {
           try {
-            agent.shuttingDown = true
-            executionLeases?.shutdown()
-	        backgroundMaintenance.stop()
-	          await shutdownGraphExecutionForHost({
-	            graphRuntime,
-	            turnService
-	          })
-            modelConnectionOAuth.close()
-            eventStreamRegistry.closeAll()
-            agent.loop.shutdownGoalResume()
-            agent.loop.shutdownInterruptedResume()
-	          await backgroundShellRuntime.shutdown()
-	          await extensionJobs.handleRuntimeShutdown()
-	          extensionMediaJobs.dispose()
-	          extensionAudioAnalysisJobs.dispose()
-	          extensionMediaArchiveJobs.dispose()
-            await waitForActiveRuns(activeRuntimeRuns)
-	          stopExtensionModelListener()
-	          extensionViewSessions.disposeAll()
-	          await extensionManager.shutdown()
-	          await extensionBroker.dispose()
-	          extensionSecretReveals.dispose()
-	          await extensionAccountAudit.flush()
-	          extensionTools.disposeAll()
-	          await extensionModelProviders.disposeAll()
-	          shutdownAllLspSessions()
-	          await services.mcpProviders.close()
-	          await migrationService.shutdown()
-	          await migrationImportService.shutdown()
-	          await routeHealth.flush()
+            await backgroundShellRuntime.shutdown()
+            await extensionJobs.handleRuntimeShutdown()
+            extensionMediaJobs.dispose()
+            extensionAudioAnalysisJobs.dispose()
+            extensionMediaArchiveJobs.dispose()
+            stopExtensionModelListener()
+            extensionViewSessions.disposeAll()
+            await extensionManager.shutdown()
+            await extensionBroker.dispose()
+            extensionSecretReveals.dispose()
+            await extensionAccountAudit.flush()
+            extensionTools.disposeAll()
+            await extensionModelProviders.disposeAll()
+            shutdownAllLspSessions()
+            await services.mcpProviders.close()
+            await migrationService.shutdown()
+            await migrationImportService.shutdown()
+            await routeHealth.flush()
           } finally {
             try {
               await llmDebug?.shutdown()

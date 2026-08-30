@@ -52,6 +52,7 @@ import {
   mergeToolProjectionEvents,
   runtimeEventStartedAt,
   unseenDeltaText,
+  updateProjectedThreadStatus,
   upsertProjectedTimelineBlock,
   upsertTimelineBlock
 } from './chat-projection-reducer-support'
@@ -127,6 +128,24 @@ export function reduceChatProjection(
           ? event.itemId
           : optimisticUserId ?? event.itemId
       const startedAt = runtimeEventStartedAt(event.createdAt, context.now)
+      const statusThreads = !backgroundNotice && event.turnId && state.activeThreadId
+        ? updateProjectedThreadStatus(
+            state.threads,
+            state.activeThreadId,
+            'running',
+            'running',
+            event.turnId
+          )
+        : state.threads
+      const observedSeq = action.seq
+      const threads = typeof observedSeq === 'number' && state.activeThreadId
+        ? statusThreads.map((thread) =>
+            thread.id === state.activeThreadId &&
+            (thread.latestSeq === undefined || thread.latestSeq < observedSeq)
+              ? { ...thread, latestSeq: observedSeq }
+              : thread
+          )
+        : statusThreads
       return {
         ...flushed,
         blocks: upsertUserBlock(reconciledBlocks, event),
@@ -146,6 +165,7 @@ export function reduceChatProjection(
               ...state.turnStartedAtByUserId,
               [event.itemId]: state.turnStartedAtByUserId[event.itemId] ?? startedAt
             },
+        ...(threads !== state.threads ? { threads } : {}),
         error: context.clearRecoveringError(state.error)
       }
     }

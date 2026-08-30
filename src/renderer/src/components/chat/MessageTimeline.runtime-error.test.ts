@@ -1,7 +1,11 @@
 import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { TimelineRuntimeError } from './MessageTimeline'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  ConversationTurn,
+  TimelineRuntimeError,
+  timelineTurnAllowsRecoveryContinue
+} from './MessageTimeline'
 
 describe('TimelineRuntimeError', () => {
   let renderer: ReactTestRenderer
@@ -49,5 +53,74 @@ describe('TimelineRuntimeError', () => {
     })
 
     expect(renderer.root.findAllByType('p')[0]?.children.join('')).toContain('restarting')
+  })
+
+  it('localizes ownership interruption and exposes the idle Continue fallback', async () => {
+    const onContinue = vi.fn()
+    await act(async () => {
+      renderer = create(createElement(TimelineRuntimeError, {
+        block: {
+          kind: 'system',
+          id: 'error_owner_lease',
+          text: 'Turn owner stopped heartbeating.',
+          detail: 'Code: owner_lease_expired\nMessage: Turn owner stopped heartbeating.',
+          code: 'owner_lease_expired',
+          severity: 'warning',
+          runtimeError: true
+        },
+        onContinue
+      }))
+    })
+
+    expect(renderer.root.findAllByType('p')[0]?.children.join('')).toContain('ownership')
+    expect(renderer.root.findAllByType('pre')[0]?.children.join(''))
+      .toContain('owner_lease_expired')
+    const button = renderer.root.findByProps({
+      'data-testid': 'timeline-runtime-error-continue'
+    })
+    await act(async () => button.props.onClick())
+    expect(onContinue).toHaveBeenCalledOnce()
+  })
+
+  it('hides the Continue fallback while another turn is running', async () => {
+    await act(async () => {
+      renderer = create(createElement(ConversationTurn, {
+        turn: {
+          blocks: [{
+            kind: 'system',
+            id: 'error_owner_lease_history',
+            text: 'Turn owner stopped heartbeating.',
+            code: 'owner_lease_expired',
+            severity: 'warning',
+            runtimeError: true
+          }]
+        },
+        isProcessing: false,
+        allowRecoveryContinue: false,
+        liveReasoning: '',
+        live: '',
+        filePreviewWorkspaceRoot: '',
+        viewportRef: { current: null }
+      }))
+    })
+
+    expect(renderer.root.findAllByProps({
+      'data-testid': 'timeline-runtime-error-continue'
+    })).toHaveLength(0)
+  })
+
+  it('allows recovery only for the latest turn while the thread is idle', () => {
+    expect(timelineTurnAllowsRecoveryContinue({
+      busy: false,
+      isLatestTurn: true
+    })).toBe(true)
+    expect(timelineTurnAllowsRecoveryContinue({
+      busy: true,
+      isLatestTurn: true
+    })).toBe(false)
+    expect(timelineTurnAllowsRecoveryContinue({
+      busy: false,
+      isLatestTurn: false
+    })).toBe(false)
   })
 })

@@ -285,6 +285,7 @@
   "userInputNotificationBody": "«{{title}}» нужен ваш ответ, чтобы продолжить.",
   "busyTimeout": "No response from the runtime after waiting {{minutes}} minutes. Deep-thinking tasks may take longer. If it stays stuck, you can cancel and retry.",
   "turnInterruptedByRestart": "Задача прервана из-за перезапуска рантайма.",
+  "turnInterruptedByRuntimeOwnership": "Задача прервана, потому что среда выполнения потеряла право исполнения. Её можно безопасно возобновить.",
   "autoResumingInterruptedTask": "Прерванная задача автоматически возобновляется после перезапуска…",
   "continueInterruptedTask": "Продолжить задачу",
   "continueInterruptedTaskPrompt": "Продолжите прерванную задачу. Изучите историю разговора и заметку о прерывании, проверьте текущее состояние и завершите исходный запрос.",

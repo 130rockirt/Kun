@@ -350,7 +350,9 @@ export abstract class AgentLoopTurnLifecycle extends AgentLoopBase {
         // Accounting/resume are post-settlement conveniences. A late store or
         // event failure must not hide an already durable terminal outcome, nor
         // skip the unconditional transient-state cleanup below.
-        if (!suspended) {
+        if (suspended) {
+          await this.goalTurns.afterSuspended(threadId, goalTimer)
+        } else {
           await this.goalTurns.afterTerminal({
             threadId,
             turnId,

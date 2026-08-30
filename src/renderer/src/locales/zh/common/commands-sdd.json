@@ -290,6 +290,7 @@
   "userInputNotificationBody": "「{{title}}」需要你的回答才能继续。",
   "busyTimeout": "已等待 {{minutes}} 分钟仍未收到运行时完成事件。深度思考任务可能需要更长时间,如果仍然卡住可中断后重试。",
   "turnInterruptedByRestart": "任务因运行时重启而中断。",
+  "turnInterruptedByRuntimeOwnership": "运行时失去任务执行权，任务已中断；通常可以安全恢复。",
   "autoResumingInterruptedTask": "上次任务被中断，正在自动恢复…",
   "runtimeRestartingForMemoryPressure": "Agent Runtime 因内存压力达到临界值正在重启；当前任务会在重启后恢复。",
   "runtimeMemoryPressureWarning": "Agent Runtime 内存占用较高，正在回收缓存并临时限制新的子代理并发。",

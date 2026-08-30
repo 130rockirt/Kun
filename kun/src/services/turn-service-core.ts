@@ -314,6 +314,10 @@ export class TurnService {
   private readonly leasedTurns = new Map<string, ThreadExecutionLease>()
   /** Steering requests that are restoring a parked Graph lease before enqueueing. */
   private readonly graphSteeringResumeFences = new Map<string, number>()
+  /** New turn/Graph execution admission is permanently closed once host shutdown starts. */
+  private executionAdmissionClosed = false
+  private activeExecutionAdmissions = 0
+  private readonly executionAdmissionIdleWaiters = new Set<() => void>()
   private maxConcurrentTurns: number
 
   constructor(deps: TurnServiceDeps) {
@@ -324,6 +328,30 @@ export class TurnService {
       nowIso: deps.nowIso
     })
     this.maxConcurrentTurns = normalizeMaxConcurrentTurns(deps.maxConcurrentTurns)
+  }
+
+  async closeAdmissionForShutdown(): Promise<void> {
+    this.executionAdmissionClosed = true
+    if (this.activeExecutionAdmissions === 0) return
+    await new Promise<void>((resolve) => {
+      this.executionAdmissionIdleWaiters.add(resolve)
+    })
+  }
+
+  private beginExecutionAdmission(): () => void {
+    if (this.executionAdmissionClosed) {
+      throw new TurnConflictError('runtime is shutting down')
+    }
+    this.activeExecutionAdmissions += 1
+    let finished = false
+    return () => {
+      if (finished) return
+      finished = true
+      this.activeExecutionAdmissions -= 1
+      if (this.activeExecutionAdmissions !== 0) return
+      for (const resolve of this.executionAdmissionIdleWaiters) resolve()
+      this.executionAdmissionIdleWaiters.clear()
+    }
   }
 
 }

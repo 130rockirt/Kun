@@ -344,4 +344,40 @@ describe('thread snapshot cache', () => {
     })
     expect(running).toBeNull()
   })
+
+  it('does not revive summary goal state when detail explicitly clears it', () => {
+    const goal = {
+      threadId: 'thr_canonical_null', objective: 'Old goal', status: 'active' as const,
+      tokensUsed: 0, timeUsedSeconds: 1,
+      createdAt: '2026-08-30T00:00:00.000Z', updatedAt: '2026-08-30T00:00:01.000Z'
+    }
+    const todos = {
+      threadId: 'thr_canonical_null', items: [], updatedAt: '2026-08-30T00:00:01.000Z'
+    }
+    const target = thread('thr_canonical_null', { goal, todos })
+    const snapshot = buildPrefetchedThreadSnapshot(target, {
+      blocks: [], latestSeq: 2, threadStatus: 'idle', goal: null, todos: null
+    })
+
+    expect(snapshot?.activeThreadGoal).toBeNull()
+    expect(snapshot?.activeThreadTodos).toBeNull()
+  })
+
+  it('falls back to summary goal state only when detail omits it', () => {
+    const goal = {
+      threadId: 'thr_legacy_omission', objective: 'Legacy goal', status: 'active' as const,
+      tokensUsed: 0, timeUsedSeconds: 1,
+      createdAt: '2026-08-30T00:00:00.000Z', updatedAt: '2026-08-30T00:00:01.000Z'
+    }
+    const todos = {
+      threadId: 'thr_legacy_omission', items: [], updatedAt: '2026-08-30T00:00:01.000Z'
+    }
+    const target = thread('thr_legacy_omission', { goal, todos })
+    const snapshot = buildPrefetchedThreadSnapshot(target, {
+      blocks: [], latestSeq: 2, threadStatus: 'idle'
+    })
+
+    expect(snapshot?.activeThreadGoal).toBe(goal)
+    expect(snapshot?.activeThreadTodos).toBe(todos)
+  })
 })

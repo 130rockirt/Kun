@@ -126,13 +126,16 @@ export abstract class AgentLoopBase {
       usage: opts.usage,
       nowIso: opts.nowIso
     })
+    const runContinuationTurn = opts.runContinuationTurn ?? (
+      (threadId: string, turnId: string) => this.runTurn(threadId, turnId)
+    )
     this.goalTurns = new GoalTurnCoordinator({
       threadStore: opts.threadStore,
       turns: opts.turns,
       events: opts.events,
       nowIso: opts.nowIso,
       nowMs: () => opts.nowMs?.() ?? Date.now(),
-      runTurn: (threadId, turnId) => this.runTurn(threadId, turnId),
+      runTurn: runContinuationTurn,
       ...(opts.goalResume ? { goalResume: opts.goalResume } : {})
     })
     this.interruptedTurns = new InterruptedTurnCoordinator({
@@ -141,7 +144,7 @@ export abstract class AgentLoopBase {
       events: opts.events,
       nowIso: opts.nowIso,
       nowMs: () => opts.nowMs?.() ?? Date.now(),
-      runTurn: (threadId, turnId) => this.runTurn(threadId, turnId),
+      runTurn: runContinuationTurn,
       ...(opts.interruptedResume ? { interruptedResume: opts.interruptedResume } : {})
     })
     this.modelRoundEngine = new ModelRoundEngine({
@@ -270,20 +273,22 @@ export abstract class AgentLoopBase {
    * cannot burn model budget by resuming the same thread on every boot.
    */
   async resumeInterruptedTurns(
-    threadIds: readonly string[],
+    sources: readonly import('./restart-recovery-source.js').RestartRecoverySource[],
     childRecoveryCandidates: readonly import('./interrupted-turn-coordinator.js').InterruptedSubagentRecoveryCandidate[] = []
   ): Promise<number> {
-    return this.interruptedTurns.resumeInterruptedTurns(threadIds, childRecoveryCandidates)
+    return this.interruptedTurns.resumeInterruptedTurns(sources, childRecoveryCandidates)
   }
 
   /**
-   * Resume goals stranded by a runtime restart (path A). `threadIds` are the
-   * threads whose in-flight turn was just reconciled to `failed`; only those
-   * with a still-`active` goal are relaunched, so dormant goals on unrelated
-   * threads are never auto-started on boot.
+   * Resume goals stranded by a runtime restart (path A). Each source binds a
+   * thread to the exact turn just reconciled to `failed`; only those with a
+   * still-`active` goal are relaunched, so dormant goals on unrelated threads
+   * are never auto-started on boot.
    */
-  async resumeInterruptedGoals(threadIds: readonly string[]): Promise<number> {
-    return this.goalTurns.resumeInterruptedGoals(threadIds)
+  async resumeInterruptedGoals(
+    sources: readonly import('./restart-recovery-source.js').RestartRecoverySource[]
+  ): Promise<number> {
+    return this.goalTurns.resumeInterruptedGoals(sources)
   }
 
   protected lifecycleHookDeps(): TurnLifecycleHookDeps {

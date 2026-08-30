@@ -31,6 +31,7 @@ import type { ToolStormBreakerOptions } from './tool-storm-breaker.js'
 import type { TurnLimitsConfig } from './turn-limits.js'
 import type { GoalTurnCoordinatorOptions } from './goal-turn-coordinator.js'
 import type { InterruptedTurnResumeOptions } from './interrupted-turn-coordinator.js'
+import type { TurnRunOutcome } from './turn-execution-types.js'
 
 export type AgentLoopOptions = {
   threadStore: ThreadStore
@@ -100,6 +101,12 @@ export type AgentLoopOptions = {
    * again after a crash so a restart loop cannot burn model budget.
    */
   interruptedResume?: InterruptedTurnResumeOptions
+  /**
+   * Host-owned continuation runner. Serve mode uses this to put goal and
+   * restart auto-resume work in the same shutdown-wait registry as HTTP,
+   * Graph, review, and extension launches.
+   */
+  runContinuationTurn?: (threadId: string, turnId: string) => Promise<TurnRunOutcome>
   /**
    * Hard allow-list intersected into every tool context for this loop. Used
    * by read-only subagents to clamp the inherited tool host to investigation

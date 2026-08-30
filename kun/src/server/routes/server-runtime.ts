@@ -257,14 +257,16 @@ export type ServerRuntime = {
    * just reconciled to `failed` after a runtime restart. Returns the number
    * of goals resumed. Optional so embedders without the agent loop can omit it.
    */
-  resumeInterruptedGoals?(threadIds: readonly string[]): Promise<number>
+  resumeInterruptedGoals?(
+    sources: readonly import('../../loop/restart-recovery-source.js').RestartRecoverySource[]
+  ): Promise<number>
   /**
    * Relaunch continuation turns for ordinary threads (no active goal) whose
    * in-flight turn was just reconciled to `failed` after a runtime restart.
    * Optional so embedders without the agent loop can omit it.
    */
   resumeInterruptedTurns?(
-    threadIds: readonly string[],
+    sources: readonly import('../../loop/restart-recovery-source.js').RestartRecoverySource[],
     childRecoveryCandidates?: readonly import('../../loop/interrupted-turn-coordinator.js').InterruptedSubagentRecoveryCandidate[]
   ): Promise<number>
   /**

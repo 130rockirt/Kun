@@ -398,12 +398,16 @@ export function buildThreadEventSink(
         error: clearRuntimeStreamRecoveringError(state.error)
       }))
     },
-    onUserMessage: (event) => {
+    onUserMessage: (event, seq) => {
       if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
       armBusyWatchdog(set, get)
       confirmBusyOnce()
-      set((state) => reduce(state, { type: 'user_message_received', payload: event }))
+      set((state) => reduce(state, {
+        type: 'user_message_received',
+        payload: event,
+        ...(typeof seq === 'number' ? { seq } : {})
+      }))
     },
     onDeltas: (rawDeltas) => {
       if (!isCurrentStream()) return

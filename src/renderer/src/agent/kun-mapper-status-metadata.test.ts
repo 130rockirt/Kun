@@ -33,6 +33,31 @@ function makeSink(): ThreadEventSink {
 }
 
 describe('streaming runtime status events', () => {
+  it('forwards a user message event sequence to the renderer sink', async () => {
+    const onUserMessage = vi.fn()
+    await dispatchKunRuntimeEvent({
+      kind: 'item_created',
+      seq: 9,
+      threadId: 'thread_1',
+      turnId: 'turn_1',
+      item: {
+        id: 'item_user_1',
+        turnId: 'turn_1',
+        threadId: 'thread_1',
+        role: 'user',
+        status: 'completed',
+        createdAt: '2026-08-30T00:00:00.000Z',
+        kind: 'user_message',
+        text: 'Continue automatically'
+      }
+    }, { ...makeSink(), onUserMessage }, async () => undefined)
+
+    expect(onUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+      itemId: 'item_user_1',
+      turnId: 'turn_1'
+    }), 9)
+  })
+
   it('surfaces tool-call ready events as running tool cards', async () => {
     let captured: unknown = null
     const sink: ThreadEventSink = {

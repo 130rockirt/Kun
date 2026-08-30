@@ -165,6 +165,16 @@ export const GraphPlanningLifecycleSchema = z.object({
 }).strict()
 export type GraphPlanningLifecycle = z.infer<typeof GraphPlanningLifecycleSchema>
 
+/** Manager-authored proof that an execution owner expired for this turn. */
+export const ManagerLeaseSettlementSchema = z.object({
+  code: z.literal('owner_lease_expired'),
+  ownerFlavor: z.enum(['production', 'development']),
+  ownerInstanceId: z.string().min(1).max(256),
+  fencingToken: z.number().int().positive(),
+  settledAt: z.string().datetime()
+}).strict()
+export type ManagerLeaseSettlement = z.infer<typeof ManagerLeaseSettlementSchema>
+
 export const TurnSchema = z.object({
   id: z.string().min(1),
   threadId: z.string().min(1),
@@ -271,6 +281,10 @@ export const TurnSchema = z.object({
    * turns.
    */
   imContext: z.boolean().optional(),
+  /** Optional stable machine-readable reason for a terminal turn. */
+  terminalCode: z.string().trim().min(1).max(128).optional(),
+  /** Internal Manager-authored ownership-expiry provenance. */
+  managerLeaseSettlement: ManagerLeaseSettlementSchema.optional(),
   error: z.string().optional()
 })
 export type Turn = z.infer<typeof TurnSchema>

@@ -133,6 +133,24 @@ describe('GoalTurnCoordinator', () => {
     expect(h.eventDrafts).toEqual([])
   })
 
+  it('accounts a graceful suspension slice without scheduling terminal resume', async () => {
+    const h = harness()
+    await h.threadStore.upsert(activeThread())
+    const timer = await h.coordinator.begin(threadId)
+    h.setNowMs(5_900)
+
+    await h.coordinator.afterSuspended(threadId, timer)
+
+    expect((await h.threadStore.get(threadId))?.goal?.timeUsedSeconds).toBe(4)
+    expect(h.eventDrafts).toEqual([
+      expect.objectContaining({
+        kind: 'goal_updated',
+        goal: expect.objectContaining({ timeUsedSeconds: 4 })
+      })
+    ])
+    expect(h.timers.filter((entry) => !entry.cancelled)).toHaveLength(0)
+  })
+
   it('records token usage and moves an exhausted active goal to usageLimited', async () => {
     const h = harness()
     await h.threadStore.upsert(activeThread())
@@ -199,5 +217,41 @@ describe('GoalTurnCoordinator', () => {
       approved: true
     })
     expect(h.coordinator.hasMadeProgress(turnId)).toBe(false)
+  })
+
+  it('resumes a restarted goal only while the same failed turn remains latest', async () => {
+    const h = harness()
+    const failed = activeThread()
+    failed.turns = [{ ...failed.turns[0]!, status: 'failed' }]
+    await h.threadStore.upsert(failed)
+
+    await expect(h.coordinator.resumeInterruptedGoals([{ threadId, turnId }])).resolves.toBe(1)
+    expect(h.startTurn).toHaveBeenCalledOnce()
+    expect(h.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId }),
+      { expectedLatestFailedTurnId: turnId }
+    )
+
+    const raced = harness()
+    await raced.threadStore.upsert(failed)
+    const originalGet = raced.threadStore.get.bind(raced.threadStore)
+    let reads = 0
+    vi.spyOn(raced.threadStore, 'get').mockImplementation(async (id) => {
+      const current = await originalGet(id)
+      reads += 1
+      if (reads === 1 || !current) return current
+      return {
+        ...current,
+        turns: [...current.turns, createTurnRecord({
+          id: 'turn_newer',
+          threadId,
+          prompt: 'new work',
+          status: 'completed'
+        })]
+      }
+    })
+
+    await expect(raced.coordinator.resumeInterruptedGoals([{ threadId, turnId }])).resolves.toBe(0)
+    expect(raced.startTurn).not.toHaveBeenCalled()
   })
 })

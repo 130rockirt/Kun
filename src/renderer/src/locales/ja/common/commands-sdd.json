@@ -285,6 +285,7 @@
   "userInputNotificationBody": "「{{title}}」を続けるにはあなたの回答が必要です。",
   "busyTimeout": "{{ minutes}} 分間待ってもランタイムからの応答がありません。深く考えるタスクにはさらに時間がかかる場合があります。スタックしたままの場合は、キャンセルして再試行できます。",
   "turnInterruptedByRestart": "タスクはランタイムの再起動により中断されました。",
+  "turnInterruptedByRuntimeOwnership": "ランタイムが実行所有権を失ったためタスクが中断されました。安全に再開できる可能性があります。",
   "autoResumingInterruptedTask": "中断されたタスクを再起動後に自動再開しています…",
   "continueInterruptedTask": "タスクを続行",
   "continueInterruptedTaskPrompt": "中断されたタスクを続行してください。会話履歴と中断メモを確認し、現在の状態を検証して、元の依頼を完了させてください。",

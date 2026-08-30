@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
-  RuntimeFlavorSchema,
-  RuntimeRegistrationSchema
+  RuntimeFlavorSchema
 } from '../contracts/runtime-flavor.js'
 import { readJsonBody } from '../server/read-json-body.js'
 import { jsonResponse, type JsonResponse } from '../server/response.js'
@@ -37,7 +36,6 @@ import {
   MAX_MANAGER_DATA_BODY_BYTES,
   MemoryStoreOperationSchema,
   RuntimeRegistrationRequiredError,
-  RuntimeSlotBusyError,
   ServiceManagerState,
   SessionStoreOperationSchema,
   StaleTurnFenceError,
@@ -53,6 +51,7 @@ import {
   validation
 } from './service-manager-router-auth.js'
 import { addHostPowerRoute } from './service-manager-router-host-power.js'
+import { addRuntimeRegistrationRoute } from './service-manager-router-runtime-registration.js'
 import {
   isUsageIndexUnavailable,
   usageIndexUnavailableResponse
@@ -280,32 +279,7 @@ export function buildServiceManagerRouter(input: {
       return jsonResponse({ released })
     }
   ))
-  router.add('PUT', '/v1/runtimes/:flavor/register', (request, context) => authorizedAsync(
-    request,
-    input.managerToken,
-    async () => {
-      const flavor = RuntimeFlavorSchema.safeParse(context.params.flavor)
-      if (!flavor.success) return validation('invalid runtime flavor')
-      const body = await readJsonBody(request)
-      if (!body.ok) return body.response
-      const registration = RuntimeRegistrationSchema.safeParse(body.value)
-      if (!registration.success || registration.data.flavor !== flavor.data) {
-        return validation('invalid runtime registration', registration.success ? undefined : registration.error.issues)
-      }
-      try {
-        return jsonResponse({ registration: input.state.register(registration.data) })
-      } catch (error) {
-        if (error instanceof RuntimeSlotBusyError) {
-          return jsonResponse({
-            code: 'runtime_slot_busy',
-            message: error.message,
-            owner: error.owner
-          }, 409)
-        }
-        throw error
-      }
-    }
-  ))
+  addRuntimeRegistrationRoute(router, input)
   router.add('POST', '/v1/runtimes/:flavor/heartbeat', (request, context) => authorizedAsync(
     request,
     input.managerToken,

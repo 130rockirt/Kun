@@ -227,6 +227,14 @@ export abstract class ManagerSharedDataStoreCore {
       const turns = thread.turns.map((turn) => turn.id === lease.turnId
         ? {
             ...finishTurn(turn, 'failed', now),
+            terminalCode: 'owner_lease_expired',
+            managerLeaseSettlement: {
+              code: 'owner_lease_expired' as const,
+              ownerFlavor: lease.ownerFlavor,
+              ownerInstanceId: lease.ownerInstanceId,
+              fencingToken: lease.fencingToken,
+              settledAt: now
+            },
             error: ownerLeaseExpiredMessage(lease)
           }
         : turn)
