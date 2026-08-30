@@ -88,6 +88,14 @@ describe('ExtensionAgentService', () => {
       input: 'Active conversation',
       workspace
     })
+    await h.events.record({
+      kind: 'approval_requested',
+      threadId: activeRun.threadId,
+      turnId: activeRun.id,
+      approvalId: 'approval-listing',
+      toolName: 'write',
+      status: 'pending'
+    })
     const getThread = vi.spyOn(h.threads, 'get')
     const iterateEvents = vi.spyOn(h.sessions, 'iterateEventsSince')
 
@@ -111,6 +119,10 @@ describe('ExtensionAgentService', () => {
       finishedAt: expect.any(String),
       ownerExtensionId: 'com.example.agent'
     })
+    expect(items.find((thread) => thread.id === activeRun.threadId)?.latestRun).toMatchObject({
+      id: activeRun.id,
+      status: 'waiting-approval'
+    })
     await expect(h.service.getOwnThread(principal(), completedRun.threadId)).resolves.toMatchObject({
       latestRun: { id: completedRun.id, status: 'completed' }
     })
@@ -121,6 +133,9 @@ describe('ExtensionAgentService', () => {
     })
     expect(getThread).toHaveBeenCalledTimes(2)
     expect(iterateEvents).toHaveBeenCalledTimes(2)
+    await expect(h.service.listOwnThreads(principal(), { state: 'waiting-approval' })).resolves.toMatchObject({
+      items: [{ id: activeRun.threadId, latestRun: { id: activeRun.id, status: 'waiting-approval' } }]
+    })
   })
 
   it('enforces permission, workspace, account, steering, and idempotent cancellation', async () => {

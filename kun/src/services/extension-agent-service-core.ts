@@ -69,7 +69,14 @@ export type ExtensionAgentCreateRunRequest = {
   visibility?: ExtensionThreadVisibility
 }
 
-export type ExtensionAgentRunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'budget-exhausted'
+export type ExtensionAgentRunStatus =
+  | 'running'
+  | 'waiting-approval'
+  | 'waiting-user-input'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'budget-exhausted'
 
 export type ExtensionAgentRun = {
   id: string
@@ -573,7 +580,7 @@ export class ExtensionAgentService {
   ): Promise<ExtensionAgentRun> {
     const turn = thread.turns.find((candidate) => candidate.id === runId)
     if (!turn) throw opaqueNotFound()
-    const { usage, budgetExhausted } = knownSummary ?? await summarizeRunEvents(
+    const { usage, budgetExhausted, waitingState } = knownSummary ?? await summarizeRunEvents(
       this.options.sessions,
       thread.id,
       runId
@@ -583,7 +590,7 @@ export class ExtensionAgentService {
       threadId: thread.id,
       ownerExtensionId: principal.extensionId,
       ownerExtensionVersion: thread.ownerExtensionVersion ?? principal.extensionVersion,
-      status: budgetExhausted ? 'budget-exhausted' : runStatus(turn.status),
+      status: budgetExhausted ? 'budget-exhausted' : waitingState ?? runStatus(turn.status),
       createdAt: turn.createdAt,
       ...(turn.finishedAt ? { finishedAt: turn.finishedAt } : {}),
       workspace: thread.workspace,

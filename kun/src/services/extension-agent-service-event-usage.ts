@@ -67,11 +67,16 @@ export async function summarizeRunEvents(
   sessions: SessionStore,
   threadId: string,
   runId: string
-): Promise<{ usage?: UsageSnapshot; budgetExhausted: boolean }> {
+): Promise<{
+  usage?: UsageSnapshot
+  budgetExhausted: boolean
+  waitingState?: 'waiting-approval' | 'waiting-user-input'
+}> {
   let baseline: UsageSnapshot | undefined
   let cumulativeUsage: UsageSnapshot | undefined
   const runUsageMetadata: RunUsageMetadata = {}
   let budgetExhausted = false
+  let waitingState: 'waiting-approval' | 'waiting-user-input' | undefined
   let reachedRun = false
   for await (const event of iterateSessionEventsSince(sessions, threadId, -1)) {
     if (event.turnId !== runId) {
@@ -83,6 +88,12 @@ export async function summarizeRunEvents(
       cumulativeUsage = event.usage
       mergeRunUsageMetadata(runUsageMetadata, event.usage)
     }
+    if (event.kind === 'approval_requested') waitingState = 'waiting-approval'
+    if (event.kind === 'user_input_requested') waitingState = 'waiting-user-input'
+    if (
+      event.kind === 'approval_resolved' || event.kind === 'user_input_resolved' ||
+      event.kind === 'turn_completed' || event.kind === 'turn_failed' || event.kind === 'turn_aborted'
+    ) waitingState = undefined
     if (
       event.kind === 'error' &&
       /budget|limit/i.test(`${event.code ?? ''} ${event.message ?? ''}`)
@@ -93,7 +104,7 @@ export async function summarizeRunEvents(
   const usage = cumulativeUsage
     ? subtractCumulativeUsage(cumulativeUsage, baseline, runUsageMetadata)
     : undefined
-  return { ...(usage ? { usage } : {}), budgetExhausted }
+  return { ...(usage ? { usage } : {}), budgetExhausted, ...(waitingState ? { waitingState } : {}) }
 }
 
 export type RunUsageMetadata = Pick<

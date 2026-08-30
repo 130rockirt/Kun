@@ -102,7 +102,9 @@ export async function pageExtensionOwnedThreads(input: {
     if (!latestTurn) continue
     const summary = await summarizeRunEvents(input.sessions, thread.id, latestTurn.id)
     summaries.set(thread.id, summary)
-    const status = summary.budgetExhausted ? 'budget-exhausted' : runStatus(latestTurn.status)
+    const status = summary.budgetExhausted
+      ? 'budget-exhausted'
+      : summary.waitingState ?? runStatus(latestTurn.status)
     if (status !== input.state) continue
     if (matched < input.offset) {
       matched += 1
