@@ -8,6 +8,7 @@ import {
   GITHUB_MCP_AUTHORIZATION_REQUIRED_MESSAGE,
   githubCliEnvironment,
   resolveGitHubCliExecutable,
+  resolveGitHubCliExecutableDetails,
   resolveBuiltinGitHubMcpCredentials
 } from './github-mcp-credential.js'
 import { serverDiagnostic, startupConnectionError } from './mcp-tool-runtime.js'
@@ -54,20 +55,97 @@ describe('built-in GitHub MCP credentials', () => {
     expect(resolved.headers.Authorization).toBe('Bearer cli-secret')
   })
 
-  it('resolves GitHub CLI only from fixed install locations, not PATH', () => {
+  it('prefers fixed install locations before verified PATH entries', () => {
     const checked: string[] = []
     const executable = resolveGitHubCliExecutable(
       { PATH: '/workspace/bin:/tmp/attacker' },
       'darwin',
       (candidate) => {
         checked.push(candidate)
-        return candidate === '/opt/homebrew/bin/gh'
-      }
+        return candidate === '/opt/homebrew/bin/gh' || candidate === '/workspace/bin/gh'
+      },
+      (candidate) => candidate
     )
 
     expect(executable).toBe('/opt/homebrew/bin/gh')
-    expect(checked).not.toContain('/workspace/bin/gh')
-    expect(checked).not.toContain('/tmp/attacker/gh')
+    expect(checked).toEqual(['/opt/homebrew/bin/gh'])
+  })
+
+  it('resolves the first verified PATH entry, skipping empty and duplicate directories', () => {
+    const checked: string[] = []
+    const executable = resolveGitHubCliExecutable(
+      { PATH: ':/nix/profile/bin:/nix/profile/bin:/asdf/shims:/mise/shims:' },
+      'linux',
+      (candidate) => {
+        checked.push(candidate)
+        return candidate === '/asdf/shims/gh'
+      },
+      (candidate) => candidate
+    )
+
+    expect(executable).toBe('/asdf/shims/gh')
+    expect(checked).toEqual([
+      '/home/linuxbrew/.linuxbrew/bin/gh',
+      '/usr/local/bin/gh',
+      '/usr/bin/gh',
+      '/snap/bin/gh',
+      '/nix/profile/bin/gh',
+      '/asdf/shims/gh'
+    ])
+  })
+
+  it('returns the resolved executable path and PATH source metadata', () => {
+    const resolved = resolveGitHubCliExecutableDetails(
+      { PATH: '/devbox/bin' },
+      'linux',
+      (candidate) => candidate === '/resolved/gh',
+      (candidate) => candidate === '/devbox/bin/gh' ? '/resolved/gh' : candidate
+    )
+
+    expect(resolved).toEqual({ path: '/resolved/gh', source: 'path' })
+  })
+
+  it('skips candidates whose realpath lookup fails', () => {
+    const executable = resolveGitHubCliExecutable(
+      { PATH: '/broken/bin:/working/bin' },
+      'linux',
+      (candidate) => candidate === '/working/bin/gh',
+      (candidate) => {
+        if (candidate === '/broken/bin/gh') throw new Error('dangling link')
+        return candidate
+      }
+    )
+
+    expect(executable).toBe('/working/bin/gh')
+  })
+
+  it('uses Windows gh.exe PATH entries before Scoop and WinGet fallbacks', () => {
+    const pathExecutable = resolveGitHubCliExecutable(
+      {
+        PATH: 'C:\\Tools;D:\\Custom',
+        USERPROFILE: 'C:\\Users\\example',
+        LOCALAPPDATA: 'C:\\Users\\example\\AppData\\Local'
+      },
+      'win32',
+      (candidate) => candidate === 'D:\\Custom\\gh.exe',
+      (candidate) => candidate
+    )
+    const scoopExecutable = resolveGitHubCliExecutable(
+      { USERPROFILE: 'C:\\Users\\example' },
+      'win32',
+      (candidate) => candidate === 'C:\\Users\\example\\scoop\\shims\\gh.exe',
+      (candidate) => candidate
+    )
+    const wingetExecutable = resolveGitHubCliExecutable(
+      { LOCALAPPDATA: 'C:\\Users\\example\\AppData\\Local' },
+      'win32',
+      (candidate) => candidate === 'C:\\Users\\example\\AppData\\Local\\Microsoft\\WinGet\\Links\\gh.exe',
+      (candidate) => candidate
+    )
+
+    expect(pathExecutable).toBe('D:\\Custom\\gh.exe')
+    expect(scoopExecutable).toBe('C:\\Users\\example\\scoop\\shims\\gh.exe')
+    expect(wingetExecutable).toBe('C:\\Users\\example\\AppData\\Local\\Microsoft\\WinGet\\Links\\gh.exe')
   })
 
   it('passes only credential-store support variables to GitHub CLI', () => {
