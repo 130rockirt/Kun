@@ -5,9 +5,7 @@ import {
   type ComponentPropsWithoutRef,
   type ReactElement
 } from 'react'
-import type { OfficeSessionDescriptor } from '@shared/office-document'
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
-import type { WpsOfficeSdkBridge } from './WpsOfficeEditor'
 import { harden } from 'rehype-harden'
 import rehypeRaw from 'rehype-raw'
 import type { PluggableList } from 'unified'
@@ -37,9 +35,6 @@ export type Props = {
   onCloseTarget?: (target: WorkspaceFileTarget) => void
   pinnedTargetKeys?: string[]
   preserveAcrossThreads?: boolean
-  officeProviderMode?: 'local' | 'wps'
-  wpsOfficeSession?: OfficeSessionDescriptor | null
-  wpsOfficeSdk?: WpsOfficeSdkBridge
   onTogglePinnedTarget?: (target: WorkspaceFileTarget) => void
   onCloseOtherTargets?: (target: WorkspaceFileTarget) => void
   onTogglePreserveAcrossThreads?: () => void

@@ -19,7 +19,7 @@ import type {
   WorkspacePdfReadResult,
   WorkspacePreviewLeaseResult
 } from '@shared/workspace-file'
-import type { OfficeSessionDescriptor, WorkspaceOfficePreviewResult } from '@shared/office-document'
+import type { WorkspaceOfficePreviewResult } from '@shared/office-document'
 import { workspaceFilePreviewKind } from '../lib/workspace-text-preview'
 import {
   ResolvedPreviewImage,
@@ -28,7 +28,6 @@ import {
   type CachedTextDraft
 } from './workspace-file-preview-support'
 import { WorkspaceOfficePreview } from './WorkspaceOfficePreview'
-import type { WpsOfficeSdkBridge } from './WpsOfficeEditor'
 import { attachWorkspaceDocumentQuote } from '../lib/attach-workspace-document-quote'
 
 type Translate = (key: string, values?: Record<string, unknown>) => string
@@ -43,9 +42,6 @@ type WorkspaceFilePreviewBodyProps = {
   officeResult: WorkspaceOfficePreviewResult | null
   officeAgentEditing: boolean
   officeRefreshError: string | null
-  officeProviderMode?: 'local' | 'wps'
-  wpsOfficeSession?: OfficeSessionDescriptor | null
-  wpsOfficeSdk?: WpsOfficeSdkBridge
   previewLease: WorkspacePreviewLeaseResult | null
   previewKind: PreviewKind
   currentFileName: string
@@ -88,9 +84,6 @@ export function WorkspaceFilePreviewBody(props: WorkspaceFilePreviewBodyProps): 
     officeResult,
     officeAgentEditing,
     officeRefreshError,
-    officeProviderMode = 'local',
-    wpsOfficeSession,
-    wpsOfficeSdk,
     previewLease,
     previewKind,
     currentFileName,
@@ -175,9 +168,6 @@ export function WorkspaceFilePreviewBody(props: WorkspaceFilePreviewBodyProps): 
             result={officeResult}
             loading={loading || officeAgentEditing}
             refreshError={officeRefreshError}
-            providerMode={officeProviderMode}
-            wpsSession={wpsOfficeSession}
-            wpsSdk={wpsOfficeSdk}
             onQuoteSelection={(draft) => attachWorkspaceDocumentQuote({
               workspaceRoot: target.workspaceRoot ?? workspaceRoot,
               draft

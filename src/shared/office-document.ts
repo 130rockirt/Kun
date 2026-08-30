@@ -10,51 +10,6 @@ export const LEGACY_OFFICE_DOCUMENT_FORMATS = ['doc', 'xls', 'ppt'] as const
 export type LegacyOfficeDocumentFormat = (typeof LEGACY_OFFICE_DOCUMENT_FORMATS)[number]
 export type OfficeDocumentPreviewFormat = OfficeDocumentFormat | LegacyOfficeDocumentFormat
 
-export type OfficeCloudErrorCode =
-  | 'not_configured'
-  | 'consent_required'
-  | 'upload_failed'
-  | 'token_expired'
-  | 'source_changed'
-  | 'remote_changed'
-  | 'save_timeout'
-  | 'download_failed'
-  | 'cleanup_pending'
-  | 'gateway_unavailable'
-  | 'invalid_gateway_response'
-
-export type OfficeVersionRef = {
-  id: string
-  etag?: string
-  updatedAt: string
-}
-
-export type OfficeCloudDocumentRef = {
-  documentId: string
-  fileId: string
-  format: OfficeDocumentPreviewFormat
-  sourceSha256: string
-  version: OfficeVersionRef
-}
-
-/** Short-lived descriptor. `token` must never be persisted or logged. */
-export type OfficeSessionDescriptor = {
-  sessionId: string
-  appId: string
-  fileId: string
-  officeType: 'word' | 'sheet' | 'slide'
-  token: string
-  expiresAt: string
-  frameOrigin: string
-}
-
-export type OfficeSyncResult = {
-  path: string
-  beforeSha256: string
-  afterSha256: string
-  remoteVersion: OfficeVersionRef
-}
-
 export const MAX_RUNTIME_DOCUMENT_HTML_CHARS = 1_000_000
 
 /** Defense in depth for the scriptless Office HTML iframe and capture window. */

@@ -1,6 +1,5 @@
 import type { ReactElement } from 'react'
 import type {
-  OfficeSessionDescriptor,
   WorkspaceOfficePreviewResult,
   WorkspaceOfficeSelection,
   WorkspacePresentationViewReference,
@@ -9,7 +8,6 @@ import type {
 import { WorkspaceDocxPreview } from './WorkspaceDocxPreview'
 import { WorkspacePptxPreview } from './WorkspacePptxPreview'
 import { WorkspaceSpreadsheetPreview } from './WorkspaceSpreadsheetPreview'
-import { WpsOfficeEditor, type WpsOfficeSdkBridge } from './WpsOfficeEditor'
 import type { WorkspaceDocumentQuoteDraft } from '../lib/workspace-document-quote'
 
 type WorkspaceOfficePreviewProps = {
@@ -23,10 +21,6 @@ type WorkspaceOfficePreviewProps = {
     source: WorkspacePresentationViewSource
   ) => void
   presentationKeyboardActive?: boolean
-  providerMode?: 'local' | 'wps'
-  wpsSession?: OfficeSessionDescriptor | null
-  wpsSdk?: WpsOfficeSdkBridge
-  wpsReadOnly?: boolean
 }
 
 export function WorkspaceOfficePreview({
@@ -36,25 +30,8 @@ export function WorkspaceOfficePreview({
   onSelectionChange,
   onQuoteSelection,
   onPresentationViewChange,
-  presentationKeyboardActive = true,
-  providerMode = 'local',
-  wpsSession,
-  wpsSdk,
-  wpsReadOnly = true
+  presentationKeyboardActive = true
 }: WorkspaceOfficePreviewProps): ReactElement {
-  if (providerMode === 'wps') {
-    return (
-      <WpsOfficeEditor
-        result={result}
-        session={wpsSession}
-        sdk={wpsSdk}
-        loading={loading}
-        error={refreshError}
-        readOnly={wpsReadOnly}
-        onSelectionChange={onSelectionChange}
-      />
-    )
-  }
   if (result.viewer === 'word') {
     return <WorkspaceDocxPreview result={result} loading={loading} refreshError={refreshError} onSelectionChange={onSelectionChange} onQuoteSelection={onQuoteSelection} />
   }

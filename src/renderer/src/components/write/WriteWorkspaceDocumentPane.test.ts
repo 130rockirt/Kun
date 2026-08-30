@@ -1,7 +1,7 @@
 import { createElement, createRef } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { OfficeSessionDescriptor, WorkspaceOfficePreviewSuccess } from '@shared/office-document'
+import type { WorkspaceOfficePreviewSuccess } from '@shared/office-document'
 import { WriteWorkspaceDocumentPane } from './WriteWorkspaceDocumentPane'
 
 vi.mock('react-i18next', () => {
@@ -221,31 +221,6 @@ describe('WriteWorkspaceDocumentPane focus mode', () => {
     expect(renderer.root.findByProps({ 'data-office-preview-mock': 'true' }).props).toMatchObject({
       onPresentationViewChange,
       presentationKeyboardActive: false
-    })
-  })
-
-  it('passes WPS edit mode, session, and SDK through the Write Office entry', async () => {
-    const officePreview: WorkspaceOfficePreviewSuccess = {
-      ok: true, path: '/repo/draft.docx', name: 'draft.docx', sourceFormat: 'docx',
-      renderFormat: 'docx', viewer: 'word', size: 3, mtimeMs: 1,
-      sourceSha256: 'c'.repeat(64), data: new Uint8Array([1, 2, 3])
-    }
-    const session: OfficeSessionDescriptor = {
-      sessionId: 'session-write', appId: 'public-app', fileId: 'file-write',
-      officeType: 'word', token: 'short-token', expiresAt: '2099-01-01T00:00:00.000Z',
-      frameOrigin: 'https://office.example.test'
-    }
-    const sdk = { mount: vi.fn() }
-    await act(async () => {
-      renderer.update(createElement(WriteWorkspaceDocumentPane, {
-        ...paneProps(false, onFocusModeChange), activeFilePath: officePreview.path,
-        activeFileIsOffice: true, activeFileIsText: false, officePreview,
-        officeProviderMode: 'wps', wpsOfficeSession: session, wpsOfficeSdk: sdk,
-        onSpreadsheetMutations: vi.fn()
-      }))
-    })
-    expect(renderer.root.findByProps({ 'data-office-preview-mock': 'true' }).props).toMatchObject({
-      providerMode: 'wps', wpsSession: session, wpsSdk: sdk, wpsReadOnly: false
     })
   })
 
