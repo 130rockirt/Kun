@@ -73,6 +73,8 @@ describe('JSONL replacement coordination', () => {
       sourcePath,
       indexPath,
       statePath,
+      threadId: 'thread_1',
+      evidencePath: join(root, 'messages-tail.evidence.json'),
       withSourceRead: (operation) => fileAccess.withRead(sourcePath, async () => {
         markLeaseStarted()
         await gate

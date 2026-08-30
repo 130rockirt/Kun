@@ -30,6 +30,8 @@ describe('FileSessionItemIndex rebuild', () => {
       sourcePath,
       indexPath,
       statePath,
+      threadId: 'thread_1',
+      evidencePath: join(root, 'messages-tail.evidence.json'),
       withSourceRead: async (operation) => {
         calls += 1
         active = true
@@ -60,7 +62,9 @@ describe('FileSessionItemIndex rebuild', () => {
     await expect(new FileSessionItemIndex().rebuild({
       sourcePath,
       indexPath: join(root, 'messages-index.jsonl'),
-      statePath: join(root, 'messages-index.state.json')
+      statePath: join(root, 'messages-index.state.json'),
+      threadId: 'thread_1',
+      evidencePath: join(root, 'messages-tail.evidence.json')
     })).resolves.toMatchObject({ rawCount: 1, uniqueCount: 1 })
   })
 })
