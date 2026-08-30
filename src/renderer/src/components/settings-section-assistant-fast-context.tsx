@@ -195,6 +195,7 @@ export function FastContextSettingsPanel({
                         })
                       }}
                     />
+                  </div>
                 }
               />
             ) : null}

@@ -93,7 +93,7 @@
     "verify:apple": "node ./scripts/verify-apple-signing.cjs",
     "preview": "electron-vite preview",
     "typecheck": "npm run build:extensions && npm run typecheck:kun && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
-    "typecheck:kun": "npm --prefix kun run typecheck",
+    "typecheck:kun": "node ./scripts/ensure-kun-install.cjs && npm --prefix kun run typecheck",
     "prepare:whisper": "node ./scripts/prepare-whisper-runner.cjs",
     "prepare:officecli": "node ./scripts/prepare-officecli.cjs",
     "mac:unquarantine": "bash ./scripts/mac-unquarantine.sh"
