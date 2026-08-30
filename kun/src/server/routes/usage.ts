@@ -1,6 +1,12 @@
 import { TurnUsageResponseSchema } from '../../contracts/usage.js'
+import {
+  ServiceManagerHttpError,
+  ServiceManagerTransportError,
+  UsageIndexUnavailableError
+} from '../../manager/usage-errors.js'
 import type { UsageService } from '../../services/usage-service.js'
 import {
+  UsageFallbackLimitError,
   buildDailyUsageResponse,
   buildModelUsageResponse,
   buildThreadUsageResponse,
@@ -16,17 +22,30 @@ import {
 import type { ServerRuntime } from './server-runtime.js'
 import { jsonResponse, type JsonResponse } from '../response.js'
 
-/**
- * The SQLite usage index is a rebuildable projection; JSONL events remain the
- * canonical history. When the index is unavailable (worker timeout, missing
- * database, or a manager-side failure), fall back to the JSONL history read
- * so the usage panels keep working instead of surfacing a 500.
- */
+const FALLBACK_PROVENANCE = { source: 'jsonl-fallback' as const, degraded: true as const }
+
+type FallbackUsageResponse = typeof FALLBACK_PROVENANCE
+
 function isUsageIndexDegraded(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return message.includes('usage_index_unavailable') ||
-    message.includes('usage_query_timeout') ||
-    message.includes('Kun Service Manager request failed')
+  return error instanceof UsageIndexUnavailableError ||
+    error instanceof ServiceManagerTransportError ||
+    error instanceof ServiceManagerHttpError && (error.status === 502 || error.status === 503)
+}
+
+function markFallback<T extends object>(response: T): T & FallbackUsageResponse {
+  return { ...response, ...FALLBACK_PROVENANCE }
+}
+
+async function indexOrFallback<T extends object>(
+  indexed: () => Promise<T>,
+  fallback: () => Promise<T>
+): Promise<T> {
+  try {
+    return await indexed()
+  } catch (error) {
+    if (!isUsageIndexDegraded(error)) throw error
+    return markFallback(await fallback())
+  }
 }
 
 /** Runtime-cumulative response retained for backward compatibility. */
@@ -55,100 +74,68 @@ export async function usageJsonResponse(
   try {
     if (groupBy === 'thread') {
       const threadId = stringParam(query, 'thread_id')
-      if (runtime.sessionStore.aggregateUsage) {
-        const aggregateQuery = {
-          groupBy: 'thread',
-          ...(threadId ? { threadId } : {})
-        } as const
-        try {
-          return jsonResponse(await runtime.sessionStore.aggregateUsage(
-            aggregateQuery,
-            await loadLiveUsageRemainders(
-              runtime,
-              { ...(threadId ? { threadId } : {}) },
-              true
-            )
-          ))
-        } catch (error) {
-          if (!isUsageIndexDegraded(error)) throw error
-        }
-      }
-      return jsonResponse(buildThreadUsageResponse(await loadUsageHistory(runtime, {
-        threadId
-      })))
+      const fallback = async () => buildThreadUsageResponse(await loadUsageHistory(runtime, { threadId }))
+      if (!runtime.sessionStore.aggregateUsage) return jsonResponse(markFallback(await fallback()))
+      return jsonResponse(await indexOrFallback(
+        async () => runtime.sessionStore.aggregateUsage!(
+          { groupBy: 'thread', ...(threadId ? { threadId } : {}) },
+          await loadLiveUsageRemainders(runtime, { ...(threadId ? { threadId } : {}) }, true)
+        ),
+        fallback
+      ))
     }
     if (groupBy === 'day') {
       const dayQuery = parseDailyUsageQuery(query)
       const range = usageQueryUtcRange(dayQuery)
-      if (runtime.sessionStore.aggregateUsage) {
-        try {
-          return jsonResponse(await runtime.sessionStore.aggregateUsage(
-            { ...dayQuery, ...range },
-            await loadLiveUsageRemainders(runtime, range, true)
-          ))
-        } catch (error) {
-          if (!isUsageIndexDegraded(error)) throw error
-        }
-      }
-      return jsonResponse(
-        buildDailyUsageResponse(
-          await loadUsageHistory(runtime, range),
-          dayQuery
-        )
-      )
+      const fallback = async () => buildDailyUsageResponse(await loadUsageHistory(runtime, range), dayQuery)
+      if (!runtime.sessionStore.aggregateUsage) return jsonResponse(markFallback(await fallback()))
+      return jsonResponse(await indexOrFallback(
+        async () => runtime.sessionStore.aggregateUsage!(
+          { ...dayQuery, ...range }, await loadLiveUsageRemainders(runtime, range, true)
+        ),
+        fallback
+      ))
     }
     if (groupBy === 'model') {
       const modelQuery = parseModelUsageQuery(query)
       const range = usageQueryUtcRange(modelQuery)
-      if (runtime.sessionStore.aggregateUsage) {
-        try {
-          return jsonResponse(await runtime.sessionStore.aggregateUsage(
-            { ...modelQuery, ...range },
-            await loadLiveUsageRemainders(runtime, range, true)
-          ))
-        } catch (error) {
-          if (!isUsageIndexDegraded(error)) throw error
-        }
-      }
-      return jsonResponse(
-        buildModelUsageResponse(
-          await loadUsageHistory(runtime, range),
-          modelQuery
-        )
-      )
+      const fallback = async () => buildModelUsageResponse(await loadUsageHistory(runtime, range), modelQuery)
+      if (!runtime.sessionStore.aggregateUsage) return jsonResponse(markFallback(await fallback()))
+      return jsonResponse(await indexOrFallback(
+        async () => runtime.sessionStore.aggregateUsage!(
+          { ...modelQuery, ...range }, await loadLiveUsageRemainders(runtime, range, true)
+        ),
+        fallback
+      ))
     }
     if (groupBy === 'turn') {
       const turnQuery = parseTurnUsageQuery(query)
-      if (runtime.sessionStore.aggregateUsage) {
-        try {
-          return jsonResponse(TurnUsageResponseSchema.parse(
-            await runtime.sessionStore.aggregateUsage(
-              turnQuery,
-              await loadLiveUsageRemainders(runtime, { threadId: turnQuery.threadId }, true)
-            )
-          ))
-        } catch (error) {
-          if (!isUsageIndexDegraded(error)) throw error
-        }
-      }
-      const response = buildTurnUsageResponse(
-        await loadUsageHistory(runtime, { threadId: turnQuery.threadId }),
-        turnQuery
+      const fallback = async () => buildTurnUsageResponse(
+        await loadUsageHistory(runtime, { threadId: turnQuery.threadId }), turnQuery
       )
-      return jsonResponse(TurnUsageResponseSchema.parse(response))
+      if (!runtime.sessionStore.aggregateUsage) {
+        return jsonResponse(TurnUsageResponseSchema.parse(markFallback(await fallback())))
+      }
+      return jsonResponse(TurnUsageResponseSchema.parse(await indexOrFallback(
+        async () => runtime.sessionStore.aggregateUsage!(
+          turnQuery,
+          await loadLiveUsageRemainders(runtime, { threadId: turnQuery.threadId }, true)
+        ),
+        fallback
+      )))
     }
   } catch (error) {
     if (error instanceof UsageValidationError) {
       return jsonResponse({ code: error.code, message: error.message }, 400)
     }
-    const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('usage_query_timeout') || message.includes('usage_index_unavailable')) {
+    if (error instanceof UsageIndexUnavailableError || error instanceof UsageFallbackLimitError) {
+      return jsonResponse({ code: error.code, message: error.message }, 503)
+    }
+    if (error instanceof ServiceManagerHttpError) {
       return jsonResponse({
-        code: message.includes('usage_query_timeout')
-          ? 'usage_query_timeout'
-          : 'usage_index_unavailable',
-        message: 'Usage history is temporarily unavailable. The previous totals were kept.'
-      }, 503)
+        code: error.code ?? 'service_manager_error',
+        message: error.message
+      }, error.status)
     }
     throw error
   }

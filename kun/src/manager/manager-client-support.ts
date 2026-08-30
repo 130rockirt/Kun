@@ -37,6 +37,7 @@ import { sameCanonicalPath } from './canonical-path.js'
 import { KUN_MANAGER_CAPABILITIES } from './service-manager.js'
 import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-lease.js'
 
+import { ServiceManagerHttpError, ServiceManagerTransportError } from './usage-errors.js'
 import type { ServiceManagerConnection } from './manager-client.js'
 
 export type ManagerRequestOptions = {
@@ -61,37 +62,60 @@ export async function requestManagerResponse(
   options: ManagerRequestOptions
 ): Promise<Response> {
   const fetchImpl = options.fetch ?? fetch
-  return fetchImpl(`${manager.discovery.baseUrl}${path}`, {
-    method: options.method ?? 'GET',
-    headers: {
-      authorization: `Bearer ${manager.discovery.managerToken}`,
-      ...(options.body === undefined ? {} : { 'content-type': 'application/json' })
-    },
-    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-    signal: options.signal
-      ? AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs ?? 5_000)])
-      : AbortSignal.timeout(options.timeoutMs ?? 5_000)
-  })
+  try {
+    return await fetchImpl(`${manager.discovery.baseUrl}${path}`, {
+      method: options.method ?? 'GET',
+      headers: {
+        authorization: `Bearer ${manager.discovery.managerToken}`,
+        ...(options.body === undefined ? {} : { 'content-type': 'application/json' })
+      },
+      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+      signal: options.signal
+        ? AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs ?? 5_000)])
+        : AbortSignal.timeout(options.timeoutMs ?? 5_000)
+    })
+  } catch (error) {
+    throw classifyManagerTransportError(error)
+  }
 }
 
 export async function requireManagerJson(response: Response): Promise<unknown> {
   if (!response.ok) {
     const body = await response.text().catch(() => '')
     const detail = body.slice(0, 1_024)
-    const error = new Error(`Kun Service Manager request failed with HTTP ${response.status}: ${detail}`)
-    // Preserve the manager's typed error code (e.g. usage_index_unavailable)
-    // so callers can match on it instead of relying on free-text substrings.
-    try {
-      const parsed = JSON.parse(body) as { code?: unknown }
-      if (typeof parsed.code === 'string' && parsed.code) {
-        ;(error as Error & { code?: string }).code = parsed.code
-      }
-    } catch {
-      // Non-JSON error body; the message above already carries the detail.
-    }
-    throw error
+    throw new ServiceManagerHttpError(
+      response.status,
+      managerErrorCode(body),
+      `Kun Service Manager request failed with HTTP ${response.status}: ${detail}`,
+      detail
+    )
   }
   return response.json()
+}
+
+function managerErrorCode(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as { code?: unknown }
+    return typeof parsed.code === 'string' && parsed.code ? parsed.code : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function classifyManagerTransportError(error: unknown): Error {
+  if (!(error instanceof Error)) return new Error(String(error))
+  const causeCode = (error.cause as NodeJS.ErrnoException | undefined)?.code
+  const code = String((error as NodeJS.ErrnoException).code ?? causeCode ?? '')
+  if (code === 'ECONNREFUSED') {
+    return new ServiceManagerTransportError('connection_refused', error.message, { cause: error })
+  }
+  if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+    return new ServiceManagerTransportError('timeout', error.message, { cause: error })
+  }
+  if (code === 'ECONNRESET' || code === 'EPIPE' || code === 'UND_ERR_SOCKET') {
+    return new ServiceManagerTransportError('socket_closed', error.message, { cause: error })
+  }
+  return error
 }
 
 export function safeManagerUrl(record: ManagerDiscoveryRecord): boolean {

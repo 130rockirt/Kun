@@ -125,7 +125,14 @@ export const DailyUsageTotalsSchema = DailyUsageCountersSchema.extend({
 })
 export type DailyUsageTotals = z.infer<typeof DailyUsageTotalsSchema>
 
-export const DailyUsageResponseSchema = z.object({
+export const UsageResponseProvenanceSchema = z.object({
+  source: z.literal('jsonl-fallback').optional(),
+  degraded: z.literal(true).optional()
+})
+
+const UsageResponseSchema = UsageResponseProvenanceSchema
+
+export const DailyUsageResponseSchema = UsageResponseSchema.extend({
   group_by: z.literal('day'),
   from: DateStringSchema,
   to: DateStringSchema,
@@ -163,7 +170,7 @@ export const ThreadUsageTotalsSchema = DailyUsageCountersSchema.omit({
 })
 export type ThreadUsageTotals = z.infer<typeof ThreadUsageTotalsSchema>
 
-export const ThreadUsageResponseSchema = z.object({
+export const ThreadUsageResponseSchema = UsageResponseSchema.extend({
   group_by: z.literal('thread'),
   buckets: z.array(ThreadUsageBucketSchema),
   totals: ThreadUsageTotalsSchema
@@ -178,7 +185,7 @@ export type ModelUsageBucket = z.infer<typeof ModelUsageBucketSchema>
 export const ModelUsageDayBucketSchema = DailyUsageBucketSchema
 export type ModelUsageDayBucket = z.infer<typeof ModelUsageDayBucketSchema>
 
-export const ModelUsageResponseSchema = z.object({
+export const ModelUsageResponseSchema = UsageResponseSchema.extend({
   group_by: z.literal('model'),
   from: DateStringSchema,
   to: DateStringSchema,
@@ -244,7 +251,7 @@ export const TurnUsageBucketSchema = TurnUsageCountersSchema.extend({
 }).strict()
 export type TurnUsageBucket = z.infer<typeof TurnUsageBucketSchema>
 
-export const TurnUsageResponseSchema = z.object({
+export const TurnUsageResponseSchema = UsageResponseSchema.extend({
   group_by: z.literal('turn'),
   thread_id: z.string().min(1),
   buckets: z.array(TurnUsageBucketSchema),

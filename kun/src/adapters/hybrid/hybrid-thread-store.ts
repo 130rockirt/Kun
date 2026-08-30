@@ -38,6 +38,7 @@ import type {
   SessionUsageAggregateResponse
 } from '../../contracts/usage-query.js'
 import { UsageQueryExecutor } from '../../manager/usage-query-executor.js'
+import { UsageIndexUnavailableError } from '../../manager/usage-errors.js'
 import { JsonlFileAccessCoordinator } from '../file/jsonl-file-access.js'
 import { renameFileWithRetry } from '../file/atomic-write.js'
 import { migrateHybridUsageBackfillState } from './hybrid-thread-store-migrations.js'
@@ -302,11 +303,16 @@ export class HybridThreadStore implements ThreadStore {
     liveRecords: SessionUsageRecord[] = []
   ): Promise<SessionUsageAggregateResponse> {
     await this.ready()
-    if (!this.db) throw new Error('usage_index_unavailable: hybrid sqlite unavailable')
+    if (!this.db) {
+      throw new UsageIndexUnavailableError('usage_index_unavailable', 'Hybrid SQLite usage index is unavailable')
+    }
     const scopedThreadIds = 'threadId' in query && query.threadId ? [query.threadId] : undefined
     if (this.backfill && !this.backfill.isUsageReady(scopedThreadIds)) {
       this.backfill.start()
-      throw new Error('usage_index_unavailable: usage backfill is still in progress')
+      throw new UsageIndexUnavailableError(
+        'usage_index_unavailable',
+        'Usage index backfill is still in progress'
+      )
     }
     return this.usageQueries.execute(query, liveRecords)
   }

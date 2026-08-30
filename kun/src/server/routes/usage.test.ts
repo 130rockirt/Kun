@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { emptyUsageSnapshot } from '../../contracts/usage.js'
+import { ServiceManagerHttpError, UsageIndexUnavailableError } from '../../manager/usage-errors.js'
 import type { ServerRuntime } from './server-runtime.js'
 import { usageJsonResponse } from './usage.js'
 
@@ -8,8 +9,8 @@ describe('usageJsonResponse', () => {
     const runtime = runtimeFixture({
       get: vi.fn(async () => ({ id: 'thread-1', model: 'fixture-model', updatedAt: '2026-08-09T00:00:00.000Z' })),
       list: vi.fn(async () => [{ id: 'thread-1', status: 'active', updatedAt: '2026-08-09T00:00:00.000Z' }]),
-      loadUsageRecords: vi.fn(async () => { throw new Error('usage_index_unavailable: index down') }),
-      aggregateUsage: vi.fn(async () => { throw new Error('usage_query_timeout') })
+      loadUsageRecords: vi.fn(async () => { throw new UsageIndexUnavailableError('usage_index_unavailable', 'index down') }),
+      aggregateUsage: vi.fn(async () => { throw new UsageIndexUnavailableError('usage_query_timeout', 'usage query timed out') })
     })
 
     const response = await usageJsonResponse(request('day', '2026-08-01', '2026-08-09'), runtime)
@@ -17,7 +18,7 @@ describe('usageJsonResponse', () => {
     expect(response.status).toBe(503)
     expect(JSON.parse(response.body)).toEqual({
       code: 'usage_index_unavailable',
-      message: 'Usage history is temporarily unavailable. The previous totals were kept.'
+      message: 'Usage index is unavailable: index down'
     })
   })
 
@@ -31,14 +32,21 @@ describe('usageJsonResponse', () => {
     const runtime = runtimeFixture({
       list: vi.fn(async () => [{ id: 'thread-1', status: 'active', updatedAt: '2026-08-09T00:00:00.000Z' }]),
       loadUsageRecords,
-      aggregateUsage: vi.fn(async () => { throw new Error('usage_index_unavailable: hybrid sqlite unavailable') })
+      aggregateUsage: vi.fn(async () => {
+        throw new UsageIndexUnavailableError('usage_index_unavailable', 'Hybrid SQLite usage index is unavailable')
+      })
     })
 
     const daily = await usageJsonResponse(request('day', '2026-08-01', '2026-08-09'), runtime)
 
     expect(daily.status).toBe(200)
     expect(aggregateCalls(runtime)).toBe(1)
-    const dailyBody = JSON.parse(daily.body) as { buckets: Array<Record<string, unknown>> }
+    const dailyBody = JSON.parse(daily.body) as {
+      source?: string
+      degraded?: boolean
+      buckets: Array<Record<string, unknown>>
+    }
+    expect(dailyBody).toMatchObject({ source: 'jsonl-fallback', degraded: true })
     expect(dailyBody.buckets).toContainEqual(expect.objectContaining({
       date: '2026-08-09',
       input_tokens: 5,
@@ -48,30 +56,30 @@ describe('usageJsonResponse', () => {
     const model = await usageJsonResponse(request('model', '2026-08-01', '2026-08-09'), runtime)
 
     expect(model.status).toBe(200)
-    const modelBody = JSON.parse(model.body) as { buckets: Array<Record<string, unknown>> }
+    const modelBody = JSON.parse(model.body) as {
+      source?: string
+      degraded?: boolean
+      buckets: Array<Record<string, unknown>>
+    }
+    expect(modelBody).toMatchObject({ source: 'jsonl-fallback', degraded: true })
     expect(modelBody.buckets).toContainEqual(expect.objectContaining({ model: 'fixture-model' }))
   })
 
-  it('falls back to JSONL history when the manager reports an internal usage failure', async () => {
-    const loadUsageRecords = vi.fn(async () => [{
-      threadId: 'thread-1',
-      model: 'fixture-model',
-      completedAt: '2026-08-09T00:00:00.000Z',
-      usage: { ...emptyUsageSnapshot(), promptTokens: 7, totalTokens: 7, turns: 1 }
-    }])
+  it('preserves a manager HTTP 500 instead of falling back to JSONL history', async () => {
+    const loadUsageRecords = vi.fn(async () => [])
     const runtime = runtimeFixture({
-      list: vi.fn(async () => [{ id: 'thread-1', status: 'active', updatedAt: '2026-08-09T00:00:00.000Z' }]),
+      list: vi.fn(async () => []),
       loadUsageRecords,
       aggregateUsage: vi.fn(async () => {
-        throw new Error('Kun Service Manager request failed with HTTP 500: {"code":"internal_error","message":"Internal server error."}')
+        throw new ServiceManagerHttpError(500, 'internal_error', 'Internal server error.')
       })
     })
 
     const response = await usageJsonResponse(request('day', '2026-08-01', '2026-08-09'), runtime)
 
-    expect(response.status).toBe(200)
-    const body = JSON.parse(response.body) as { buckets: Array<Record<string, unknown>> }
-    expect(body.buckets).toContainEqual(expect.objectContaining({ input_tokens: 7 }))
+    expect(response.status).toBe(500)
+    expect(JSON.parse(response.body)).toEqual({ code: 'internal_error', message: 'Internal server error.' })
+    expect(loadUsageRecords).not.toHaveBeenCalled()
   })
 
   it('validates day queries before loading history and forwards the UTC range', async () => {
@@ -241,7 +249,11 @@ describe('usageJsonResponse', () => {
     const body = JSON.parse(response.body) as { buckets: Array<{ model: string }> }
 
     expect(response.status).toBe(200)
-    expect(list).toHaveBeenCalledWith({ includeArchived: true, includeSide: true })
+    expect(list).toHaveBeenCalledWith({
+      limit: 2_001,
+      includeArchived: true,
+      includeSide: true
+    })
     expect(body.buckets.map((bucket) => bucket.model)).toEqual([
       'deepseek-v4',
       'glm-5.2',

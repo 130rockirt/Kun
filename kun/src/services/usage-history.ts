@@ -3,6 +3,7 @@ import type { UsageEvent } from '../contracts/events.js'
 import { emptyUsageSnapshot } from '../contracts/usage.js'
 import type { ThreadRecord, ThreadSummary } from '../contracts/threads.js'
 import { diffUsage, hasUsage } from '../domain/usage.js'
+import { UsageIndexUnavailableError } from '../manager/usage-errors.js'
 import type {
   SessionStore,
   SessionUsageQueryOptions,
@@ -24,9 +25,31 @@ type UsageAttributionThread = Pick<
   turns: Array<Pick<ThreadRecord['turns'][number], 'id' | 'model' | 'providerId'>>
 }
 
+export class UsageFallbackLimitError extends Error {
+  readonly code: 'usage_fallback_limit_exceeded' | 'usage_fallback_timeout'
+
+  constructor(code: UsageFallbackLimitError['code'], message: string) {
+    super(message)
+    this.name = 'UsageFallbackLimitError'
+    this.code = code
+  }
+}
+
+export const USAGE_FALLBACK_MAX_THREADS = 2_000
+export const USAGE_FALLBACK_TIMEOUT_MS = 15_000
+
 export type UsageHistorySource = {
   threadService: {
-    list(options?: { includeArchived?: boolean; includeSide?: boolean }): Promise<ThreadSummary[]>
+    list(options?: {
+      limit?: number
+      includeArchived?: boolean
+      includeSide?: boolean
+    }): Promise<ThreadSummary[]>
+    listPage?(options?: {
+      limit?: number
+      includeArchived?: boolean
+      includeSide?: boolean
+    }): Promise<{ threads: ThreadSummary[]; hasMore: boolean }>
     get(threadId: string): Promise<ThreadRecord | null>
     getMetadata?(threadId: string): Promise<ThreadRecord | null>
   }
@@ -40,6 +63,7 @@ export type UsageHistorySource = {
 type ThreadHydrator = (threadId: string) => Promise<UsageAttributionThread | null>
 
 const usageRecordLoads = new WeakMap<object, Map<string, Promise<ThreadUsageRecord[]>>>()
+const fallbackLoads = new WeakMap<object, Map<string, Promise<ThreadUsageRecord[]>>>()
 const USAGE_FALLBACK_READ_CONCURRENCY = 4
 
 /**
@@ -198,8 +222,7 @@ async function loadUsageRecords(
   if (options.threadId && !explicitThread) return []
   const threadSummaries = options.threadId
     ? []
-    : (await source.threadService.list({ includeArchived: true, includeSide: true }))
-        .filter((thread) => thread.status !== 'deleted')
+    : await listFallbackThreadSummaries(source)
   const summariesById = new Map(threadSummaries.map((thread) => [thread.id, thread]))
 
   // Summaries omit `turns`, so per-turn provider/model attribution uses the
@@ -241,8 +264,11 @@ async function loadUsageRecords(
     indexedRaw = await source.sessionStore.loadUsageRecords(options)
   } catch (error) {
     if (!options.threadId && source.sessionStore.aggregateUsage) {
-      const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`usage_index_unavailable: ${message}`, { cause: error })
+      throw new UsageIndexUnavailableError(
+        'usage_index_unavailable',
+        `Usage index is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      )
     }
     return loadUsageFallback(source, explicitThread, threadSummaries, hydrateThread, options)
   }
@@ -277,17 +303,44 @@ async function loadUsageRecords(
   return records
 }
 
-function loadUsageFallback(
+async function listFallbackThreadSummaries(source: UsageHistorySource): Promise<ThreadSummary[]> {
+  const options = { limit: USAGE_FALLBACK_MAX_THREADS + 1, includeArchived: true, includeSide: true }
+  const page = source.threadService.listPage
+    ? await source.threadService.listPage(options)
+    : { threads: await source.threadService.list(options), hasMore: false }
+  if (page.hasMore || page.threads.length > USAGE_FALLBACK_MAX_THREADS) {
+    throw new UsageFallbackLimitError(
+      'usage_fallback_limit_exceeded',
+      `Usage JSONL fallback is limited to ${USAGE_FALLBACK_MAX_THREADS} threads.`
+    )
+  }
+  return page.threads.filter((thread) => thread.status !== 'deleted')
+}
+
+async function loadUsageFallback(
   source: UsageHistorySource,
   explicitThread: UsageAttributionThread | null,
   threadSummaries: ThreadSummary[],
   hydrateThread: ThreadHydrator,
   options: SessionUsageQueryOptions
 ): Promise<ThreadUsageRecord[]> {
-  const sources: UsageThreadSource[] = explicitThread
-    ? [{ id: explicitThread.id, thread: explicitThread }]
-    : threadSummaries.map((thread) => ({ id: thread.id, summary: thread }))
-  return loadUsageRecordsFromSources(source, sources, hydrateThread, options)
+  const key = explicitThread?.id ?? '__all_threads__'
+  const loads = fallbackLoads.get(source) ?? new Map<string, Promise<ThreadUsageRecord[]>>()
+  fallbackLoads.set(source, loads)
+  let load = loads.get(key)
+  if (!load) {
+    const sources: UsageThreadSource[] = explicitThread
+      ? [{ id: explicitThread.id, thread: explicitThread }]
+      : threadSummaries.map((thread) => ({ id: thread.id, summary: thread }))
+    const scanOptions = explicitThread ? { threadId: explicitThread.id } : {}
+    load = loadUsageRecordsFromSources(source, sources, hydrateThread, scanOptions, Date.now())
+      .finally(() => {
+        if (loads.get(key) === load) loads.delete(key)
+        if (loads.size === 0) fallbackLoads.delete(source)
+      })
+    loads.set(key, load)
+  }
+  return (await load).filter((record) => timestampInUsageRange(record.completedAt, options))
 }
 
 async function hydrateThreadsWithBounds(
@@ -312,13 +365,17 @@ async function loadUsageRecordsFromSources(
   source: UsageHistorySource,
   sources: UsageThreadSource[],
   hydrateThread: ThreadHydrator,
-  options: SessionUsageQueryOptions
+  options: SessionUsageQueryOptions,
+  startedAt: number
 ): Promise<ThreadUsageRecord[]> {
   const recordsBySource: ThreadUsageRecord[][] = Array.from({ length: sources.length })
   let nextIndex = 0
   const workerCount = Math.min(USAGE_FALLBACK_READ_CONCURRENCY, sources.length)
   await Promise.all(Array.from({ length: workerCount }, async () => {
     while (nextIndex < sources.length) {
+      if (Date.now() - startedAt >= USAGE_FALLBACK_TIMEOUT_MS) {
+        throw new UsageFallbackLimitError('usage_fallback_timeout', 'Usage JSONL fallback timed out.')
+      }
       const index = nextIndex
       nextIndex += 1
       recordsBySource[index] = await loadUsageRecordsForSource(

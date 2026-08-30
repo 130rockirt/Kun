@@ -4,6 +4,7 @@ import type {
   SessionUsageAggregateResponse
 } from '../contracts/usage-query.js'
 import type { SessionUsageRecord } from '../ports/session-store.js'
+import { UsageIndexUnavailableError } from './usage-errors.js'
 
 const USAGE_QUERY_TIMEOUT_MS = 8_000
 const USAGE_QUERY_RESULT_TTL_MS = 1_000
@@ -82,23 +83,26 @@ export class UsageQueryExecutor {
       })
       const timer = setTimeout(() => {
         void worker.terminate()
-        reject(new Error('usage_query_timeout'))
+        reject(new UsageIndexUnavailableError('usage_query_timeout', 'Usage index query timed out'))
       }, USAGE_QUERY_TIMEOUT_MS)
       worker.once('message', (message: WorkerOutput) => {
         clearTimeout(timer)
         void worker.terminate()
         if (message.ok) resolve(message.result)
-        else reject(new Error(`usage_index_unavailable: ${message.error}`))
+        else reject(new UsageIndexUnavailableError('usage_index_unavailable', message.error))
       })
       worker.once('error', (error) => {
         clearTimeout(timer)
         const message = error instanceof Error ? error.message : String(error)
-        reject(new Error(`usage_index_unavailable: ${message}`, { cause: error }))
+        reject(new UsageIndexUnavailableError('usage_index_unavailable', message, { cause: error }))
       })
       worker.once('exit', (code) => {
         if (code === 0) return
         clearTimeout(timer)
-        reject(new Error(`usage_index_unavailable: worker exited with code ${code}`))
+        reject(new UsageIndexUnavailableError(
+          'usage_index_unavailable',
+          `Usage query worker exited with code ${code}`
+        ))
       })
     })
   }
