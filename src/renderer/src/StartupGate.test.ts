@@ -7,6 +7,7 @@ import type {
   DesktopStartupStatePayload
 } from '@shared/desktop-startup-state'
 import { StartupGate, STARTUP_STATE_TIMEOUT_MS } from './StartupGate'
+import { KUN_STARTUP_VARIANTS } from './components/startup/kun-startup-variants'
 
 const appMock = vi.hoisted(() => ({
   prepareWorkbenchApp: vi.fn<() => Promise<void>>(async () => undefined)
@@ -219,6 +220,10 @@ describe('StartupGate', () => {
     const artwork = container.querySelector('[data-testid="kun-startup-artwork"]')
     expect(artwork?.getAttribute('aria-hidden')).toBe('true')
     expect(artwork?.getAttribute('data-motion')).toBe('running')
+    const startupVariant = artwork?.getAttribute('data-variant')
+    expect(KUN_STARTUP_VARIANTS).toContain(startupVariant)
+    expect(container.querySelector('.kun-startup')?.getAttribute('data-startup-variant'))
+      .toBe(startupVariant)
     expect(container.querySelector('[data-testid="kun-startup-kun"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="kun-startup-bird"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="kun-startup-orbit"]')).not.toBeNull()
@@ -239,11 +244,16 @@ describe('StartupGate', () => {
     renderGate({})
     await act(async () => undefined)
     expect(container.textContent).toContain('Preparing Kun desktop...')
+    const startupVariant = container
+      .querySelector('[data-testid="kun-startup-artwork"]')
+      ?.getAttribute('data-variant')
 
     await act(async () => {
       api.listeners.forEach((listener) => listener(phasePayload('runtime_starting')))
     })
     expect(container.textContent).toContain('Starting Kun runtime...')
+    expect(container.querySelector('[data-testid="kun-startup-artwork"]')?.getAttribute('data-variant'))
+      .toBe(startupVariant)
     expect(container.querySelector('[data-testid="workbench-app"]')).toBeNull()
 
     await act(async () => {

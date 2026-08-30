@@ -1,0 +1,63 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
+import { KunStartupArtwork } from './KunStartupArtwork'
+import {
+  KUN_STARTUP_VARIANT_CONFIG,
+  KUN_STARTUP_VARIANTS,
+  selectKunStartupVariant,
+  type KunStartupVariant
+} from './kun-startup-variants'
+
+describe('selectKunStartupVariant', () => {
+  it.each<[number, KunStartupVariant]>([
+    [0, 'signal'],
+    [0.199999, 'signal'],
+    [0.2, 'wave'],
+    [0.399999, 'wave'],
+    [0.4, 'dash'],
+    [0.599999, 'dash'],
+    [0.6, 'focus'],
+    [0.799999, 'focus'],
+    [0.8, 'cast'],
+    [0.999999, 'cast']
+  ])('maps random value %s to %s', (randomValue, expected) => {
+    expect(selectKunStartupVariant(randomValue)).toBe(expected)
+  })
+
+  it('clamps out-of-contract values to a stable endpoint', () => {
+    expect(selectKunStartupVariant(-1)).toBe('signal')
+    expect(selectKunStartupVariant(Number.NaN)).toBe('signal')
+    expect(selectKunStartupVariant(1)).toBe('cast')
+    expect(selectKunStartupVariant(Number.POSITIVE_INFINITY)).toBe('signal')
+  })
+})
+
+describe('KunStartupArtwork variants', () => {
+  it.each(KUN_STARTUP_VARIANTS)('renders the %s avatar resource', (variant) => {
+    const html = renderToStaticMarkup(createElement(KunStartupArtwork, {
+      motion: 'running',
+      variant
+    }))
+
+    expect(html).toContain(`data-variant="${variant}"`)
+    expect(html).toContain('data-testid="kun-startup-artwork"')
+    expect(html).toContain('data-testid="kun-startup-kun"')
+    expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG[variant].avatarUrl}"`)
+  })
+
+  it('defaults to the signal variant for existing callers', () => {
+    const html = renderToStaticMarkup(createElement(KunStartupArtwork, { motion: 'paused' }))
+
+    expect(html).toContain('data-variant="signal"')
+    expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG.signal.avatarUrl}"`)
+  })
+
+  it('keeps every configured avatar resource unique', () => {
+    const avatarUrls = KUN_STARTUP_VARIANTS.map(
+      (variant) => KUN_STARTUP_VARIANT_CONFIG[variant].avatarUrl
+    )
+
+    expect(new Set(avatarUrls).size).toBe(KUN_STARTUP_VARIANTS.length)
+  })
+})

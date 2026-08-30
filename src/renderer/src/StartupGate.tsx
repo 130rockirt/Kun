@@ -5,6 +5,7 @@ import type {
 } from '@shared/desktop-startup-state'
 import { requestApplicationReload } from './lib/application-reload'
 import { KunStartupArtwork } from './components/startup/KunStartupArtwork'
+import { selectKunStartupVariant } from './components/startup/kun-startup-variants'
 import {
   mergeStartupPhase,
   startupPhaseLabel,
@@ -109,6 +110,7 @@ export function StartupGate({
   const [startupAttempt, setStartupAttempt] = useState(0)
   const [recoveryActionError, setRecoveryActionError] = useState<string | null>(null)
   const [boot, setBoot] = useState<WorkbenchBootState>({ status: 'idle' })
+  const [startupVariant] = useState(selectKunStartupVariant)
   const bootRunRef = useRef(0)
 
   useEffect(() => {
@@ -272,9 +274,13 @@ export function StartupGate({
   const recovering = phase === 'recovery_required'
   if (recovering) {
     return (
-      <main className="kun-startup" data-recovery="true">
+      <main
+        className="kun-startup"
+        data-recovery="true"
+        data-startup-variant={startupVariant}
+      >
         <section className="kun-startup__content" role="alert" aria-live="assertive">
-          <KunStartupArtwork motion="paused" />
+          <KunStartupArtwork motion="paused" variant={startupVariant} />
           <div className="kun-startup__copy">
             <h1 className="kun-startup__title">{startupPhaseLabel(phase)}</h1>
             {phaseDetail ? <p className="kun-startup__detail">{phaseDetail}</p> : null}
@@ -293,14 +299,18 @@ export function StartupGate({
     ? 'Opening your workspace...'
     : startupPhaseLabel(phase)
   return (
-    <main className="kun-startup" data-recovery="false">
+    <main
+      className="kun-startup"
+      data-recovery="false"
+      data-startup-variant={startupVariant}
+    >
       <section
         className="kun-startup__content"
         role="status"
         aria-live="polite"
         aria-busy="true"
       >
-        <KunStartupArtwork motion="running" />
+        <KunStartupArtwork motion="running" variant={startupVariant} />
         <div className="kun-startup__copy">
           <h1 className="kun-startup__title">{statusTitle}</h1>
           {phaseDetail ? <p className="kun-startup__detail">{phaseDetail}</p> : null}

@@ -1,23 +1,33 @@
 import type { ReactElement } from 'react'
-import kunAvatarUrl from '../../assets/startup/kun-startup-avatar.webp'
 import kunBirdUrl from '../../assets/startup/kun-startup-bird.webp'
 import kunWordmarkUrl from '../../assets/startup/kun-startup-wordmark.webp'
+import {
+  KUN_STARTUP_VARIANT_CONFIG,
+  type KunStartupVariant
+} from './kun-startup-variants'
 
 export type KunStartupMotion = 'running' | 'paused'
 
 export function KunStartupArtwork({
-  motion
+  motion,
+  variant = 'signal'
 }: {
   motion: KunStartupMotion
+  variant?: KunStartupVariant
 }): ReactElement {
+  const variantConfig = KUN_STARTUP_VARIANT_CONFIG[variant]
+
   return (
     <div
       className="kun-startup__artwork kun-startup__motion"
       data-motion={motion}
+      data-variant={variant}
       data-testid="kun-startup-artwork"
       aria-hidden="true"
     >
       <span className="kun-startup-artwork__ground-glow kun-startup__motion" />
+      <span className="kun-startup-artwork__variant-aura kun-startup__motion" />
+      <span className="kun-startup-artwork__variant-streaks kun-startup__motion" />
 
       <div
         className="kun-startup-artwork__orbit"
@@ -78,11 +88,12 @@ export function KunStartupArtwork({
       <span className="kun-startup-artwork__character-wrap kun-startup__motion">
         <img
           className="kun-startup-artwork__character"
-          src={kunAvatarUrl}
+          src={variantConfig.avatarUrl}
           width="768"
           height="768"
           alt=""
           draggable={false}
+          data-variant={variant}
           data-testid="kun-startup-kun"
         />
       </span>

@@ -10,4 +10,15 @@ describe('Kun startup motion styles', () => {
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.kun-startup__motion\s*{[\s\S]*?animation: none !important;/)
   })
+
+  it('gives every randomized scene a distinct motion profile', async () => {
+    const css = await readStylesheetBundle(new URL('./startup-gate.css', import.meta.url))
+
+    expect(css).toContain('animation: kun-startup-character-breathe 3.6s')
+    for (const variant of ['wave', 'dash', 'focus', 'cast']) {
+      expect(css).toContain(`.kun-startup__artwork[data-variant='${variant}']`)
+      expect(css).toContain(`animation: kun-startup-character-${variant}`)
+      expect(css).toContain(`[data-startup-variant='${variant}'] .kun-startup__progress-indicator`)
+    }
+  })
 })
