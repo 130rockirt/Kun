@@ -101,6 +101,8 @@ export abstract class DelegationRuntimeBase {
   private readonly childAdmission = new ChildAdmissionScheduler(
     () => this.enabled() ? this.parallelLimit : 0
   )
+  /** Active executions that currently own, or borrow, child admission. */
+  private readonly activeAdmissionOwners = new Map<string, { fastContext: boolean }>()
   protected childSeq = 0
   protected readonly childSeqById = new Map<string, number>()
   /**
@@ -188,6 +190,7 @@ export abstract class DelegationRuntimeBase {
     parentThreadId: string
     signal: AbortSignal
     queueTimeoutMs?: number
+    borrowGlobal?: boolean
   }): Promise<SlotLease> {
     return this.childAdmission.acquire(input)
   }
@@ -453,12 +456,15 @@ export abstract class DelegationRuntimeBase {
   }): Promise<ChildRunRecord> {
     let record = args.state.record
     let releaseSlot: SlotLease | undefined
+    const parentAdmission = this.activeAdmissionOwners.get(args.parentThreadId)
+    const borrowGlobal = args.fastContext && parentAdmission?.fastContext === false
     try {
       releaseSlot = await this.acquireSlot({
         fastContext: args.fastContext,
         parentThreadId: args.parentThreadId,
         signal: args.signal,
-        queueTimeoutMs: args.queueTimeoutMs
+        queueTimeoutMs: args.queueTimeoutMs,
+        borrowGlobal
       })
     } catch (error) {
       if (error instanceof ChildQueueTimeoutError) {
@@ -488,6 +494,7 @@ export abstract class DelegationRuntimeBase {
     }
 
     const startedAt = this.now()
+    this.activeAdmissionOwners.set(record.id, { fastContext: args.fastContext })
     let unsubscribeActivity: (() => void) | undefined
     let usageBeforeRun: ChildRunRecord['usage'] | undefined
     try {
@@ -621,6 +628,7 @@ export abstract class DelegationRuntimeBase {
       } catch (error) {
         console.warn('[kun] child activity subscription cleanup failed:', error)
       } finally {
+        this.activeAdmissionOwners.delete(record.id)
         releaseSlot?.()
       }
     }

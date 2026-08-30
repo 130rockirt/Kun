@@ -368,6 +368,10 @@ export abstract class AgentLoopBase {
   protected async dispatchToolCalls(input: ToolDispatchInput): Promise<ToolDispatchOutcome> {
     const context = createToolExecutionContext(input, {
       memoryEnabled: Boolean(this.opts.memoryStore),
+      ...(this.opts.allowedModelProviderIds
+        ? { allowedModelProviderIds: this.opts.allowedModelProviderIds }
+        : {}),
+      ...(this.opts.allowedModelIds ? { allowedModelIds: this.opts.allowedModelIds } : {}),
       ...(this.opts.allowedProviderIds ? { allowedProviderIds: this.opts.allowedProviderIds } : {}),
       ...(this.opts.allowedSkillIds ? { allowedSkillIds: this.opts.allowedSkillIds } : {}),
       ...(this.opts.allowedReadPaths ? { allowedReadPaths: this.opts.allowedReadPaths } : {}),

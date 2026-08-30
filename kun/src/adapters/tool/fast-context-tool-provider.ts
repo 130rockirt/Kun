@@ -65,6 +65,12 @@ export function buildFastContextToolProvider(
     kind: 'delegation',
     enabled: true,
     available: true,
+    effects: {
+      network: false,
+      externalWrite: false,
+      processExecution: false,
+      guiAutomation: false
+    },
     tools: [LocalToolHost.defineTool({
       name: FAST_CONTEXT_TOOL_NAME,
       description: FAST_CONTEXT_DESCRIPTION,
@@ -316,18 +322,14 @@ function fastContextPrompt(tasks: readonly FastContextTask[]): string {
 function securitySnapshot(workspace: string, context: ToolHostContext) {
   return {
     sandboxRoot: workspace,
-    ...(context.allowedProviderIds ? { allowedProviderIds: [...context.allowedProviderIds] } : {}),
-    ...(context.allowedToolNames ? { allowedToolNames: [...context.allowedToolNames] } : {}),
-    ...(context.allowedSkillIds ? { allowedSkillIds: [...context.allowedSkillIds] } : {}),
-    // A Fast Context child never inherits full-access filesystem reach. An
-    // explicit read scope remains a parent upper bound; otherwise `.` pins
-    // every source tool to the captured workspace root.
+    // The retrieval child is an opaque implementation of the already-authorized
+    // fast_context call. It receives no caller tool/provider catalog: its own
+    // profile and ToolHost wrapper enforce exactly grep, glob, and read.
+    allowedModelProviderIds: context.allowedModelProviderIds
+      ? [...context.allowedModelProviderIds]
+      : undefined,
+    allowedModelIds: context.allowedModelIds ? [...context.allowedModelIds] : undefined,
     allowedReadPaths: context.allowedReadPaths ? [...context.allowedReadPaths] : ['.'],
-    ...(context.allowedWritePaths ? { allowedWritePaths: [...context.allowedWritePaths] } : {}),
-    ...(context.allowedArtifactIds ? { allowedArtifactIds: [...context.allowedArtifactIds] } : {}),
-    ...(context.blockedProviderIds ? { blockedProviderIds: [...context.blockedProviderIds] } : {}),
-    ...(context.blockedToolNames ? { blockedToolNames: [...context.blockedToolNames] } : {}),
-    ...(context.blockedSkillIds ? { blockedSkillIds: [...context.blockedSkillIds] } : {}),
     memoryEnabled: false
   }
 }

@@ -96,6 +96,10 @@ export function createRuntimeRegistry(
             : {}),
           allowSdkBuiltins: false,
           toolContextBoundary: {
+            ...(child.allowedModelProviderIds
+              ? { allowedModelProviderIds: child.allowedModelProviderIds }
+              : {}),
+            ...(child.allowedModelIds ? { allowedModelIds: child.allowedModelIds } : {}),
             ...(child.allowedProviderIds ? { allowedProviderIds: child.allowedProviderIds } : {}),
             ...(child.allowedToolNames ? { allowedToolNames: child.allowedToolNames } : {}),
             ...(child.allowedSkillIds ? { allowedSkillIds: child.allowedSkillIds } : {}),
@@ -178,6 +182,10 @@ export function createRuntimeRegistry(
             ? { instructionRuntime: services.instructionRuntime }
             : {}),
           toolContextBoundary: {
+            ...(child.allowedModelProviderIds
+              ? { allowedModelProviderIds: child.allowedModelProviderIds }
+              : {}),
+            ...(child.allowedModelIds ? { allowedModelIds: child.allowedModelIds } : {}),
             ...(child.allowedProviderIds ? { allowedProviderIds: child.allowedProviderIds } : {}),
             ...(child.allowedToolNames ? { allowedToolNames: child.allowedToolNames } : {}),
             ...(child.allowedSkillIds ? { allowedSkillIds: child.allowedSkillIds } : {}),

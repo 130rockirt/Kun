@@ -303,8 +303,8 @@ export type SubagentSurface = z.infer<typeof SubagentSurface>
  * Tools a `readOnly` subagent may call. The list is enforced twice: the
  * child loop advertises only these names (schema filter) and the
  * capability registry re-checks them at execute time (backstop). Keep it
- * to side-effect-free investigation tools — no bash/edit/write, and no
- * nested `delegate_task`.
+ * to side-effect-free investigation tools, including the host-owned
+ * `fast_context` retriever — no bash/edit/write, and no nested `delegate_task`.
  */
 /**
  * Host-enforced upper bound for read-only subagents. Profile `allowedTools`
@@ -317,6 +317,7 @@ export const SUBAGENT_READ_ONLY_TOOL_NAMES = [
   'glob',
   'ls',
   'repo_map',
+  'fast_context',
   'web_fetch',
   'web_search'
 ] as const

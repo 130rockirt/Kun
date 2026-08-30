@@ -287,6 +287,66 @@ it('fails a queued child at its deadline without leaking the slot or FIFO waiter
     await expect(second).resolves.toMatchObject({ status: 'completed' })
   })
 
+  it('lets nested Fast Context borrow an active parent slot at maxParallel one', async () => {
+    let runtime: DelegationRuntime
+    const started: string[] = []
+    runtime = createRuntime({
+      maxParallel: 1,
+      executor: async (input) => {
+        started.push(input.prompt)
+        if (input.prompt === 'outer') {
+          const nested = await runtime.runChild({
+            parentThreadId: input.childId,
+            parentTurnId: input.parentTurnId,
+            launcher: 'fast_context',
+            prompt: 'nested-fast-context',
+            fastContext: true,
+            queueTimeoutMs: 100,
+            signal: input.signal
+          })
+          expect(nested).toMatchObject({ status: 'completed' })
+        }
+        return { summary: input.prompt }
+      }
+    })
+
+    await expect(run(runtime, 'outer', new AbortController().signal))
+      .resolves.toMatchObject({ status: 'completed' })
+    expect(started).toEqual(['outer', 'nested-fast-context'])
+    await expect(runtime.diagnostics()).resolves.toMatchObject({ active: 0 })
+  })
+
+  it('does not let a Fast Context child recursively borrow its own slot', async () => {
+    let runtime: DelegationRuntime
+    runtime = createRuntime({
+      maxParallel: 1,
+      executor: async (input) => {
+        if (input.prompt === 'outer-fast') {
+          const nested = await runtime.runChild({
+            parentThreadId: input.childId,
+            parentTurnId: input.parentTurnId,
+            launcher: 'fast_context',
+            prompt: 'recursive-fast',
+            fastContext: true,
+            queueTimeoutMs: 25,
+            signal: input.signal
+          })
+          expect(nested).toMatchObject({
+            status: 'failed',
+            failure: { code: 'child_queue_timeout' }
+          })
+        }
+        return { summary: input.prompt }
+      }
+    })
+
+    await expect(run(runtime, 'outer-fast', new AbortController().signal, undefined, {
+      fastContext: true,
+      parentThreadId: 'parent-fast'
+    })).resolves.toMatchObject({ status: 'completed' })
+    await expect(runtime.diagnostics()).resolves.toMatchObject({ active: 0 })
+  })
+
   it('enforces one global ceiling across ordinary and Fast Context lanes', async () => {
     const gates = {
       ordinary: deferred<void>(),

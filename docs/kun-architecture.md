@@ -133,8 +133,10 @@ provider 原生缓存字段；这些历史数据只能作为旧实现的证据�
 
 ## Subagent 召回与派发
 
-`delegate_task` 是唯一创建 child run 的入口，`list_subagent_profiles` 是主代理专用的
-只读发现工具。开启“使用现有代理”时，发现结果只按页返回当前 workspace 和 product
+`delegate_task` 是创建普通 child run 的唯一模型入口，`list_subagent_profiles` 是主代理专用的
+只读发现工具。`fast_context` 是例外的 host-owned 全局只读检索能力：支持 Kun ToolHost
+的普通 agent、subagent 和 Graph Worker 都可以启动它的受管 retrieval child，但这不会
+开放普通 child fan-out。开启“使用现有代理”时，发现结果只按页返回当前 workspace 和 product
 surface 的有效 profile；`delegate_task` 只公开可选 `profile`，省略时由 Kun 在有效
 目录中自动路由。该模式不向模型公开 `custom_agent`，宿主也会拒绝旧客户端或手工请求
 携带的该字段。关闭该开关时不读取或返回注入目录，发现结果只描述一次性 custom
@@ -149,7 +151,11 @@ body），也可按精确 ID 显式选择，并出现在设置页与工作台右
 `toolPolicy: inherit` 时可在父能力快照内使用写工具。`omit_base_prompt: true`
 时 child 只用 role prompt，不再 prepend Kun base。宿主仍强制禁用 Skills、
 屏蔽 model/provider/reasoning 覆盖，并阻止嵌套 `delegate_task` /
-`generate_subagent`。
+`generate_subagent`。`fast_context` 在普通 profile allowlist 收窄后由宿主统一补入，
+但父 capability snapshot、显式 tool/provider deny 和 Lab 总开关仍优先。它的内部 child
+只获得 `grep` / `glob` / `read` 和继承的 read scope；嵌套调用借用当前 subagent 的
+全局并发位，同时仍受独立 Fast Context lane 串行约束。provider-native runtime 若声明
+`kunTools: false`（当前 Antigravity CLI）则整个回合都没有 Kun 独占工具，不会静默换模型。
 
 Subagent 目录按产品 surface 分层。`shared` 是 Code、Work、Design 强制继承的
 基础池，其余 profile 可以属于一个或多个 `code` / `write` / `design` surface；

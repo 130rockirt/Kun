@@ -59,6 +59,7 @@ import {
 import { buildFastContextEvidencePack } from './fast-context-evidence.js'
 import { createFastContextToolHost } from './fast-context-tool-host.js'
 import { resolveChildEpisodeLimits } from './child-episode-limits.js'
+import { withGlobalSubagentTools } from './subagent-global-tool-policy.js'
 
 export type ChildDelegatedRuntimeFactory = (input: {
   threads: ThreadService
@@ -69,6 +70,8 @@ export type ChildDelegatedRuntimeFactory = (input: {
   ids: { next(prefix: string): string }
   prefix: ImmutablePrefix
   toolPolicy: 'readOnly' | 'inherit'
+  allowedModelProviderIds?: readonly string[]
+  allowedModelIds?: readonly string[]
   allowedToolNames?: readonly string[]
   allowedProviderIds?: readonly string[]
   allowedSkillIds?: readonly string[]
@@ -199,10 +202,10 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ids,
       nowIso
     })
-    // Every allow-list is an upper bound. readOnly is host-defined and cannot
-    // be widened by a profile's allowedTools; the parent turn's allow-list is
-    // intersected last, so a child can only lose capabilities.
-    const forcedAllowedToolNames = intersectDefinedLists(
+    // Every ordinary allow-list is an upper bound. Global host-owned child
+    // capabilities are added only after that narrowing and remain subject to
+    // the parent snapshot plus explicit tool/provider deny-lists.
+    const ordinaryAllowedToolNames = intersectDefinedLists(
       input.toolPolicy === 'readOnly' ? SUBAGENT_READ_ONLY_TOOL_NAMES : undefined,
       input.fastContext ? ['grep', 'glob', 'read'] : undefined,
       input.allowedTools,
@@ -216,6 +219,14 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(input.security?.blockedProviderIds ?? []),
       ...(input.blockedMcpServers ?? []).map((serverId) => `mcp:${serverId}`)
     ])
+    const forcedAllowedToolNames = withGlobalSubagentTools({
+      allowedToolNames: ordinaryAllowedToolNames,
+      parentAllowedToolNames: input.security?.allowedToolNames,
+      blockedToolNames,
+      parentAllowedProviderIds: input.security?.allowedProviderIds,
+      parentBlockedProviderIds: blockedProviderIds,
+      fastContext: input.fastContext === true
+    })
     // A custom system prompt augments the base prefix (kun tool/safety
     // conventions stay) on a distinct fingerprint, so same-agent calls still
     // hit the prompt cache; cross-agent reuse is intentionally given up.
@@ -254,6 +265,12 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ids,
       prefix: childPrefix,
       toolPolicy: input.toolPolicy,
+      ...(input.security?.allowedModelProviderIds
+        ? { allowedModelProviderIds: input.security.allowedModelProviderIds }
+        : {}),
+      ...(input.security?.allowedModelIds
+        ? { allowedModelIds: input.security.allowedModelIds }
+        : {}),
       ...(forcedAllowedToolNames ? { allowedToolNames: forcedAllowedToolNames } : {}),
       ...(input.security?.allowedProviderIds
         ? { allowedProviderIds: input.security.allowedProviderIds }
@@ -297,6 +314,12 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ids,
       nowIso,
       ...(forcedAllowedToolNames ? { forcedAllowedToolNames } : {}),
+      ...(input.security?.allowedModelProviderIds
+        ? { allowedModelProviderIds: input.security.allowedModelProviderIds }
+        : {}),
+      ...(input.security?.allowedModelIds
+        ? { allowedModelIds: input.security.allowedModelIds }
+        : {}),
       ...(input.security?.allowedProviderIds ? { allowedProviderIds: input.security.allowedProviderIds } : {}),
       ...(input.security?.allowedSkillIds ? { allowedSkillIds: input.security.allowedSkillIds } : {}),
       ...(allowedReadPaths

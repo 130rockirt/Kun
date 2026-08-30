@@ -86,6 +86,8 @@ export interface CursorSdkRuntimeFactoryDeps extends Omit<
   nowIso?: () => string
   toolContextBoundary?: Pick<
     ToolHostContext,
+    | 'allowedModelProviderIds'
+    | 'allowedModelIds'
     | 'allowedProviderIds'
     | 'allowedToolNames'
     | 'allowedSkillIds'

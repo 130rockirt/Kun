@@ -29,6 +29,8 @@ export class ChildAdmissionScheduler {
     parentThreadId: string
     signal: AbortSignal
     queueTimeoutMs?: number
+    /** Nested Fast Context borrows the already-admitted parent child slot. */
+    borrowGlobal?: boolean
   }): Promise<SlotLease> {
     const queuedAt = Date.now()
     const lane = input.fastContext
@@ -37,6 +39,7 @@ export class ChildAdmissionScheduler {
         )
       : await this.ordinary.acquire(input.signal, input.queueTimeoutMs)
     try {
+      if (input.borrowGlobal) return lane
       const remaining = input.queueTimeoutMs === undefined
         ? undefined
         : Math.max(0, input.queueTimeoutMs - (Date.now() - queuedAt))

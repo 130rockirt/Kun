@@ -113,6 +113,10 @@ export type AgentLoopOptions = {
    * tools — enforced at both the schema (listTools) and execute layers.
    */
   forcedAllowedToolNames?: readonly string[]
+  /** Model-provider allow-list inherited from the parent turn for delegated loops. */
+  allowedModelProviderIds?: readonly string[]
+  /** Model allow-list inherited from the parent turn for delegated loops. */
+  allowedModelIds?: readonly string[]
   /** Provider allow-list inherited from the parent turn for delegated loops. */
   allowedProviderIds?: readonly string[]
   /** Skill allow-list captured at the delegated child boundary. */
