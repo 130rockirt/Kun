@@ -122,11 +122,6 @@ export function registerExtensionViewIpcHandlers(
       payload
     )
     const identity = parseQualifiedContributionId(request.contributionId)
-    const view = await options.descriptors.resolveView(
-      identity.extensionId,
-      identity.localId,
-      request.workspaceRoot
-    )
     await workbenchEnvironmentSync.syncToRuntime()
     if (request.retryHost) {
       const retried = await options.runtimeRequest(
@@ -146,11 +141,29 @@ export function registerExtensionViewIpcHandlers(
     if (!result.ok) throw runtimeResultError(result)
     const runtimeSession = parseRuntimeViewSession(result.body)
     if (!runtimeSession) throw new Error('Kun returned an invalid extension View Session.')
+    // Runtime activation may have waited for an in-flight version, permission,
+    // or enablement change. Resolve the descriptor afterwards so Main never
+    // binds local resources or external hosts from the pre-activation state.
+    const view = await options.descriptors.resolveView(
+      identity.extensionId,
+      identity.localId,
+      request.workspaceRoot
+    ).catch((error: unknown) => throwAfterRuntimeViewSessionRollback(
+      options,
+      runtimeSession.sessionId,
+      error
+    ))
     if (
       runtimeSession.extensionId !== identity.extensionId ||
       runtimeSession.extensionVersion !== view.extensionVersion ||
       runtimeSession.contributionId !== request.contributionId
-    ) throw new Error('Kun returned a mismatched extension View Session.')
+    ) {
+      await throwAfterRuntimeViewSessionRollback(
+        options,
+        runtimeSession.sessionId,
+        new Error('Kun returned a mismatched extension View Session.')
+      )
+    }
     const record = options.viewSessions.create({
       sessionId: runtimeSession.sessionId,
       runtimeSessionId: runtimeSession.sessionId,
@@ -584,4 +597,16 @@ export function registerExtensionViewIpcHandlers(
       stopDisposeObserver()
     }
   }
+}
+
+async function throwAfterRuntimeViewSessionRollback(
+  options: RegisterExtensionIpcHandlersOptions,
+  runtimeSessionId: string,
+  error: unknown
+): Promise<never> {
+  await options.runtimeRequest(
+    `/v1/extensions/view-sessions/${encodeURIComponent(runtimeSessionId)}`,
+    'DELETE'
+  ).catch(() => undefined)
+  throw error
 }

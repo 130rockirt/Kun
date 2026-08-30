@@ -503,6 +503,11 @@ export class ExtensionPackageManager {
     )
   }
 
+  /** Wait for the package or permission transaction currently fencing this extension. */
+  async waitForPendingOperation(extensionId: string): Promise<void> {
+    await (this.operations.get(extensionId) ?? Promise.resolve())
+  }
+
   private async resolveForActivationSerialized(
     extensionId: string,
     workspaceKey?: string

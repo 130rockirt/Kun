@@ -45,8 +45,16 @@ vi.mock('electron', () => ({
   }
 }))
 
+vi.mock('../main-window', () => ({
+  trustedWorkbenchRendererUrl: () => 'http://127.0.0.1:5173/index.html'
+}))
+
 export function fixture() {
-  const mainFrame = { processId: 100, routingId: 200 }
+  const mainFrame = {
+    processId: 100,
+    routingId: 200,
+    url: 'http://127.0.0.1:5173/index.html'
+  }
   let mainDestroyedListener: (() => void) | undefined
   const mainContents = {
     id: 1,
