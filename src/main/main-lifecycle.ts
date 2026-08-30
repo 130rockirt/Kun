@@ -295,6 +295,9 @@ export function installDevPreviewWebviewGuards(options: {
 }): void {
   installWebviewSecurityGuards({
     app,
+    existingWebContents: mainState.mainWindow && !mainState.mainWindow.isDestroyed()
+      ? [mainState.mainWindow.webContents]
+      : [],
     sessions: extensionViewSessions,
     extensionPreloadPath: resolveNamedPreloadPath(__dirname, 'extension-view'),
     assertExtensionPartitionPrepared: (record) => options.viewProtocols.assertPrepared(record),
