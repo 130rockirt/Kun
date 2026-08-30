@@ -18,12 +18,27 @@ type ParsedTask = {
   checkboxStatus: 'pending' | 'completed'
 }
 
+type FenceState = { marker: '`' | '~'; length: number }
+
 const HEADING_RE = /^\s{0,3}(#{2,3})\s+(.+?)\s*#*\s*$/
 const TASK_RE = /^\s*[-*+]\s+\[([ xX])\]\s+(.+?)\s*$/
-const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/
 
-function normalizePath(value: string): string {
+export function normalizePlanBoardPath(value: string): string {
   return value.replaceAll('\\', '/').replace(/\/+/g, '/').replace(/^\.\//, '')
+}
+
+function advanceFence(line: string, current: FenceState | null): {
+  fence: FenceState | null
+  fenceLine: boolean
+} {
+  const match = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+  if (!match) return { fence: current, fenceLine: false }
+  const marker = match[1] ?? ''
+  const trailing = match[2] ?? ''
+  const char = marker[0] as '`' | '~'
+  if (!current) return { fence: { marker: char, length: marker.length }, fenceLine: true }
+  const closes = char === current.marker && marker.length >= current.length && /^\s*$/.test(trailing)
+  return { fence: closes ? null : current, fenceLine: closes }
 }
 
 function parseTask(line: string): ParsedTask | null {
@@ -49,11 +64,11 @@ export function buildPlanBoardCards(input: {
   const cards: PlanBoardCard[] = []
   const lines = input.markdown.split(/\r?\n/)
   const lineEndingLength = input.markdown.includes('\r\n') ? 2 : 1
-  const path = normalizePath(input.relativePath)
+  const path = normalizePlanBoardPath(input.relativePath)
   const planTodos = (input.todos?.items ?? []).filter((item) =>
     item.source?.kind === 'plan' &&
     item.source.planId === input.planId &&
-    normalizePath(item.source.relativePath) === path
+    normalizePlanBoardPath(item.source.relativePath) === path
   )
   const byOrdinal = new Map<number, ThreadTodoItem>()
   for (const item of planTodos) {
@@ -63,18 +78,15 @@ export function buildPlanBoardCards(input: {
   let sectionTitle: string | null = null
   let ordinal = 0
   let offset = 0
-  let fence: string | null = null
+  let fence: FenceState | null = null
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     const line = lines[lineIndex] ?? ''
-    const fenceMatch = FENCE_RE.exec(line)
-    if (fenceMatch) {
-      const marker = fenceMatch[1] ?? ''
-      if (!fence) fence = marker[0] ?? null
-      else if (marker[0] === fence) fence = null
+    const fenceState = advanceFence(line, fence)
+    fence = fenceState.fence
+    if (fenceState.fenceLine || fence) {
       offset += line.length + (lineIndex < lines.length - 1 ? lineEndingLength : 0)
       continue
     }
-    if (!fence) {
       const heading = HEADING_RE.exec(line)
       if (heading) sectionTitle = heading[2]?.trim() || null
       const task = parseTask(line)
@@ -94,7 +106,6 @@ export function buildPlanBoardCards(input: {
         })
         ordinal += 1
       }
-    }
     offset += line.length + (lineIndex < lines.length - 1 ? lineEndingLength : 0)
   }
   return cards

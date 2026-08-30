@@ -33,6 +33,15 @@ describe('plan todo synchronization', () => {
     ])
   })
 
+  it('requires a matching fence marker, length, and whitespace-only close', () => {
+    const items = extract([
+      '````md', '- [ ] hidden one', '```', '- [ ] hidden two',
+      '```` not-a-close', '- [ ] hidden three', '````',
+      '~~~', '- [ ] hidden tilde', '~~~', '- [ ] visible'
+    ].join('\r\n'))
+    expect(items.map((item) => item.content)).toEqual(['visible'])
+  })
+
   it.each([
     ['completed markdown wins', 'completed', 'in_progress', 'document_edit', 'completed'],
     ['in-progress state survives an unchecked document edit', 'pending', 'in_progress', 'document_edit', 'in_progress'],

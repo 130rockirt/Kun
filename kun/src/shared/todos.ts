@@ -16,6 +16,8 @@ type ParsedTaskLine = {
   content: string
 }
 
+type FenceState = { marker: '`' | '~'; length: number }
+
 export type PlanTodoSyncMode = 'document_edit' | 'plan_write'
 
 export type MergePlanTodosOptions = {
@@ -62,7 +64,7 @@ export function extractPlanTodos(input: {
   const items: ExtractedPlanTodo[] = []
   const lines = input.markdown.split(/\r?\n/)
   let ordinal = 0
-  let fence: string | null = null
+  let fence: FenceState | null = null
   for (const line of lines) {
     fence = nextFence(line, fence)
     if (fence) continue
@@ -134,7 +136,7 @@ export function patchPlanTodoStatus(
   const lines = markdown.split(/\r?\n/)
   const lineEnding = markdown.includes('\r\n') ? '\r\n' : '\n'
   const tasks: Array<{ line: string; lineIndex: number; task: ParsedTaskLine }> = []
-  let fence: string | null = null
+  let fence: FenceState | null = null
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     const line = lines[lineIndex] ?? ''
     fence = nextFence(line, fence)
@@ -189,12 +191,18 @@ function samePlanSource(
     normalizePlanRelativePath(source.relativePath) === normalizePlanRelativePath(target.relativePath)
 }
 
-function nextFence(line: string, current: string | null): string | null {
-  const match = /^\s*(`{3,}|~{3,})/.exec(line)
+function nextFence(line: string, current: FenceState | null): FenceState | null {
+  const match = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line)
   if (!match) return current
   const marker = match[1] ?? ''
-  if (!current) return marker
-  return marker[0] === current[0] && marker.length >= current.length ? null : current
+  const trailing = match[2] ?? ''
+  const char = marker[0] as '`' | '~'
+  if (!current) return { marker: char, length: marker.length }
+  const closes =
+    char === current.marker &&
+    marker.length >= current.length &&
+    /^\s*$/.test(trailing)
+  return closes ? null : current
 }
 
 function taskMarkerToStatus(marker: string | undefined): ThreadTodoStatus {

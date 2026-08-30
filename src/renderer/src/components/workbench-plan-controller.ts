@@ -1,11 +1,11 @@
 import type { Dispatch, SetStateAction } from 'react'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import type { ChatBlock } from '../agent/types'
+import type { ChatBlock, ThreadTodoList } from '../agent/types'
 import { useChatStore } from '../store/chat-store'
 import type { ChatState } from '../store/chat-store-types'
 import { buildRefinePlanPrompt } from '../plan/plan-prompts'
 import { preparePlanBuild } from '../plan/prepare-plan-build'
-import { planHasBoardTasks } from '../plan/plan-board-model'
+import { normalizePlanBoardPath, planHasBoardTasks } from '../plan/plan-board-model'
 import { buildSddVerifyPrompt } from '../sdd/sdd-verify-prompt'
 import { sddDraftRelativePathForPlanPath, sddDraftTraceRelativePath } from '@shared/sdd'
 import { buildSddTraceSnapshot, parseSddRequirementBlocks } from '@shared/sdd-trace'
@@ -88,6 +88,20 @@ export function resolvePlanTurnWorkspaceRoot(
 
 function normalizePlanWorkspaceRoot(value: string | undefined): string {
   return normalizeWorkspaceRoot(value).replaceAll('\\', '/').replace(/\/+$/, '')
+}
+
+export function planTodosForBuild(
+  plan: GuiPlanArtifact,
+  todos: ThreadTodoList | null
+): Array<{ id: string; content: string; status: 'pending' | 'in_progress' | 'completed' }> {
+  const planPath = normalizePlanBoardPath(plan.relativePath)
+  return (todos?.items ?? [])
+    .filter((item) =>
+      item.source?.kind === 'plan' &&
+      item.source.planId === plan.id &&
+      normalizePlanBoardPath(item.source.relativePath) === planPath
+    )
+    .map(({ id, content, status }) => ({ id, content, status }))
 }
 
 export function resolveAssociatedGuiPlan(
@@ -206,7 +220,9 @@ export function useWorkbenchPlanController({
     contentToSave: string
   ): Promise<boolean> => {
     const planStore = useGuiPlanStore.getState()
-    planStore.setSaveStatus('saving')
+    const planId = plan.id
+    const threadId = plan.threadId?.trim() || null
+    planStore.setSaveStatusForPlan(planId, threadId, 'saving')
     try {
       const result = await window.kunGui.writeWorkspaceFile({
         workspaceRoot: plan.workspaceRoot,
@@ -214,31 +230,38 @@ export function useWorkbenchPlanController({
         content: contentToSave
       })
       if (!result.ok) {
-        useGuiPlanStore.getState().setSaveStatus('error', result.message)
+        useGuiPlanStore.getState().setSaveStatusForPlan(planId, threadId, 'error', result.message)
         return false
       }
       const chatState = useChatStore.getState()
+      if (threadId && chatState.activeThreadId !== threadId) return false
       const hasLinkedTodos = (chatState.activeThreadTodos?.items ?? []).some((item) =>
         item.source?.kind === 'plan' && item.source.planId === plan.id
       )
       if (
-        chatState.activeThreadId &&
+        threadId &&
+        chatState.activeThreadId === threadId &&
         chatState.runtimeConnection === 'ready' &&
         (hasLinkedTodos || planHasBoardTasks(contentToSave))
       ) {
-        const synced = await chatState.syncPlanTodosFromMarkdown(plan, contentToSave)
+        const synced = await chatState.syncPlanTodosFromMarkdown(threadId, plan, contentToSave)
         if (!synced) {
-          useGuiPlanStore.getState().setSaveStatus('error', t('planBoardSyncFailed'))
+          useGuiPlanStore.getState().setSaveStatusForPlan(
+            planId,
+            threadId,
+            'error',
+            t('planBoardSyncFailed')
+          )
           return false
         }
       }
       const latest = useGuiPlanStore.getState()
-      if (latest.activePlan?.id === plan.id) {
-        latest.markSaved(contentToSave)
-      }
+      latest.markSavedForPlan(planId, threadId, contentToSave)
       return true
     } catch (error) {
-      useGuiPlanStore.getState().setSaveStatus(
+      useGuiPlanStore.getState().setSaveStatusForPlan(
+        planId,
+        threadId,
         'error',
         error instanceof Error ? error.message : String(error)
       )
@@ -377,13 +400,7 @@ export function useWorkbenchPlanController({
         branchPrefix: preference?.branchPrefix ?? 'codex/',
         activeThreadId: chatState.activeThreadId,
         getPlanTodos: orchestration === 'direct'
-          ? () => (useChatStore.getState().activeThreadTodos?.items ?? [])
-              .filter((item) =>
-                item.source?.kind === 'plan' &&
-                item.source.planId === plan.id &&
-                item.source.relativePath === plan.relativePath
-              )
-              .map(({ id, content, status }) => ({ id, content, status }))
+          ? () => planTodosForBuild(plan, useChatStore.getState().activeThreadTodos)
           : undefined,
         save: savePlanContentToDisk,
         currentPlanId: () => useGuiPlanStore.getState().activePlan?.id,

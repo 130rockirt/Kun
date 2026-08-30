@@ -638,27 +638,29 @@ export function createMaintenanceMetadataActions(
     }
   },
 
-  syncPlanTodosFromMarkdown: async (plan, markdown) => {
-    const { activeThreadId } = get()
-    if (!activeThreadId) return false
+  syncPlanTodosFromMarkdown: async (threadId, plan, markdown) => {
+    if (!threadId || get().activeThreadId !== threadId) return false
     if (get().runtimeConnection !== 'ready') return false
     const p = getProvider()
     if (typeof p.syncThreadTodosFromPlan !== 'function') return false
     try {
-      const todos = await p.syncThreadTodosFromPlan(activeThreadId, {
+      const todos = await p.syncThreadTodosFromPlan(threadId, {
         planId: plan.id,
         relativePath: plan.relativePath,
         markdown
       })
-      applyTodosSnapshot(set, activeThreadId, todos)
+      if (get().activeThreadId !== threadId) return false
+      applyTodosSnapshot(set, threadId, todos)
       return true
     } catch (e) {
-      set({
-        error: formatRuntimeError(e),
-        ...(shouldOpenSettingsForError(e)
-          ? { route: 'settings' as const, settingsSection: 'agents' as const }
-          : {})
-      })
+      if (get().activeThreadId === threadId) {
+        set({
+          error: formatRuntimeError(e),
+          ...(shouldOpenSettingsForError(e)
+            ? { route: 'settings' as const, settingsSection: 'agents' as const }
+            : {})
+        })
+      }
       return false
     }
   },

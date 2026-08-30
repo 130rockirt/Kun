@@ -41,6 +41,18 @@ describe('plan-board-model', () => {
     expect(markdown.slice(cards[0]!.from, cards[0]!.to)).toBe('- [ ] Build board')
   })
 
+  it('keeps longer fences open across shorter and trailing-content markers', () => {
+    const markdown = [
+      '## Tasks', '````md', '- [ ] Hidden one', '```', '- [ ] Hidden two',
+      '```` not-a-close', '- [ ] Hidden three', '````',
+      '~~~', '- [ ] Hidden tilde', '~~~', '- [ ] Visible'
+    ].join('\r\n')
+    const cards = buildPlanBoardCards({
+      markdown, planId: 'plan_1', relativePath: '.kunsdd/plan/demo.md', todos: null
+    })
+    expect(cards.map((card) => card.title)).toEqual(['Visible'])
+  })
+
   it('edits, deletes, and appends task lines without rewriting the document', () => {
     const markdown = '# Demo\n\n## Implementation\n\n- [ ] Build board\n\nNotes\n'
     const [card] = buildPlanBoardCards({ markdown, planId: 'plan_1', relativePath: 'demo.md', todos: null })

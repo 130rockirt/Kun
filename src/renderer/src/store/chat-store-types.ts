@@ -618,6 +618,7 @@ export type ChatState = {
   setActiveThreadTodoStatus: (todoId: string, status: ThreadTodoStatus) => Promise<boolean>
   clearActiveThreadTodos: () => Promise<boolean>
   syncPlanTodosFromMarkdown: (
+    threadId: string,
     plan: { id: string; relativePath: string },
     markdown: string
   ) => Promise<boolean>

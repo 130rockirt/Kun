@@ -79,7 +79,8 @@ export function PlanPanel({
     setActivePlan,
     setContent,
     setSaveStatus,
-    markSaved,
+    setSaveStatusForPlan,
+    markSavedForPlan,
     setOperationStatus,
     clearActivePlan
   } = useGuiPlanStore(
@@ -93,7 +94,8 @@ export function PlanPanel({
       setActivePlan: s.setActivePlan,
       setContent: s.setContent,
       setSaveStatus: s.setSaveStatus,
-      markSaved: s.markSaved,
+      setSaveStatusForPlan: s.setSaveStatusForPlan,
+      markSavedForPlan: s.markSavedForPlan,
       setOperationStatus: s.setOperationStatus,
       clearActivePlan: s.clearActivePlan
     }))
@@ -183,7 +185,9 @@ export function PlanPanel({
       const snapshot = useGuiPlanStore.getState()
       if (snapshot.activePlan?.id !== activePlan.id || snapshot.saveStatus !== 'dirty') return
       const contentToSave = snapshot.content
-      setSaveStatus('saving')
+      const planId = activePlan.id
+      const threadId = activePlan.threadId?.trim() || activeThreadId?.trim() || null
+      setSaveStatusForPlan(planId, threadId, 'saving')
       void window.kunGui
         .writeWorkspaceFile({
           workspaceRoot: activePlan.workspaceRoot,
@@ -194,28 +198,42 @@ export function PlanPanel({
           const latest = useGuiPlanStore.getState()
           if (latest.activePlan?.id !== activePlan.id) return
           if (!result.ok) {
-            setSaveStatus('error', result.message)
+            setSaveStatusForPlan(planId, threadId, 'error', result.message)
             return
           }
           if (latest.content === contentToSave) {
-            if (activeThreadId && runtimeReady) {
-              const synced = await useChatStore.getState().syncPlanTodosFromMarkdown(activePlan, contentToSave)
+            if (threadId && runtimeReady) {
+              const synced = await useChatStore.getState().syncPlanTodosFromMarkdown(threadId, activePlan, contentToSave)
               if (!synced) {
-                setSaveStatus('error', t('planBoardSyncFailed'))
+                setSaveStatusForPlan(planId, threadId, 'error', t('planBoardSyncFailed'))
                 return
               }
             }
-            markSaved(contentToSave)
+            markSavedForPlan(planId, threadId, contentToSave)
           } else {
-            setSaveStatus('dirty')
+            setSaveStatusForPlan(planId, threadId, 'dirty')
           }
         })
         .catch((saveError) => {
-          setSaveStatus('error', saveError instanceof Error ? saveError.message : String(saveError))
+          setSaveStatusForPlan(
+            planId,
+            threadId,
+            'error',
+            saveError instanceof Error ? saveError.message : String(saveError)
+          )
         })
     }, 650)
     return () => window.clearTimeout(timer)
-  }, [activePlan, activeThreadId, content, markSaved, runtimeReady, saveStatus, setSaveStatus])
+  }, [
+    activePlan,
+    activeThreadId,
+    content,
+    markSavedForPlan,
+    runtimeReady,
+    saveStatus,
+    setSaveStatusForPlan,
+    t
+  ])
 
   const readOnly =
     operationStatus === 'drafting' ||
