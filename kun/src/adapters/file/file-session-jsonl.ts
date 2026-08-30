@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createReadStream, createWriteStream } from 'node:fs'
+import { createReadStream } from 'node:fs'
 import { rm, stat, type FileHandle } from 'node:fs/promises'
 import { RuntimeEvent as RuntimeEventSchema, type RuntimeEvent } from '../../contracts/events.js'
 import { isPublicTurnItem, type TurnItem } from '../../contracts/items.js'
@@ -7,6 +7,7 @@ import type { ItemHistoryPage, ItemHistoryPageOptions } from '../../ports/sessio
 import { buildPublicItemHistoryPage, timelineSafeItem } from '../../services/item-history-page.js'
 import { yieldToEventLoop } from '../hybrid/hybrid-thread-support.js'
 import { renameFileWithRetry } from './atomic-write.js'
+import { writeJsonlLines, type CreateJsonlWriteStream } from './jsonl-write-stream.js'
 
 const MS_PER_DAY = 86_400_000
 const DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES = 16 * 1024 * 1024
@@ -41,6 +42,7 @@ export async function compactUsageEventsJsonlFile(
     maxRecordBytes: number
     commitReplacement?: (replace: () => Promise<void>) => Promise<boolean>
     withSourceRead?: <T>(operation: () => Promise<T>) => Promise<T>
+    createWriteStream?: CreateJsonlWriteStream
   }
 ): Promise<boolean> {
   const cutoffMs = Date.parse(options.nowIso) - options.retentionDays * MS_PER_DAY
@@ -64,7 +66,8 @@ export async function compactUsageEventsJsonlFile(
   try {
     await withSourceRead(options, () => rewriteJsonlKeepingLines(path, tmp, {
       maxRecordBytes: options.maxRecordBytes,
-      keepLine: (event, index) => event.kind !== 'usage' || keepUsageIndexes.has(index)
+      keepLine: (event, index) => event.kind !== 'usage' || keepUsageIndexes.has(index),
+      createWriteStream: options.createWriteStream
     }))
     const replace = async (): Promise<void> => renameFileWithRetry(tmp, path)
     if (options.commitReplacement) {
@@ -157,39 +160,26 @@ async function rewriteJsonlKeepingLines(
   options: {
     maxRecordBytes: number
     keepLine: (event: RuntimeEvent, index: number) => boolean
+    createWriteStream?: CreateJsonlWriteStream
   }
 ): Promise<void> {
-  const writer = createWriteStream(targetPath, { encoding: 'utf-8', mode: 0o600 })
-  const writeLine = (line: string): Promise<void> => new Promise((resolve, reject) => {
-    if (writer.write(`${line}\n`)) {
-      resolve()
-      return
-    }
-    writer.once('error', reject)
-    writer.once('drain', () => {
-      writer.off('error', reject)
-      resolve()
-    })
+  await writeJsonlLines(targetPath, keptJsonlLines(sourcePath, options), {
+    createWriteStream: options.createWriteStream
   })
+}
+
+async function* keptJsonlLines(
+  sourcePath: string,
+  options: { maxRecordBytes: number; keepLine: (event: RuntimeEvent, index: number) => boolean }
+): AsyncIterable<string> {
   let lineIndex = 0
-  try {
-    for await (const record of iterateJsonlEventRecords(sourcePath, options.maxRecordBytes)) {
-      if (record.event && options.keepLine(record.event, lineIndex)) {
-        await writeLine(record.line)
-      } else if (!record.event) {
-        await writeLine(record.line)
-      }
-      lineIndex += 1
-      if (lineIndex % YIELD_EVERY_LINES === 0) await yieldToEventLoop()
+  for await (const record of iterateJsonlEventRecords(sourcePath, options.maxRecordBytes)) {
+    if ((record.event && options.keepLine(record.event, lineIndex)) || !record.event) {
+      yield `${record.line}\n`
     }
-  } catch (error) {
-    writer.destroy()
-    throw error
+    lineIndex += 1
+    if (lineIndex % YIELD_EVERY_LINES === 0) await yieldToEventLoop()
   }
-  await new Promise<void>((resolve, reject) => {
-    writer.once('error', reject)
-    writer.end(() => resolve())
-  })
 }
 
 function shouldRetainUsageEvent(
@@ -216,38 +206,18 @@ export async function trimEventsJsonlFromSeq(
     maxRecordBytes: number
     commitReplacement?: (replace: () => Promise<void>) => Promise<boolean>
     withSourceRead?: <T>(operation: () => Promise<T>) => Promise<T>
+    createWriteStream?: CreateJsonlWriteStream
   }
 ): Promise<{ trimmed: boolean; keptEvents: number }> {
   const tmp = `${path}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   let keptEvents = 0
   try {
-    const writer = createWriteStream(tmp, { encoding: 'utf-8', mode: 0o600 })
-    const writeLine = (line: string): Promise<void> => new Promise((resolve, reject) => {
-      if (writer.write(`${line}\n`)) { resolve(); return }
-      writer.once('error', reject)
-      writer.once('drain', () => { writer.off('error', reject); resolve() })
-    })
-    let lineIndex = 0
-    try {
-      await withSourceRead(options, async () => {
-        for await (const record of iterateJsonlEventRecords(path, options.maxRecordBytes)) {
-          const keep = !record.event || record.event.seq >= fromSeqInclusive
-          if (keep && record.line.trim()) {
-            await writeLine(record.line)
-            keptEvents += 1
-          }
-          lineIndex += 1
-          if (lineIndex % YIELD_EVERY_LINES === 0) await yieldToEventLoop()
-        }
-      })
-    } catch (error) {
-      writer.destroy()
-      throw error
-    }
-    await new Promise<void>((resolve, reject) => {
-      writer.once('error', reject)
-      writer.end(() => resolve())
-    })
+    await withSourceRead(options, () => writeJsonlLines(tmp, trimmedJsonlLines(
+      path,
+      fromSeqInclusive,
+      options.maxRecordBytes,
+      () => { keptEvents += 1 }
+    ), { createWriteStream: options.createWriteStream }))
     const replace = async (): Promise<void> => { await renameFileWithRetry(tmp, path) }
     if (options.commitReplacement) {
       const committed = await options.commitReplacement(replace)
@@ -257,6 +227,24 @@ export async function trimEventsJsonlFromSeq(
     return { trimmed: true, keptEvents }
   } finally {
     await rm(tmp, { force: true }).catch(() => undefined)
+  }
+}
+
+async function* trimmedJsonlLines(
+  path: string,
+  fromSeqInclusive: number,
+  maxRecordBytes: number,
+  onKept: () => void
+): AsyncIterable<string> {
+  let lineIndex = 0
+  for await (const record of iterateJsonlEventRecords(path, maxRecordBytes)) {
+    const keep = !record.event || record.event.seq >= fromSeqInclusive
+    if (keep && record.line.trim()) {
+      onKept()
+      yield `${record.line}\n`
+    }
+    lineIndex += 1
+    if (lineIndex % YIELD_EVERY_LINES === 0) await yieldToEventLoop()
   }
 }
 

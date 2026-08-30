@@ -108,32 +108,37 @@ export class FileSessionItemIndex {
     statePath: string
     threadId: string
     evidencePath: string
+    withSourceRead?: <T>(operation: () => Promise<T>) => Promise<T>
   }): Promise<{ rawCount: number; uniqueCount: number; canonicalBytes: number }> {
-    await ensureItemTailReady({
-      verified: this.verifiedItemTails,
-      threadId: input.threadId,
-      path: input.sourcePath,
-      evidencePath: input.evidencePath
+    const rebuilt = await withSourceRead(input, async () => {
+      await ensureItemTailReady({
+        verified: this.verifiedItemTails,
+        threadId: input.threadId,
+        path: input.sourcePath,
+        evidencePath: input.evidencePath
+      })
+      const before = await stat(input.sourcePath).catch(() => null)
+      if (!before) return null
+      const rows: ItemIndexRow[] = []
+      const latest = new Map<string, number>()
+      for await (const record of scanItemRecords(input.sourcePath)) {
+        rows.push(rowForItem(record.item, record.offset, record.recordBytes))
+        latest.set(record.item.id, record.recordBytes)
+      }
+      const after = await stat(input.sourcePath).catch(() => null)
+      if (!after || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+        throw new Error('item history changed during index rebuild')
+      }
+      return { rows, latest, source: after }
     })
-    const before = await stat(input.sourcePath).catch(() => null)
-    if (!before) {
+    if (!rebuilt) {
       await this.invalidate(input.indexPath, input.statePath)
       return { rawCount: 0, uniqueCount: 0, canonicalBytes: 0 }
     }
-    const rows: ItemIndexRow[] = []
-    const latest = new Map<string, number>()
     let canonicalBytes = 0
-    for await (const record of scanItemRecords(input.sourcePath)) {
-      rows.push(rowForItem(record.item, record.offset, record.recordBytes))
-      latest.set(record.item.id, record.recordBytes)
-    }
-    for (const bytes of latest.values()) canonicalBytes += bytes + 1
-    const after = await stat(input.sourcePath).catch(() => null)
-    if (!after || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
-      throw new Error('item history changed during index rebuild')
-    }
-    await writeIndexFiles(input.indexPath, input.statePath, rows, after)
-    return { rawCount: rows.length, uniqueCount: latest.size, canonicalBytes }
+    for (const bytes of rebuilt.latest.values()) canonicalBytes += bytes + 1
+    await writeIndexFiles(input.indexPath, input.statePath, rebuilt.rows, rebuilt.source)
+    return { rawCount: rebuilt.rows.length, uniqueCount: rebuilt.latest.size, canonicalBytes }
   }
 
   scheduleRebuild(input: {
@@ -142,6 +147,7 @@ export class FileSessionItemIndex {
     statePath: string
     threadId: string
     evidencePath: string
+    withSourceRead?: <T>(operation: () => Promise<T>) => Promise<T>
   }): void {
     if (this.rebuilds.has(input.sourcePath)) return
     const run = new Promise<void>((resolve) => setImmediate(resolve))
@@ -407,6 +413,13 @@ function sourceMatches(
     source.dev === state.sourceDev &&
     source.ino === state.sourceIno
   )
+}
+
+function withSourceRead<T>(
+  input: { withSourceRead?: <Value>(operation: () => Promise<Value>) => Promise<Value> },
+  operation: () => Promise<T>
+): Promise<T> {
+  return input.withSourceRead ? input.withSourceRead(operation) : operation()
 }
 
 function errorMessage(error: unknown): string {

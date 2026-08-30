@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -7,6 +7,7 @@ import { createThreadRecord } from '../../domain/thread.js'
 import { HybridThreadStore } from '../hybrid/hybrid-thread-store.js'
 import { stripThreadItemBodies } from '../hybrid/hybrid-thread-projection.js'
 import { FileSessionStore } from './file-session-store.js'
+import { FileSessionItemIndex } from './file-session-item-index.js'
 import { JsonlFileAccessCoordinator } from './jsonl-file-access.js'
 
 const roots: string[] = []
@@ -52,6 +53,52 @@ async function holdRead(
 }
 
 describe('JSONL replacement coordination', () => {
+  it('makes an index rebuild source lease wait before replacement', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-jsonl-index-gate-'))
+    roots.push(root)
+    const sourcePath = join(root, 'messages.jsonl')
+    const indexPath = join(root, 'messages-index.jsonl')
+    const statePath = join(root, 'messages-index.state.json')
+    const item = makeToolResultItem({
+      id: 'result_1', threadId: 'thread_1', turnId: 'turn_1', callId: 'call_1',
+      toolName: 'bash', output: { text: 'done' }, status: 'completed'
+    })
+    await writeFile(sourcePath, `${JSON.stringify(item)}\n`)
+    const fileAccess = new ObservableCoordinator()
+    let releaseLease!: () => void
+    let markLeaseStarted!: () => void
+    const leaseStarted = new Promise<void>((resolve) => { markLeaseStarted = resolve })
+    const gate = new Promise<void>((resolve) => { releaseLease = resolve })
+    const rebuilding = new FileSessionItemIndex().rebuild({
+      sourcePath,
+      indexPath,
+      statePath,
+      withSourceRead: (operation) => fileAccess.withRead(sourcePath, async () => {
+        markLeaseStarted()
+        await gate
+        return operation()
+      })
+    })
+    await leaseStarted
+    let replacementRan = false
+    const replacement = fileAccess.withReplacement(sourcePath, async () => { replacementRan = true })
+    await fileAccess.replacementRequested
+    await Promise.resolve()
+    expect(replacementRan).toBe(false)
+
+    releaseLease()
+    await rebuilding
+    await replacement
+    expect(replacementRan).toBe(true)
+    const source = await stat(sourcePath)
+    expect(JSON.parse(await readFile(statePath, 'utf8'))).toMatchObject({
+      sourceBytes: source.size,
+      sourceMtimeMs: source.mtimeMs,
+      sourceDev: source.dev,
+      sourceIno: source.ino
+    })
+  })
+
   it('lets an active read scope finish nested reads after a replacement queues', async () => {
     const fileAccess = new ObservableCoordinator()
     const path = join(tmpdir(), 'kun-jsonl-reentrant-read.jsonl')

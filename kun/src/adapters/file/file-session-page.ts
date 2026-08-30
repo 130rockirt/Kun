@@ -35,7 +35,8 @@ export async function loadIndexedLiveItemPageFromStore(input: Parameters<
       indexPath: input.indexPath,
       statePath: input.indexStatePath,
       threadId: input.threadId,
-      evidencePath: input.evidencePath
+      evidencePath: input.evidencePath,
+      withSourceRead: (operation) => input.fileAccess.withRead(input.path, operation)
     })
   }
   const page = indexed ?? await loadItemPageFromStore(input)
