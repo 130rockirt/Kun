@@ -423,6 +423,25 @@ describe('active model provider API-key status', () => {
     expect(activeModelProviderNeedsApiKey(state)).toBe(false)
   })
 
+  it('requires an API key for a custom HTTP provider without a preset source', () => {
+    const state = settings()
+    const customProvider = {
+      ...state.provider.providers[0]!,
+      id: 'custom-provider-2',
+      name: 'Custom provider',
+      presetSource: undefined,
+      kind: 'http' as const,
+      apiKey: '',
+      baseUrl: 'https://api.example.com/v1'
+    }
+    state.provider.providers.push(customProvider)
+    state.agents.kun.providerId = customProvider.id
+    state.agents.kun.apiKey = ''
+
+    expect(modelProviderRequiresApiKey(customProvider)).toBe(true)
+    expect(activeModelProviderNeedsApiKey(state)).toBe(true)
+  })
+
   it.each([
     ['claude-subscription', 'agent-sdk'],
     ['gemini-subscription', 'antigravity-cli'],

@@ -386,8 +386,10 @@ export function modelProviderRequiresApiKey(
     source?.preset.id === 'litellm' ||
     source?.preset.id === OPENCODE_FREE_PROVIDER_ID
   ) return false
-  if (provider.id === DEFAULT_MODEL_PROVIDER_ID) return true
-  return Boolean(source)
+  // Every remaining profile uses API-key authentication. In particular,
+  // manually created HTTP providers have no presetSource, which must not make
+  // the credential field disappear from Settings (#1245).
+  return true
 }
 
 export function activeModelProviderNeedsApiKey(settings: AppSettingsV1): boolean {

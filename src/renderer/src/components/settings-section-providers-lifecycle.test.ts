@@ -191,6 +191,10 @@ describe('provider mutation lifecycle across settings remounts', () => {
         openSettingsConfigFile: vi.fn(async () => ({ ok: true })),
         confirmDialog: vi.fn(async () => true)
       },
+      setTimeout: vi.fn((callback: () => void) => {
+        callback()
+        return 0
+      }),
       addEventListener: vi.fn(),
       removeEventListener: vi.fn()
     })
@@ -239,6 +243,28 @@ describe('provider mutation lifecycle across settings remounts', () => {
     const tabs = renderer.root.findAllByProps({ role: 'tablist' })
       .find((tablist) => tablist.props['aria-label'] === 'providers')
     expect(tabs).toBeTruthy()
+  })
+
+  it('shows a wired API key input when adding a custom provider', async () => {
+    const { settings, provider } = providerFixture('deepseek')
+    const renderer = await mount(contextFor(settings, provider))
+    await flush()
+
+    await act(async () => findButton(renderer, 'modelProviderAdd').props.onClick())
+    const customProviderButton = renderer.root.findAllByType('button')
+      .find((button) => instanceText(button).includes('modelProviderAddMenuCustom'))
+    expect(customProviderButton).toBeTruthy()
+    await act(async () => customProviderButton!.props.onClick())
+
+    const credentialInput = renderer.root.findAllByType('input')
+      .find((input) => input.props.type === 'password')
+    expect(credentialInput).toBeTruthy()
+    expect(rendererText(renderer)).toContain('modelProviderApiKey')
+
+    await act(async () => credentialInput!.props.onChange({ target: { value: 'sk-custom' } }))
+    expect(renderer.root.findAllByType('input')
+      .find((input) => input.props.type === 'password')?.props.value)
+      .toBe('sk-custom')
   })
 
   it('uses the shared provider mark in configured, detail, and add-provider surfaces', async () => {
