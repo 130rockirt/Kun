@@ -35,9 +35,12 @@ import {
   KUN_THREAD_GUARDIAN_TEMPLATE,
   KUN_SUPPLY_CHAIN_AUDIT_TEMPLATE,
   KUN_SUPPLY_CHAIN_UPDATE_CHECK_TEMPLATE,
+  KUN_SESSION_RESUME_METADATA_TEMPLATE,
   KUN_SESSION_RESUME_TEMPLATE,
   KUN_SKILLS_TEMPLATE,
   KUN_THREADS_TEMPLATE,
+  KUN_THREADS_BULK_DELETE_TEMPLATE,
+  KUN_THREADS_CONTENT_SEARCH_TEMPLATE,
   KUN_THREAD_COMPACT_TEMPLATE,
   KUN_THREAD_PRUNE_TEMPLATE,
   KUN_THREAD_FORK_TEMPLATE,
@@ -147,10 +150,12 @@ function compileEndpoint(
   allowedMethods: readonly string[]
 ): EndpointTemplate {
   // Build a regex from the template by escaping the literal parts and
-  // substituting the `{id}` / `{turn}` placeholders with `[^/]+`. The
-  // template fragments are URL-encoded by the path helpers, so they
-  // contain only characters that are safe to escape directly.
-  const pattern = template.replace(/[.+*?^$()|[\]\\]/g, '\\$&').replace(/\{(?:id|turn)\}/g, '[^/]+')
+  // substituting every `{name}` placeholder with one non-empty path segment.
+  // Template fragments are URL-encoded by path helpers, so they contain only
+  // characters that are safe to escape directly.
+  const pattern = template
+    .replace(/[.+*?^$()|[\]\\]/g, '\\$&')
+    .replace(/\{[^/{}]+\}/g, '[^/]+')
   const regex = new RegExp(`^${pattern}$`)
   return {
     match: (path: string) => regex.test(path),
@@ -201,6 +206,8 @@ const ENDPOINTS: readonly EndpointTemplate[] = [
   compileEndpoint(KUN_THREAD_TIMELINE_TEMPLATE, ['GET']),
   compileEndpoint(KUN_THREAD_KNOWLEDGE_BASES_TEMPLATE, ['GET']),
   compileEndpoint(KUN_THREAD_KNOWLEDGE_BASE_REINDEX_TEMPLATE, ['POST']),
+  compileEndpoint(KUN_THREADS_BULK_DELETE_TEMPLATE, ['POST']),
+  compileEndpoint(KUN_THREADS_CONTENT_SEARCH_TEMPLATE, ['GET']),
   compileEndpoint(KUN_THREAD_TEMPLATE, ['GET', 'PATCH', 'DELETE']),
   compileEndpoint(KUN_THREAD_FORK_TEMPLATE, ['POST']),
   compileEndpoint(KUN_THREAD_SUMMARIZE_TEMPLATE, ['POST']),
@@ -218,6 +225,7 @@ const ENDPOINTS: readonly EndpointTemplate[] = [
   compileEndpoint(KUN_THREAD_MODEL_REQUESTS_TEMPLATE, ['GET']),
   compileEndpoint(KUN_USER_INPUT_TEMPLATE, ['POST']),
   compileEndpoint(KUN_SESSION_RESUME_TEMPLATE, ['POST']),
+  compileEndpoint(KUN_SESSION_RESUME_METADATA_TEMPLATE, ['GET']),
   compileEndpoint(KUN_USAGE_TEMPLATE, ['GET']),
   compileEndpoint(KUN_DEBUG_LLM_ROUNDS_TEMPLATE, ['GET']),
   compileEndpoint(KUN_BACKGROUND_SHELLS_TEMPLATE, ['GET']),

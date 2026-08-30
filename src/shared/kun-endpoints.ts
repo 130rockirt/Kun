@@ -220,6 +220,12 @@ export const KUN_THREADS_TEMPLATE = '/v1/threads'
 export const KUN_THREAD_STATES_PATH = '/v1/threads/states'
 export const KUN_THREAD_STATES_TEMPLATE = '/v1/threads/states'
 
+export const KUN_THREADS_BULK_DELETE_PATH = '/v1/threads/bulk-delete'
+export const KUN_THREADS_BULK_DELETE_TEMPLATE = '/v1/threads/bulk-delete'
+
+export const KUN_THREADS_CONTENT_SEARCH_PATH = '/v1/threads/content-search'
+export const KUN_THREADS_CONTENT_SEARCH_TEMPLATE = '/v1/threads/content-search'
+
 export const KUN_THREAD_TEMPLATE = '/v1/threads/{id}'
 export function kunThreadPath(threadId: string): string {
   return `/v1/threads/${encodeURIComponent(threadId)}`

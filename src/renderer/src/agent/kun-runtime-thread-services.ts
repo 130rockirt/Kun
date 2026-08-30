@@ -21,6 +21,7 @@ import {
   KUN_RUNTIME_TOOLS_PATH,
   KUN_SKILLS_PATH,
   KUN_THREAD_STATES_PATH,
+  KUN_THREADS_BULK_DELETE_PATH,
   kunThreadCompactPath,
   kunThreadEventsPath,
   kunThreadForkPath,
@@ -338,7 +339,7 @@ export class KunRuntimeThreadServices extends KunRuntimeProviderServices {
 
   async deleteThreadsByWorkspace(workspace: string): Promise<string[]> {
     const response = await rendererRuntimeClient.runtimeRequest(
-      '/v1/threads/bulk-delete',
+      KUN_THREADS_BULK_DELETE_PATH,
       'POST',
       JSON.stringify({ workspace })
     )

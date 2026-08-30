@@ -20,6 +20,7 @@ import {
   KUN_RUNTIME_INFO_PATH,
   KUN_RUNTIME_TOOLS_PATH,
   KUN_SKILLS_PATH,
+  KUN_THREADS_CONTENT_SEARCH_PATH,
   kunThreadCompactPath,
   kunThreadEventsPath,
   kunThreadForkPath,
@@ -225,7 +226,7 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       limit: String(options.limit ?? 12)
     })
     const response = await rendererRuntimeClient.runtimeRequest(
-      '/v1/threads/content-search?' + params.toString(),
+      KUN_THREADS_CONTENT_SEARCH_PATH + '?' + params.toString(),
       'GET'
     )
     if (!response.ok) {

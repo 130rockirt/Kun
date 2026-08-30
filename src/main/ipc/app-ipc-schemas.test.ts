@@ -4,6 +4,13 @@ import {
   it
 } from 'vitest'
 import {
+  kunBackgroundShellPath,
+  kunBackgroundShellStopPath,
+  kunSessionResumeMetadataPath,
+  KUN_THREADS_BULK_DELETE_PATH,
+  KUN_THREADS_CONTENT_SEARCH_PATH
+} from '../../shared/kun-endpoints'
+import {
   appBadgeCountSchema,
   cursorSubscriptionDiscoveryPayloadSchema,
   modelProviderCredentialRevealPayloadSchema,
@@ -140,6 +147,30 @@ describe('app-ipc-schemas runtime', () => {
     })
 
     expect(payload.path).toBe('/v1/threads?limit=1')
+  })
+
+  it('admits only modeled runtime routes for workspace deletion and session recovery (#1252)', () => {
+    for (const payload of [
+      { path: KUN_THREADS_BULK_DELETE_PATH, method: 'POST', body: '{"workspace":"/tmp/project"}' },
+      { path: `${KUN_THREADS_CONTENT_SEARCH_PATH}?q=checkout`, method: 'GET' },
+      { path: kunSessionResumeMetadataPath('session%2Fone'), method: 'GET' },
+      { path: kunBackgroundShellPath('shell%2Fone'), method: 'GET' },
+      { path: kunBackgroundShellStopPath('shell%2Fone'), method: 'POST' }
+    ] as const) {
+      expect(runtimeRequestPayloadSchema.parse(payload).path).toBe(payload.path)
+    }
+
+    for (const payload of [
+      { path: KUN_THREADS_BULK_DELETE_PATH, method: 'GET' },
+      { path: KUN_THREADS_CONTENT_SEARCH_PATH, method: 'POST', body: '{}' },
+      { path: kunSessionResumeMetadataPath('session_1'), method: 'POST', body: '{}' },
+      { path: kunBackgroundShellPath('shell_1'), method: 'POST', body: '{}' },
+      { path: kunBackgroundShellStopPath('shell_1'), method: 'GET' }
+    ] as const) {
+      expect(() => runtimeRequestPayloadSchema.parse(payload)).toThrow(
+        /runtime request path is not allowed/
+      )
+    }
   })
 
   it('accepts the Kun runtime info endpoint', () => {
