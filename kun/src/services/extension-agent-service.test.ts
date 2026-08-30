@@ -363,6 +363,13 @@ describe('ExtensionAgentService', () => {
       afterSequence,
       limit: 1
     })).resolves.toMatchObject({ historyIncomplete: false })
+
+    eventReplayFloorSeq.mockResolvedValue(1)
+    await expect(h.service.listRunEvents(principal(), {
+      runId: run.id,
+      afterSequence: 0,
+      limit: 1
+    })).resolves.toMatchObject({ historyIncomplete: false })
   })
 
   it('summarizes run status with forward-only event iteration', async () => {
