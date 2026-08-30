@@ -301,6 +301,8 @@
   "subagentTurnCompleteNotification": "उप-एजेंट पूर्णता सूचनाएँ",
   "subagentTurnCompleteNotificationDesc": "उप-एजेंट सत्र पूरा होने पर सिस्टम सूचना दिखाएँ।",
   "desktopBehavior": "डेस्कटॉप व्यवहार",
+  "desktopKeepAwake": "कंप्यूटर को सक्रिय रखें",
+  "desktopKeepAwakeDesc": "Kun के चलने के दौरान कंप्यूटर को स्लीप होने से रोकें, ताकि बैकग्राउंड एजेंट और निर्धारित कार्य चलते रहें। डिस्प्ले बंद या स्क्रीन लॉक की जा सकती है।",
   "desktopOpenAtLogin": "लॉगिन पर खोलें",
   "desktopOpenAtLoginDesc": "साइन इन करने के बाद कुन स्वचालित रूप से प्रारंभ करें।",
   "desktopOpenAtLoginUnsupportedDesc": "लॉगिन पर खोलें विंडोज़ और मैकओएस पर उपलब्ध है।",

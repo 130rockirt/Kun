@@ -301,6 +301,8 @@
   "subagentTurnCompleteNotification": "Subagent completions",
   "subagentTurnCompleteNotificationDesc": "Show a system notification when a subagent session completes.",
   "desktopBehavior": "Desktop behavior",
+  "desktopKeepAwake": "Keep computer awake",
+  "desktopKeepAwakeDesc": "Prevent the computer from sleeping while Kun is running so background agents and scheduled tasks can continue. The display may still turn off or lock.",
   "desktopOpenAtLogin": "Open at login",
   "desktopOpenAtLoginDesc": "Start Kun automatically after you sign in.",
   "desktopOpenAtLoginUnsupportedDesc": "Open at login is available on Windows and macOS.",

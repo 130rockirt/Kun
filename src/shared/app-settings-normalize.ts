@@ -370,6 +370,7 @@ export function normalizeAppBehaviorSettings(
   return {
     openAtLogin,
     startMinimized: openAtLogin && settings?.startMinimized === true,
+    keepAwake: settings?.keepAwake === true,
     useSystemTitleBar: settings?.useSystemTitleBar === true,
     closeAction,
     closeToTray: closeAction === 'tray'

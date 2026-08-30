@@ -301,6 +301,8 @@
   "subagentTurnCompleteNotification": "子代理完成通知",
   "subagentTurnCompleteNotificationDesc": "子代理会话完成时，显示系统通知。",
   "desktopBehavior": "桌面行为",
+  "desktopKeepAwake": "保持电脑唤醒",
+  "desktopKeepAwakeDesc": "Kun 运行期间阻止电脑进入休眠，让后台 Agent 与定时任务持续运行（仍可关闭显示器或锁屏）。",
   "desktopOpenAtLogin": "开机自动启动",
   "desktopOpenAtLoginDesc": "登录系统后自动启动 Kun。",
   "desktopOpenAtLoginUnsupportedDesc": "开机自动启动目前支持 Windows 和 macOS。",

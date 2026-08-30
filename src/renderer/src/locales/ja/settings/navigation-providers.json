@@ -301,6 +301,8 @@
   "subagentTurnCompleteNotification": "サブエージェントの完了通知",
   "subagentTurnCompleteNotificationDesc": "サブエージェントのセッションが完了したときに、システム通知を表示します。",
   "desktopBehavior": "デスクトップの動作",
+  "desktopKeepAwake": "コンピューターをスリープさせない",
+  "desktopKeepAwakeDesc": "Kun の実行中はコンピューターのスリープを防ぎ、バックグラウンドエージェントとスケジュールされたタスクを継続します。ディスプレイのオフや画面ロックは可能です。",
   "desktopOpenAtLogin": "ログイン時に開く",
   "desktopOpenAtLoginDesc": "サインイン後、Kun が自動的に起動します。",
   "desktopOpenAtLoginUnsupportedDesc": "ログイン時に開くは Windows と macOS で利用できます。",

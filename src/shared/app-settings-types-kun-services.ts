@@ -382,6 +382,8 @@ export type WindowCloseAction = typeof WINDOW_CLOSE_ACTIONS[number]
 export type AppBehaviorConfigV1 = {
   openAtLogin: boolean
   startMinimized: boolean
+  /** Keep the computer from sleeping while the Kun desktop host is running. */
+  keepAwake?: boolean
   /** Linux only. Use the desktop environment/window manager title bar after restart. */
   useSystemTitleBar?: boolean
   closeAction?: WindowCloseAction

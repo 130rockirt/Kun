@@ -135,6 +135,9 @@ export function registerMainIpc(services: MainServices): void {
     }
     ipcMain.removeHandler('startup:state:get')
     ipcMain.handle('startup:state:get', () => mainState.startupState.payload())
+    const syncAppKeepAwake = (settings: AppSettingsV1): void => {
+      mainState.powerSaveController?.setAppKeepAwake(settings.appBehavior.keepAwake === true)
+    }
     const applySettingsPatch = async (partial: AppSettingsPatch): Promise<AppSettingsV1> => {
       const { previous, saved } = await runtimeSettingsIntents.serializePersistence(async () => {
         let committedPrevious: AppSettingsV1 | undefined
@@ -189,6 +192,7 @@ export function registerMainIpc(services: MainServices): void {
             })
           })
       }
+      syncAppKeepAwake(saved)
       try {
         mainState.scheduleRuntime?.sync(saved)
         mainState.workflowRuntime?.sync(saved)
@@ -291,6 +295,7 @@ export function registerMainIpc(services: MainServices): void {
         })
         return saved
       })
+      syncAppKeepAwake(saved)
       requestExtensionWorkbenchEnvironmentPublish()
       return saved
     }

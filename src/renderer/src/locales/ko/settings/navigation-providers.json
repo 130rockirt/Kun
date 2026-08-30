@@ -301,6 +301,8 @@
   "subagentTurnCompleteNotification": "하위 에이전트 완료 알림",
   "subagentTurnCompleteNotificationDesc": "하위 에이전트 세션이 완료되면 시스템 알림을 표시합니다.",
   "desktopBehavior": "데스크탑 동작",
+  "desktopKeepAwake": "컴퓨터 절전 모드 방지",
+  "desktopKeepAwakeDesc": "Kun이 실행되는 동안 컴퓨터가 절전 모드로 전환되지 않아 백그라운드 에이전트와 예약 작업이 계속 실행됩니다. 디스플레이 끄기와 화면 잠금은 가능합니다.",
   "desktopOpenAtLogin": "로그인 시 열기",
   "desktopOpenAtLoginDesc": "로그인 후 자동으로 Kun을 시작합니다.",
   "desktopOpenAtLoginUnsupportedDesc": "로그인 시 열기는 Windows 및 macOS에서 사용할 수 있습니다.",

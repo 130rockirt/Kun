@@ -301,6 +301,8 @@
   "subagentTurnCompleteNotification": "Завершение субагента",
   "subagentTurnCompleteNotificationDesc": "Показывать системное уведомление после завершения сеанса субагента.",
   "desktopBehavior": "Поведение на рабочем столе",
+  "desktopKeepAwake": "Не переводить компьютер в спящий режим",
+  "desktopKeepAwakeDesc": "Не разрешать компьютеру переходить в спящий режим, пока работает Kun, чтобы фоновые агенты и запланированные задачи продолжали выполняться. Экран по-прежнему можно выключить или заблокировать.",
   "desktopOpenAtLogin": "Открывать при входе",
   "desktopOpenAtLoginDesc": "Автоматически запускать Kun после входа в систему.",
   "desktopOpenAtLoginUnsupportedDesc": "Функция доступна в Windows и macOS.",

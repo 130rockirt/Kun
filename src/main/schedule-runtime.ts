@@ -551,8 +551,7 @@ export class ScheduleRuntime {
 
   private acquirePowerSave(): void {
     if (this.keepAwakeHeld || !this.powerSaveController) return
-    this.powerSaveController.acquire()
-    this.keepAwakeHeld = true
+    this.keepAwakeHeld = this.powerSaveController.acquire()
   }
 
   private releasePowerSave(): void {

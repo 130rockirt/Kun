@@ -301,6 +301,8 @@
   "subagentTurnCompleteNotification": "การแจ้งเตือนเอเจนต์ย่อยเสร็จสิ้น",
   "subagentTurnCompleteNotificationDesc": "แสดงการแจ้งเตือนระบบเมื่อเซสชันของเอเจนต์ย่อยเสร็จสิ้น",
   "desktopBehavior": "ลักษณะการทำงานของเดสก์ท็อป",
+  "desktopKeepAwake": "ป้องกันคอมพิวเตอร์เข้าสู่โหมดสลีป",
+  "desktopKeepAwakeDesc": "ป้องกันคอมพิวเตอร์เข้าสู่โหมดสลีปขณะที่ Kun ทำงาน เพื่อให้เอเจนต์เบื้องหลังและงานตามกำหนดเวลาทำงานต่อไปได้ โดยยังคงปิดจอหรือล็อกหน้าจอได้",
   "desktopOpenAtLogin": "เปิดเมื่อเข้าสู่ระบบ",
   "desktopOpenAtLoginDesc": "เริ่ม Kun โดยอัตโนมัติหลังจากที่คุณลงชื่อเข้าใช้",
   "desktopOpenAtLoginUnsupportedDesc": "เปิดเมื่อเข้าสู่ระบบพร้อมใช้งานบน Windows และ macOS",
