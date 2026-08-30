@@ -389,10 +389,10 @@ export function UserMessageBubble({
       </div>
       <div
         data-user-message-actions="inline"
-        className="invisible absolute right-0 top-full z-20 flex translate-y-0.5 items-center pt-1 text-ds-faint opacity-0 transition-[opacity,transform,visibility] duration-150 motion-reduce:transition-none group-hover:visible group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:visible group-focus-within:translate-y-0 group-focus-within:opacity-100"
+        className="invisible flex min-h-7 min-w-0 max-w-full items-center justify-end pt-1 text-ds-faint opacity-0 transition-[opacity,visibility] duration-150 motion-reduce:transition-none group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
       >
-        <div className="flex items-center gap-4">
-          <ModelMetaTag label={block.modelLabel} className="text-left" />
+        <div className="flex min-w-0 max-w-full items-center justify-end gap-4">
+          <ModelMetaTag label={block.modelLabel} className="flex-1 text-left" />
           <CopyFeedbackButton text={displayText} iconOnly />
           {canEdit ? (
             <button
