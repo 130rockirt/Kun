@@ -319,7 +319,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
     addProviderQuery, subscriptionRegion, providerListQuery, probeStates, cursorAccounts,
     pendingImport, draftProvider, displayProviders, activeProvider, sharedConnectionFor,
     hasConfiguredCredential, activeKunProviderId, closeAddProviderDialog, addPresetModelProvider,
-    updateProviderProxy, updateModelProvider, setGlobalNetworkOpen, providerProxy })
+    updateProviderProxy, updateModelProvider, setGlobalNetworkOpen, providerProxy, runProbe })
 
   const openSettingsConfigFile = async (): Promise<void> => {
     setSettingsConfigOpenError('')

@@ -508,6 +508,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(rendererText(renderer)).toContain('No API key')
       expect(findButton(renderer, 'Test connection').props.disabled).toBe(true)
       expect(findButton(renderer, 'Test connection').props.title).toBe('Enter this provider API key first.')
+      expect(findButton(renderer, 'Fetch models').props.disabled).toBe(true)
+      expect(findButton(renderer, 'Fetch models').props.title).toBe('Enter this provider API key first.')
+      expect(renderer.root.findByProps({ 'data-testid': 'provider-list-fetch-xiaomi' }).props.disabled).toBe(true)
 
       await clickProviderTab(renderer, 'Advanced')
       const providerIdInput = renderer.root.findAllByType('input')
@@ -559,6 +562,63 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(renderer.root.findByProps({ placeholder: 'e.g. 10808' }).props.value)
         .toBe('65536')
       expect(renderer.root.findByProps({ id: 'provider-proxy-url-error' })).toBeTruthy()
+    })
+
+    it('fetches models from the provider header and list without opening the Models tab', async () => {
+      const settings = defaultModelProviderSettings()
+      const target = {
+        id: 'probe-provider',
+        name: 'Probe Provider',
+        apiKey: 'sk-probe',
+        baseUrl: 'https://api.example.com/v1',
+        endpointFormat: 'chat_completions',
+        useProxy: false,
+        models: [],
+        modelProfiles: {}
+      } satisfies ModelProviderProfileV1
+      const renderer = await mountProviders({
+        ...baseCtx(),
+        provider: { ...settings, providers: [...settings.providers, target] },
+        kun: { ...defaultKunRuntimeSettings(), providerId: target.id }
+      })
+
+      expect(renderer.root.findByProps({ 'data-testid': 'provider-fetch-models' }).props.disabled).toBe(false)
+      await act(async () => {
+        renderer.root.findByProps({ 'data-testid': 'provider-fetch-models' }).props.onClick()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(probeModelProvider).toHaveBeenCalledWith({
+        providerId: target.id,
+        baseUrl: target.baseUrl,
+        apiKey: target.apiKey,
+        endpointFormat: target.endpointFormat,
+        useProxy: target.useProxy
+      })
+      expect(fetchModelsDevCatalog).toHaveBeenCalledWith({
+        providerId: target.id,
+        baseUrl: target.baseUrl,
+        forceRefresh: true
+      })
+      expect(renderer.root.findByProps({ role: 'dialog' })).toBeTruthy()
+
+      await act(async () => findButton(renderer, 'Cancel import').props.onClick())
+      probeModelProvider.mockClear()
+      fetchModelsDevCatalog.mockClear()
+
+      await act(async () => {
+        renderer.root.findByProps({ 'data-testid': 'provider-list-fetch-probe-provider' }).props.onClick({
+          stopPropagation() {}
+        })
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(probeModelProvider).toHaveBeenCalledOnce()
+      expect(fetchModelsDevCatalog).toHaveBeenCalledOnce()
+      expect(renderer.root.findByProps({ role: 'dialog' })).toBeTruthy()
     })
   })
 })

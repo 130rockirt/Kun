@@ -386,6 +386,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       expect(rendererText(renderer)).toContain('Needs configuration')
       expect(rendererText(renderer)).toContain('URL must start with http:// or https://')
       expect(findButton(renderer, 'Test connection').props.disabled).toBe(true)
+      expect(findButton(renderer, 'Fetch models').props.disabled).toBe(true)
+      expect(renderer.root.findByProps({ 'data-testid': 'provider-list-fetch-probe-provider' }).props.disabled)
+        .toBe(true)
       expect(rendererText(renderer)).toContain('Could not apply')
     })
 
