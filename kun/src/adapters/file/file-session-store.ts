@@ -232,6 +232,8 @@ export class FileSessionStore implements SessionStore {
         sourcePath: path,
         indexPath: this.itemIndexPath(threadId),
         statePath: this.itemIndexStatePath(threadId),
+        threadId,
+        evidencePath: this.itemTailEvidencePath(threadId),
         item,
         record
       })
@@ -263,6 +265,8 @@ export class FileSessionStore implements SessionStore {
         sourcePath: path,
         indexPath: this.itemIndexPath(threadId),
         statePath: this.itemIndexStatePath(threadId),
+        threadId,
+        evidencePath: this.itemTailEvidencePath(threadId),
         item,
         record
       })
@@ -334,6 +338,8 @@ export class FileSessionStore implements SessionStore {
         sourcePath: this.messagesPath(threadId),
         indexPath: this.itemIndexPath(threadId),
         statePath: this.itemIndexStatePath(threadId),
+        threadId,
+        evidencePath: this.itemTailEvidencePath(threadId),
         item: updated,
         record
       })
@@ -353,6 +359,8 @@ export class FileSessionStore implements SessionStore {
     const path = this.messagesPath(threadId)
     return compactFileSessionItems({
       path,
+      threadId,
+      evidencePath: this.itemTailEvidencePath(threadId),
       force: options.force === true,
       minimumBytes: this.itemHistoryCompactionMinBytes,
       cachedItemCount: () => this.itemsCache.get(threadId)?.length ?? 0,
@@ -469,6 +477,8 @@ export class FileSessionStore implements SessionStore {
       itemIndex: this.itemIndex,
       indexPath: this.itemIndexPath(threadId),
       indexStatePath: this.itemIndexStatePath(threadId),
+      threadId,
+      evidencePath: this.itemTailEvidencePath(threadId),
       liveItemsPath: this.liveItemsPath(threadId)
     })
   }
@@ -635,6 +645,10 @@ export class FileSessionStore implements SessionStore {
 
   private liveItemsPath(threadId: string): string {
     return join(this.threadDir(threadId), 'live-items.json')
+  }
+
+  private itemTailEvidencePath(threadId: string): string {
+    return join(this.threadDir(threadId), 'messages.torn-tail.json')
   }
 
   private itemIndexPath(threadId: string): string {

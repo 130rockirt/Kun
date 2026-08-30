@@ -5,8 +5,9 @@ import type { ItemHistoryPage, ItemHistoryPageOptions } from '../../ports/sessio
 import { timelineSafeItem } from '../../services/item-history-page.js'
 import { atomicWriteFile } from './atomic-write.js'
 import { ITEM_HISTORY_MAX_RECORD_BYTES } from './file-session-live-items.js'
+import { ensureItemTailReady } from './file-session-item-tail.js'
 
-const INDEX_VERSION = 2
+const INDEX_VERSION = 3
 const INDEX_MAX_BYTES = 32 * 1024 * 1024
 const SCAN_CHUNK_BYTES = 64 * 1024
 
@@ -21,7 +22,8 @@ type ItemIndexRow = {
 }
 
 type ItemIndexState = {
-  version: 2
+  version: 3
+  tailReady: true
   sourceBytes: number
   sourceMtimeMs: number
   sourceDev: number
@@ -33,14 +35,23 @@ type ItemIndexState = {
 
 export class FileSessionItemIndex {
   private readonly rebuilds = new Map<string, Promise<void>>()
+  private readonly verifiedItemTails = new Set<string>()
 
   async append(input: {
     sourcePath: string
     indexPath: string
     statePath: string
+    threadId: string
+    evidencePath: string
     item: TurnItem
     record: string
   }): Promise<void> {
+    await ensureItemTailReady({
+      verified: this.verifiedItemTails,
+      threadId: input.threadId,
+      path: input.sourcePath,
+      evidencePath: input.evidencePath
+    })
     const before = await stat(input.sourcePath).catch(() => null)
     const offset = before?.size ?? 0
     await appendFile(input.sourcePath, `${input.record}\n`, { encoding: 'utf8', mode: 0o600 })
@@ -58,6 +69,7 @@ export class FileSessionItemIndex {
       const after = await stat(input.sourcePath)
       await atomicWriteFile(input.statePath, JSON.stringify({
         version: INDEX_VERSION,
+        tailReady: true,
         sourceBytes: after.size,
         sourceMtimeMs: after.mtimeMs,
         sourceDev: after.dev,
@@ -94,7 +106,15 @@ export class FileSessionItemIndex {
     sourcePath: string
     indexPath: string
     statePath: string
+    threadId: string
+    evidencePath: string
   }): Promise<{ rawCount: number; uniqueCount: number; canonicalBytes: number }> {
+    await ensureItemTailReady({
+      verified: this.verifiedItemTails,
+      threadId: input.threadId,
+      path: input.sourcePath,
+      evidencePath: input.evidencePath
+    })
     const before = await stat(input.sourcePath).catch(() => null)
     if (!before) {
       await this.invalidate(input.indexPath, input.statePath)
@@ -120,6 +140,8 @@ export class FileSessionItemIndex {
     sourcePath: string
     indexPath: string
     statePath: string
+    threadId: string
+    evidencePath: string
   }): void {
     if (this.rebuilds.has(input.sourcePath)) return
     const run = new Promise<void>((resolve) => setImmediate(resolve))
@@ -138,6 +160,7 @@ export class FileSessionItemIndex {
 
   clear(): void {
     this.rebuilds.clear()
+    this.verifiedItemTails.clear()
   }
 
   async replaceForItems(input: {
@@ -273,6 +296,7 @@ async function readIndexState(path: string): Promise<ItemIndexState | null> {
     const value = JSON.parse(await readFile(path, 'utf8')) as Partial<ItemIndexState>
     if (
       value.version !== INDEX_VERSION ||
+      value.tailReady !== true ||
       !Number.isSafeInteger(value.sourceBytes) ||
       !Number.isFinite(value.sourceMtimeMs) ||
       !Number.isSafeInteger(value.sourceDev) ||
@@ -301,6 +325,7 @@ async function writeIndexFiles(
   await atomicWriteFile(indexPath, contents)
   await atomicWriteFile(statePath, JSON.stringify({
     version: INDEX_VERSION,
+    tailReady: true,
     sourceBytes: source.size,
     sourceMtimeMs: source.mtimeMs,
     sourceDev: source.dev,
@@ -342,6 +367,7 @@ async function* scanItemRecords(path: string): AsyncIterable<{
       throw new Error(`item history record exceeds ${ITEM_HISTORY_MAX_RECORD_BYTES} bytes`)
     }
   }
+  if (pending.length > 0) throw new Error('item history has an unterminated trailing record')
 }
 
 function rowForItem(item: TurnItem, offset: number, recordBytes: number): ItemIndexRow {

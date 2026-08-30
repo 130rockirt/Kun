@@ -17,6 +17,8 @@ export async function loadIndexedLiveItemPageFromStore(input: Parameters<
   itemIndex: FileSessionItemIndex
   indexPath: string
   indexStatePath: string
+  threadId: string
+  evidencePath: string
   liveItemsPath: string
 }): Promise<ItemHistoryPage> {
   const indexed = await input.fileAccess.withRead(input.path, () => input.itemIndex.loadPage({
@@ -31,7 +33,9 @@ export async function loadIndexedLiveItemPageFromStore(input: Parameters<
     input.itemIndex.scheduleRebuild({
       sourcePath: input.path,
       indexPath: input.indexPath,
-      statePath: input.indexStatePath
+      statePath: input.indexStatePath,
+      threadId: input.threadId,
+      evidencePath: input.evidencePath
     })
   }
   const page = indexed ?? await loadItemPageFromStore(input)

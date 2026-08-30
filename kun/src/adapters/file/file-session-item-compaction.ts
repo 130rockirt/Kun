@@ -6,9 +6,12 @@ import { readLatestItemsFromJsonl } from './file-session-jsonl.js'
 import { serializeItemRecords } from './file-session-live-items.js'
 import { assertLegacyRepairDiskSpace, shouldRepairLegacyHistory } from './file-session-repair.js'
 import type { JsonlFileAccessCoordinator } from './jsonl-file-access.js'
+import { ensureItemTailReady } from './file-session-item-tail.js'
 
 export async function compactFileSessionItems(input: {
   path: string
+  threadId: string
+  evidencePath: string
   force: boolean
   minimumBytes: number
   cachedItemCount: () => number
@@ -21,6 +24,12 @@ export async function compactFileSessionItems(input: {
   scheduleRetry: () => void
   withThreadWrite: <T>(operation: () => Promise<T>) => Promise<T>
 }): Promise<ItemHistoryCompactionResult> {
+  await input.fileAccess.withRead(input.path, () => ensureItemTailReady({
+    verified: new Set<string>(),
+    threadId: input.threadId,
+    path: input.path,
+    evidencePath: input.evidencePath
+  }))
   const info = await stat(input.path).catch(() => null)
   if (!info) return unchanged(0, 0, 0)
   if (!input.force && info.size < input.minimumBytes) {
