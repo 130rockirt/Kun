@@ -39,7 +39,7 @@ function makeTempRoot(): string {
 }
 
 function runHelper(input: {
-  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'ResolveUninstaller' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore' | 'ValidatePayload' | 'CleanupInPlaceLeftovers'
+  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore' | 'ValidatePayload' | 'CleanupInPlaceLeftovers'
   source?: string
   secondary?: string
   currentUserSource?: string
@@ -63,6 +63,7 @@ function runHelper(input: {
   canonicalLeaf?: string
   appExecutable?: string
   productName?: string
+  selfPath?: string
 }) {
   const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
   const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
@@ -105,7 +106,8 @@ function runHelper(input: {
         KUN_INSTALLER_CANONICAL_LEAF: input.canonicalLeaf ?? 'Kun',
         KUN_INSTALLER_APP_EXECUTABLE: input.appExecutable ?? 'Kun.exe',
         KUN_INSTALLER_PRODUCT_NAME: input.productName ?? 'Kun',
-        KUN_INSTALLER_SELF_PID: String(process.pid)
+        KUN_INSTALLER_SELF_PID: String(process.pid),
+        KUN_INSTALLER_SELF_PATH: input.selfPath ?? ''
       }
     }
   )
@@ -266,21 +268,6 @@ it('lets an explicit target override a registered legacy branded source', () => 
     expect(processError(result)).toContain('exactly one verified Kun registration')
   })
 
-  it('returns only an app-specific uninstaller inside the verified source', () => {
-    const root = makeTempRoot()
-    const source = join(root, 'Kun')
-    const resultPath = join(root, 'trusted-uninstaller.txt')
-    mkdirSync(source, { recursive: true })
-    writeFileSync(join(source, 'Kun.exe'), 'app')
-    writeFileSync(join(source, 'Uninstall Kun.exe'), 'uninstaller')
-
-    const result = runHelper({ action: 'ResolveUninstaller', source, resultPath })
-
-    expect(result.status, processError(result)).toBe(0)
-    expect(readFileSync(resultPath, 'utf16le'))
-      .toBe(realpathSync.native(join(source, 'Uninstall Kun.exe')))
-  })
-
   it('writes resolver output beside the helper without cross-process result state', () => {
     const root = makeTempRoot()
     const copiedHelper = join(root, 'migration.ps1')
@@ -335,6 +322,34 @@ it('lets an explicit target override a registered legacy branded source', () => 
     expect(prepared.status, processError(prepared)).toBe(0)
     expect(readFileSync(resultPath, 'utf16le')).toBe('0')
     expect(existsSync(join(source, 'personal.txt'))).toBe(false)
+    const restored = runHelper({ action: 'Restore', source, target: source, journal })
+    expect(restored.status, processError(restored)).toBe(0)
+    expect(readFileSync(join(source, 'personal.txt'), 'utf8')).toBe('keep me')
+  })
+
+  it('leaves the exact top-level running installer in place during manual cleanup', () => {
+    const root = makeTempRoot()
+    const source = join(root, 'Kun')
+    const journal = join(root, 'recovery', 'journal.json')
+    const installer = join(source, 'Kun-setup.exe')
+    mkdirSync(join(source, 'resources'), { recursive: true })
+    writeFileSync(join(source, 'Kun.exe'), 'app')
+    writeFileSync(join(source, 'resources', 'app.asar'), 'packaged app')
+    writeFileSync(installer, 'running installer')
+    writeFileSync(join(source, 'personal.txt'), 'keep me')
+
+    const prepared = runHelper({
+      action: 'Prepare', source, target: source, journal, selfPath: installer
+    })
+    expect(prepared.status, processError(prepared)).toBe(0)
+    expect(readFileSync(installer, 'utf8')).toBe('running installer')
+
+    const cleaned = runHelper({
+      action: 'FallbackCleanup', source, target: source, journal, selfPath: installer
+    })
+    expect(cleaned.status, processError(cleaned)).toBe(0)
+    expect(readFileSync(installer, 'utf8')).toBe('running installer')
+
     const restored = runHelper({ action: 'Restore', source, target: source, journal })
     expect(restored.status, processError(restored)).toBe(0)
     expect(readFileSync(join(source, 'personal.txt'), 'utf8')).toBe('keep me')

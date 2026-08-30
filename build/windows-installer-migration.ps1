@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('ResolvePath', 'ResolveSource', 'ResolveUpdateScope', 'ResolveUninstaller', 'ResolveRecoveryExecutable', 'RecoverUpdateTransaction', 'PrepareUpdateTransaction', 'SwitchUpdatePayload', 'ValidateCutover', 'RollbackUpdateTransaction', 'ResolveHealthToken', 'ValidateHealthResult', 'CommitUpdateTransaction', 'FinalizeUpdateTransaction', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'ValidatePayload', 'BackupPayload', 'RestorePayloadBackup', 'CleanupInPlaceLeftovers', 'CleanupJournal', 'UpdatePath', 'WriteUpdateResult')]
+  [ValidateSet('ResolvePath', 'ResolveSource', 'ResolveUpdateScope', 'ResolveRecoveryExecutable', 'RecoverUpdateTransaction', 'PrepareUpdateTransaction', 'SwitchUpdatePayload', 'ValidateCutover', 'RollbackUpdateTransaction', 'ResolveHealthToken', 'ValidateHealthResult', 'CommitUpdateTransaction', 'FinalizeUpdateTransaction', 'StopProcesses', 'Recover', 'Prepare', 'FallbackCleanup', 'Restore', 'ValidatePayload', 'BackupPayload', 'RestorePayloadBackup', 'CleanupInPlaceLeftovers', 'CleanupJournal', 'UpdatePath', 'WriteUpdateResult')]
   [string]$Action,
   [string]$ResultPath = ''
 )
@@ -133,7 +133,9 @@ try {
   Write-InstallerDiagnostic (
     "START action=$Action source=$(Get-EnvironmentValue 'KUN_INSTALLER_SOURCE') " +
     "target=$(Get-EnvironmentValue 'KUN_INSTALLER_TARGET') " +
-    "journal=$(Get-EnvironmentValue 'KUN_INSTALLER_JOURNAL')"
+    "journal=$(Get-EnvironmentValue 'KUN_INSTALLER_JOURNAL') " +
+    "installMode=$(Get-EnvironmentValue 'KUN_INSTALLER_INSTALL_MODE') " +
+    "uacInner=$(Get-EnvironmentValue 'KUN_INSTALLER_UAC_INNER')"
   )
   switch ($Action) {
     'ResolvePath' {
@@ -144,9 +146,6 @@ try {
     }
     'ResolveUpdateScope' {
       Write-InstallerResult (Resolve-AutomaticUpdateScope)
-    }
-    'ResolveUninstaller' {
-      Write-InstallerResult (Resolve-TrustedAppUninstaller)
     }
     'ResolveRecoveryExecutable' {
       Write-InstallerResult (Resolve-RecoveryPayloadExecutable)
@@ -182,7 +181,7 @@ try {
       $stopResult = Stop-InstallRootProcesses
       if ($stopResult.Outcome -eq 'running') {
         $processIds = @($stopResult.ProcessIds | ForEach-Object { [string]$_ }) -join ','
-        Write-InstallerDiagnostic "STOP_PROCESSES outcome=running pids=$processIds"
+        Write-BlockingProcessDiagnostic $stopResult
         [Console]::Error.WriteLine("KUN_INSTALLER_STOP_RESULT=running pids=$processIds")
         exit 2
       }

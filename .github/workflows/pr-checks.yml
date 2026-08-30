@@ -294,7 +294,18 @@ jobs:
 
       - name: Smoke Windows installer migration
         timeout-minutes: 60
+        env:
+          KUN_INSTALLER_SMOKE_ARTIFACT_DIR: ${{ github.workspace }}\artifacts\windows-installer-smoke
         run: npm run smoke:windows-installer-migration -- -InstallerPath (Get-ChildItem dist/Kun-*-win-x64.exe | Select-Object -First 1 -ExpandProperty FullName)
+
+      - name: Upload Windows installer smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-windows-installer-smoke-diagnostics
+          if-no-files-found: ignore
+          retention-days: 3
+          path: artifacts/windows-installer-smoke/**
 
       - name: Smoke packaged update handoff (Windows)
         timeout-minutes: 20

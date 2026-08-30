@@ -1,5 +1,6 @@
 param(
   [string]$InstallerPath = '',
+  [string]$ArtifactDirectory = '',
   [switch]$AllowLocal
 )
 
@@ -12,12 +13,17 @@ if (-not [Environment]::Is64BitOperatingSystem -or [Environment]::OSVersion.Plat
 if (-not $AllowLocal -and $env:CI -ne 'true') {
   throw 'This smoke mutates the current-user Kun uninstall registration and is restricted to clean CI runners. Use -AllowLocal only in a disposable Windows account.'
 }
+if ([string]::IsNullOrWhiteSpace($ArtifactDirectory)) {
+  $ArtifactDirectory = [Environment]::GetEnvironmentVariable('KUN_INSTALLER_SMOKE_ARTIFACT_DIR', 'Process')
+}
 
 $root = Join-Path ([IO.Path]::GetTempPath()) ('kun-installer-migration-smoke-' + [guid]::NewGuid().ToString('N'))
 $diagnosticPath = Join-Path $root 'installer-helper-diagnostics.log'
 $previousDiagnosticPath = [Environment]::GetEnvironmentVariable('KUN_INSTALLER_DIAGNOSTIC_PATH', 'Process')
 $previousUpdateSource = [Environment]::GetEnvironmentVariable('KUN_INSTALLER_UPDATE_SOURCE', 'Process')
 $previousAttackMarker = [Environment]::GetEnvironmentVariable('KUN_INSTALLER_ATTACK_MARKER', 'Process')
+$previousFixtureMarker = [Environment]::GetEnvironmentVariable('KUN_INSTALLER_SMOKE_FIXTURE_MARKER', 'Process')
+$previousFixtureBehavior = [Environment]::GetEnvironmentVariable('KUN_INSTALLER_SMOKE_FIXTURE_BEHAVIOR', 'Process')
 $markerName = '.kun-installer-migration-smoke-' + [guid]::NewGuid().ToString('N')
 $installRegistryPath = $null
 $uninstallRegistryPath = $null
@@ -66,26 +72,33 @@ function Show-InstallerDiagnostics([string]$Scenario) {
 function Invoke-Installer(
   [string]$Scenario,
   [string[]]$Arguments,
-  [int]$ExpectedExitCode = 0
+  [int]$ExpectedExitCode = 0,
+  [int]$TimeoutSeconds = 600,
+  [string]$ExecutablePath = ''
 ) {
   $script:currentScenario = $Scenario
   $argumentText = $Arguments -join ' '
   $accessViolationExitCode = -1073741819
   $maximumAttempts = 2
   $process = $null
+  $installerExecutable = if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
+    $script:InstallerPath
+  } else {
+    $ExecutablePath
+  }
   for ($attempt = 1; $attempt -le $maximumAttempts; $attempt += 1) {
     Write-Host "[$Scenario] Starting installer (attempt $attempt/$maximumAttempts): $argumentText"
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    $process = Start-Process -FilePath $script:InstallerPath -ArgumentList $Arguments -PassThru
+    $process = Start-Process -FilePath $installerExecutable -ArgumentList $Arguments -PassThru
     # Start-Process -Wait follows the entire process tree. Automatic-update
     # rollback intentionally relaunches the previous Kun app, so -Wait would
     # hide the installer's real exit code until that interactive app closes.
-    $exited = $process.WaitForExit(600000)
+    $exited = $process.WaitForExit($TimeoutSeconds * 1000)
     $stopwatch.Stop()
     if (-not $exited) {
       & "$env:SystemRoot\System32\taskkill.exe" /PID $process.Id /T /F | Out-Null
       Show-InstallerDiagnostics $Scenario
-      throw "[$Scenario] Installer PID $($process.Id) did not exit within 600 seconds. Arguments: $argumentText"
+      throw "[$Scenario] Installer PID $($process.Id) did not exit within $TimeoutSeconds seconds. Arguments: $argumentText"
     }
     Write-Host "[$Scenario] Installer exited with $($process.ExitCode) after $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s."
     if ($process.ExitCode -ne $accessViolationExitCode -or $attempt -eq $maximumAttempts) {
@@ -408,6 +421,8 @@ try {
   Assert-RegisteredLocation $custom
   Assert-True (Test-Path -LiteralPath (Join-Path $custom 'custom-note.txt')) 'Custom install content was not restored in place.'
 
+  . (Join-Path $PSScriptRoot 'smoke-windows-installer-manual-upgrade.ps1')
+
   Move-Item -LiteralPath (Join-Path $custom 'Kun.exe') -Destination (Join-Path $custom 'Kun.exe.partial-missing')
   Invoke-Installer 'partially damaged packaged source recovery' @('/S', '/currentuser')
   Assert-RegisteredLocation $custom
@@ -446,7 +461,7 @@ try {
   Set-RegisteredLocation $custom
 
   Move-Item -LiteralPath (Join-Path $custom 'Uninstall Kun.exe') -Destination (Join-Path $custom 'old-uninstaller.missing')
-  Invoke-Installer 'missing uninstaller fallback cleanup' @('/S', '/currentuser')
+  Invoke-Installer 'missing uninstaller direct cleanup' @('/S', '/currentuser')
   Assert-RegisteredLocation $custom
   Assert-True (Test-Path -LiteralPath (Join-Path $custom 'old-uninstaller.missing')) 'Fallback cleanup deleted preserved unknown content.'
 
@@ -470,6 +485,13 @@ try {
   Move-RegisteredInstall $conflictTarget $externalBackingSource $externalSource
   Set-Content -LiteralPath (Join-Path $externalSource 'external-note.txt') -Value 'keep external note'
   Assert-RegisteredLocation $externalSource
+  $externalManualUserRoot = Join-Path $externalSource ($unicodeDirectoryName + '-user-files')
+  $externalManualTextFile = Join-Path $externalManualUserRoot 'notes.txt'
+  $externalManualBinaryFile = Join-Path $externalManualUserRoot 'nested\payload.bin'
+  Assert-True ((Get-FileSha256 $externalManualTextFile) -eq $manualUserHashes[$manualTextFile]) `
+    'The Unicode user text changed while relocating the current-user install.'
+  Assert-True ((Get-FileSha256 $externalManualBinaryFile) -eq $manualUserHashes[$manualBinaryFile]) `
+    'The nested binary user file changed while relocating the current-user install.'
 
   foreach ($sentinel in $sentinels) {
     Assert-True (Test-Path -LiteralPath $sentinel) "User-data sentinel was removed: $sentinel"
@@ -479,11 +501,42 @@ try {
   $previousUserUninstallRegistryPath = $script:uninstallRegistryPath
   $machineParent = Join-Path $root 'machine'
   $machineTarget = Join-Path $machineParent 'Kun'
-  Invoke-Installer 'current-user to all-users migration' @('/S', '/allusers', "/D=$machineParent")
+  $uacOldUninstallerMarker = Join-Path $root 'uac-old-uninstaller-ran.txt'
+  Install-SmokeOldUninstallerFixture $externalSource
+  $oldFixtureMarker = [Environment]::GetEnvironmentVariable('KUN_INSTALLER_SMOKE_FIXTURE_MARKER', 'Process')
+  $oldFixtureBehavior = [Environment]::GetEnvironmentVariable('KUN_INSTALLER_SMOKE_FIXTURE_BEHAVIOR', 'Process')
+  try {
+    [Environment]::SetEnvironmentVariable('KUN_INSTALLER_SMOKE_FIXTURE_MARKER', $uacOldUninstallerMarker, 'Process')
+    [Environment]::SetEnvironmentVariable('KUN_INSTALLER_SMOKE_FIXTURE_BEHAVIOR', 'exit2', 'Process')
+    Invoke-Installer 'current-user to all-users migration' @('/S', '/allusers', "/D=$machineParent")
+  } finally {
+    [Environment]::SetEnvironmentVariable('KUN_INSTALLER_SMOKE_FIXTURE_MARKER', $oldFixtureMarker, 'Process')
+    [Environment]::SetEnvironmentVariable('KUN_INSTALLER_SMOKE_FIXTURE_BEHAVIOR', $oldFixtureBehavior, 'Process')
+  }
+  Assert-True (-not (Test-Path -LiteralPath $uacOldUninstallerMarker)) `
+    'The elevated manual overwrite invoked the current-user old uninstaller fixture.'
   Assert-True (-not (Test-Path -LiteralPath $previousUserInstallRegistryPath)) 'The current-user install registration remains after all-users migration.'
   Assert-True (-not (Test-Path -LiteralPath $previousUserUninstallRegistryPath)) 'The current-user uninstall registration remains after all-users migration.'
   Assert-True (-not (Test-Path -LiteralPath (Join-Path $externalSource 'Kun.exe'))) 'The external current-user application payload remains after all-users migration.'
   Assert-True ((Get-Content -LiteralPath (Join-Path $externalSource 'external-note.txt') -Raw).Trim() -eq 'keep external note') 'External current-user content was not restored.'
+  Assert-True ((Get-FileSha256 $externalManualTextFile) -eq $manualUserHashes[$manualTextFile]) `
+    'The all-users migration changed the preserved Unicode user text.'
+  Assert-True ((Get-FileSha256 $externalManualBinaryFile) -eq $manualUserHashes[$manualBinaryFile]) `
+    'The all-users migration changed the preserved nested binary user file.'
+  $allUsersPrepareDiagnostics = @(Get-Content -LiteralPath $diagnosticPath | Where-Object {
+    $_ -match 'START action=Prepare' -and
+      $_ -match [regex]::Escape("source=$externalSource") -and
+      $_ -match 'installMode=all' -and
+      $_ -match 'uacInner=[01]'
+  })
+  Assert-True ($allUsersPrepareDiagnostics.Count -gt 0) `
+    'The all-users migration did not record its outer/inner installer evidence.'
+  $ranUacInner = [bool]($allUsersPrepareDiagnostics | Where-Object { $_ -match 'uacInner=1' })
+  if ($env:KUN_INSTALLER_SMOKE_REQUIRE_UAC_INNER -eq '1') {
+    Assert-True $ranUacInner 'This smoke environment required a real UAC inner installer instance.'
+  } elseif (-not $ranUacInner) {
+    Write-Warning 'The runner was already elevated; the all-users path ran without a UAC inner instance.'
+  }
   Assert-NoKunShortcuts 'CurrentUser'
   Find-KunRegistration $machineTarget 'HKLM'
   Assert-RegisteredLocation $machineTarget
@@ -553,10 +606,37 @@ try {
   }
 
   Write-Host 'Windows installer migration smoke passed.'
+} catch {
+  $failureRecord = $_
+  if (-not [string]::IsNullOrWhiteSpace($ArtifactDirectory)) {
+    try {
+      $artifactRoot = [IO.Path]::GetFullPath($ArtifactDirectory)
+      [IO.Directory]::CreateDirectory($artifactRoot) | Out-Null
+      if (Test-Path -LiteralPath $diagnosticPath -PathType Leaf) {
+        Copy-Item -LiteralPath $diagnosticPath `
+          -Destination (Join-Path $artifactRoot 'installer-helper-diagnostics.log') -Force
+      }
+      foreach ($evidence in @(Get-ChildItem -LiteralPath $root -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.Extension -eq '.txt' -or $_.Extension -eq '.log'
+      })) {
+        Copy-Item -LiteralPath $evidence.FullName -Destination $artifactRoot -Force
+      }
+      [ordered]@{
+        scenario = $currentScenario
+        message = $failureRecord.Exception.Message
+        at = [DateTime]::UtcNow.ToString('o')
+      } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $artifactRoot 'failure-summary.json') -Encoding UTF8
+    } catch {
+      Write-Warning "Unable to preserve installer smoke diagnostics: $($_.Exception.Message)"
+    }
+  }
+  throw $failureRecord
 } finally {
   [Environment]::SetEnvironmentVariable('KUN_INSTALLER_DIAGNOSTIC_PATH', $previousDiagnosticPath, 'Process')
   [Environment]::SetEnvironmentVariable('KUN_INSTALLER_UPDATE_SOURCE', $previousUpdateSource, 'Process')
   [Environment]::SetEnvironmentVariable('KUN_INSTALLER_ATTACK_MARKER', $previousAttackMarker, 'Process')
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_SMOKE_FIXTURE_MARKER', $previousFixtureMarker, 'Process')
+  [Environment]::SetEnvironmentVariable('KUN_INSTALLER_SMOKE_FIXTURE_BEHAVIOR', $previousFixtureBehavior, 'Process')
   foreach ($sentinel in $sentinels) {
     Remove-Item -LiteralPath $sentinel -Force -ErrorAction SilentlyContinue
   }

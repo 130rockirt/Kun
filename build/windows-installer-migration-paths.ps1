@@ -291,22 +291,3 @@ function Resolve-AutomaticUpdateScope {
   }
   return $matches[0]
 }
-
-function Resolve-TrustedAppUninstaller {
-  $source = Normalize-FullPath (Get-EnvironmentValue 'KUN_INSTALLER_SOURCE')
-  if ([string]::IsNullOrWhiteSpace($source)) {
-    return ''
-  }
-  Assert-SafeInstallRoot $source 'Uninstaller source'
-  Assert-RecoverableApplicationSource $source
-  foreach ($name in (Get-AppSpecificUninstallerFiles)) {
-    $candidate = Join-Path $source $name
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-      if (Test-ReparsePoint $candidate) {
-        throw "The app-specific uninstaller is a reparse point: $candidate"
-      }
-      return Normalize-FullPath $candidate
-    }
-  }
-  return ''
-}

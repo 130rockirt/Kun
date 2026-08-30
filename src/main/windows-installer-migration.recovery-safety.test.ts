@@ -39,7 +39,7 @@ function makeTempRoot(): string {
 }
 
 function runHelper(input: {
-  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'ResolveUninstaller' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore' | 'ValidatePayload' | 'CleanupInPlaceLeftovers'
+  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore' | 'ValidatePayload' | 'CleanupInPlaceLeftovers'
   source?: string
   secondary?: string
   currentUserSource?: string
@@ -105,7 +105,8 @@ function runHelper(input: {
         KUN_INSTALLER_CANONICAL_LEAF: input.canonicalLeaf ?? 'Kun',
         KUN_INSTALLER_APP_EXECUTABLE: input.appExecutable ?? 'Kun.exe',
         KUN_INSTALLER_PRODUCT_NAME: input.productName ?? 'Kun',
-        KUN_INSTALLER_SELF_PID: String(process.pid)
+        KUN_INSTALLER_SELF_PID: String(process.pid),
+        KUN_INSTALLER_SELF_PATH: ''
       }
     }
   )
@@ -172,9 +173,7 @@ it('preserves unknown top-level content and restores it after fallback cleanup',
       'keep me'
     )
 
-    // A successful old uninstaller removes the identity executable before the
-    // installer asks the helper to clean allowlisted leftovers.
-    rmSync(join(source, 'Kun.exe'))
+    // Manual overwrite owns the allowlisted cleanup; no old uninstaller runs first.
     const cleaned = runHelper({ action: 'FallbackCleanup', source, target, journal })
     expect(cleaned.status, processError(cleaned)).toBe(0)
     expect(existsSync(join(source, 'Kun.exe'))).toBe(false)
@@ -197,9 +196,7 @@ it('preserves unknown top-level content and restores it after fallback cleanup',
     expect(prepared.status, processError(prepared)).toBe(0)
     expect(existsSync(journal)).toBe(true)
 
-    // The old uninstaller removes the identity executable before fallback
-    // cleanup, so the validated preparation record becomes the authorization.
-    rmSync(join(source, 'Kun.exe'))
+    // The validated preparation record authorizes direct allowlisted cleanup.
     const cleaned = runHelper({ action: 'FallbackCleanup', source, target, journal })
     expect(cleaned.status, processError(cleaned)).toBe(0)
     expect(existsSync(source)).toBe(false)

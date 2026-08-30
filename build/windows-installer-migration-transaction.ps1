@@ -559,6 +559,7 @@ function Invoke-RollbackUpdateTransaction {
     $failed = Normalize-FullPath ([string]$transaction.FailedPayloadRoot)
     $stopResult = Stop-AppProcesses @($target)
     if ($stopResult.Outcome -ne 'stopped') {
+      Write-BlockingProcessDiagnostic $stopResult
       throw 'The candidate application could not be stopped before rollback.'
     }
     if (Test-Path -LiteralPath $failed) { Remove-Item -LiteralPath $failed -Recurse -Force }

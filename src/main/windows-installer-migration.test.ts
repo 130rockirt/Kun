@@ -40,7 +40,7 @@ function makeTempRoot(): string {
 }
 
 function runHelper(input: {
-  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'ResolveUninstaller' | 'ResolveRecoveryExecutable' | 'PrepareUpdateTransaction' | 'SwitchUpdatePayload' | 'ValidateCutover' | 'RollbackUpdateTransaction' | 'ResolveHealthToken' | 'ValidateHealthResult' | 'CommitUpdateTransaction' | 'StopProcesses' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore' | 'ValidatePayload' | 'BackupPayload' | 'RestorePayloadBackup' | 'CleanupInPlaceLeftovers' | 'CleanupJournal'
+  action: 'ResolvePath' | 'ResolveSource' | 'ResolveUpdateScope' | 'ResolveRecoveryExecutable' | 'PrepareUpdateTransaction' | 'SwitchUpdatePayload' | 'ValidateCutover' | 'RollbackUpdateTransaction' | 'ResolveHealthToken' | 'ValidateHealthResult' | 'CommitUpdateTransaction' | 'StopProcesses' | 'Recover' | 'Prepare' | 'FallbackCleanup' | 'Restore' | 'ValidatePayload' | 'BackupPayload' | 'RestorePayloadBackup' | 'CleanupInPlaceLeftovers' | 'CleanupJournal'
   source?: string
   secondary?: string
   currentUserSource?: string
@@ -66,6 +66,7 @@ function runHelper(input: {
   productName?: string
   appRoot?: string
   diagnosticPath?: string
+  selfPath?: string
   automaticUpdate?: boolean
   backupPath?: string
   transactionPath?: string
@@ -119,6 +120,7 @@ function runHelper(input: {
         KUN_INSTALLER_APP_EXECUTABLE: input.appExecutable ?? 'Kun.exe',
         KUN_INSTALLER_PRODUCT_NAME: input.productName ?? 'Kun',
         KUN_INSTALLER_SELF_PID: String(process.pid),
+        KUN_INSTALLER_SELF_PATH: input.selfPath ?? '',
         KUN_INSTALLER_APP_ROOT: input.appRoot ?? '',
         KUN_INSTALLER_DIAGNOSTIC_PATH: input.diagnosticPath ?? '',
         KUN_INSTALLER_AUTOMATIC_UPDATE: input.automaticUpdate ? '1' : '0',
@@ -253,7 +255,7 @@ describe('Windows installer migration ACL contract', () => {
 
     expect(script).toContain('$accessViolationExitCode = -1073741819')
     expect(script).toContain('$maximumAttempts = 2')
-    expect(script).toContain('$process.WaitForExit(600000)')
+    expect(script).toContain('$process.WaitForExit($TimeoutSeconds * 1000)')
     expect(script).not.toContain(
       'Start-Process -FilePath $script:InstallerPath -ArgumentList $Arguments -Wait'
     )
