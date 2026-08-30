@@ -151,6 +151,15 @@ export function buildToolPreferenceInstruction(
       'Use `delegate_task` when a substantial task benefits from specialist expertise, a fresh independent review, or parallel investigation of independent workstreams. Delegate a clear bounded outcome with enough context; keep integration and final verification in the parent agent.'
     )
     bullets.push(
+      'Before delegating, decide whether the child result is required for the current final answer. If it is required, run the child in the foreground and do not set detach=true; detached children report back asynchronously after the current turn and are not a final-answer quality gate.'
+    )
+    bullets.push(
+      'For the same parent turn, code-change scope, and review purpose, launch only one reviewer. If a matching detached reviewer is already queued or running, do not start an overlapping foreground reviewer. Multiple reviewers are allowed only for explicitly distinct, independent scopes recorded in their labels and prompts.'
+    )
+    bullets.push(
+      'Do not claim that a detached review passed until its settled result has actually been observed.'
+    )
+    bullets.push(
       'Do not delegate trivial work, tightly coupled sequential steps, or tasks the parent can complete faster directly. Issue multiple child calls together only when they are genuinely independent.'
     )
     bullets.push(

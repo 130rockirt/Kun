@@ -74,7 +74,10 @@ export function buildDelegationToolProviders(
               description: 'Last observed resumeCount for stale/double-submit protection. Set only with resumeChildId; omit it entirely for a new child.'
             },
             ...modeProperties,
-            detach: { type: 'boolean', description: 'Run in the background and return after the child is queued.' },
+            detach: {
+              type: 'boolean',
+              description: 'Run in the background and return after the child is queued. The current turn does not wait for the result; omit this when the result must be consumed before the final answer.'
+            },
             returnFormat: { type: 'string', enum: ['summary', 'evidence'] }
           },
           required: ['prompt'],
@@ -661,7 +664,7 @@ function buildDelegateTaskDescription(runtime: DelegationRuntime): string {
     modeDescription,
     'For a new child, omit resumeChildId and expectedResumeCount entirely; never use empty or "new" sentinel values.',
     'Child model, provider, and reasoning strength remain host-controlled and are not tool-call arguments.',
-    'Issue multiple calls in one message for independent parallel work.',
+    'Issue multiple calls in one message only for independent work. Do not start a detached review and then a foreground review for the same scope.',
     `Children default to the "${runtime.defaultToolPolicy}" tool policy and can never recursively delegate.`
   ].join(' ')
 }
