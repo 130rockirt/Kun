@@ -3,6 +3,7 @@ import type { AgentProvider, NormalizedThread } from '../agent/types'
 import type { ScheduleRuntimeStatus } from '@shared/app-settings'
 import type { ChatState } from './chat-store-types'
 import { stopTurnCompletionPoll } from './chat-store-schedulers'
+import { SIDEBAR_ACTIVITY_CHECKPOINTS_KEY } from './sidebar-activity-checkpoints'
 import {
   createSidebarActivityActions,
   scheduledThreadActivities
@@ -101,6 +102,34 @@ describe('sidebar activity observer', () => {
     await h.action()
 
     expect(h.get().threads[0]).toMatchObject({ latestSeq: 3, latestTurnId: 'turn-2', status: 'idle' })
+    expect(h.get().unreadThreadIds).toEqual({ 'thread-1': 'completed' })
+  })
+
+  it('migrates a v1 baseline without a false unread and retains latestSeq detection', async () => {
+    const legacyKey = 'kun.sidebarActivityCheckpoints.v1'
+    window.localStorage.setItem(legacyKey, JSON.stringify({
+      initialized: true,
+      threads: { 'thread-1': { latestSeq: 1, fallback: '2026-08-20T00:00:00.000Z|idle' } },
+      scheduleRuns: {}
+    }))
+    let listed = thread()
+    provider = {
+      listThreads: vi.fn(async () => [listed]),
+      listThreadsPage: vi.fn(async () => ({ threads: [listed], hasMore: false })),
+      getThreadState: vi.fn(async () => ({
+        status: 'idle', updatedAt: listed.updatedAt, latestSeq: listed.latestSeq ?? 0,
+        latestTurnId: 'turn-2', latestTurnStatus: 'completed'
+      }))
+    }
+    const h = harness()
+
+    await h.action()
+    expect(h.get().unreadThreadIds).toEqual({})
+    expect(window.localStorage.getItem(SIDEBAR_ACTIVITY_CHECKPOINTS_KEY)).not.toBeNull()
+
+    listed = thread({ latestSeq: 2, updatedAt: '2026-08-20T00:01:00.000Z' })
+    await h.action()
+
     expect(h.get().unreadThreadIds).toEqual({ 'thread-1': 'completed' })
   })
 

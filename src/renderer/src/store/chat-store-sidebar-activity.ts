@@ -152,7 +152,7 @@ async function runSync(set: ChatStoreSet, get: ChatStoreGet, generation: number)
     return !local || threadLooksRunning(thread) ||
       stateAtStart.watchTurnCompletion[thread.id] === true ||
       stateAtStart.awaitingUserInputThreadIds[thread.id] === true ||
-      (baselineEstablished && checkpointChanged(checkpoints.threads[thread.id], thread))
+      (baselineEstablished && checkpointChanged(checkpoints.threads[thread.id]?.checkpoint, thread))
   })
   const runtimeStates = new Map<string, Awaited<ReturnType<typeof provider.getThreadState>>>()
   const missingRuntimeStateIds = new Set<string>()
@@ -166,6 +166,7 @@ async function runSync(set: ChatStoreSet, get: ChatStoreGet, generation: number)
   }
   if (generation !== syncGeneration) return
 
+  const checkpointUpdatedAt = Date.now()
   const nextCheckpoints: SidebarActivityCheckpoints = {
     initialized: true,
     threads: { ...checkpoints.threads },
@@ -176,12 +177,17 @@ async function runSync(set: ChatStoreSet, get: ChatStoreGet, generation: number)
       candidateIds.has(thread.id) &&
       !runtimeStates.has(thread.id)
     ) continue
-    nextCheckpoints.threads[thread.id] = checkpointForThread(thread)
+    nextCheckpoints.threads[thread.id] = {
+      checkpoint: checkpointForThread(thread),
+      updatedAt: checkpointUpdatedAt
+    }
   }
   const boundTasks = scheduleStatus?.boundThreadTasks ?? []
   for (const task of boundTasks) {
     const key = scheduleRunKey(task)
-    if (key) nextCheckpoints.scheduleRuns[task.taskId] = key
+    if (key) {
+      nextCheckpoints.scheduleRuns[task.taskId] = { checkpoint: key, updatedAt: checkpointUpdatedAt }
+    }
   }
 
   let discoveredUnknownThread = false
@@ -216,7 +222,10 @@ async function runSync(set: ChatStoreSet, get: ChatStoreGet, generation: number)
         typeof summary.latestSeq === 'number' &&
         thread.latestSeq > summary.latestSeq
       ) return thread
-      const changed = baselineEstablished && checkpointChanged(checkpoints.threads[thread.id], summary)
+      const changed = baselineEstablished && checkpointChanged(
+        checkpoints.threads[thread.id]?.checkpoint,
+        summary
+      )
       const running = runtimeState ? threadLooksRunning(runtimeState) : threadLooksRunning(summary)
       const latestTurnStatus = runtimeState?.latestTurnStatus
       if (running && thread.id !== state.activeThreadId && watchTurnCompletion[thread.id] !== true) {
@@ -288,7 +297,7 @@ async function runSync(set: ChatStoreSet, get: ChatStoreGet, generation: number)
     for (const task of boundTasks) {
       if (!knownIds.has(task.threadId)) continue
       const key = scheduleRunKey(task)
-      if (!baselineEstablished || !key || checkpoints.scheduleRuns[task.taskId] === key) continue
+      if (!baselineEstablished || !key || checkpoints.scheduleRuns[task.taskId]?.checkpoint === key) continue
       const outcome = completionOutcomeForTurnStatus(task.status)
       if (!outcome) continue
       unreadThreadIds = completionIsCurrentlyVisible(state, task.threadId)
