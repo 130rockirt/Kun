@@ -15,11 +15,9 @@ import {
   modelProviderPresetProfile,
   renderToStaticMarkup,
   t,
-  useChatStore,
   vi,
   type KunFastContextSettingsV1,
   type KunLabSettingsV1,
-  type ModelProviderModelGroup,
   type ModelProviderModelProfileV1, type ModelProviderProfileV1,
   type ReactTestRenderer
 } from './settings-section-agents.test-support'
@@ -264,7 +262,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     })
     expect(fixed).toContain('Use fixed model')
     expect(fixed).toContain('Fast Context reasoning effort')
-    expect(fixed).toContain('Codex Fast mode')
+    expect(fixed).not.toContain('Codex Fast mode')
 
     const disabled = renderPanel({
       enabled: false,
@@ -331,13 +329,6 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       presetSource: { presetId: 'codex', mode: 'api' },
       modelProfiles: { 'gpt-5.4': codexModelProfile }
     }]
-    const groups: ModelProviderModelGroup[] = [{
-      providerId: 'codex-2',
-      presetSource: 'codex',
-      label: 'Codex',
-      modelIds: ['gpt-5.4'],
-      modelProfiles: { 'gpt-5.4': codexModelProfile }
-    }]
     const mount = async (): Promise<ReactTestRenderer> => {
       let renderer: ReactTestRenderer
       await act(async () => {
@@ -360,7 +351,6 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     }
 
     // Codex model advertising priority: both toggles enabled and checked.
-    useChatStore.setState({ composerModelGroups: groups })
     let renderer = await mount()
     let switches = renderer.root.findAllByProps({ role: 'switch' })
     expect(switches).toHaveLength(2)
@@ -368,7 +358,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(switches.map((node) => node.props['aria-disabled'])).toEqual([false, false])
 
     // Model without priority support: the fast toggle is disabled and unchecked.
-    useChatStore.setState({ composerModelGroups: [] })
+    modelProviders[0]!.modelProfiles = {}
     renderer = await mount()
     switches = renderer.root.findAllByProps({ role: 'switch' })
     expect(switches.map((node) => node.props['aria-checked'])).toEqual([true, false])
