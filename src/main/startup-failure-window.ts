@@ -11,7 +11,10 @@ import {
 export function showStartupFailureWindow(
   error: unknown,
   logDir: string,
-  options: { recoverHandoff?: () => Promise<void> } = {}
+  options: {
+    recoverHandoff?: () => Promise<void>
+    replaceWindow?: BrowserWindow | null
+  } = {}
 ): BrowserWindow | null {
   const presentation = startupFailurePresentation(error)
   const message = presentation.message
@@ -110,6 +113,10 @@ export function showStartupFailureWindow(
         if (!window.isDestroyed()) window.show()
         dialog.showErrorBox('Kun failed to start', message)
       })
+    const replacedWindow = options.replaceWindow
+    if (replacedWindow && replacedWindow !== window && !replacedWindow.isDestroyed()) {
+      replacedWindow.destroy()
+    }
     return window
   } catch (fallbackError) {
     logError('startup', 'Failed to create startup recovery window.', {

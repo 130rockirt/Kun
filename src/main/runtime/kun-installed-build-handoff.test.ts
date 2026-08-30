@@ -79,48 +79,74 @@ function input(overrides: { dataDirs?: string[] } = {}) {
 }
 
 describe('installed build handoff coordinator', () => {
-  it('clears a recycled Runtime PID under the Manager lock without stopping the process', async () => {
-    const stale = runtime('production', { pid: 12948 })
-    let current: RuntimeHandoffDiscoveryRecord | null = stale
-    let lockHeld = false
-    const stopRuntime = vi.fn()
-    const removeRuntime = vi.fn(async (_dir, instanceId) => {
-      expect(lockHeld).toBe(true)
-      expect(instanceId).toBe(stale.instanceId)
-      current = null
-      return true
-    })
-    const overrides = {
-      withManagerLock: async <T>(_dir: string, action: () => Promise<T>) => {
-        lockHeld = true
-        try { return await action() } finally { lockHeld = false }
-      },
+  it.each(['production', 'development'] as const)(
+    'clears a recycled %s Runtime PID under the Manager lock without stopping the process',
+    async (flavor) => {
+      const stale = runtime(flavor, { pid: 12948 })
+      let current: RuntimeHandoffDiscoveryRecord | null = stale
+      let lockHeld = false
+      const stopRuntime = vi.fn()
+      const removeRuntime = vi.fn(async (_dir, instanceId, removedFlavor) => {
+        expect(lockHeld).toBe(true)
+        expect(instanceId).toBe(stale.instanceId)
+        expect(removedFlavor).toBe(flavor)
+        current = null
+        return true
+      })
+      const overrides = {
+        withManagerLock: async <T>(_dir: string, action: () => Promise<T>) => {
+          lockHeld = true
+          try { return await action() } finally { lockHeld = false }
+        },
+        readManager: async () => null,
+        readRuntime: async (_dir: string, requestedFlavor?: 'production' | 'development') =>
+          requestedFlavor === flavor ? current : null,
+        processAlive: (pid: number) => pid === stale.pid,
+        processIdentity: async (pid: number) => ({
+          pid,
+          commandLine: 'C:\\Windows\\System32\\SNAPOS64.exe',
+          executablePath: 'C:\\Windows\\System32\\SNAPOS64.exe',
+          startedAtMs: Date.parse(stale.startedAt) + 120_000
+        }),
+        withAncillaryWriter: async <T>(_dir: string, action: () => Promise<T>) => action(),
+        removeRuntime,
+        stopRuntime: stopRuntime as never,
+        stopManager: vi.fn() as never
+      }
+
+      await expect(probeInstalledBuildHandoff(input(), overrides)).resolves.toBe('mismatched')
+      expect(removeRuntime).not.toHaveBeenCalled()
+
+      await expect(drainKunOwnersForHandoff(input(), overrides)).resolves.toMatchObject({
+        owners: expect.arrayContaining([
+          expect.objectContaining({ kind: 'runtime', flavor, result: 'not-found' })
+        ])
+      })
+      expect(removeRuntime).toHaveBeenCalledOnce()
+      expect(stopRuntime).not.toHaveBeenCalled()
+    }
+  )
+
+  it('requires cleanup when a stale Runtime record already reports the target build', async () => {
+    const targetBuildId = 'b'.repeat(64)
+    const stale = runtime('production', { pid: 12948, buildId: targetBuildId })
+
+    await expect(probeInstalledBuildHandoff({
+      ...input(),
+      targetBuildId
+    }, {
       readManager: async () => null,
-      readRuntime: async (_dir: string, flavor?: 'production' | 'development') =>
-        flavor === 'production' ? current : null,
-      processAlive: (pid: number) => pid === stale.pid,
-      processIdentity: async (pid: number) => ({
+      readRuntime: async (_dir, flavor) => flavor === 'production' ? stale : null,
+      processAlive: () => true,
+      processIdentity: async (pid) => ({
         pid,
         commandLine: 'C:\\Windows\\System32\\SNAPOS64.exe',
         executablePath: 'C:\\Windows\\System32\\SNAPOS64.exe',
         startedAtMs: Date.parse(stale.startedAt) + 120_000
       }),
-      withAncillaryWriter: async <T>(_dir: string, action: () => Promise<T>) => action(),
-      removeRuntime,
-      stopRuntime: stopRuntime as never,
+      stopRuntime: vi.fn() as never,
       stopManager: vi.fn() as never
-    }
-
-    await expect(probeInstalledBuildHandoff(input(), overrides)).resolves.toBe('mismatched')
-    expect(removeRuntime).not.toHaveBeenCalled()
-
-    await expect(drainKunOwnersForHandoff(input(), overrides)).resolves.toMatchObject({
-      owners: expect.arrayContaining([
-        expect.objectContaining({ kind: 'runtime', flavor: 'production', result: 'not-found' })
-      ])
-    })
-    expect(removeRuntime).toHaveBeenCalledOnce()
-    expect(stopRuntime).not.toHaveBeenCalled()
+    })).resolves.toBe('mismatched')
   })
 
   it('fails closed when a live Runtime PID cannot be inspected', async () => {

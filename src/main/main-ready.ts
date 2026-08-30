@@ -83,7 +83,6 @@ export function startMainApp(): Promise<void> {
       }
     }
     const earlyWindow = mainState.mainWindow
-    if (earlyWindow && !earlyWindow.isDestroyed()) earlyWindow.destroy()
     const message = sanitizeStartupFailureMessage(error)
     console.error('[kun-gui] startup failed:', message)
     logError('startup', 'Desktop startup failed.', {
@@ -95,7 +94,10 @@ export function startMainApp(): Promise<void> {
     const recoveryWindow = showStartupFailureWindow(
       error,
       mainState.logDir,
-      recoverHandoff ? { recoverHandoff } : {}
+      {
+        ...(recoverHandoff ? { recoverHandoff } : {}),
+        replaceWindow: earlyWindow
+      }
     )
     if (recoveryWindow) {
       mainState.mainWindow = recoveryWindow

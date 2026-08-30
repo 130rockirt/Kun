@@ -166,6 +166,47 @@ describe('showStartupFailureWindow', () => {
     expect(electron.window.show).toHaveBeenCalledOnce()
   })
 
+  it('creates the recovery window before destroying the workbench window', () => {
+    const workbenchWindow = {
+      isDestroyed: vi.fn(() => false),
+      destroy: vi.fn()
+    }
+
+    const window = showStartupFailureWindow(
+      new Error('manager failed'),
+      'C:\\Kun\\logs',
+      { replaceWindow: workbenchWindow as never }
+    )
+
+    expect(window).toBe(electron.window)
+    expect(workbenchWindow.destroy).toHaveBeenCalledOnce()
+    expect(electron.BrowserWindow.mock.invocationCallOrder[0])
+      .toBeLessThan(workbenchWindow.destroy.mock.invocationCallOrder[0]!)
+  })
+
+  it('preserves the workbench window when recovery window creation fails', () => {
+    const workbenchWindow = {
+      isDestroyed: vi.fn(() => false),
+      destroy: vi.fn()
+    }
+    electron.BrowserWindow.mockImplementationOnce(() => {
+      throw new Error('window creation failed')
+    })
+
+    const window = showStartupFailureWindow(
+      new Error('manager failed'),
+      'C:\\Kun\\logs',
+      { replaceWindow: workbenchWindow as never }
+    )
+
+    expect(window).toBeNull()
+    expect(workbenchWindow.destroy).not.toHaveBeenCalled()
+    expect(electron.dialog.showErrorBox).toHaveBeenCalledWith(
+      'Kun failed to start',
+      'manager failed'
+    )
+  })
+
   it('runs only an explicit recovery action from intercepted navigation', async () => {
     showStartupFailureWindow(new Error('manager failed'), 'C:\\Kun\\logs')
     const preventDefault = vi.fn()
