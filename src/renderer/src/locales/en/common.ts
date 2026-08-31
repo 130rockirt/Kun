@@ -13,6 +13,7 @@ import sidebar from './common/sidebar.json'
 import i18nReview from './common/i18n-review.json'
 import commandPalette from './common/command-palette.json'
 import workConversations from './common/work-conversations.json'
+import projectBoard from './common/project-board.json'
 
 const common = {
   ...shellWorkflow,
@@ -30,6 +31,7 @@ const common = {
   ...i18nReview,
   ...commandPalette,
   ...workConversations,
+  ...projectBoard,
 }
 
 export default common

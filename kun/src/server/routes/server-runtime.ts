@@ -103,6 +103,7 @@ import type {
 import type { ProviderQuotaService } from '../../services/provider-quota-service.js'
 import type { ToolCancellationService } from '../../services/tool-cancellation-service.js'
 import type { KnowledgeBaseService } from '../../knowledge/knowledge-base-service.js'
+import type { ProjectBoardService } from '../../services/project-board-service.js'
 
 export type RuntimeToolDiagnostics = {
   providers: ToolProviderPolicy[]
@@ -170,6 +171,7 @@ export type ExtensionPlatformRuntime = {
  */
 export type ServerRuntime = {
   threadService: ThreadService
+  projectBoardService?: ProjectBoardService
   turnService: TurnService
   toolCancellationService?: ToolCancellationService
   usageService: UsageService

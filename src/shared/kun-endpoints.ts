@@ -229,6 +229,22 @@ export const KUN_THREADS_BULK_DELETE_TEMPLATE = '/v1/threads/bulk-delete'
 export const KUN_THREADS_CONTENT_SEARCH_PATH = '/v1/threads/content-search'
 export const KUN_THREADS_CONTENT_SEARCH_TEMPLATE = '/v1/threads/content-search'
 
+export const KUN_PROJECT_BOARD_SNAPSHOT_PATH = '/v1/project-boards/snapshot'
+export const KUN_PROJECT_BOARD_SNAPSHOT_TEMPLATE = '/v1/project-boards/snapshot'
+export const KUN_PROJECT_BOARD_SUMMARIES_PATH = '/v1/project-boards/summaries'
+export const KUN_PROJECT_BOARD_SUMMARIES_TEMPLATE = '/v1/project-boards/summaries'
+export const KUN_PROJECT_BOARD_CARDS_PATH = '/v1/project-boards/cards'
+export const KUN_PROJECT_BOARD_CARDS_TEMPLATE = '/v1/project-boards/cards'
+export const KUN_PROJECT_BOARD_CARD_TEMPLATE = '/v1/project-boards/cards/{id}'
+export const KUN_PROJECT_BOARD_TODO_OVERLAY_TEMPLATE =
+  '/v1/project-boards/todo-overlays/{id}/{id}'
+export function kunProjectBoardCardPath(cardId: string): string {
+  return `${KUN_PROJECT_BOARD_CARDS_PATH}/${encodeURIComponent(cardId)}`
+}
+export function kunProjectBoardTodoOverlayPath(threadId: string, todoId: string): string {
+  return `/v1/project-boards/todo-overlays/${encodeURIComponent(threadId)}/${encodeURIComponent(todoId)}`
+}
+
 export const KUN_THREAD_TEMPLATE = '/v1/threads/{id}'
 export function kunThreadPath(threadId: string): string {
   return `/v1/threads/${encodeURIComponent(threadId)}`
@@ -293,6 +309,11 @@ export function kunThreadTodosPath(threadId: string): string {
 export const KUN_THREAD_TODOS_SYNC_PLAN_TEMPLATE = '/v1/threads/{id}/todos/sync-plan'
 export function kunThreadTodosSyncPlanPath(threadId: string): string {
   return `${kunThreadTodosPath(threadId)}/sync-plan`
+}
+
+export const KUN_THREAD_TODO_TEMPLATE = '/v1/threads/{id}/todos/{id}'
+export function kunThreadTodoPath(threadId: string, todoId: string): string {
+  return `${kunThreadTodosPath(threadId)}/${encodeURIComponent(todoId)}`
 }
 
 export const KUN_THREAD_COMPACT_TEMPLATE = '/v1/threads/{id}/compact'

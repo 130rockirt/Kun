@@ -18,7 +18,12 @@ export { FileAttachmentStore, type AttachmentStore } from '../attachments/attach
 export { InMemoryApprovalGate } from '../adapters/in-memory-approval-gate.js'
 export { InMemoryUserInputGate } from '../adapters/in-memory-user-input-gate.js'
 export { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
-export { FileSessionStore, FileThreadStore, JsonlFileAccessCoordinator } from '../adapters/file/index.js'
+export {
+  FileProjectBoardStore,
+  FileSessionStore,
+  FileThreadStore,
+  JsonlFileAccessCoordinator
+} from '../adapters/file/index.js'
 export { HybridSessionStore, HybridThreadStore } from '../adapters/hybrid/index.js'
 export {
   createManagerRemoteStores,
@@ -177,6 +182,7 @@ export {
 export { LlmDebugRecorder } from '../services/llm-debug-recorder.js'
 export { waitForWorkspaceCheckpoint } from '../services/workspace-checkpoint-gate.js'
 export { ThreadService } from '../services/thread-service.js'
+export { ProjectBoardService } from '../services/project-board-service.js'
 export { TurnService, ownerLeaseExpiredTurnAbortReason } from '../services/turn-service.js'
 export { ReviewService } from '../services/review-service.js'
 export { UsageService } from '../services/usage-service.js'

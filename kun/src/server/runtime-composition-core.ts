@@ -38,6 +38,8 @@ import {
   ThreadLifecycleFence,
   LlmDebugRecorder,
   ThreadService,
+  FileProjectBoardStore,
+  ProjectBoardService,
   UsageService,
   ModelConnectionRegistry,
   type RuntimeDataDirLease
@@ -173,6 +175,16 @@ export async function createRuntimeCore(
     onForked: (sourceThreadId, targetThreadId) =>
       handleGraphThreadFork?.(sourceThreadId, targetThreadId)
   })
+  const projectBoardStore = new FileProjectBoardStore({
+    dataDir: options.dataDir,
+    nowIso
+  })
+  const projectBoardService = new ProjectBoardService({
+    store: projectBoardStore,
+    threadStore,
+    ids,
+    nowIso
+  })
   const artifactStore: ArtifactStore = activeOptions.serviceManager
     ? new ManagerRemoteArtifactStore(activeOptions.serviceManager)
     : new FileArtifactStore(join(activeOptions.dataDir, 'artifacts'), nowIso)
@@ -285,6 +297,8 @@ export async function createRuntimeCore(
     prefix,
     delegatedSessions,
     threadService,
+    projectBoardStore,
+    projectBoardService,
     artifactStore,
     graphConfig,
     graphRuntime,

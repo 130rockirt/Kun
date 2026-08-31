@@ -23,6 +23,7 @@ import {
   rememberCatalogComposerSelection,
   resolveCatalogComposerSelection
 } from './chat-store-thread-composer-state'
+import { useProjectBoardStore } from '../project-board/project-board-store'
 type CreateAppActionsOptions = {
   set: ChatStoreSet
   get: ChatStoreGet
@@ -74,6 +75,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
   | 'closeSettings'
   | 'openPlugins'
   | 'openClaw'
+  | 'openBoard'
   | 'openSchedule'
   | 'openWorkflow'
   | 'openDesign'
@@ -333,6 +335,12 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
     openClaw: () => {
       set({ route: 'claw' })
       void get().refreshClawChannels()
+    },
+
+    openBoard: (workspaceRoot?: string) => {
+      const target = normalizeWorkspaceRoot(workspaceRoot || get().workspaceRoot)
+      if (target) useProjectBoardStore.getState().selectWorkspace(target)
+      set({ route: 'board' })
     },
 
     openSchedule: () => {

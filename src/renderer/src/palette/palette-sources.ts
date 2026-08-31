@@ -4,6 +4,7 @@ import { KEYBOARD_SHORTCUT_COMMANDS } from '@shared/keyboard-shortcuts'
 import {
   Archive,
   Clock3,
+  Columns3,
   Code2,
   Command,
   Cpu,
@@ -98,6 +99,7 @@ const ROUTE_LABEL_KEYS: Record<AppRoute, string> = {
   plugins: 'plugins',
   extensions: 'extensions',
   claw: 'claw',
+  board: 'projectBoardNav',
   schedule: 'schedule',
   workflow: 'workflowCreate'
 }
@@ -110,6 +112,7 @@ const ROUTE_ICONS: Record<AppRoute, LucideIcon> = {
   plugins: LayoutGrid,
   extensions: Puzzle,
   claw: Smartphone,
+  board: Columns3,
   schedule: Clock3,
   workflow: Workflow
 }

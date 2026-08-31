@@ -227,7 +227,7 @@ export type SettingsRouteSection =
   | 'debug'
   | 'storage'
   | 'dataMigration'
-export type AppRoute = 'chat' | 'write' | 'design' | 'settings' | 'plugins' | 'extensions' | 'claw' | 'schedule' | 'workflow'
+export type AppRoute = 'chat' | 'write' | 'design' | 'settings' | 'plugins' | 'extensions' | 'claw' | 'board' | 'schedule' | 'workflow'
 export type ThreadCompletionOutcome = 'completed' | 'failed'
 export type CompletionAttentionRegistry = Record<string, ThreadCompletionOutcome | boolean>
 export type ScheduledThreadActivity = {
@@ -497,6 +497,7 @@ export type ChatState = {
   closeSettings: () => void
   openPlugins: (host?: PluginHostRoute) => void
   openClaw: () => void
+  openBoard: (workspaceRoot?: string) => void
   openSchedule: () => void
   openWorkflow: () => void
   openDesign: () => void

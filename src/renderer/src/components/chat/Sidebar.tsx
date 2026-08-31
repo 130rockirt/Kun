@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Clock3,
+  Columns3,
   LayoutGrid,
   Moon,
   Plus,
@@ -25,6 +26,7 @@ import { ClawAddImDialog } from './SidebarClawDialog'
 import { ConnectPhoneSidebarPanel } from './ConnectPhoneView'
 import { SidebarProjectsSection } from './SidebarProjectsSection'
 import { SidebarConversationsSection } from './SidebarConversationsSection'
+import { SidebarProjectBoardsSection } from './SidebarProjectBoardsSection'
 import { WorkspaceModeTabs } from './WorkspaceModeTabs'
 import {
   SidebarCommandRow,
@@ -36,7 +38,7 @@ import { SidebarFocusModeControl } from '../sidebar/SidebarFocusModeControl'
 type Props = {
   threads: NormalizedThread[]
   activeThreadId: string | null
-  activeView: 'chat' | 'write' | 'claw' | 'schedule' | 'workflow' | 'subagents'
+  activeView: 'chat' | 'write' | 'claw' | 'board' | 'schedule' | 'workflow' | 'subagents'
   connectPhoneSidebarOpen: boolean
   connectPhoneInitialTarget: ClawInstallTarget
   pluginsActive: boolean
@@ -66,6 +68,7 @@ type Props = {
   onCodeOpen: () => void
   onWriteOpen: () => void
   onScheduleOpen: () => void
+  onBoardOpen?: () => void
   onWorkflowOpen: () => void
   onNewConversation: () => void
 }
@@ -100,6 +103,7 @@ export function Sidebar({
   onCodeOpen,
   onWriteOpen,
   onScheduleOpen,
+  onBoardOpen,
   onWorkflowOpen,
   onNewConversation
 }: Props): ReactElement {
@@ -126,6 +130,7 @@ export function Sidebar({
   const loadMoreThreads = useChatStore((s) => s.loadMoreThreads)
   const chooseWorkspace = useChatStore((s) => s.chooseWorkspace)
   const removeWorkspace = useChatStore((s) => s.removeWorkspace)
+  const removedCodeWorkspaces = useChatStore((s) => s.removedCodeWorkspaces)
   const busy = useChatStore((s) => s.busy)
   const watchTurnCompletion = useChatStore((s) => s.watchTurnCompletion)
   const unreadThreadIds = useChatStore((s) => s.unreadThreadIds)
@@ -216,6 +221,12 @@ export function Sidebar({
           active={extensionsActive}
         />
         <SidebarCommandRow
+          icon={<Columns3 className="h-4 w-4" strokeWidth={1.75} />}
+          label={t('projectBoardNav')}
+          onClick={onBoardOpen}
+          active={activeView === 'board'}
+        />
+        <SidebarCommandRow
           icon={<Clock3 className="h-4 w-4" strokeWidth={1.75} />}
           label={t('schedule')}
           onClick={onScheduleOpen}
@@ -252,6 +263,20 @@ export function Sidebar({
           onAddChannel={() => setImDialogMode('add')}
           onResetChannel={(channelId) => void resetClawChannelSession(channelId)}
           onOpenSettings={() => setImDialogMode('edit')}
+          t={t}
+        />
+      ) : activeView === 'board' ? (
+        <SidebarProjectBoardsSection
+          threads={threads}
+          workspaceRoot={workspaceRoot}
+          workspaceRoots={codeWorkspaceRoots}
+          conversationRoot={conversationWorkspaceRoot}
+          removedCodeWorkspaces={removedCodeWorkspaces}
+          runtimeReady={runtimeReady}
+          onAddProject={() => void chooseWorkspace({
+            createThreadAfter: false,
+            selectThreadAfter: false
+          })}
           t={t}
         />
       ) : activeView === 'workflow' ? (

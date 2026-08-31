@@ -24,7 +24,7 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
     updateFocusMode, setThreadSearch, openThread, renameThread, pinThread, archiveThread,
     deleteThread, startNewChat, startNewChatInWorkspace,
     openSettings, openPluginsView, openExtensionsView, toggleTheme, toggleConnectPhone, openConnectWeixin,
-    openCodeMode, openWriteMode, openScheduleView, openWorkflowView,
+    openCodeMode, openWriteMode, openBoardView, openScheduleView, openWorkflowView,
     startNewConversation, beginLeftResize, toggleLeftSidebar, busy,
     input, rightPanel, writeRuntimeBanner, setInput, sendWritePrompt,
     conversationRuntimeBanner, activeSddDraft, rightPanelMode, toggleSddAssistantPanel,
@@ -111,6 +111,7 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
         onCodeOpen={openCodeMode}
         onWriteOpen={openWriteMode}
         onScheduleOpen={openScheduleView}
+        onBoardOpen={openBoardView}
         onWorkflowOpen={openWorkflowView}
         onNewConversation={startNewConversation}
         onBeginResize={beginLeftResize}

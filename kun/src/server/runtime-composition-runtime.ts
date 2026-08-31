@@ -47,6 +47,7 @@ export function createServerRuntimeComposition(
     threadActivity,
     prefix,
     threadService,
+    projectBoardService,
     artifactStore,
     graphConfig,
     graphRuntime
@@ -118,6 +119,7 @@ export function createServerRuntimeComposition(
   const { startedAt, rebuildCapabilities, applyConfig } = config
   return {
     threadService,
+    projectBoardService,
     turnService,
     threadStore: stores.threadStore,
     toolCancellationService,

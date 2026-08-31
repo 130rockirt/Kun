@@ -66,6 +66,39 @@ async setTodosFromTool(this: ThreadService, threadId: string, request: SetThread
     return this['setTodosInternal'](threadId, request, true)
   },
 
+async patchTodoStatus(this: ThreadService,
+    threadId: string,
+    todoId: string,
+    status: ThreadTodoStatus
+  ): Promise<ThreadTodoList> {
+    const todos = await this['withThreadMutation'](threadId, async () => {
+      const current = await this['threadStore'].get(threadId)
+      if (!current) throw new Error(`thread not found: ${threadId}`)
+      const existing = current.todos?.items ?? []
+      if (!existing.some((item) => item.id === todoId)) {
+        throw new Error(`todo not found: ${threadId}/${todoId}`)
+      }
+      const now = this['nowIso']()
+      const items = existing.map((item) => ({
+        ...item,
+        status: item.id === todoId
+          ? status
+          : status === 'in_progress' && item.status === 'in_progress'
+            ? 'pending' as const
+            : item.status,
+        ...(item.id === todoId || (status === 'in_progress' && item.status === 'in_progress')
+          ? { updatedAt: now }
+          : {})
+      }))
+      await this['patchPlanMarkdownForTodoStatusChanges'](current, items)
+      const next: ThreadTodoList = { threadId, items, updatedAt: now }
+      await this['threadStore'].upsert(touchThread({ ...current, todos: next }, now))
+      return next
+    })
+    await this['events'].record({ kind: 'todos_updated', threadId, todos })
+    return todos
+  },
+
 async setTodosInternal(this: ThreadService,
     threadId: string,
     request: SetThreadTodosRequest,

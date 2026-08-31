@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactElement } from 'react'
 import {
   Check,
   ClipboardList,
+  Columns3,
   Copy,
   ExternalLink,
   Loader2,
@@ -69,6 +70,7 @@ export function PlanPanel({
   onReplanChanged
 }: Props): ReactElement {
   const { t } = useTranslation('common')
+  const openBoard = useChatStore((state) => state.openBoard)
   const {
     activePlan,
     content,
@@ -307,6 +309,16 @@ export function PlanPanel({
     >
       <div className="ds-sidebar-surface-chrome shrink-0 border-b border-ds-border-muted">
         <div className="flex h-12 min-w-0 items-center gap-2 px-4">
+          <button
+            type="button"
+            onClick={() => openBoard(activePlan?.workspaceRoot || workspaceRoot)}
+            disabled={!activePlan}
+            className="ds-sidebar-toggle-button shrink-0 disabled:cursor-not-allowed disabled:opacity-45"
+            aria-label={t('projectBoardOpen')}
+            title={t('projectBoardOpen')}
+          >
+            <Columns3 className="h-4 w-4" strokeWidth={1.9} />
+          </button>
           <button
             type="button"
             onClick={onCollapse}

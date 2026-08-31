@@ -23,6 +23,7 @@ import {
   updateThread
 } from './threads.js'
 import { syncThreadTodosFromPlan } from './thread-todos-sync-plan.js'
+import { patchThreadTodoStatus } from './project-boards.js'
 import { deleteThreadsByWorkspace } from './threads-bulk-delete.js'
 import { contentSearchThreads } from './thread-content-search.js'
 import { summarizeThread } from './threads-summarize.js'
@@ -217,6 +218,16 @@ export function registerThreadRoutes(
   router.add('POST', '/v1/threads/:id/todos/sync-plan', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return syncThreadTodosFromPlan(runtime.threadService, ctx.params.id, request)
+  })
+  router.add('PATCH', '/v1/threads/:id/todos/:todoId', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return patchThreadTodoStatus(
+      runtime.threadService,
+      runtime.projectBoardService,
+      ctx.params.id,
+      ctx.params.todoId,
+      request
+    )
   })
   router.add('DELETE', '/v1/threads/:id/todos', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

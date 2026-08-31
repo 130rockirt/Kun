@@ -549,6 +549,30 @@ describe('app-ipc-schemas runtime', () => {
     }).path).toBe('/v1/threads/thr_1/review')
   })
 
+  it('admits only the modeled project board methods', () => {
+    for (const payload of [
+      { path: '/v1/project-boards/snapshot?workspace=%2Ftmp%2Fproject', method: 'GET' },
+      { path: '/v1/project-boards/summaries', method: 'POST', body: '{"workspaces":[]}' },
+      { path: '/v1/project-boards/cards', method: 'POST', body: '{}' },
+      { path: '/v1/project-boards/cards/board_1', method: 'PATCH', body: '{}' },
+      { path: '/v1/project-boards/cards/board_1', method: 'DELETE', body: '{}' },
+      { path: '/v1/project-boards/todo-overlays/thr_1/todo_1', method: 'PATCH', body: '{}' },
+      { path: '/v1/threads/thr_1/todos/todo_1', method: 'PATCH', body: '{}' }
+    ] as const) {
+      expect(runtimeRequestPayloadSchema.parse(payload).path).toBe(payload.path)
+    }
+    for (const payload of [
+      { path: '/v1/project-boards/snapshot', method: 'POST' },
+      { path: '/v1/project-boards/cards/board_1', method: 'GET' },
+      { path: '/v1/project-boards/todo-overlays/thr_1/todo_1', method: 'DELETE' },
+      { path: '/v1/threads/thr_1/todos/todo_1', method: 'POST' }
+    ] as const) {
+      expect(() => runtimeRequestPayloadSchema.parse(payload)).toThrow(
+        /runtime request path is not allowed/
+      )
+    }
+  })
+
   it('accepts the read-only Kun turn status endpoint', () => {
     expect(runtimeRequestPayloadSchema.parse({
       path: '/v1/threads/thr_1/turns/turn_1',
