@@ -5,6 +5,7 @@ import type { TrajectoryRecord } from '../../agent/trajectory'
 import { trajectoryUiState } from '../../store/trajectory-ui-store'
 import { mergeRecords } from './useTrajectoryData'
 import { TrajectoryTimeline } from './TrajectoryTimeline'
+import { TrajectoryInspector } from './TrajectoryInspector'
 import { deriveHarnessLayout } from './trajectory-harness-model'
 
 const base = {
@@ -56,5 +57,31 @@ describe('trajectory renderer primitives', () => {
     expect(html).toContain('trajectoryLaneInput')
     expect(html).toContain('trajectoryLaneModel')
     expect(html).toContain('trajectoryLaneTool')
+  })
+
+  it('renders a DSH-style typed summary instead of raw record JSON', () => {
+    const assistant: TrajectoryRecord = {
+      ...base,
+      id: 'assistant-summary', kind: 'assistant', itemId: 'item-summary', itemIds: ['item-summary'],
+      parentRequestId: 'request-summary', startedAt: '2026-01-01T00:00:01.000Z',
+      durationMs: 900, preview: 'Summary preview', thinkingPreview: 'Reasoning preview', attachmentIds: []
+    }
+    const layout = deriveHarnessLayout([
+      request('request-summary', '2026-01-01T00:00:00.000Z'), assistant
+    ])
+    const html = renderToStaticMarkup(createElement(TrajectoryInspector, {
+      threadId: 'thread-1',
+      cell: layout.cells[0] ?? null,
+      request: null,
+      parentRequest: layout.requests[0] ?? null,
+      width: null,
+      onWidthChange: () => undefined,
+      onClose: () => undefined,
+      onSelectParentRequest: () => undefined
+    }))
+    expect(html).toContain('data-trajectory-summary')
+    expect(html).toContain('Summary preview')
+    expect(html).toContain('Request #1')
+    expect(html).not.toContain('trajectoryTabSource')
   })
 })

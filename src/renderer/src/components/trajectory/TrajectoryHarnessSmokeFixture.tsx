@@ -17,6 +17,7 @@ type ToolRecord = Extract<TrajectoryRecord, { callId: string }>
 
 export type TrajectorySmokeScenario =
   | 'default'
+  | 'unselected'
   | 'empty'
   | 'loading'
   | 'running'
@@ -37,7 +38,9 @@ export function mountTrajectoryHarnessSmokeFixture(
   })
   document.body.append(host)
   const records = scenarioRecords(scenario)
-  const selected = records.find((record) => record.kind === 'assistant')?.id ?? null
+  const selected = scenario === 'unselected'
+    ? null
+    : records.find((record) => record.kind === 'assistant')?.id ?? null
   useTrajectoryUiStore.getState().remove(THREAD_ID)
   useTrajectoryUiStore.getState().update(THREAD_ID, { selectedRecordId: selected })
   mountedRoot = createRoot(host)
@@ -64,7 +67,9 @@ function fixtureData(records: TrajectoryRecord[], scenario: TrajectorySmokeScena
   return {
     records,
     summary: summary(records),
-    ...(scenario === 'long' || scenario === 'default' ? { nextCursor: 'earlier' } : {}),
+    ...(scenario === 'long' || scenario === 'default' || scenario === 'unselected'
+      ? { nextCursor: 'earlier' }
+      : {}),
     warnings: [],
     historyIncomplete: false,
     loading: scenario === 'loading',

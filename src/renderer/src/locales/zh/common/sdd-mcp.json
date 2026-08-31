@@ -459,5 +459,17 @@
   "trajectoryTabSource": "来源",
   "trajectoryCopyValue": "复制值",
   "trajectoryCopyPath": "复制 JSON 路径",
-  "trajectoryCopyJson": "复制格式化 JSON"
+  "trajectoryCopyJson": "复制格式化 JSON",
+  "trajectoryDetailHierarchy": "层级",
+  "trajectoryDetailStatus": "状态",
+  "trajectoryDetailProvider": "Provider",
+  "trajectoryDetailModel": "模型",
+  "trajectoryDetailAttempt": "尝试",
+  "trajectoryDetailTool": "工具",
+  "trajectoryDetailCallId": "调用 ID",
+  "trajectoryDetailDuration": "耗时",
+  "trajectoryDetailInputTokens": "输入 Token",
+  "trajectoryDetailOutputTokens": "输出 Token",
+  "trajectoryDetailReasoningTokens": "推理 Token",
+  "trajectoryDetailError": "错误"
 }

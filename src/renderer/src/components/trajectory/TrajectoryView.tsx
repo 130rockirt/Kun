@@ -1,5 +1,5 @@
 import { Activity } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useMemo, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { trajectoryUiState, useTrajectoryUiStore } from '../../store/trajectory-ui-store'
 import { TrajectoryInspector } from './TrajectoryInspector'
@@ -63,13 +63,6 @@ export function TrajectoryView({
     layout.cells.slice(index + 1).some((candidate) => candidate.parentRequestId === cell.parentRequestId && (candidate.kind === 'tool' || candidate.kind === 'subtool')))
   const allTurnsCollapsed = collapsibleTurns.length > 0 && collapsibleTurns.every((id) => collapsedTurns.has(id))
   const allCallsCollapsed = callAssistants.length > 0 && callAssistants.every((cell) => collapsedCalls.has(cell.id))
-
-  useEffect(() => {
-    if (ui.selectedRecordId || ui.selectedRequestId || !layout.cells.length) return
-    const lastContent = layout.cells.filter((cell) => !cell.requestOnly).at(-1)
-    if (lastContent) update(threadId, { selectedRecordId: lastContent.id })
-    else update(threadId, { selectedRequestId: layout.requests.at(-1)?.request.requestId ?? null })
-  }, [layout.cells, layout.requests, threadId, ui.selectedRecordId, ui.selectedRequestId, update])
 
   const setActualDuration = (value: boolean): void => {
     setActualDurationState(value)

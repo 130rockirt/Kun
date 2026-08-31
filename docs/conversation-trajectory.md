@@ -17,6 +17,8 @@ The trajectory contains:
 
 At wide widths the inspector docks at `clamp(320px, 38%, 440px)` and can be resized to 720px while retaining at least 280px for the ledger. At 760px and below it becomes a right overlay no wider than 420px. The Event column collapses from 122px to an icon-only 50px when its table container reaches 620px. The old Agent Perspective right-panel contribution remains removed; saved references to that panel normalize to no panel.
 
+Trajectory opens with no selected record, leaving the ledger at full width. Selecting a ledger row, request boundary, or timing span opens the typed inspector; its Summary view presents status, hierarchy, usage, timing, and bounded previews rather than dumping the normalized wire record as JSON.
+
 The existing Composer floats over trajectory mode without being unmounted. A `ResizeObserver` publishes its live height, and the ledger and inspector reserve that height plus 16px so their final content stays reachable.
 
 ## Capture policy

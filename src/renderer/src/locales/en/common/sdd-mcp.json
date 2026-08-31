@@ -459,5 +459,17 @@
   "trajectoryTabSource": "Source",
   "trajectoryCopyValue": "Copy value",
   "trajectoryCopyPath": "Copy JSON path",
-  "trajectoryCopyJson": "Copy formatted JSON"
+  "trajectoryCopyJson": "Copy formatted JSON",
+  "trajectoryDetailHierarchy": "Hierarchy",
+  "trajectoryDetailStatus": "Status",
+  "trajectoryDetailProvider": "Provider",
+  "trajectoryDetailModel": "Model",
+  "trajectoryDetailAttempt": "Attempt",
+  "trajectoryDetailTool": "Tool",
+  "trajectoryDetailCallId": "Call ID",
+  "trajectoryDetailDuration": "Duration",
+  "trajectoryDetailInputTokens": "Input tokens",
+  "trajectoryDetailOutputTokens": "Output tokens",
+  "trajectoryDetailReasoningTokens": "Reasoning tokens",
+  "trajectoryDetailError": "Error"
 }

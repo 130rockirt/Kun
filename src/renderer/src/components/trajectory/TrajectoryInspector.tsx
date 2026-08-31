@@ -7,6 +7,7 @@ import { fetchTrajectoryDetail, type TrajectoryDetail, type TrajectoryDetailSect
 import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { StreamdownAssistant } from '../chat/StreamdownAssistant'
 import type { HarnessCell, HarnessRequestBoundary } from './trajectory-harness-model'
+import { TrajectoryInspectorSummary } from './TrajectoryInspectorSummary'
 import styles from './TrajectoryInspector.module.css'
 
 type Tab = { id: TrajectoryDetailSection; label: string }
@@ -51,7 +52,7 @@ export function TrajectoryInspector({
   const key = targetId ? `${targetId}:${active}` : ''
   const detail = cache.get(key)
   useEffect(() => {
-    if (!targetId || detail) return
+    if (!targetId || active === 'overview' || detail) return
     let cancelled = false
     setLoading(true)
     void loadDetail(threadId, targetId, active)
@@ -97,10 +98,18 @@ export function TrajectoryInspector({
           event.preventDefault()
         }}
       />
-      <div className={styles.header}><div className={styles.title}><span className={styles.dot} /><strong>{title}</strong><span className={styles.location}>{location}</span>{parentRequest ? <button type="button" className={styles.parent} onClick={() => onSelectParentRequest(parentRequest.request.requestId)}>Request #{parentRequest.number}</button> : null}</div><button type="button" className={styles.close} onClick={onClose} aria-label={t('trajectoryBack')}><X /></button></div>
+      <div className={styles.header}><div className={styles.title}><span className={styles.dot} /><strong className={styles.kindTitle} data-kind={cell?.kind}>{title}</strong><span className={styles.location}>{location}</span></div><button type="button" className={styles.close} onClick={onClose} aria-label={t('trajectoryBack')}><X /></button></div>
       <div className={styles.tabs} role="tablist">{tabs.map((tab) => <button key={tab.id} type="button" role="tab" aria-selected={active === tab.id} className={active === tab.id ? `${styles.tab} ${styles.tabActive}` : styles.tab} onClick={() => setActive(tab.id)}>{tab.label}</button>)}</div>
       <div className={styles.body} role="tabpanel">
-        {loading && !detail ? <div className={styles.empty}>{t('trajectoryLoading')}</div> : detail ? <DetailContent detail={detail} threadId={threadId} attachmentIds={cell?.attachmentIds ?? []} /> : null}
+        {active === 'overview' ? (
+          <TrajectoryInspectorSummary
+            cell={cell}
+            request={request}
+            parentRequest={parentRequest}
+            onSelectParentRequest={onSelectParentRequest}
+            onSelectSection={setActive}
+          />
+        ) : loading && !detail ? <div className={styles.empty}>{t('trajectoryLoading')}</div> : detail ? <DetailContent detail={detail} threadId={threadId} attachmentIds={cell?.attachmentIds ?? []} /> : null}
       </div>
     </aside>
   )
@@ -163,7 +172,8 @@ function tabsFor(cell: HarnessCell | null, request: HarnessRequestBoundary | nul
   if (cell.kind === 'system') return [...(cell.record.kind === 'system' && cell.record.previousPromptFingerprint ? [{ id: 'diff' as const, label: t('trajectoryTabDiff') }] : []), { id: 'system-prompt', label: t('trajectoryTabSystemPrompt') }, { id: 'tools', label: t('trajectoryTabTools') }]
   if (cell.kind === 'tool' || cell.kind === 'subtool') return [{ id: 'overview', label: t('trajectoryTabSummary') }, { id: 'arguments', label: t('trajectoryTabPayload') }, { id: 'result', label: t('trajectorySection_result') }, { id: 'schema', label: t('trajectoryTabSchema') }, { id: 'timing', label: t('trajectorySection_timing') }]
   if (cell.kind === 'compacted') return [{ id: 'overview', label: t('trajectoryTabSummary') }, { id: 'raw', label: t('trajectorySection_raw') }]
-  return [{ id: 'overview', label: t('trajectoryTabSummary') }, { id: 'rendered', label: t('trajectoryTabPreview') }, { id: 'raw', label: t('trajectorySection_raw') }, { id: 'source', label: t('trajectoryTabSource') }]
+  const markdown = [{ id: 'overview' as const, label: t('trajectoryTabSummary') }, { id: 'rendered' as const, label: t('trajectoryTabPreview') }, { id: 'raw' as const, label: t('trajectorySection_raw') }]
+  return cell.kind === 'assistant' ? markdown : [...markdown, { id: 'source', label: t('trajectoryTabSource') }]
 }
 
 function markdownText(value: unknown): string | null {

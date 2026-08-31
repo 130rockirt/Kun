@@ -128,6 +128,7 @@ async function main() {
     })
 
     const captures = []
+    captures.push(await capture({ electronApplication, page, evidenceRoot, scenario: 'unselected', theme: 'light', bounds: WIDE, name: 'initial-unselected' }))
     captures.push(await capture({ electronApplication, page, evidenceRoot, scenario: 'default', theme: 'light', bounds: WIDE, name: 'wide-light' }))
     captures.push(await capture({ electronApplication, page, evidenceRoot, scenario: 'default', theme: 'dark', bounds: WIDE, name: 'wide-dark' }))
     captures.push(await capture({ electronApplication, page, evidenceRoot, scenario: 'default', theme: 'light', bounds: TABLE_BREAKPOINT, name: 'table-620-breakpoint' }))
@@ -242,9 +243,14 @@ function assertGeometry(value, context) {
   if (context.scenario !== 'empty' && context.scenario !== 'loading') {
     exact(value.header?.height ?? null, 30, 'table header height')
     exact(value.firstRow?.height ?? null, 30, 'table row height')
-    exact(value.inspectorHeader?.height ?? null, 42, 'inspector header height')
-    exact(value.inspectorTabs?.height ?? null, 34, 'inspector tabs height')
+    if (context.scenario !== 'unselected') {
+      exact(value.inspectorHeader?.height ?? null, 42, 'inspector header height')
+      exact(value.inspectorTabs?.height ?? null, 34, 'inspector tabs height')
+    }
     exact(value.tablePanePaddingBottom, 128, 'composer clearance')
+  }
+  if (context.scenario === 'unselected' && value.inspector !== null) {
+    throw new Error(`${context.name}: inspector opened before the user selected a record`)
   }
   if (context.bounds.width === TABLE_BREAKPOINT.width && value.eventColumnWidth > 51) {
     throw new Error(`${context.name}: compact Event column is ${value.eventColumnWidth}px`)

@@ -299,7 +299,9 @@ export function WorkbenchChatStage({
                 trajectoryFailed={trajectoryData.summary.lastStatus === 'failed'}
                 onToggleTrajectory={() => {
                   if (!activeThreadId) return
-                  updateTrajectoryUi(activeThreadId, { view: trajectoryOpen ? 'chat' : 'trajectory' })
+                  updateTrajectoryUi(activeThreadId, trajectoryOpen
+                    ? { view: 'chat' }
+                    : { view: 'trajectory', selectedRecordId: null, selectedRequestId: null })
                 }}
                 terminalOpen={terminalOpen}
                 onToggleTerminal={onToggleTerminal}
