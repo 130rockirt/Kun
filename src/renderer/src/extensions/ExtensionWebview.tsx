@@ -25,6 +25,12 @@ type InvalidatedViewRecovery = {
 const MAX_INITIAL_VIEW_MESSAGES = 8
 const MAX_INITIAL_VIEW_MESSAGE_BYTES = 64 * 1024
 const INVALIDATED_VIEW_REFRESH_TIMEOUT_MS = 2_000
+const ACTIVATION_CANCELLED_MESSAGE =
+  'Extension activation was invalidated by a lifecycle or permission change'
+
+function isActivationCancelledFailure(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(ACTIVATION_CANCELLED_MESSAGE)
+}
 
 export function extensionViewSessionContractKey(
   contribution: RegisteredContribution<
@@ -113,6 +119,7 @@ export function ExtensionWebview({
   contributionRef.current = contribution
   const contributionId = contribution.id
   const sessionContractKey = extensionViewSessionContractKey(contribution)
+  const activationRecoveryRef = useRef({ sessionContractKey, attempted: false })
   const normalizedWorkspaceRoot = workspaceRoot?.trim() || undefined
   const initialMessagesJson = JSON.stringify(initialMessages)
   const boundedInitialMessages = useMemo(() => {
@@ -133,6 +140,9 @@ export function ExtensionWebview({
     originFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     let disposed = false
     let opened: ExtensionViewSession | null = null
+    if (activationRecoveryRef.current.sessionContractKey !== sessionContractKey) {
+      activationRecoveryRef.current = { sessionContractKey, attempted: false }
+    }
     setSession(null)
     setFailure(null)
     const retryHost = retryHostRef.current
@@ -157,10 +167,21 @@ export function ExtensionWebview({
           return
         }
         opened = next
+        activationRecoveryRef.current.attempted = false
         setSession(next)
       })
       .catch((error) => {
-        if (!disposed) setFailure(boundedPlainText(error instanceof Error ? error.message : String(error), 1_024))
+        if (disposed) return
+        if (isActivationCancelledFailure(error) && !activationRecoveryRef.current.attempted) {
+          activationRecoveryRef.current.attempted = true
+          retryHostRef.current = false
+          setOpenGeneration((value) => value + 1)
+          return
+        }
+        const message = isActivationCancelledFailure(error)
+          ? t('extensionViewOpenFailed')
+          : error instanceof Error ? error.message : String(error)
+        setFailure(boundedPlainText(message, 1_024))
       })
 
     return () => {
@@ -169,7 +190,7 @@ export function ExtensionWebview({
       const focusTarget = originFocusRef.current
       if (focusTarget?.isConnected) window.requestAnimationFrame(() => focusTarget.focus())
     }
-  }, [contributionId, normalizedWorkspaceRoot, openGeneration, sessionContractKey])
+  }, [contributionId, normalizedWorkspaceRoot, openGeneration, sessionContractKey, t])
 
   useEffect(() => {
     if (!session) return
@@ -280,6 +301,7 @@ export function ExtensionWebview({
           <button
             type="button"
             onClick={() => {
+              activationRecoveryRef.current.attempted = false
               retryHostRef.current = true
               setOpenGeneration((value) => value + 1)
             }}

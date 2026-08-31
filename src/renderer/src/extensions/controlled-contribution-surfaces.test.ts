@@ -539,6 +539,40 @@ describe('controlled workbench contribution rendering', () => {
     }
   })
 
+  it('retries a cancelled activation once and hides the internal lifecycle message', async () => {
+    const contribution = registryWithContributions().list('views.rightSidebar')
+      .find((item) => item.id === 'extension:acme.ui/dashboard')!
+    const lifecycleMessage = 'Extension activation was invalidated by a lifecycle or permission change'
+    const createSession = vi.spyOn(extensionWorkbenchClient, 'createViewSession')
+      .mockRejectedValueOnce(new Error(lifecycleMessage))
+      .mockRejectedValueOnce(new Error(lifecycleMessage))
+    vi.spyOn(extensionWorkbenchClient, 'disposeViewSession').mockResolvedValue(undefined)
+    vi.stubGlobal('HTMLElement', class {})
+    vi.stubGlobal('document', { activeElement: null })
+    vi.stubGlobal('window', { requestAnimationFrame: vi.fn() })
+    let renderer!: ReturnType<typeof createRenderer>
+    try {
+      await act(async () => {
+        renderer = createRenderer(createElement(ExtensionViewOutlet, {
+          contribution,
+          workspaceRoot: '/workspace'
+        }))
+      })
+
+      expect(createSession).toHaveBeenCalledTimes(2)
+      expect(createSession).toHaveBeenNthCalledWith(1, contribution.id, '/workspace')
+      expect(createSession).toHaveBeenNthCalledWith(2, contribution.id, '/workspace')
+      expect(renderer.root.findByProps({ role: 'alert' })).toBeDefined()
+      const alertText = JSON.stringify(renderer.toJSON())
+      expect(alertText).toContain('The extension View is unavailable')
+      expect(alertText).not.toContain(lifecycleMessage)
+    } finally {
+      if (renderer) act(() => renderer.unmount())
+      vi.restoreAllMocks()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('renders Host-owned extension View status in the active Kun language', async () => {
     const contribution = registryWithContributions().list('views.rightSidebar')
       .find((item) => item.id === 'extension:acme.ui/dashboard')!
