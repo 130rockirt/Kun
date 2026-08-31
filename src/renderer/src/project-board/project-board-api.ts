@@ -1,14 +1,15 @@
 import {
   KUN_PROJECT_BOARD_CARDS_PATH,
+  KUN_PROJECT_BOARD_CARD_STATUS_PATH,
   KUN_PROJECT_BOARD_SNAPSHOT_PATH,
   KUN_PROJECT_BOARD_SUMMARIES_PATH,
   kunProjectBoardCardPath,
-  kunProjectBoardTodoOverlayPath,
-  kunThreadTodoPath
+  kunProjectBoardTodoOverlayPath
 } from '@shared/kun-endpoints'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import type {
   ProjectBoardCard,
+  ProjectBoardBulkStatusResponse,
   ProjectBoardCategory,
   ProjectBoardPriority,
   ProjectBoardSnapshot,
@@ -68,6 +69,20 @@ export const projectBoardApi = {
     return request<ProjectBoardSnapshot>(kunProjectBoardCardPath(stripManualPrefix(cardId)), 'PATCH', input)
   },
 
+  patchCardStatuses(input: {
+    workspace: string
+    expectedRevision: number
+    cardIds: string[]
+    fromStatus: ProjectBoardStatus
+    status: ProjectBoardStatus
+  }) {
+    return request<ProjectBoardBulkStatusResponse>(
+      KUN_PROJECT_BOARD_CARD_STATUS_PATH,
+      'PATCH',
+      input
+    )
+  },
+
   deleteCard(cardId: string, workspace: string, expectedRevision: number) {
     return request<ProjectBoardSnapshot>(
       kunProjectBoardCardPath(stripManualPrefix(cardId)),
@@ -89,15 +104,6 @@ export const projectBoardApi = {
       kunProjectBoardTodoOverlayPath(card.source.threadId, card.source.todoId),
       'PATCH',
       input
-    )
-  },
-
-  patchTodoStatus(card: ProjectBoardCard, status: ProjectBoardStatus) {
-    if (!card.source.threadId || !card.source.todoId) throw new Error('Plan card source is unavailable')
-    return request<{ todos: unknown; card?: ProjectBoardCard }>(
-      kunThreadTodoPath(card.source.threadId, card.source.todoId),
-      'PATCH',
-      { status }
     )
   }
 }

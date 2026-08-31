@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
@@ -54,5 +54,55 @@ describe('ThreadService.patchTodoStatus', () => {
     ])
     await service.patchTodoStatus('thr_1', 'second', 'completed')
     expect(await readFile(planPath, 'utf8')).toBe('- [ ] First\n- [x] Second\n')
+  })
+
+  it('patches multiple Todo statuses with one thread mutation and one Plan rewrite', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'kun-todo-bulk-patch-'))
+    temporary.push(workspace)
+    await mkdir(join(workspace, '.kunsdd', 'plan'), { recursive: true })
+    const planPath = join(workspace, '.kunsdd', 'plan', 'demo.md')
+    await writeFile(planPath, '- [ ] First\n- [ ] Second\n')
+    const threadStore = new InMemoryThreadStore()
+    const sessionStore = new InMemorySessionStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-08-31T12:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus, sessionStore, allocateSeq: (id) => eventBus.allocateSeq(id), nowIso
+    })
+    const service = new ThreadService({
+      threadStore, sessionStore, events, ids: new SequentialIdGenerator(), nowIso
+    })
+    const thread = createThreadRecord({ id: 'thr_bulk', title: 'Thread', workspace, model: 'test' })
+    thread.todos = {
+      threadId: thread.id,
+      updatedAt: nowIso(),
+      items: ['First', 'Second'].map((content, ordinal) => ({
+        id: `todo_${ordinal}`,
+        content,
+        status: 'pending' as const,
+        source: {
+          kind: 'plan' as const,
+          planId: 'plan',
+          relativePath: '.kunsdd/plan/demo.md',
+          ordinal,
+          contentHash: String(ordinal)
+        },
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      }))
+    }
+    await threadStore.upsert(thread)
+    const upsert = vi.spyOn(threadStore, 'upsert')
+
+    const next = await service.patchTodoStatuses(
+      thread.id,
+      ['todo_0', 'todo_1'],
+      'pending',
+      'completed'
+    )
+
+    expect(next.items.every((item) => item.status === 'completed')).toBe(true)
+    expect(upsert).toHaveBeenCalledTimes(1)
+    expect(await readFile(planPath, 'utf8')).toBe('- [x] First\n- [x] Second\n')
   })
 })

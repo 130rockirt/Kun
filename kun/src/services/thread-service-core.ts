@@ -219,6 +219,12 @@ export interface ThreadService {
   setTodos(threadId: string, request: SetThreadTodosRequest): Promise<ThreadTodoList>;
   setTodosFromTool(threadId: string, request: SetThreadTodosRequest): Promise<ThreadTodoList>;
   patchTodoStatus(threadId: string, todoId: string, status: ThreadTodoStatus): Promise<ThreadTodoList>;
+  patchTodoStatuses(
+    threadId: string,
+    todoIds: readonly string[],
+    fromStatus: ThreadTodoStatus,
+    status: ThreadTodoStatus
+  ): Promise<ThreadTodoList>;
   clearTodos(threadId: string): Promise<boolean>;
   syncTodosFromPlan(threadId: string, options: SyncPlanTodosOptions): Promise<ThreadTodoList>;
   delete(threadId: string): Promise<boolean>;

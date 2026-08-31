@@ -47,6 +47,17 @@ describe('ThreadActivityRegistry', () => {
     })
   })
 
+  it('projects Todo changes as metadata invalidations', () => {
+    const registry = new ThreadActivityRegistry(8, 'epoch-test')
+    const cursor = registry.cursor()
+    registry.record(event('todos_updated', 'thread-1', 4))
+
+    expect(registry.changesSince(cursor)).toMatchObject({
+      resetRequired: false,
+      batch: { changes: [{ threadId: 'thread-1', kind: 'metadata', threadSeq: 4 }] }
+    })
+  })
+
   it('requires reset for another runtime epoch or an expired ring cursor', () => {
     const old = new ThreadActivityRegistry(2, 'old')
     const staleCursor = old.cursor()

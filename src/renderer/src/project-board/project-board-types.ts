@@ -1,4 +1,5 @@
 export type ProjectBoardStatus = 'pending' | 'in_progress' | 'completed'
+export const PROJECT_BOARD_DRAG_MIME = 'application/x-kun-project-board-cards'
 export type ProjectBoardPriority = 'P0' | 'P1' | 'P2' | null
 export type ProjectBoardCategory =
   | 'feature'
@@ -62,6 +63,26 @@ export type ProjectBoardSummary = {
   inProgress: number
   progress: number
   updatedAt: string | null
+}
+
+export type ProjectBoardStatusDelta = {
+  id: string
+  status: ProjectBoardStatus
+  updatedAt: string
+}
+
+export type ProjectBoardBulkStatusFailure = {
+  cardId: string
+  code: 'write_failed' | 'source_missing' | 'stale_status' | 'skipped'
+  message: string
+}
+
+export type ProjectBoardBulkStatusResponse = {
+  workspaceRoot: string
+  revision: number
+  counts: ProjectBoardCounts
+  updatedCards: ProjectBoardStatusDelta[]
+  failures: ProjectBoardBulkStatusFailure[]
 }
 
 export type ProjectBoardFilters = {

@@ -235,6 +235,8 @@ export const KUN_PROJECT_BOARD_SUMMARIES_PATH = '/v1/project-boards/summaries'
 export const KUN_PROJECT_BOARD_SUMMARIES_TEMPLATE = '/v1/project-boards/summaries'
 export const KUN_PROJECT_BOARD_CARDS_PATH = '/v1/project-boards/cards'
 export const KUN_PROJECT_BOARD_CARDS_TEMPLATE = '/v1/project-boards/cards'
+export const KUN_PROJECT_BOARD_CARD_STATUS_PATH = '/v1/project-boards/cards/status'
+export const KUN_PROJECT_BOARD_CARD_STATUS_TEMPLATE = '/v1/project-boards/cards/status'
 export const KUN_PROJECT_BOARD_CARD_TEMPLATE = '/v1/project-boards/cards/{id}'
 export const KUN_PROJECT_BOARD_TODO_OVERLAY_TEMPLATE =
   '/v1/project-boards/todo-overlays/{id}/{id}'

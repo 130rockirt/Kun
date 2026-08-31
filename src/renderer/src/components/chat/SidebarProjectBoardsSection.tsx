@@ -70,15 +70,17 @@ export function SidebarProjectBoardsSection({
         workspaceRootIdentityKey(path) === workspaceRootIdentityKey(workspaceRoot)) ?? all[0]
       if (fallback) selectWorkspace(fallback)
     }
-    if (runtimeReady) void refreshSummaries(all)
-  }, [refreshSummaries, runtimeReady, selectWorkspace, selected, workspaceRoot, workspaceRoots, workspaces])
+  }, [selectWorkspace, selected, workspaceRoot, workspaceRoots, workspaces])
 
   useEffect(() => {
-    const onFocus = (): void => {
-      if (runtimeReady) void refreshSummaries(workspaces, { force: true })
+    if (!runtimeReady || workspaces.length === 0) return
+    const run = (): void => { void refreshSummaries(workspaces) }
+    if (typeof window.requestIdleCallback === 'function') {
+      const id = window.requestIdleCallback(run, { timeout: 1_500 })
+      return () => window.cancelIdleCallback(id)
     }
-    window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
+    const timer = window.setTimeout(run, 200)
+    return () => window.clearTimeout(timer)
   }, [refreshSummaries, runtimeReady, workspaces])
 
   return (

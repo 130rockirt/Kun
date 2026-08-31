@@ -8,6 +8,7 @@ import {
   getProjectBoardSnapshot,
   getProjectBoardSummaries,
   patchProjectBoardCard,
+  patchProjectBoardCardStatuses,
   patchProjectBoardTodoOverlay
 } from './project-boards.js'
 
@@ -29,6 +30,12 @@ export function registerProjectBoardRoutes(router: Router, runtime: ServerRuntim
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return service
       ? createProjectBoardCard(service, request)
+      : ERRORS.unavailable('project boards are not available')
+  })
+  router.add('PATCH', '/v1/project-boards/cards/status', (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return service
+      ? patchProjectBoardCardStatuses(service, request)
       : ERRORS.unavailable('project boards are not available')
   })
   router.add('PATCH', '/v1/project-boards/cards/:cardId', (request, ctx) => {

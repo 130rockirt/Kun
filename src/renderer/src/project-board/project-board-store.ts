@@ -1,9 +1,11 @@
 import { create, type StoreApi } from 'zustand'
 import { normalizeWorkspaceRoot, workspaceRootIdentityKey } from '../lib/workspace-path'
+import i18n from '../i18n'
 import { projectBoardApi, ProjectBoardApiError } from './project-board-api'
 import {
   DEFAULT_PROJECT_BOARD_FILTERS,
   type ProjectBoardCard,
+  type ProjectBoardBulkStatusResponse,
   type ProjectBoardCategory,
   type ProjectBoardFilters,
   type ProjectBoardPriority,
@@ -18,13 +20,22 @@ const FILTERS_KEY_PREFIX = 'kun:project-board:filters:v1:'
 const SUMMARY_CACHE_MS = 30_000
 const inflightLoads = new Map<string, Promise<void>>()
 const summaryLoadedAtByWorkspace = new Map<string, number>()
+const boardRetryByWorkspace = new Map<string, { failures: number; nextRetryAt: number }>()
+const summaryRetryByWorkspace = new Map<string, { failures: number; nextRetryAt: number }>()
+const RETRY_DELAYS_MS = [15_000, 30_000, 60_000, 120_000] as const
+
+export type ProjectBoardMoveResult = {
+  updatedCardIds: string[]
+  failedCardIds: string[]
+}
 
 export type ProjectBoardState = {
   selectedWorkspaceRoot: string
   snapshotByWorkspace: Record<string, ProjectBoardSnapshot>
   summariesByWorkspace: Record<string, ProjectBoardSummary>
   loading: boolean
-  mutatingCardId: string | null
+  mutatingCardIds: Record<string, true>
+  loadedAtByWorkspace: Record<string, number>
   error: string | null
   searchQuery: string
   filters: ProjectBoardFilters
@@ -58,7 +69,8 @@ export type ProjectBoardState = {
     description?: string
     archived?: boolean
   }): Promise<void>
-  moveCard(card: ProjectBoardCard, status: ProjectBoardStatus): Promise<void>
+  moveCard(card: ProjectBoardCard, status: ProjectBoardStatus): Promise<ProjectBoardMoveResult>
+  moveCards(cards: ProjectBoardCard[], status: ProjectBoardStatus): Promise<ProjectBoardMoveResult>
 }
 
 export const useProjectBoardStore = create<ProjectBoardState>((set, get) => ({
@@ -66,7 +78,8 @@ export const useProjectBoardStore = create<ProjectBoardState>((set, get) => ({
   snapshotByWorkspace: {},
   summariesByWorkspace: {},
   loading: false,
-  mutatingCardId: null,
+  mutatingCardIds: {},
+  loadedAtByWorkspace: {},
   error: null,
   searchQuery: '',
   filters: DEFAULT_PROJECT_BOARD_FILTERS,
@@ -97,22 +110,39 @@ export const useProjectBoardStore = create<ProjectBoardState>((set, get) => ({
     if (!workspace) return
     const key = workspaceRootIdentityKey(workspace)
     if (inflightLoads.has(key)) return inflightLoads.get(key)
+    const force = _options.force === true
+    const retry = boardRetryByWorkspace.get(key)
+    if (!force && retry && Date.now() < retry.nextRetryAt) return
     const selectedAtStart = get().selectedWorkspaceRoot
     const task = (async () => {
       if (workspaceRootIdentityKey(selectedAtStart) === key) set({ loading: true, error: null })
       try {
         const snapshot = await projectBoardApi.snapshot(workspace, { includeArchived: true })
+        boardRetryByWorkspace.delete(key)
+        const loadedAt = Date.now()
         set((state) => ({
           snapshotByWorkspace: {
             ...state.snapshotByWorkspace,
             [workspace]: snapshot,
             [snapshot.workspaceRoot]: snapshot
           },
+          loadedAtByWorkspace: {
+            ...state.loadedAtByWorkspace,
+            [workspace]: loadedAt,
+            [snapshot.workspaceRoot]: loadedAt
+          },
+          summariesByWorkspace: withSnapshotSummary(
+            state.summariesByWorkspace,
+            workspace,
+            snapshot,
+            loadedAt
+          ),
           ...(workspaceRootIdentityKey(state.selectedWorkspaceRoot) === key
             ? { loading: false, error: snapshot.warning ?? null }
             : {})
         }))
       } catch (error) {
+        recordRetryFailure(boardRetryByWorkspace, key)
         set((state) => workspaceRootIdentityKey(state.selectedWorkspaceRoot) === key
           ? { loading: false, error: errorMessage(error) }
           : state)
@@ -152,14 +182,18 @@ export const useProjectBoardStore = create<ProjectBoardState>((set, get) => ({
     if (roots.length === 0) return
     const now = Date.now()
     const pending = options.force ? roots : roots.filter((workspace) =>
-      now - (summaryLoadedAtByWorkspace.get(workspaceRootIdentityKey(workspace)) ?? 0) >= SUMMARY_CACHE_MS)
+      now - (summaryLoadedAtByWorkspace.get(workspaceRootIdentityKey(workspace)) ?? 0) >= SUMMARY_CACHE_MS &&
+      now >= (summaryRetryByWorkspace.get(workspaceRootIdentityKey(workspace))?.nextRetryAt ?? 0))
     if (pending.length === 0) return
     try {
       const batches: string[][] = []
       for (let index = 0; index < pending.length; index += 32) batches.push(pending.slice(index, index + 32))
-      const summaries = (await Promise.all(batches.map((batch) => projectBoardApi.summaries(batch)))).flat()
+      const summaries: ProjectBoardSummary[] = []
+      for (const batch of batches) summaries.push(...await projectBoardApi.summaries(batch))
       for (const workspace of pending) {
-        summaryLoadedAtByWorkspace.set(workspaceRootIdentityKey(workspace), Date.now())
+        const key = workspaceRootIdentityKey(workspace)
+        summaryLoadedAtByWorkspace.set(key, Date.now())
+        summaryRetryByWorkspace.delete(key)
       }
       set((state) => ({
         summariesByWorkspace: summaries.reduce<Record<string, ProjectBoardSummary>>((all, summary) => {
@@ -171,6 +205,9 @@ export const useProjectBoardStore = create<ProjectBoardState>((set, get) => ({
         }, { ...state.summariesByWorkspace })
       }))
     } catch {
+      for (const workspace of pending) {
+        recordRetryFailure(summaryRetryByWorkspace, workspaceRootIdentityKey(workspace))
+      }
       // Sidebar summaries are supplementary; the page owns the visible error state.
     }
   },
@@ -219,51 +256,63 @@ export const useProjectBoardStore = create<ProjectBoardState>((set, get) => ({
   },
 
   async moveCard(card, status) {
-    if (card.status === status) return
+    return get().moveCards([card], status)
+  },
+
+  async moveCards(cards, status) {
+    if (cards.length === 0) return { updatedCardIds: [], failedCardIds: [] }
+    const fromStatus = cards[0]?.status
+    if (!fromStatus || cards.some((card) => card.status !== fromStatus)) {
+      set({ error: i18n.t('common:projectBoardSameColumnRequired') })
+      return { updatedCardIds: [], failedCardIds: cards.map((card) => card.id) }
+    }
+    if (fromStatus === status) {
+      return { updatedCardIds: [], failedCardIds: [] }
+    }
+    if (status === 'in_progress' && hasInProgressSelectionConflict(cards)) {
+      set({ error: i18n.t('common:projectBoardInProgressSelectionConflict') })
+      return { updatedCardIds: [], failedCardIds: cards.map((card) => card.id) }
+    }
     const workspace = get().selectedWorkspaceRoot
     const snapshot = get().snapshotByWorkspace[workspace]
-    if (!workspace || !snapshot) return
-    const optimistic = replaceCard(snapshot, card.id, { status, updatedAt: new Date().toISOString() })
+    if (!workspace || !snapshot) {
+      return { updatedCardIds: [], failedCardIds: cards.map((card) => card.id) }
+    }
+    const cardIds = cards.map((card) => card.id)
+    const pendingIds = Object.fromEntries(cardIds.map((id) => [id, true])) as Record<string, true>
+    const optimistic = replaceCardStatuses(snapshot, new Set(cardIds), status)
     set((state) => ({
       snapshotByWorkspace: { ...state.snapshotByWorkspace, [workspace]: optimistic },
-      mutatingCardId: card.id,
+      mutatingCardIds: { ...state.mutatingCardIds, ...pendingIds },
       error: null
     }))
     try {
-      if (card.kind === 'manual') {
-        const next = await projectBoardApi.patchCard(card.id, {
-          workspace,
-          expectedRevision: snapshot.revision,
-          status
-        })
-        applySnapshot(set, workspace, next)
-      } else {
-        const response = await projectBoardApi.patchTodoStatus(card, status)
-        set((state) => ({
-          snapshotByWorkspace: {
-            ...state.snapshotByWorkspace,
-            [workspace]: response.card
-              ? replaceCard(state.snapshotByWorkspace[workspace] ?? snapshot, card.id, {
-                  status: response.card.status,
-                  updatedAt: response.card.updatedAt
-                })
-              : state.snapshotByWorkspace[workspace] ?? optimistic
-          },
-          mutatingCardId: null
-        }))
+      const response = await projectBoardApi.patchCardStatuses({
+        workspace,
+        expectedRevision: snapshot.revision,
+        cardIds,
+        fromStatus,
+        status
+      })
+      applyBulkStatusResponse(set, workspace, snapshot, cardIds, response)
+      const failed = new Set(response.failures.map((failure) => failure.cardId))
+      return {
+        updatedCardIds: cardIds.filter((id) => !failed.has(id)),
+        failedCardIds: cardIds.filter((id) => failed.has(id))
       }
     } catch (error) {
-      if (error instanceof ProjectBoardApiError && error.snapshot) {
-        applySnapshot(set, workspace, error.snapshot, error.message)
-      } else {
-        set((state) => ({
-          snapshotByWorkspace: { ...state.snapshotByWorkspace, [workspace]: snapshot },
-          mutatingCardId: null,
-          ...(workspaceRootIdentityKey(state.selectedWorkspaceRoot) === workspaceRootIdentityKey(workspace)
-            ? { error: errorMessage(error) }
-            : {})
-        }))
+      set((state) => ({
+        snapshotByWorkspace: { ...state.snapshotByWorkspace, [workspace]: snapshot },
+        mutatingCardIds: withoutKeys(state.mutatingCardIds, cardIds),
+        ...(workspaceRootIdentityKey(state.selectedWorkspaceRoot) === workspaceRootIdentityKey(workspace)
+          ? { error: errorMessage(error) }
+          : {})
+      }))
+      if (error instanceof ProjectBoardApiError && error.status === 409) {
+        await get().loadBoard(workspace, { force: true })
+        set({ error: error.message })
       }
+      return { updatedCardIds: [], failedCardIds: cardIds }
     }
   }
 }))
@@ -278,17 +327,20 @@ async function mutateSnapshot(
   mutation: () => Promise<ProjectBoardSnapshot>
 ): Promise<ProjectBoardSnapshot | null> {
   const workspace = get().selectedWorkspaceRoot
-  set({ mutatingCardId: cardId, error: null })
+  set((state) => ({
+    mutatingCardIds: { ...state.mutatingCardIds, [cardId]: true },
+    error: null
+  }))
   try {
     const next = await mutation()
-    applySnapshot(set, workspace, next)
+    applySnapshot(set, workspace, next, null, [cardId])
     return next
   } catch (error) {
     if (error instanceof ProjectBoardApiError && error.snapshot) {
-      applySnapshot(set, workspace, error.snapshot, error.message)
+      applySnapshot(set, workspace, error.snapshot, error.message, [cardId])
     } else {
       set((state) => ({
-        mutatingCardId: null,
+        mutatingCardIds: withoutKeys(state.mutatingCardIds, [cardId]),
         ...(workspaceRootIdentityKey(state.selectedWorkspaceRoot) === workspaceRootIdentityKey(workspace)
           ? { error: errorMessage(error) }
           : {})
@@ -302,7 +354,8 @@ function applySnapshot(
   set: StoreSet,
   workspace: string,
   snapshot: ProjectBoardSnapshot,
-  error: string | null = null
+  error: string | null = null,
+  clearedIds: string[] = []
 ): void {
   set((state) => ({
     snapshotByWorkspace: {
@@ -310,20 +363,134 @@ function applySnapshot(
       [workspace]: snapshot,
       [snapshot.workspaceRoot]: snapshot
     },
-    mutatingCardId: null,
+    loadedAtByWorkspace: {
+      ...state.loadedAtByWorkspace,
+      [workspace]: Date.now(),
+      [snapshot.workspaceRoot]: Date.now()
+    },
+    summariesByWorkspace: withSnapshotSummary(
+      state.summariesByWorkspace,
+      workspace,
+      snapshot,
+      Date.now()
+    ),
+    mutatingCardIds: withoutKeys(state.mutatingCardIds, clearedIds),
     ...(workspaceRootIdentityKey(state.selectedWorkspaceRoot) === workspaceRootIdentityKey(workspace)
       ? { error }
       : {})
   }))
 }
 
-function replaceCard(
+function replaceCardStatuses(
   snapshot: ProjectBoardSnapshot,
-  cardId: string,
-  patch: Partial<ProjectBoardCard> | ProjectBoardCard
+  cardIds: ReadonlySet<string>,
+  status: ProjectBoardStatus
 ): ProjectBoardSnapshot {
-  const cards = snapshot.cards.map((card) => card.id === cardId ? { ...card, ...patch } : card)
+  const now = new Date().toISOString()
+  const cards = snapshot.cards.map((card) =>
+    cardIds.has(card.id) ? { ...card, status, updatedAt: now } : card)
   return { ...snapshot, cards, counts: countsFor(cards) }
+}
+
+function applyBulkStatusResponse(
+  set: StoreSet,
+  workspace: string,
+  original: ProjectBoardSnapshot,
+  selectedIds: string[],
+  response: ProjectBoardBulkStatusResponse
+): void {
+  const selected = new Set(selectedIds)
+  const originalById = new Map(original.cards.map((card) => [card.id, card]))
+  const deltas = new Map(response.updatedCards.map((delta) => [delta.id, delta]))
+  const failed = new Set(response.failures.map((failure) => failure.cardId))
+  set((state) => {
+    const current = state.snapshotByWorkspace[workspace] ?? original
+    const cards = current.cards.map((card) => {
+      const delta = deltas.get(card.id)
+      if (delta) return { ...card, status: delta.status, updatedAt: delta.updatedAt }
+      if (selected.has(card.id) && failed.has(card.id)) return originalById.get(card.id) ?? card
+      return card
+    })
+    const snapshot = {
+      ...current,
+      workspaceRoot: response.workspaceRoot,
+      revision: response.revision,
+      counts: response.counts,
+      cards
+    }
+    const loadedAt = Date.now()
+    return {
+      snapshotByWorkspace: {
+        ...state.snapshotByWorkspace,
+        [workspace]: snapshot,
+        [response.workspaceRoot]: snapshot
+      },
+      summariesByWorkspace: withSnapshotSummary(
+        state.summariesByWorkspace,
+        workspace,
+        snapshot,
+        loadedAt
+      ),
+      loadedAtByWorkspace: {
+        ...state.loadedAtByWorkspace,
+        [workspace]: loadedAt,
+        [response.workspaceRoot]: loadedAt
+      },
+      mutatingCardIds: withoutKeys(state.mutatingCardIds, selectedIds),
+      error: response.failures.length > 0
+        ? i18n.t('common:projectBoardPartialMove', {
+            moved: selectedIds.length - response.failures.length,
+            failed: response.failures.length
+          })
+        : null
+    }
+  })
+}
+
+function withoutKeys<T>(record: Record<string, T>, keys: readonly string[]): Record<string, T> {
+  if (keys.length === 0) return record
+  const next = { ...record }
+  for (const key of keys) delete next[key]
+  return next
+}
+
+function hasInProgressSelectionConflict(cards: readonly ProjectBoardCard[]): boolean {
+  const threadIds = new Set<string>()
+  for (const card of cards) {
+    if (card.kind !== 'thread_todo' || !card.source.threadId) continue
+    if (threadIds.has(card.source.threadId)) return true
+    threadIds.add(card.source.threadId)
+  }
+  return false
+}
+
+function recordRetryFailure(
+  registry: Map<string, { failures: number; nextRetryAt: number }>,
+  key: string
+): void {
+  const failures = Math.min((registry.get(key)?.failures ?? 0) + 1, RETRY_DELAYS_MS.length)
+  const delay = RETRY_DELAYS_MS[Math.max(0, failures - 1)]
+  registry.set(key, { failures, nextRetryAt: Date.now() + delay })
+}
+
+function withSnapshotSummary(
+  summaries: Record<string, ProjectBoardSummary>,
+  workspace: string,
+  snapshot: ProjectBoardSnapshot,
+  loadedAt: number
+): Record<string, ProjectBoardSummary> {
+  const total = snapshot.counts.total
+  const summary: ProjectBoardSummary = {
+    workspaceRoot: snapshot.workspaceRoot,
+    total,
+    completed: snapshot.counts.completed,
+    inProgress: snapshot.counts.inProgress,
+    progress: total === 0 ? 0 : snapshot.counts.completed / total,
+    updatedAt: snapshot.cards.reduce<string | null>((latest, card) =>
+      !latest || card.updatedAt > latest ? card.updatedAt : latest, null) ??
+      new Date(loadedAt).toISOString()
+  }
+  return { ...summaries, [workspace]: summary, [snapshot.workspaceRoot]: summary }
 }
 
 function countsFor(cards: ProjectBoardCard[]): ProjectBoardSnapshot['counts'] {

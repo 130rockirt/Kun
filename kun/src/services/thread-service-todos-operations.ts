@@ -71,25 +71,49 @@ async patchTodoStatus(this: ThreadService,
     todoId: string,
     status: ThreadTodoStatus
   ): Promise<ThreadTodoList> {
+    const current = await this['getTodos'](threadId)
+    const fromStatus = current?.items.find((item) => item.id === todoId)?.status
+    if (!fromStatus) throw new Error(`todo not found: ${threadId}/${todoId}`)
+    return this['patchTodoStatuses'](threadId, [todoId], fromStatus, status)
+  },
+
+async patchTodoStatuses(this: ThreadService,
+    threadId: string,
+    todoIds: readonly string[],
+    fromStatus: ThreadTodoStatus,
+    status: ThreadTodoStatus
+  ): Promise<ThreadTodoList> {
+    const uniqueIds = [...new Set(todoIds)]
+    if (uniqueIds.length === 0) throw new Error('at least one todo id is required')
+    if (status === 'in_progress' && uniqueIds.length > 1) {
+      throw new Error(`in_progress conflict: thread ${threadId} has multiple selected todos`)
+    }
+    const selectedIds = new Set(uniqueIds)
     const todos = await this['withThreadMutation'](threadId, async () => {
       const current = await this['threadStore'].get(threadId)
       if (!current) throw new Error(`thread not found: ${threadId}`)
       const existing = current.todos?.items ?? []
-      if (!existing.some((item) => item.id === todoId)) {
-        throw new Error(`todo not found: ${threadId}/${todoId}`)
+      const existingById = new Map(existing.map((item) => [item.id, item]))
+      for (const todoId of uniqueIds) {
+        const item = existingById.get(todoId)
+        if (!item) throw new Error(`todo not found: ${threadId}/${todoId}`)
+        if (item.status !== fromStatus) {
+          throw new Error(
+            `stale todo status: ${threadId}/${todoId} expected ${fromStatus}, received ${item.status}`
+          )
+        }
       }
       const now = this['nowIso']()
-      const items = existing.map((item) => ({
-        ...item,
-        status: item.id === todoId
+      const items = existing.map((item) => {
+        const nextStatus = selectedIds.has(item.id)
           ? status
           : status === 'in_progress' && item.status === 'in_progress'
             ? 'pending' as const
-            : item.status,
-        ...(item.id === todoId || (status === 'in_progress' && item.status === 'in_progress')
-          ? { updatedAt: now }
-          : {})
-      }))
+            : item.status
+        return nextStatus === item.status
+          ? item
+          : { ...item, status: nextStatus, updatedAt: now }
+      })
       await this['patchPlanMarkdownForTodoStatusChanges'](current, items)
       const next: ThreadTodoList = { threadId, items, updatedAt: now }
       await this['threadStore'].upsert(touchThread({ ...current, todos: next }, now))

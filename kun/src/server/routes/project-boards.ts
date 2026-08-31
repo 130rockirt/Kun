@@ -2,15 +2,18 @@ import {
   CreateManualProjectBoardCardRequestSchema,
   DeleteManualProjectBoardCardRequestSchema,
   PatchManualProjectBoardCardRequestSchema,
+  PatchProjectBoardCardStatusesRequestSchema,
   PatchProjectBoardTodoOverlayRequestSchema,
   PatchThreadTodoRequestSchema,
   PatchThreadTodoResponseSchema,
+  ProjectBoardBulkStatusResponseSchema,
   ProjectBoardSnapshotResponseSchema,
   ProjectBoardSummariesRequestSchema,
   ProjectBoardSummariesResponseSchema
 } from '../../contracts/project-board.js'
 import { ProjectBoardRevisionConflictError } from '../../ports/project-board-store.js'
 import {
+  ProjectBoardBulkConflictError,
   ProjectBoardNotFoundError,
   type ProjectBoardService
 } from '../../services/project-board-service.js'
@@ -81,6 +84,33 @@ export async function patchProjectBoardCard(
   }
 }
 
+export async function patchProjectBoardCardStatuses(
+  service: ProjectBoardService,
+  request: Request
+): Promise<JsonResponse | Response> {
+  const parsed = await parseBody(request, PatchProjectBoardCardStatusesRequestSchema)
+  if (!parsed.ok) return parsed.response
+  try {
+    const result = ProjectBoardBulkStatusResponseSchema.parse(
+      await service.patchCardStatuses(parsed.data)
+    )
+    return jsonResponse(result, result.failures.length > 0 ? 207 : 200)
+  } catch (error) {
+    if (error instanceof ProjectBoardRevisionConflictError) {
+      return jsonResponse({
+        code: 'conflict',
+        message: 'Project board was updated in another window.',
+        expectedRevision: error.expectedRevision,
+        actualRevision: error.actualRevision
+      }, 409)
+    }
+    if (error instanceof ProjectBoardBulkConflictError) {
+      return jsonResponse({ code: error.code, message: error.message }, 409)
+    }
+    return boardError(error)
+  }
+}
+
 export async function deleteProjectBoardCard(
   service: ProjectBoardService,
   cardId: string,
@@ -112,7 +142,7 @@ export async function patchProjectBoardTodoOverlay(
 
 export async function patchThreadTodoStatus(
   threadService: ThreadService,
-  projectBoardService: ProjectBoardService | undefined,
+  _projectBoardService: ProjectBoardService | undefined,
   threadId: string,
   todoId: string,
   request: Request
@@ -121,8 +151,7 @@ export async function patchThreadTodoStatus(
   if (!parsed.ok) return parsed.response
   try {
     const todos = await threadService.patchTodoStatus(threadId, todoId, parsed.data.status)
-    const card = await projectBoardService?.cardForThreadTodo(threadId, todoId)
-    return jsonResponse(PatchThreadTodoResponseSchema.parse({ todos, ...(card ? { card } : {}) }))
+    return jsonResponse(PatchThreadTodoResponseSchema.parse({ todos }))
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (/not found/i.test(message)) return ERRORS.notFound(message)

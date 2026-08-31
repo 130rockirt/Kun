@@ -109,7 +109,13 @@ export class ThreadActivityRegistry implements RuntimeEventObserver {
 
 function activityKind(kind: RuntimeEvent['kind']): ThreadActivityKind | null {
   if (kind === 'thread_created') return 'created'
-  if (kind === 'thread_updated' || kind === 'thread_pruned' || kind === 'thread_restored') {
+  if (
+    kind === 'thread_updated' ||
+    kind === 'thread_pruned' ||
+    kind === 'thread_restored' ||
+    kind === 'todos_updated' ||
+    kind === 'todos_cleared'
+  ) {
     return 'metadata'
   }
   return RUNTIME_KINDS.has(kind) ? 'runtime' : null

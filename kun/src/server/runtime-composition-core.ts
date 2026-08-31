@@ -182,6 +182,7 @@ export async function createRuntimeCore(
   const projectBoardService = new ProjectBoardService({
     store: projectBoardStore,
     threadStore,
+    threadService,
     ids,
     nowIso
   })

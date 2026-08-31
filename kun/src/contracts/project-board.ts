@@ -100,6 +100,52 @@ export const ProjectBoardCountsSchema = z.object({
 }).strict()
 export type ProjectBoardCounts = z.infer<typeof ProjectBoardCountsSchema>
 
+export const PatchProjectBoardCardStatusesRequestSchema = z.object({
+  workspace: z.string().trim().min(1),
+  expectedRevision: z.number().int().nonnegative(),
+  cardIds: z.array(z.string().trim().min(1)).min(1).max(PROJECT_BOARD_MAX_CARDS),
+  fromStatus: ProjectBoardStatusSchema,
+  status: ProjectBoardStatusSchema
+}).strict().superRefine((value, ctx) => {
+  if (new Set(value.cardIds).size !== value.cardIds.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['cardIds'],
+      message: 'cardIds must be unique'
+    })
+  }
+})
+export type PatchProjectBoardCardStatusesRequest = z.infer<
+  typeof PatchProjectBoardCardStatusesRequestSchema
+>
+
+export const ProjectBoardStatusDeltaSchema = z.object({
+  id: z.string().min(1),
+  status: ProjectBoardStatusSchema,
+  updatedAt: z.string()
+}).strict()
+export type ProjectBoardStatusDelta = z.infer<typeof ProjectBoardStatusDeltaSchema>
+
+export const ProjectBoardBulkStatusFailureSchema = z.object({
+  cardId: z.string().min(1),
+  code: z.enum(['write_failed', 'source_missing', 'stale_status', 'skipped']),
+  message: z.string().min(1)
+}).strict()
+export type ProjectBoardBulkStatusFailure = z.infer<
+  typeof ProjectBoardBulkStatusFailureSchema
+>
+
+export const ProjectBoardBulkStatusResponseSchema = z.object({
+  workspaceRoot: z.string().min(1),
+  revision: z.number().int().nonnegative(),
+  counts: ProjectBoardCountsSchema,
+  updatedCards: z.array(ProjectBoardStatusDeltaSchema).max(PROJECT_BOARD_MAX_CARDS * 2),
+  failures: z.array(ProjectBoardBulkStatusFailureSchema).max(PROJECT_BOARD_MAX_CARDS)
+}).strict()
+export type ProjectBoardBulkStatusResponse = z.infer<
+  typeof ProjectBoardBulkStatusResponseSchema
+>
+
 export const ProjectBoardSnapshotResponseSchema = z.object({
   workspaceRoot: z.string().min(1),
   revision: z.number().int().nonnegative(),

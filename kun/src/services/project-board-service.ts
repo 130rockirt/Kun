@@ -1,15 +1,37 @@
+import { createHash } from 'node:crypto'
 import { readFile, realpath } from 'node:fs/promises'
 import { basename, isAbsolute, relative, resolve } from 'node:path'
 import type { IdGenerator } from '../ports/id-generator.js'
-import type { ProjectBoardStore } from '../ports/project-board-store.js'
+import {
+  ProjectBoardRevisionConflictError,
+  type ProjectBoardStore
+} from '../ports/project-board-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
+import type { ThreadService } from './thread-service.js'
+import {
+  ProjectBoardBulkConflictError,
+  assertNoInProgressSelectionConflict,
+  countLightweightCards,
+  failureCodeForBulkError,
+  groupSelectedPlanCards,
+  lightweightBoardCards,
+  runWithConcurrency,
+  threadTodoCardId
+} from './project-board-bulk-status-support.js'
+import {
+  ProjectBoardPlanMetadataCache,
+  loadPlanMetadataConcurrently
+} from './project-board-plan-metadata-cache.js'
 import {
   PROJECT_BOARD_MAX_CARDS,
   type CreateManualProjectBoardCardRequest,
   type ManualProjectBoardCard,
   type PatchManualProjectBoardCardRequest,
   type PatchProjectBoardTodoOverlayRequest,
+  type PatchProjectBoardCardStatusesRequest,
   type ProjectBoardCard,
+  type ProjectBoardBulkStatusFailure,
+  type ProjectBoardBulkStatusResponse,
   type ProjectBoardCounts,
   type ProjectBoardDocumentV1,
   type ProjectBoardSnapshotResponse,
@@ -23,12 +45,23 @@ const ORPHAN_OVERLAY_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000
 export type ProjectBoardServiceOptions = {
   store: ProjectBoardStore
   threadStore: ThreadStore
+  threadService?: Pick<ThreadService, 'patchTodoStatuses'>
+  planMetadataCache?: ProjectBoardPlanMetadataCache
   ids: IdGenerator
   nowIso: () => string
 }
 
 export class ProjectBoardService {
-  constructor(private readonly options: ProjectBoardServiceOptions) {}
+  private membershipsInFlight: Promise<BoardThreadMembership[]> | null = null
+  private readonly membershipPathCache = new Map<
+    string,
+    { workspace: string; gitProjectRoot: string | null }
+  >()
+  private readonly planMetadataCache: ProjectBoardPlanMetadataCache
+
+  constructor(private readonly options: ProjectBoardServiceOptions) {
+    this.planMetadataCache = options.planMetadataCache ?? new ProjectBoardPlanMetadataCache()
+  }
 
   async snapshot(input: {
     workspace: string
@@ -40,16 +73,19 @@ export class ProjectBoardService {
   }
 
   async summaries(workspaces: readonly string[]): Promise<ProjectBoardSummary[]> {
+    const startedAt = performance.now()
     const canonical = await Promise.all([...new Set(workspaces)].map(canonicalWorkspaceRoot))
     const memberships = await this.boardThreadMemberships()
-    return Promise.all(canonical.map(async (workspaceRoot) => {
+    const summaries = await Promise.all(canonical.map(async (workspaceRoot) => {
       const document = (await this.options.store.read(workspaceRoot)).document
       const threads = memberships.filter((membership) =>
         threadMembershipMatchesProject(membership, workspaceRoot)).map(({ thread }) => thread)
-      const cards = await this.allCards(workspaceRoot, document, threads)
-      const counts = countCards(cards)
-      const latest = cards.reduce<string | null>((current, card) =>
-        !current || card.updatedAt > current ? card.updatedAt : current, null)
+      const cards = lightweightBoardCards(document, threads)
+      const counts = countLightweightCards(cards.values())
+      let latest: string | null = null
+      for (const card of cards.values()) {
+        if (!latest || card.updatedAt > latest) latest = card.updatedAt
+      }
       return {
         workspaceRoot,
         total: counts.total,
@@ -59,6 +95,14 @@ export class ProjectBoardService {
         updatedAt: latest
       }
     }))
+    logSlowBoardOperation('summaries', canonical.join('\0'), startedAt, {
+      workspaces: canonical.length,
+      threads: memberships.length,
+      cards: summaries.reduce((total, summary) => total + summary.total, 0),
+      planFiles: 0,
+      metadataCacheHits: 0
+    })
+    return summaries
   }
 
   async createManualCard(
@@ -152,12 +196,142 @@ export class ProjectBoardService {
     return this.snapshotCanonical(workspaceRoot, {})
   }
 
-  async cardForThreadTodo(threadId: string, todoId: string): Promise<ProjectBoardCard | undefined> {
-    const thread = await this.options.threadStore.get(threadId)
-    if (!thread) return undefined
-    const snapshot = await this.snapshot({ workspace: thread.workspace, includeArchived: true })
-    return snapshot.cards.find((card) => card.kind === 'thread_todo' &&
-      card.source.threadId === threadId && card.source.todoId === todoId)
+  async patchCardStatuses(
+    request: PatchProjectBoardCardStatusesRequest
+  ): Promise<ProjectBoardBulkStatusResponse> {
+    const startedAt = performance.now()
+    const workspaceRoot = await canonicalWorkspaceRoot(request.workspace)
+    const read = await this.options.store.read(workspaceRoot)
+    if (read.document.revision !== request.expectedRevision) {
+      throw new ProjectBoardRevisionConflictError(
+        request.expectedRevision,
+        read.document.revision
+      )
+    }
+    const threads = await this.boardThreads(workspaceRoot)
+    const references = lightweightBoardCards(read.document, threads)
+    const selected = request.cardIds.map((cardId) => {
+      const card = references.get(cardId)
+      if (!card) throw new ProjectBoardNotFoundError(`project board card not found: ${cardId}`)
+      if (card.archived) {
+        throw new ProjectBoardBulkConflictError(
+          'archived_card',
+          `archived project board card cannot move: ${cardId}`
+        )
+      }
+      if (card.status !== request.fromStatus) {
+        throw new ProjectBoardBulkConflictError(
+          'stale_status',
+          `project board card ${cardId} is no longer ${request.fromStatus}`
+        )
+      }
+      return card
+    })
+    if (request.status === request.fromStatus) {
+      return {
+        workspaceRoot,
+        revision: read.document.revision,
+        counts: countLightweightCards(references.values()),
+        updatedCards: [],
+        failures: []
+      }
+    }
+    assertNoInProgressSelectionConflict(selected, request.status)
+
+    const planGroups = groupSelectedPlanCards(selected, threads)
+    const updatedCards: ProjectBoardBulkStatusResponse['updatedCards'] = []
+    const failures: ProjectBoardBulkStatusFailure[] = []
+    await runWithConcurrency([...planGroups.values()], 4, async (group) => {
+      const before = new Map(
+        (group.thread.todos?.items ?? []).map((item) => [item.id, item])
+      )
+      try {
+        if (!this.options.threadService) throw new Error('thread todo mutation is unavailable')
+        const todos = await this.options.threadService.patchTodoStatuses(
+          group.thread.id,
+          group.todoIds,
+          request.fromStatus,
+          request.status
+        )
+        for (const item of todos.items) {
+          const previous = before.get(item.id)
+          if (item.source?.kind !== 'plan' || !previous || previous.status === item.status) continue
+          updatedCards.push({
+            id: threadTodoCardId(group.thread.id, item.id),
+            status: item.status,
+            updatedAt: item.updatedAt
+          })
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        for (const cardId of group.cardIds) {
+          failures.push({ cardId, code: failureCodeForBulkError(message), message })
+        }
+      }
+    })
+
+    const manualCards = selected.filter((card) => card.kind === 'manual')
+    let revision = read.document.revision
+    if (failures.length > 0) {
+      for (const card of manualCards) {
+        failures.push({
+          cardId: card.id,
+          code: 'skipped',
+          message: 'manual card update skipped because a Plan card update failed'
+        })
+      }
+    } else if (manualCards.length > 0) {
+      const now = this.options.nowIso()
+      try {
+        const written = await this.options.store.mutate(
+          workspaceRoot,
+          request.expectedRevision,
+          (document) => {
+            for (const card of manualCards) {
+              const current = document.manualCards[card.manualId]
+              if (!current) throw new ProjectBoardNotFoundError(`manual board card not found: ${card.id}`)
+              document.manualCards[card.manualId] = {
+                ...current,
+                status: request.status,
+                updatedAt: now
+              }
+            }
+            return document
+          }
+        )
+        revision = written.document.revision
+        for (const card of manualCards) {
+          updatedCards.push({ id: card.id, status: request.status, updatedAt: now })
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        for (const card of manualCards) {
+          failures.push({ cardId: card.id, code: failureCodeForBulkError(message), message })
+        }
+      }
+    }
+
+    const [latestDocument, latestThreads] = await Promise.all([
+      this.options.store.read(workspaceRoot),
+      this.boardThreads(workspaceRoot)
+    ])
+    revision = latestDocument.document.revision
+    const response = {
+      workspaceRoot,
+      revision,
+      counts: countLightweightCards(
+        lightweightBoardCards(latestDocument.document, latestThreads).values()
+      ),
+      updatedCards,
+      failures
+    }
+    logSlowBoardOperation('bulk-status', workspaceRoot, startedAt, {
+      selected: request.cardIds.length,
+      updated: updatedCards.length,
+      failures: failures.length,
+      threads: planGroups.size
+    })
+    return response
   }
 
   private async mutate(
@@ -183,15 +357,17 @@ export class ProjectBoardService {
     workspaceRoot: string,
     input: { includeArchived?: boolean; cursor?: string }
   ): Promise<ProjectBoardSnapshotResponse> {
+    const startedAt = performance.now()
     const read = await this.options.store.read(workspaceRoot)
-    const allCards = await this.allCards(workspaceRoot, read.document)
+    const projection = await this.allCards(workspaceRoot, read.document)
+    const allCards = projection.cards
     const counts = countCards(allCards)
     const visible = input.includeArchived ? allCards : allCards.filter((card) => !card.archived)
     const offset = decodeCursor(input.cursor)
     const cards = visible.slice(offset, offset + PROJECT_BOARD_MAX_CARDS)
     const nextOffset = offset + cards.length
     const truncated = nextOffset < visible.length
-    return {
+    const response = {
       workspaceRoot,
       revision: read.document.revision,
       cards,
@@ -200,13 +376,25 @@ export class ProjectBoardService {
       ...(truncated ? { nextCursor: encodeCursor(nextOffset) } : {}),
       ...(read.warning ? { warning: read.warning } : {})
     }
+    logSlowBoardOperation('snapshot', workspaceRoot, startedAt, {
+      cards: allCards.length,
+      returned: cards.length,
+      truncated,
+      planFiles: projection.planFiles,
+      metadataCacheHits: projection.metadataCacheHits
+    })
+    return response
   }
 
   private async allCards(
     workspaceRoot: string,
     document: ProjectBoardDocumentV1,
     knownThreads?: ThreadSummary[]
-  ): Promise<ProjectBoardCard[]> {
+  ): Promise<{
+    cards: ProjectBoardCard[]
+    planFiles: number
+    metadataCacheHits: number
+  }> {
     const threads = knownThreads ?? await this.boardThreads(workspaceRoot)
     const cards: ProjectBoardCard[] = Object.values(document.manualCards).map((card) => ({
       id: `manual:${card.id}`,
@@ -221,19 +409,34 @@ export class ProjectBoardService {
       updatedAt: card.updatedAt,
       source: { label: 'Manual' }
     }))
-    const planCache = new Map<string, Map<number, PlanTaskMetadata>>()
+    const planPaths = new Set<string>()
+    for (const thread of threads) {
+      for (const todo of thread.todos?.items ?? []) {
+        if (todo.source?.kind !== 'plan') continue
+        const path = planPathForTodo(workspaceRoot, todo)
+        if (path) planPaths.add(path)
+      }
+    }
+    const loadedMetadata = await loadPlanMetadataConcurrently(
+      [...planPaths],
+      this.planMetadataCache,
+      4
+    )
     for (const thread of threads) {
       for (const todo of thread.todos?.items ?? []) {
         if (todo.source?.kind !== 'plan') continue
         const key = projectBoardTodoOverlayKey(thread.id, todo.id)
         const overlay = document.todoOverlays[key]
-        const metadata = await planMetadata(workspaceRoot, todo, planCache)
+        const planPath = planPathForTodo(workspaceRoot, todo)
+        const metadata = planPath
+          ? loadedMetadata.metadata.get(planPath)?.get(todo.source.ordinal)
+          : undefined
         cards.push({
           id: `todo:${thread.id}:${todo.id}`,
           kind: 'thread_todo',
           workspaceRoot,
           title: todo.content,
-          description: overlay?.description || metadata.description,
+          description: overlay?.description || metadata?.description || '',
           status: todo.status,
           category: overlay?.category ?? 'plan',
           priority: overlay?.priority ?? null,
@@ -246,13 +449,17 @@ export class ProjectBoardService {
             threadTitle: thread.title,
             planId: todo.source.planId,
             planRelativePath: todo.source.relativePath,
-            ...(metadata.sectionTitle ? { sectionTitle: metadata.sectionTitle } : {}),
+            ...(metadata?.sectionTitle ? { sectionTitle: metadata.sectionTitle } : {}),
             ordinal: todo.source.ordinal
           }
         })
       }
     }
-    return cards.sort(compareCards)
+    return {
+      cards: cards.sort(compareCards),
+      planFiles: planPaths.size,
+      metadataCacheHits: loadedMetadata.cacheHits
+    }
   }
 
   private async boardThreads(workspaceRoot: string): Promise<ThreadSummary[]> {
@@ -262,23 +469,37 @@ export class ProjectBoardService {
   }
 
   private async boardThreadMemberships(): Promise<BoardThreadMembership[]> {
-    const threads = await this.options.threadStore.list({ includeArchived: false, includeSide: false })
-    const candidates = threads.filter((thread) =>
-      thread.status !== 'archived' &&
-      thread.status !== 'deleted' &&
-      thread.relation !== 'side' &&
-      thread.agentSurface !== 'write')
-    return Promise.all(candidates.map(async (thread) => {
-      const rawWorkspace = thread.workspace ?? ''
-      const workspace = await realpath(resolve(rawWorkspace)).catch(() => resolve(rawWorkspace))
-      return { thread, workspace, gitProjectRoot: await gitProjectRootForWorktree(workspace) }
-    }))
+    if (this.membershipsInFlight) return this.membershipsInFlight
+    const task = (async () => {
+      const threads = await this.options.threadStore.list({ includeArchived: false, includeSide: false })
+      const candidates = threads.filter((thread) =>
+        thread.status !== 'archived' &&
+        thread.status !== 'deleted' &&
+        thread.relation !== 'side' &&
+        thread.agentSurface !== 'write')
+      return Promise.all(candidates.map(async (thread) => {
+        const rawWorkspace = thread.workspace ?? ''
+        let resolved = this.membershipPathCache.get(rawWorkspace)
+        if (!resolved) {
+          const workspace = await realpath(resolve(rawWorkspace)).catch(() => resolve(rawWorkspace))
+          resolved = { workspace, gitProjectRoot: await gitProjectRootForWorktree(workspace) }
+          setBoundedCache(this.membershipPathCache, rawWorkspace, resolved, 512)
+        }
+        return { thread, ...resolved }
+      }))
+    })().finally(() => {
+      if (this.membershipsInFlight === task) this.membershipsInFlight = null
+    })
+    this.membershipsInFlight = task
+    return task
   }
 }
 
 export class ProjectBoardNotFoundError extends Error {
   override name = 'ProjectBoardNotFoundError'
 }
+
+export { ProjectBoardBulkConflictError } from './project-board-bulk-status-support.js'
 
 export function projectBoardTodoOverlayKey(threadId: string, todoId: string): string {
   return Buffer.from(`${threadId}\0${todoId}`, 'utf8').toString('base64url')
@@ -370,6 +591,41 @@ function compareCards(left: ProjectBoardCard, right: ProjectBoardCard): number {
   return byUpdatedAt !== 0 ? byUpdatedAt : left.id.localeCompare(right.id)
 }
 
+function setBoundedCache<K, V>(
+  cache: Map<K, V>,
+  key: K,
+  value: V,
+  capacity: number
+): void {
+  cache.delete(key)
+  cache.set(key, value)
+  while (cache.size > capacity) {
+    const oldest = cache.keys().next().value as K | undefined
+    if (oldest === undefined) break
+    cache.delete(oldest)
+  }
+}
+
+function logSlowBoardOperation(
+  operation: string,
+  workspaceIdentity: string,
+  startedAt: number,
+  details: Record<string, unknown>
+): void {
+  const durationMs = Math.round((performance.now() - startedAt) * 10) / 10
+  if (durationMs < 250) return
+  const workspaceHash = createHash('sha256')
+    .update(workspaceIdentity)
+    .digest('hex')
+    .slice(0, 12)
+  console.warn(`[kun] slow project board operation: ${JSON.stringify({
+    operation,
+    durationMs,
+    workspaceHash,
+    ...details
+  })}`)
+}
+
 function encodeCursor(offset: number): string {
   return Buffer.from(String(offset), 'utf8').toString('base64url')
 }
@@ -381,54 +637,13 @@ function decodeCursor(cursor: string | undefined): number {
   return parsed
 }
 
-type PlanTaskMetadata = { sectionTitle: string; description: string }
-
-async function planMetadata(
+function planPathForTodo(
   workspaceRoot: string,
-  todo: ThreadTodoItem,
-  cache: Map<string, Map<number, PlanTaskMetadata>>
-): Promise<PlanTaskMetadata> {
+  todo: ThreadTodoItem
+): string | null {
   const source = todo.source
-  if (!source) return { sectionTitle: '', description: '' }
+  if (!source) return null
   const absolutePath = resolve(workspaceRoot, source.relativePath)
   const rel = relative(workspaceRoot, absolutePath)
-  if (rel.startsWith('..') || isAbsolute(rel)) return { sectionTitle: '', description: '' }
-  let entries = cache.get(absolutePath)
-  if (!entries) {
-    entries = await readPlanTaskMetadata(absolutePath)
-    cache.set(absolutePath, entries)
-  }
-  return entries.get(source.ordinal) ?? { sectionTitle: '', description: '' }
-}
-
-async function readPlanTaskMetadata(path: string): Promise<Map<number, PlanTaskMetadata>> {
-  let markdown: string
-  try {
-    markdown = await readFile(path, 'utf8')
-  } catch {
-    return new Map()
-  }
-  const result = new Map<number, PlanTaskMetadata>()
-  const lines = markdown.split(/\r?\n/)
-  let sectionTitle = ''
-  let ordinal = 0
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? ''
-    const heading = line.match(/^#{2,3}\s+(.+?)\s*$/)
-    if (heading) sectionTitle = heading[1]?.trim() ?? ''
-    if (!/^\s*[-*+]\s+\[[ xX]\]\s+/.test(line)) continue
-    let description = ''
-    const taskIndent = line.match(/^\s*/)?.[0].length ?? 0
-    for (let child = index + 1; child < lines.length; child += 1) {
-      const candidate = lines[child] ?? ''
-      if (!candidate.trim()) continue
-      const indent = candidate.match(/^\s*/)?.[0].length ?? 0
-      if (indent <= taskIndent || /^\s*[-*+]\s+\[[ xX]\]\s+/.test(candidate)) break
-      description = candidate.trim().replace(/^[-*+]\s+/, '')
-      break
-    }
-    result.set(ordinal, { sectionTitle, description })
-    ordinal += 1
-  }
-  return result
+  return rel.startsWith('..') || isAbsolute(rel) ? null : absolutePath
 }

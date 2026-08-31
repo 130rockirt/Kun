@@ -1,6 +1,15 @@
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type ReactElement
+} from 'react'
 import { AlertTriangle, Columns3, RefreshCw, WifiOff } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../../store/chat-store'
 import { normalizeWorkspaceRoot, workspaceRootIdentityKey } from '../../lib/workspace-path'
 import { openWorkspaceFileWithSystemDefault } from '../../lib/open-workspace-path'
@@ -8,13 +17,27 @@ import { resolveProjectWorkspacePath } from '../../lib/worktree-project-path'
 import { readThreadWorktreeRegistry } from '../../lib/thread-worktree-registry'
 import { useProjectBoardStore } from '../../project-board/project-board-store'
 import { selectVisibleProjectBoardCards } from '../../project-board/project-board-selectors'
-import type { ProjectBoardCard, ProjectBoardStatus } from '../../project-board/project-board-types'
+import {
+  EMPTY_PROJECT_BOARD_SELECTION,
+  projectBoardSelectionCards,
+  reconcileProjectBoardSelection,
+  selectionForProjectBoardDrag,
+  setProjectBoardColumnSelection,
+  toggleProjectBoardCardSelection,
+  type ProjectBoardSelection
+} from '../../project-board/project-board-selection'
+import {
+  PROJECT_BOARD_DRAG_MIME,
+  type ProjectBoardCard,
+  type ProjectBoardStatus
+} from '../../project-board/project-board-types'
 import { ProjectBoard } from './ProjectBoard'
 import { ProjectBoardArchive } from './ProjectBoardArchive'
 import { ProjectBoardCardDialog, type ProjectBoardCardDraft } from './ProjectBoardCardDialog'
 import { ProjectBoardHeader } from './ProjectBoardHeader'
 import { ProjectBoardOverview } from './ProjectBoardOverview'
 import { ProjectBoardToolbar } from './ProjectBoardToolbar'
+import { ProjectBoardSelectionToolbar } from './ProjectBoardSelectionToolbar'
 
 type Props = {
   leftSidebarCollapsed: boolean
@@ -26,21 +49,50 @@ export function ProjectBoardView(props: Props): ReactElement {
   const runtimeReady = useChatStore((state) => state.runtimeConnection === 'ready')
   const workspaceRoot = useChatStore((state) => state.workspaceRoot)
   const workspaceRoots = useChatStore((state) => state.codeWorkspaceRoots)
-  const activeThread = useChatStore((state) =>
-    state.threads.find((thread) => thread.id === state.activeThreadId) ?? null)
-  const activeTodosUpdatedAt = useChatStore((state) => state.activeThreadTodos?.updatedAt ?? '')
-  const board = useProjectBoardStore()
+  const board = useProjectBoardStore(useShallow((state) => ({
+    selectedWorkspaceRoot: state.selectedWorkspaceRoot,
+    snapshot: state.snapshotByWorkspace[state.selectedWorkspaceRoot],
+    loading: state.loading,
+    mutatingCardIds: state.mutatingCardIds,
+    loadedAt: state.loadedAtByWorkspace[state.selectedWorkspaceRoot] ?? 0,
+    error: state.error,
+    searchQuery: state.searchQuery,
+    filters: state.filters,
+    activeTab: state.activeTab,
+    selectWorkspace: state.selectWorkspace,
+    setSearchQuery: state.setSearchQuery,
+    setFilters: state.setFilters,
+    setActiveTab: state.setActiveTab,
+    loadBoard: state.loadBoard,
+    loadMore: state.loadMore,
+    createManualCard: state.createManualCard,
+    patchManualCard: state.patchManualCard,
+    deleteManualCard: state.deleteManualCard,
+    patchTodoOverlay: state.patchTodoOverlay,
+    moveCards: state.moveCards
+  })))
   const selectBoardWorkspace = board.selectWorkspace
   const loadBoard = board.loadBoard
+  const patchManualCard = board.patchManualCard
+  const patchTodoOverlay = board.patchTodoOverlay
+  const moveBoardCards = board.moveCards
+  const deleteManualCard = board.deleteManualCard
   const [dialog, setDialog] = useState<{ card?: ProjectBoardCard; status: ProjectBoardStatus } | null>(null)
+  const [selection, setSelection] = useState<ProjectBoardSelection>(EMPTY_PROJECT_BOARD_SELECTION)
   const selected = board.selectedWorkspaceRoot
-  const snapshot = board.snapshotByWorkspace[selected]
-  const activeThreadProjectWorkspace = useMemo(() => activeThread
-    ? resolveProjectWorkspacePath(activeThread.workspace ?? '', {
-        threadWorktrees: readThreadWorktreeRegistry().worktrees,
+  const snapshot = board.snapshot
+  const threadWorktrees = readThreadWorktreeRegistry().worktrees
+  const todoRevision = useChatStore((state) => state.threads
+    .filter((thread) => {
+      const resolved = resolveProjectWorkspacePath(thread.workspace ?? '', {
+        threadWorktrees,
         candidateProjectPaths: [selected, workspaceRoot, ...workspaceRoots]
       })
-    : '', [activeThread, selected, workspaceRoot, workspaceRoots])
+      return workspaceRootIdentityKey(resolved) === workspaceRootIdentityKey(selected)
+    })
+    .map((thread) => `${thread.id}:${thread.todos?.updatedAt ?? ''}`)
+    .sort()
+    .join('|'))
 
   useEffect(() => {
     if (selected) return
@@ -54,25 +106,31 @@ export function ProjectBoardView(props: Props): ReactElement {
 
   useEffect(() => {
     if (!selected || !runtimeReady) return
-    const refresh = (): void => {
-      if (document.visibilityState === 'visible') void loadBoard(selected, { force: true })
+    const refreshIfStale = (): void => {
+      if (
+        document.visibilityState === 'visible' &&
+        Date.now() - board.loadedAt >= 30_000
+      ) void loadBoard(selected)
     }
-    const interval = window.setInterval(refresh, 15_000)
-    window.addEventListener('focus', refresh)
-    document.addEventListener('visibilitychange', refresh)
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void loadBoard(selected)
+    }, 60_000)
+    window.addEventListener('focus', refreshIfStale)
+    document.addEventListener('visibilitychange', refreshIfStale)
     return () => {
       window.clearInterval(interval)
-      window.removeEventListener('focus', refresh)
-      document.removeEventListener('visibilitychange', refresh)
+      window.removeEventListener('focus', refreshIfStale)
+      document.removeEventListener('visibilitychange', refreshIfStale)
     }
-  }, [loadBoard, runtimeReady, selected])
+  }, [board.loadedAt, loadBoard, runtimeReady, selected])
 
+  const todoRevisionRef = useRef(todoRevision)
   useEffect(() => {
-    if (!activeTodosUpdatedAt || !runtimeReady ||
-      workspaceRootIdentityKey(activeThreadProjectWorkspace) !== workspaceRootIdentityKey(selected)) return
+    if (!runtimeReady || todoRevision === todoRevisionRef.current) return
+    todoRevisionRef.current = todoRevision
     const timer = window.setTimeout(() => void loadBoard(selected, { force: true }), 250)
     return () => window.clearTimeout(timer)
-  }, [activeThreadProjectWorkspace, activeTodosUpdatedAt, loadBoard, runtimeReady, selected])
+  }, [loadBoard, runtimeReady, selected, todoRevision])
 
   const visible = useMemo(() => selectVisibleProjectBoardCards({
     cards: snapshot?.cards ?? [],
@@ -80,20 +138,105 @@ export function ProjectBoardView(props: Props): ReactElement {
     filters: board.filters,
     archived: board.activeTab === 'archive'
   }), [board.activeTab, board.filters, board.searchQuery, snapshot?.cards])
-  const disabled = !runtimeReady || Boolean(board.mutatingCardId)
+  const disabled = !runtimeReady
+  const selectedCards = useMemo(
+    () => projectBoardSelectionCards(selection, visible),
+    [selection, visible]
+  )
+  const selectionBusy = selection.cardIds.some((id) => board.mutatingCardIds[id] === true)
 
-  const editOverlay = (card: ProjectBoardCard, patch: { archived?: boolean }): void => {
-    if (card.kind === 'manual') void board.patchManualCard(card.id, patch)
-    else void board.patchTodoOverlay(card, patch)
-  }
-  const openThread = (card: ProjectBoardCard): void => {
+  useEffect(() => {
+    setSelection((current) => {
+      if (current.cardIds.some((id) => board.mutatingCardIds[id] === true)) return current
+      const next = reconcileProjectBoardSelection(current, visible)
+      return sameSelection(current, next) ? current : next
+    })
+  }, [board.mutatingCardIds, visible])
+
+  useEffect(() => {
+    setSelection(EMPTY_PROJECT_BOARD_SELECTION)
+  }, [selected, board.activeTab])
+
+  useEffect(() => {
+    const clearSelection = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setSelection(EMPTY_PROJECT_BOARD_SELECTION)
+    }
+    window.addEventListener('keydown', clearSelection)
+    return () => window.removeEventListener('keydown', clearSelection)
+  }, [])
+
+  const editOverlay = useCallback((card: ProjectBoardCard, patch: { archived?: boolean }): void => {
+    if (card.kind === 'manual') void patchManualCard(card.id, patch)
+    else void patchTodoOverlay(card, patch)
+  }, [patchManualCard, patchTodoOverlay])
+  const openThread = useCallback((card: ProjectBoardCard): void => {
     if (card.source.threadId) void useChatStore.getState().selectThread(card.source.threadId)
-  }
-  const openPlan = (card: ProjectBoardCard): void => {
+  }, [])
+  const openPlan = useCallback((card: ProjectBoardCard): void => {
     if (card.source.planRelativePath) {
       void openWorkspaceFileWithSystemDefault(card.source.planRelativePath, card.workspaceRoot)
     }
-  }
+  }, [])
+  const toggleSelection = useCallback((
+    card: ProjectBoardCard,
+    options: { range: boolean }
+  ): void => {
+    const orderedCardIds = visible
+      .filter((candidate) => candidate.status === card.status)
+      .map((candidate) => candidate.id)
+    setSelection((current) => toggleProjectBoardCardSelection({
+      selection: current,
+      card,
+      orderedCardIds,
+      range: options.range
+    }))
+  }, [visible])
+  const toggleColumnSelection = useCallback((
+    status: ProjectBoardStatus,
+    cards: ProjectBoardCard[],
+    shouldSelect: boolean
+  ): void => {
+    setSelection(setProjectBoardColumnSelection(
+      status,
+      cards.map((card) => card.id),
+      shouldSelect
+    ))
+  }, [])
+  const moveCards = useCallback(async (
+    cards: ProjectBoardCard[],
+    status: ProjectBoardStatus
+  ): Promise<void> => {
+    const result = await moveBoardCards(cards, status)
+    const failed = new Set(result.failedCardIds)
+    setSelection((current) => {
+      const cardIds = current.cardIds.filter((id) => failed.has(id))
+      return cardIds.length > 0
+        ? { ...current, cardIds, anchorId: cardIds[0] ?? null }
+        : EMPTY_PROJECT_BOARD_SELECTION
+    })
+  }, [moveBoardCards])
+  const dragCard = useCallback((card: ProjectBoardCard, event: DragEvent<HTMLElement>): void => {
+    const dragSelection = selectionForProjectBoardDrag(selection, card)
+    if (!sameSelection(selection, dragSelection)) setSelection(dragSelection)
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData(PROJECT_BOARD_DRAG_MIME, JSON.stringify({
+      cardIds: dragSelection.cardIds,
+      status: dragSelection.status
+    }))
+    setProjectBoardDragImage(event, dragSelection.cardIds.length)
+  }, [selection])
+  const moveOneCard = useCallback((card: ProjectBoardCard, status: ProjectBoardStatus): void => {
+    void moveCards([card], status)
+  }, [moveCards])
+  const editCard = useCallback((card: ProjectBoardCard): void => {
+    setDialog({ card, status: card.status })
+  }, [])
+  const archiveCard = useCallback((card: ProjectBoardCard, archived: boolean): void => {
+    editOverlay(card, { archived })
+  }, [editOverlay])
+  const deleteCard = useCallback((card: ProjectBoardCard): void => {
+    if (window.confirm(t('projectBoardDeleteConfirm'))) void deleteManualCard(card.id)
+  }, [deleteManualCard, t])
   const submitDialog = async (draft: ProjectBoardCardDraft): Promise<void> => {
     if (!dialog) return
     if (!dialog.card) {
@@ -132,7 +275,7 @@ export function ProjectBoardView(props: Props): ReactElement {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-ds-main text-ds-ink">
+    <div className="relative flex h-full min-h-0 flex-col bg-ds-main text-ds-ink">
       <ProjectBoardHeader
         workspaceRoot={selected}
         activeTab={board.activeTab}
@@ -178,14 +321,17 @@ export function ProjectBoardView(props: Props): ReactElement {
                 <ProjectBoard
                   cards={visible}
                   disabled={disabled}
-                  mutatingCardId={board.mutatingCardId}
+                  mutatingCardIds={board.mutatingCardIds}
+                  selection={selection}
                   onAdd={(status) => setDialog({ status })}
-                  onMove={(card, status) => void board.moveCard(card, status)}
-                  onEdit={(card) => setDialog({ card, status: card.status })}
-                  onArchive={(card, archived) => editOverlay(card, { archived })}
-                  onDelete={(card) => {
-                    if (window.confirm(t('projectBoardDeleteConfirm'))) void board.deleteManualCard(card.id)
-                  }}
+                  onMove={moveOneCard}
+                  onMoveCards={(cards, status) => void moveCards(cards, status)}
+                  onToggleSelect={toggleSelection}
+                  onToggleColumnSelection={toggleColumnSelection}
+                  onDragCard={dragCard}
+                  onEdit={editCard}
+                  onArchive={archiveCard}
+                  onDelete={deleteCard}
                   onOpenThread={openThread}
                   onOpenPlan={openPlan}
                 />
@@ -199,11 +345,20 @@ export function ProjectBoardView(props: Props): ReactElement {
           </div>
         )}
       </div>
+      {selection.status && selection.cardIds.length > 0 ? (
+        <ProjectBoardSelectionToolbar
+          count={selection.cardIds.length}
+          sourceStatus={selection.status}
+          disabled={disabled || selectionBusy}
+          onMove={(status) => void moveCards(selectedCards, status)}
+          onClear={() => setSelection(EMPTY_PROJECT_BOARD_SELECTION)}
+        />
+      ) : null}
       {dialog ? (
         <ProjectBoardCardDialog
           card={dialog.card}
           initialStatus={dialog.status}
-          busy={Boolean(board.mutatingCardId)}
+          busy={Object.keys(board.mutatingCardIds).length > 0}
           onClose={() => setDialog(null)}
           onSubmit={submitDialog}
         />
@@ -231,3 +386,40 @@ function BoardSkeleton(): ReactElement {
   return <div className="grid h-full min-w-[930px] grid-cols-3 gap-4 p-5">{[0, 1, 2].map((column) => <div key={column} className="animate-pulse rounded-2xl border border-ds-border-muted bg-ds-main/50 p-3"><div className="h-5 w-24 rounded bg-ds-card" /><div className="mt-5 h-28 rounded-xl bg-ds-card" /><div className="mt-3 h-28 rounded-xl bg-ds-card" /></div>)}</div>
 }
 function cssId(value: string): string { return value.replace(/[^A-Za-z0-9_-]/g, '-') }
+
+function sameSelection(
+  left: ProjectBoardSelection,
+  right: ProjectBoardSelection
+): boolean {
+  return left.status === right.status &&
+    left.anchorId === right.anchorId &&
+    left.cardIds.length === right.cardIds.length &&
+    left.cardIds.every((id, index) => id === right.cardIds[index])
+}
+
+function setProjectBoardDragImage(
+  event: DragEvent<HTMLElement>,
+  count: number
+): void {
+  if (count <= 1) return
+  const preview = document.createElement('div')
+  preview.textContent = String(count)
+  preview.style.cssText = [
+    'position:fixed',
+    'left:-9999px',
+    'top:-9999px',
+    'width:44px',
+    'height:32px',
+    'border-radius:10px',
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'background:#2563eb',
+    'color:white',
+    'font:600 13px system-ui',
+    'box-shadow:0 6px 18px rgba(0,0,0,.2)'
+  ].join(';')
+  document.body.appendChild(preview)
+  event.dataTransfer.setDragImage(preview, 22, 16)
+  window.setTimeout(() => preview.remove(), 0)
+}

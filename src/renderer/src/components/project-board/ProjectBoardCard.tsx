@@ -1,4 +1,4 @@
-import type { DragEvent, ReactElement } from 'react'
+import { memo, type DragEvent, type MouseEvent, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProjectBoardCard as Card, ProjectBoardStatus } from '../../project-board/project-board-types'
 import { ProjectBoardCardMenu } from './ProjectBoardCardMenu'
@@ -7,32 +7,57 @@ type Props = {
   card: Card
   disabled: boolean
   pending: boolean
-  onMove: (status: ProjectBoardStatus) => void
-  onEdit: () => void
-  onArchive: (archived: boolean) => void
-  onDelete: () => void
-  onOpenThread: () => void
-  onOpenPlan: () => void
+  selected: boolean
+  onToggleSelect: (card: Card, options: { range: boolean }) => void
+  onDragCard: (card: Card, event: DragEvent<HTMLElement>) => void
+  onMove: (card: Card, status: ProjectBoardStatus) => void
+  onEdit: (card: Card) => void
+  onArchive: (card: Card, archived: boolean) => void
+  onDelete: (card: Card) => void
+  onOpenThread: (card: Card) => void
+  onOpenPlan: (card: Card) => void
 }
 
-export function ProjectBoardCard(props: Props): ReactElement {
+function ProjectBoardCardComponent(props: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
-  const dragStart = (event: DragEvent): void => {
+  const dragStart = (event: DragEvent<HTMLElement>): void => {
     if (props.disabled) return event.preventDefault()
-    event.dataTransfer.effectAllowed = 'move'
-    event.dataTransfer.setData('application/x-kun-project-board-card', props.card.id)
+    props.onDragCard(props.card, event)
+  }
+  const toggleFromCard = (event: MouseEvent): void => {
+    if (!event.shiftKey && !event.metaKey && !event.ctrlKey) return
+    event.preventDefault()
+    props.onToggleSelect(props.card, { range: event.shiftKey })
   }
   return (
     <article
       id={`project-board-${cssId(props.card.id)}`}
       draggable={!props.disabled}
       onDragStart={dragStart}
+      onClick={toggleFromCard}
       tabIndex={0}
       className={`group rounded-[14px] border bg-ds-card px-3.5 py-3 shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-        props.pending ? 'border-accent ring-1 ring-accent/30' : 'border-ds-border-muted hover:border-ds-border hover:shadow-md'
+        props.pending || props.selected
+          ? 'border-accent ring-1 ring-accent/30'
+          : 'border-ds-border-muted hover:border-ds-border hover:shadow-md'
       } motion-reduce:transition-none`}
     >
       <div className="flex items-start gap-2">
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={props.selected}
+          aria-label={props.selected ? t('projectBoardDeselectTask') : t('projectBoardSelectTask')}
+          onClick={(event) => {
+            event.stopPropagation()
+            props.onToggleSelect(props.card, { range: event.shiftKey })
+          }}
+          className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+            props.selected ? 'border-accent bg-accent text-white' : 'border-ds-border text-transparent'
+          }`}
+        >
+          <span className="text-[10px] leading-none">✓</span>
+        </button>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap gap-1.5">
             <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium ${categoryClass(props.card.category)}`}>
@@ -47,12 +72,12 @@ export function ProjectBoardCard(props: Props): ReactElement {
         <ProjectBoardCardMenu
           card={props.card}
           disabled={props.disabled}
-          onMove={props.onMove}
-          onEdit={props.onEdit}
-          onArchive={props.onArchive}
-          onDelete={props.onDelete}
-          onOpenThread={props.onOpenThread}
-          onOpenPlan={props.onOpenPlan}
+          onMove={(status) => props.onMove(props.card, status)}
+          onEdit={() => props.onEdit(props.card)}
+          onArchive={(archived) => props.onArchive(props.card, archived)}
+          onDelete={() => props.onDelete(props.card)}
+          onOpenThread={() => props.onOpenThread(props.card)}
+          onOpenPlan={() => props.onOpenPlan(props.card)}
         />
       </div>
       {props.card.description ? <p className="mt-1.5 line-clamp-3 text-[11.5px] leading-[17px] text-ds-muted">{props.card.description}</p> : null}
@@ -63,6 +88,8 @@ export function ProjectBoardCard(props: Props): ReactElement {
     </article>
   )
 }
+
+export const ProjectBoardCard = memo(ProjectBoardCardComponent)
 
 function cssId(value: string): string { return value.replace(/[^A-Za-z0-9_-]/g, '-') }
 function priorityClass(priority: NonNullable<Card['priority']>): string {
