@@ -35,6 +35,7 @@ import {
   DesignDocumentTargetSchema,
   DesignTaskProfileSchema
 } from './design-task-profile.js'
+import { ModelRequestFailureContextSchema } from './model-request-failure.js'
 
 /**
  * Persisted runtime events. Every event has a per-thread `seq` so the
@@ -247,6 +248,7 @@ export const TurnLifecycleEvent = RuntimeEventBase.extend({
   message: z.string().optional(),
   code: z.string().optional(),
   details: z.unknown().optional(),
+  modelRequestFailure: ModelRequestFailureContextSchema.optional(),
   severity: RuntimeErrorSeverity.optional(),
   model: z.string().min(1).optional(),
   providerId: z.string().min(1).optional(),
@@ -530,6 +532,7 @@ export const ErrorEvent = RuntimeEventBase.extend({
   message: z.string(),
   code: z.string().optional(),
   details: z.unknown().optional(),
+  modelRequestFailure: ModelRequestFailureContextSchema.optional(),
   severity: RuntimeErrorSeverity.optional()
 })
 export type ErrorEvent = z.infer<typeof ErrorEvent>

@@ -604,6 +604,7 @@ export function systemErrorBlockFromItem(item: CoreTurnItemJson): ChatBlock {
     text: redactSecretText(message),
     ...(item.code ? { code: item.code } : {}),
     ...(detail ? { detail } : {}),
+    ...(item.modelRequestFailure ? { modelRequestFailure: item.modelRequestFailure } : {}),
     severity: errorSeverity(item.severity, item.code),
     runtimeError: true
   }
@@ -618,6 +619,7 @@ export function runtimeErrorFromItem(item: CoreTurnItemJson): RuntimeErrorEventP
     message: redactSecretText(message),
     ...(item.code ? { code: item.code } : {}),
     ...(item.details !== undefined ? { details: item.details } : {}),
+    ...(item.modelRequestFailure ? { modelRequestFailure: item.modelRequestFailure } : {}),
     severity: errorSeverity(item.severity, item.code)
   }
 }
@@ -635,6 +637,7 @@ export function runtimeErrorFromEvent(
     message: redactSecretText(message),
     ...(event.code ? { code: event.code } : {}),
     ...(event.details !== undefined ? { details: event.details } : {}),
+    ...(event.modelRequestFailure ? { modelRequestFailure: event.modelRequestFailure } : {}),
     severity: errorSeverity(event.severity, event.code)
   }
 }
@@ -644,6 +647,7 @@ export function errorForRuntimeEvent(payload: RuntimeErrorEventPayload): Error {
     ...(payload.code ? { code: payload.code } : {}),
     message: payload.message,
     ...(payload.details !== undefined ? { details: payload.details } : {}),
+    ...(payload.modelRequestFailure ? { modelRequestFailure: payload.modelRequestFailure } : {}),
     ...(payload.severity ? { severity: payload.severity } : {})
   }))
 }

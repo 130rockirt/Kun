@@ -14,6 +14,7 @@ import type {
 } from '../contracts/turns.js'
 import type { TurnItem, UserMessageSource } from '../contracts/items.js'
 import type { RuntimeErrorSeverity } from '../contracts/errors.js'
+import type { ModelRequestFailureContext } from '../contracts/model-request-failure.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
 import type { MigrationMaintenanceLock } from '../ports/migration-maintenance-lock.js'
@@ -406,6 +407,7 @@ async finishTurn(this: TurnService, input: {
     error?: string
     code?: string
     details?: unknown
+    modelRequestFailure?: ModelRequestFailureContext
     severity?: RuntimeErrorSeverity
   }): Promise<TurnSettlement> {
     let settlement: TurnSettlement
@@ -472,6 +474,7 @@ async finishTurn(this: TurnService, input: {
           message: input.error,
           ...(input.code ? { code: input.code } : {}),
           ...(input.details !== undefined ? { details: input.details } : {}),
+          ...(input.modelRequestFailure ? { modelRequestFailure: input.modelRequestFailure } : {}),
           ...(input.severity ? { severity: input.severity } : {})
         })
       : null
@@ -483,6 +486,7 @@ async finishTurn(this: TurnService, input: {
       ...(input.error ? { message: input.error } : {}),
       ...(input.code ? { code: input.code } : {}),
       ...(input.details !== undefined ? { details: input.details } : {}),
+      ...(input.modelRequestFailure ? { modelRequestFailure: input.modelRequestFailure } : {}),
       ...(input.severity ? { severity: input.severity } : {})
     })
       if (errorItem) {

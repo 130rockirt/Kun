@@ -351,12 +351,14 @@ export function runtimeErrorPayloadToError(event: {
   message: string
   code?: string
   details?: unknown
+  modelRequestFailure?: import('../agent/kun-contract').CoreModelRequestFailureJson
   severity?: string
 }): Error {
   return new Error(JSON.stringify({
     ...(event.code ? { code: event.code } : {}),
     message: event.message,
     ...(event.details !== undefined ? { details: event.details } : {}),
+    ...(event.modelRequestFailure ? { modelRequestFailure: event.modelRequestFailure } : {}),
     ...(event.severity ? { severity: event.severity } : {})
   }))
 }
@@ -372,6 +374,7 @@ export function sameRuntimeErrorContent(
   return (
     left.severity === right.severity &&
     left.code === right.code &&
+    JSON.stringify(left.modelRequestFailure) === JSON.stringify(right.modelRequestFailure) &&
     normalizeRuntimeErrorText(left.text) === normalizeRuntimeErrorText(right.text) &&
     normalizeRuntimeErrorText(left.detail) === normalizeRuntimeErrorText(right.detail)
   )

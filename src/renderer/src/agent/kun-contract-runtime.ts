@@ -214,6 +214,16 @@ export type CoreWebSourceJson = {
   retrievedAt?: string
 }
 
+export type CoreModelRequestFailureJson = {
+  requestState: 'provider_responded' | 'sent_no_response' | 'not_sent'
+  providerId?: string
+  model?: string
+  httpStatus?: number
+  providerCode?: string
+  category?: 'network' | 'timeout' | 'authentication' | 'quota' | 'rate_limit' | 'unavailable' | 'model_not_found' | 'request' | 'capability' | 'unknown'
+  retryAfterMs?: number
+}
+
 export type CoreTurnJson = {
   id: string
   threadId: string
@@ -306,6 +316,7 @@ export type CoreTurnItemJson = {
   message?: string
   code?: string
   details?: unknown
+  modelRequestFailure?: CoreModelRequestFailureJson
   severity?: 'info' | 'warning' | 'error'
   attachmentIds?: string[]
   composerContexts?: CoreComposerContextAttachmentJson[]
@@ -610,6 +621,7 @@ export type CoreRuntimeEventJson = {
   todos?: CoreThreadTodoListJson | null
   cleared?: boolean
   message?: string
+  modelRequestFailure?: CoreModelRequestFailureJson
   severity?: 'info' | 'warning' | 'error'
   child?: CoreChildRuntimeMetadataJson
 }

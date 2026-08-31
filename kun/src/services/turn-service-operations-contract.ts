@@ -20,6 +20,7 @@ import type {
 } from '../contracts/turns.js'
 import type { TurnItem, UserMessageSource } from '../contracts/items.js'
 import type { RuntimeErrorSeverity } from '../contracts/errors.js'
+import type { ModelRequestFailureContext } from '../contracts/model-request-failure.js'
 import type { RestartRecoverySource } from '../loop/restart-recovery-source.js'
 import type { SessionStore } from '../ports/session-store.js'
 import type { ThreadStore } from '../ports/thread-store.js'
@@ -142,6 +143,7 @@ export interface TurnServiceOperations {
     error?: string
     code?: string
     details?: unknown
+    modelRequestFailure?: ModelRequestFailureContext
     severity?: RuntimeErrorSeverity
   }): Promise<TurnSettlement>;
   suspendGraphLeadTurn(input: {

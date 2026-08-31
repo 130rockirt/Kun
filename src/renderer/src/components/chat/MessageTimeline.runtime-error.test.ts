@@ -38,6 +38,51 @@ describe('TimelineRuntimeError', () => {
     expect(renderer.root.findAllByType('button')).toHaveLength(0)
   })
 
+  it('prominently labels provider-returned errors and keeps the provider message visible', async () => {
+    await act(async () => {
+      renderer = create(createElement(TimelineRuntimeError, {
+        block: {
+          kind: 'system', id: 'provider_error', severity: 'error', runtimeError: true,
+          text: 'Our servers are currently overloaded. Please try again later.',
+          code: 'server_is_overloaded',
+          modelRequestFailure: {
+            requestState: 'provider_responded', providerId: 'codex', model: 'gpt-5.6-sol',
+            httpStatus: 503, providerCode: 'server_is_overloaded', category: 'unavailable'
+          }
+        }
+      }))
+    })
+
+    const html = JSON.stringify(renderer.toJSON())
+    expect(html).toContain('Provider response')
+    expect(html).toContain('codex · gpt-5.6-sol')
+    expect(html).toContain('Provider-returned message')
+    expect(html).toContain('Our servers are currently overloaded')
+    expect(html).toContain('HTTP 503')
+    expect(html).toContain('server_is_overloaded')
+  })
+
+  it('does not mislabel transport or preflight failures as provider responses', async () => {
+    for (const [requestState, expected] of [
+      ['sent_no_response', 'No provider response'],
+      ['not_sent', 'Request not sent']
+    ] as const) {
+      await act(async () => {
+        renderer = create(createElement(TimelineRuntimeError, {
+          block: {
+            kind: 'system', id: `error_${requestState}`, severity: 'error', runtimeError: true,
+            text: requestState === 'not_sent' ? 'unknown model provider: codex' : 'fetch failed',
+            modelRequestFailure: { requestState, providerId: 'codex', model: 'gpt-5.6-sol' }
+          }
+        }))
+      })
+      const html = JSON.stringify(renderer.toJSON())
+      expect(html).toContain(expected)
+      expect(html).not.toContain('Provider response')
+      await act(async () => renderer.unmount())
+    }
+  })
+
   it('explains a memory-pressure restart instead of exposing only its code', async () => {
     await act(async () => {
       renderer = create(createElement(TimelineRuntimeError, {

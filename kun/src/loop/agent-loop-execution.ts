@@ -250,6 +250,9 @@ export class AgentLoopExecution extends AgentLoopTurnLifecycle {
                 message: rawMessage,
                 code: rawCode,
                 ...(failure.details !== undefined ? { details: failure.details } : {}),
+                ...(failure.modelRequestFailure
+                  ? { modelRequestFailure: failure.modelRequestFailure }
+                  : {}),
                 severity: failure.severity ?? 'error'
               })
             ).catch(() => undefined)

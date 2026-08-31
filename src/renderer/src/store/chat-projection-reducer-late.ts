@@ -53,9 +53,10 @@ export function reduceLateChatProjection(
         id: event.itemId,
         ...(event.turnId ? { turnId: event.turnId } : {}),
         createdAt: event.createdAt ?? new Date(context.now).toISOString(),
-        text: view.message,
+        text: event.modelRequestFailure ? event.message : view.message,
         ...(view.code ? { code: view.code } : {}),
         ...(view.detail ? { detail: view.detail } : {}),
+        ...(event.modelRequestFailure ? { modelRequestFailure: event.modelRequestFailure } : {}),
         severity: event.severity ?? 'error',
         runtimeError: true
       }
