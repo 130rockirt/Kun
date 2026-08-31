@@ -55,7 +55,7 @@ export function SidebarUsagePanel({
   onStatusChange
 }: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
-  const [rangeKey, setRangeKey] = useState<UsageRangeKey>('90d')
+  const [rangeKey, setRangeKey] = useState<UsageRangeKey>('7d')
   const [modelPage, setModelPage] = useState(0)
   const [autoRefreshKey, setAutoRefreshKey] = useState(0)
   const effectiveRefreshKey = `${String(refreshKey)}:${autoRefreshKey}`
@@ -64,7 +64,7 @@ export function SidebarUsagePanel({
     enabled && Boolean(activeThreadId),
     effectiveRefreshKey
   )
-  const dailyState = useDailyUsageState(enabled, effectiveRefreshKey, RANGE_DAYS.all)
+  const dailyState = useDailyUsageState(enabled, effectiveRefreshKey, RANGE_DAYS[rangeKey])
   const modelState = useModelUsageState(
     enabled,
     effectiveRefreshKey,
@@ -86,12 +86,9 @@ export function SidebarUsagePanel({
   }, [loading, onStatusChange, refreshedAt])
 
   const buckets = dailyState.usage?.buckets ?? EMPTY_DAILY_USAGE_BUCKETS
-  const rangeBuckets = useMemo(
-    () => buckets.slice(-RANGE_DAYS[rangeKey]),
-    [buckets, rangeKey]
-  )
+  const rangeBuckets = buckets
   const totals = useMemo(() => usageTotalsFromBuckets(rangeBuckets), [rangeBuckets])
-  const calendarBuckets = useMemo(() => buckets.slice(-RANGE_DAYS.all), [buckets])
+  const calendarBuckets = buckets
   const weeks = useMemo(() => buildUsageCalendarWeeks(calendarBuckets), [calendarBuckets])
   const positiveTokens = useMemo(
     () => calendarBuckets.map((bucket) => bucket.totalTokens).filter((value) => value > 0),

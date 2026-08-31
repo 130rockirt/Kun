@@ -103,6 +103,17 @@ function inclusiveRangeDays(path: string): number {
   return Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1
 }
 
+function expectUsageRange(
+  runtimeRequest: ReturnType<typeof vi.fn>,
+  groupBy: 'day' | 'model',
+  days: number
+): void {
+  const path = runtimeRequest.mock.calls
+    .filter(([path]) => path.includes(`group_by=${groupBy}`))
+    .at(-1)?.[0]
+  expect(path).toBeTypeOf('string')
+  expect(inclusiveRangeDays(path as string)).toBe(days)
+}
 describe('UsageQuotaPanel', () => {
   beforeEach(async () => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -140,13 +151,12 @@ describe('UsageQuotaPanel', () => {
     expect(renderer.root.findByProps({ id: 'usage-quota-tab-usage' }).props['data-active']).toBe('true')
     expect(renderer.root.findByProps({ id: 'usage-quota-tab-quota' }).props['data-active']).toBe('false')
     expect(renderer.root.findByProps({ 'data-sidebar-usage-panel': true })).toBeTruthy()
-    expect(renderer.root.findByProps({ 'data-usage-range': '7d' }).props['aria-pressed']).toBe(false)
+    expect(renderer.root.findByProps({ 'data-usage-range': '7d' }).props['aria-pressed']).toBe(true)
     expect(renderer.root.findByProps({ 'data-usage-range': '30d' }).props['aria-pressed']).toBe(false)
-    expect(renderer.root.findByProps({ 'data-usage-range': '90d' }).props['aria-pressed']).toBe(true)
+    expect(renderer.root.findByProps({ 'data-usage-range': '90d' }).props['aria-pressed']).toBe(false)
     expect(renderer.root.findByProps({ 'data-usage-range': 'all' }).props['aria-pressed']).toBe(false)
-    expect(inclusiveRangeDays(
-      runtimeRequest.mock.calls.find(([path]) => path.includes('group_by=model'))![0]
-    )).toBe(90)
+    expectUsageRange(runtimeRequest, 'day', 7)
+    expectUsageRange(runtimeRequest, 'model', 7)
     expect(listProviderQuotas).not.toHaveBeenCalled()
     const output = JSON.stringify(renderer.toJSON())
     expect(output).toContain('1.0k')
@@ -178,27 +188,22 @@ describe('UsageQuotaPanel', () => {
     expect(renderer.root.findByProps({ 'aria-label': 'Next page' }).props.disabled).toBe(true)
 
     await act(async () => {
-      renderer.root.findByProps({ 'data-usage-range': '7d' }).props.onClick()
-    })
-
-    expect(renderer.root.findByProps({ 'data-usage-range': '7d' }).props['aria-pressed']).toBe(true)
-    expect(inclusiveRangeDays(
-      runtimeRequest.mock.calls.filter(([path]) => path.includes('group_by=model')).at(-1)![0]
-    )).toBe(7)
-
-    await act(async () => {
       renderer.root.findByProps({ 'data-usage-range': '30d' }).props.onClick()
     })
-    expect(inclusiveRangeDays(
-      runtimeRequest.mock.calls.filter(([path]) => path.includes('group_by=model')).at(-1)![0]
-    )).toBe(30)
+    expectUsageRange(runtimeRequest, 'day', 30)
+    expectUsageRange(runtimeRequest, 'model', 30)
+
+    await act(async () => {
+      renderer.root.findByProps({ 'data-usage-range': '90d' }).props.onClick()
+    })
+    expectUsageRange(runtimeRequest, 'day', 90)
+    expectUsageRange(runtimeRequest, 'model', 90)
 
     await act(async () => {
       renderer.root.findByProps({ 'data-usage-range': 'all' }).props.onClick()
     })
-    expect(inclusiveRangeDays(
-      runtimeRequest.mock.calls.filter(([path]) => path.includes('group_by=model')).at(-1)![0]
-    )).toBe(365)
+    expectUsageRange(runtimeRequest, 'day', 365)
+    expectUsageRange(runtimeRequest, 'model', 365)
 
     const resetPage = JSON.stringify(renderer.toJSON())
     expect(resetPage).toContain('Showing 1–5 / 6')
