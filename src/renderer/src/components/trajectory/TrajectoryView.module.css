@@ -34,6 +34,7 @@
   overflow: hidden;
   color: var(--trajectory-label-1);
   background: var(--trajectory-bg-1);
+  -webkit-app-region: no-drag;
 }
 .ledger { position: relative; isolation: isolate; display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: var(--trajectory-label-3); font-size: 12px; }

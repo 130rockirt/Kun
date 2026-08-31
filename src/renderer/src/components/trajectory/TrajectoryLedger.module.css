@@ -1,5 +1,5 @@
 .split { position: relative; display: flex; flex: 1; width: 100%; min-height: 0; overflow: hidden; background: var(--trajectory-bg-1); container-type: inline-size; }
-.tablePane { position: relative; flex: 1; min-width: 0; overflow-x: hidden; overflow-y: auto; padding-bottom: var(--trajectory-bottom-clearance, 0px); container: trajectory-table / inline-size; }
+.tablePane { position: relative; flex: 1; min-width: 0; overflow-x: hidden; overflow-y: auto; padding-bottom: var(--trajectory-bottom-clearance, 0px); container: trajectory-table / inline-size; -webkit-app-region: no-drag; }
 .table { width: 100%; min-width: 0; border-spacing: 0; table-layout: fixed; color: var(--trajectory-label-1); background: var(--trajectory-bg-1); font: 12px/16px var(--ds-font-family-ui, system-ui); }
 .eventColumn { width: 122px; } .contentColumn { width: auto; }
 .table th { position: sticky; top: 0; z-index: 3; box-sizing: border-box; height: 30px; padding: 0 8px; overflow: hidden; border-bottom: 1px solid var(--trajectory-border-2); color: var(--trajectory-label-3); background: var(--trajectory-sidebar); font-weight: 500; text-align: left; text-overflow: ellipsis; white-space: nowrap; }

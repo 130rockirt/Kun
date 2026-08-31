@@ -243,6 +243,7 @@ async function layoutSnapshot(page) {
     }
     return {
       viewportWidth: innerWidth,
+      appRegion: style('[data-testid="trajectory-view"]', '-webkit-app-region'),
       toolbar: rect('[role="toolbar"]'),
       timeline: rect('[data-testid="trajectory-timeline"]'),
       header: rect('thead tr'),
@@ -269,6 +270,9 @@ function assertGeometry(value, context) {
   }
   exact(value.toolbar?.height ?? null, 32, 'toolbar height')
   exact(value.timeline?.height ?? null, 50, 'timeline height')
+  if (value.appRegion !== 'no-drag') {
+    throw new Error(`${context.name}: trajectory inherited Electron drag hit-testing (${value.appRegion})`)
+  }
   if (context.scenario !== 'empty' && context.scenario !== 'loading') {
     exact(value.header?.height ?? null, 30, 'table header height')
     exact(value.firstRow?.height ?? null, 30, 'table row height')

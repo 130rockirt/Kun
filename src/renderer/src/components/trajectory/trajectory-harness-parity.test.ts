@@ -128,13 +128,15 @@ describe('Harness trajectory parity models', () => {
   })
 
   it('pins the frozen Harness geometry in CSS modules', async () => {
-    const [toolbar, timeline, ledger, inspector] = await Promise.all([
+    const [view, toolbar, timeline, ledger, inspector] = await Promise.all([
+      readFile(new URL('./TrajectoryView.module.css', import.meta.url), 'utf8'),
       readFile(new URL('./TrajectoryToolbar.module.css', import.meta.url), 'utf8'),
       readFile(new URL('./TrajectoryTimeline.module.css', import.meta.url), 'utf8'),
       readFile(new URL('./TrajectoryLedger.module.css', import.meta.url), 'utf8'),
       readFile(new URL('./TrajectoryInspector.module.css', import.meta.url), 'utf8')
     ])
     expect(toolbar).toContain('height: 32px')
+    expect(view).toContain('-webkit-app-region: no-drag')
     expect(timeline).toContain('height: 50px')
     expect(ledger).toContain('height: 30px')
     expect(ledger).toContain('max-width: 620px')

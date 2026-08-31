@@ -7,6 +7,7 @@ import {
   kunBackgroundShellPath,
   kunBackgroundShellStopPath,
   kunSessionResumeMetadataPath,
+  kunThreadTodosSyncPlanPath,
   KUN_THREADS_BULK_DELETE_PATH,
   KUN_THREADS_CONTENT_SEARCH_PATH
 } from '../../shared/kun-endpoints'
@@ -547,6 +548,20 @@ describe('app-ipc-schemas runtime', () => {
       method: 'POST',
       body: '{"target":{"kind":"uncommittedChanges"}}'
     }).path).toBe('/v1/threads/thr_1/review')
+  })
+
+  it('admits only POST for plan todo synchronization', () => {
+    const path = kunThreadTodosSyncPlanPath('thr_1')
+    expect(runtimeRequestPayloadSchema.parse({
+      path,
+      method: 'POST',
+      body: '{}'
+    }).path).toBe(path)
+    for (const method of ['GET', 'PATCH'] as const) {
+      expect(() => runtimeRequestPayloadSchema.parse({ path, method })).toThrow(
+        /runtime request path is not allowed/
+      )
+    }
   })
 
   it('admits only the modeled project board methods', () => {
