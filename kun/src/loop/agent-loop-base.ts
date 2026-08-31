@@ -234,6 +234,7 @@ export abstract class AgentLoopBase {
       get tokenEconomy() { return opts.tokenEconomy },
       get toolArgumentRepair() { return opts.toolArgumentRepair },
       get turnLimits() { return opts.turnLimits },
+      get finalAnswerOnlyStep() { return opts.finalAnswerOnlyStep },
       modelRouting: this.modelRouting,
       budgetGate: this.budgetGate,
       goalTurns: this.goalTurns,

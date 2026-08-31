@@ -68,6 +68,8 @@ export type AgentLoopOptions = {
   receipts?: CanvasReceiptRegistry
   toolStorm?: ToolStormBreakerOptions & { enabled?: boolean }
   turnLimits?: TurnLimitsConfig
+  /** Zero-based model step at which tools are withheld for bounded final synthesis. */
+  finalAnswerOnlyStep?: number
   /** Internal retrieval-child marker propagated into discovery and execution contexts. */
   fastContext?: boolean
   /** Parent chat thread used to isolate Fast Context scheduling and source-tool slots. */

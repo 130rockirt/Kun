@@ -162,7 +162,7 @@ export class ModelStepService extends ModelStepPreparationService {
       hardRequiredToolName,
       softRequiredToolName,
       forceToolSuppressionFinalAnswerRecovery,
-      fastContextFinalSynthesis,
+      boundedFinalSynthesis,
       requestToolSpecs,
       promptCachePhase,
       svgCompletion,
@@ -647,7 +647,7 @@ export class ModelStepService extends ModelStepPreparationService {
       ...(softRequiredToolName && !forceToolSuppressionFinalAnswerRecovery
         ? { softRequiredToolName }
         : {}),
-      ...(forceToolSuppressionFinalAnswerRecovery || fastContextFinalSynthesis
+      ...(forceToolSuppressionFinalAnswerRecovery || boundedFinalSynthesis
         ? { toolCallsDisabled: true }
         : {}),
       turn,
