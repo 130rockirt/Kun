@@ -48,7 +48,6 @@ import type {
   WriteAssistantMessageContext
 } from './chat-store-types'
 import {
-  canEditQueuedMessage,
   queuedMessageGuidancePayload,
   queuedMessageMatchesRunningTurn
 } from './queued-message-guidance'
@@ -171,7 +170,7 @@ import {
 export function createThreadQueueActions(
   context: StoreActionContext,
   runtime: ThreadActionRuntime
-): Pick<ChatState, 'drainQueuedMessages' | 'removeQueuedMessage' | 'editQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage'> {
+): Pick<ChatState, 'drainQueuedMessages' | 'removeQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage'> {
   const { set, get, sseAbortRef } = context
   return {
   drainQueuedMessages: async () => {
@@ -230,19 +229,6 @@ export function createThreadQueueActions(
     if (removed?.waitForRuntimeAdmission) {
       settleRuntimeTurnAdmission(removed.clientRequestId, false)
     }
-  },
-
-  editQueuedMessage: (id, text) => {
-    const trimmedText = text.trim()
-    const message = get().queuedMessages.find((candidate) => candidate.id === id)
-    if (!trimmedText || !message || !canEditQueuedMessage(message)) return false
-    set((state) => ({
-      queuedMessages: state.queuedMessages.map((candidate) => candidate.id === id
-        ? { ...candidate, text: trimmedText, ...(candidate.displayText ? { displayText: trimmedText } : {}) }
-        : candidate)
-    }))
-    runtime.persistActiveQueuedMessages()
-    return true
   },
 
   reorderQueuedMessage: (id, targetId, position) => {

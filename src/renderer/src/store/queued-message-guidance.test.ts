@@ -1,20 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
-  canEditQueuedMessage,
   canGuideQueuedMessage,
   queuedMessageGuidancePayload,
   queuedMessageMatchesRunningTurn
 } from './queued-message-guidance'
 
 describe('canGuideQueuedMessage', () => {
-  it('allows editing only payloads whose runtime text can be replaced losslessly', () => {
-    expect(canEditQueuedMessage({ id: 'q-text', text: 'before' })).toBe(true)
-    expect(canEditQueuedMessage({ id: 'q-plan', text: 'before', mode: 'plan' })).toBe(false)
-    expect(canEditQueuedMessage({ id: 'q-image', text: 'before', attachmentIds: ['image'] })).toBe(false)
-    expect(canEditQueuedMessage({ id: 'q-display', text: 'internal', displayText: 'visible' })).toBe(false)
-    expect(canEditQueuedMessage({ id: 'q-flight', text: 'before', deliveryState: 'in_flight' })).toBe(false)
-  })
-
   it('requires queued and admitted turn surfaces to match in both directions', () => {
     expect(queuedMessageMatchesRunningTurn(
       { id: 'q-design', text: 'design', agentSurface: 'design' },

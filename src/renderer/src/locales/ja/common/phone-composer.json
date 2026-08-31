@@ -623,9 +623,5 @@
   "knowledgeBaseDescription": "ワークスペースを、このタスクの読み取り専用かつベクトル不要の構造インデックスとしてマウントします。",
   "knowledgeBaseOpenWrite": "ワークで開く",
   "knowledgeBaseEmpty": "ワークスペースがまだありません。",
-  "knowledgeBaseAddDirectory": "ワークスペースを追加してマウント",
-  "queuedMessageSave": "Save queued message",
-  "queuedMessageCancelEdit": "Cancel editing",
-  "queuedMessageEditUnsupported": "Messages with structured context cannot be edited here",
-  "guideQueuedMessageUnavailable": "Steering is available only while the agent is running"
+  "knowledgeBaseAddDirectory": "ワークスペースを追加してマウント"
 }

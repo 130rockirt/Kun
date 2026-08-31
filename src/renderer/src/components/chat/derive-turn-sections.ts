@@ -6,7 +6,6 @@ import {
   formatFilePathForDisplay,
 } from '../../lib/diff-stats'
 import {
-  isBackgroundNoticeBlock,
   isProcessBlock,
   splitThink,
   type Turn
@@ -16,7 +15,6 @@ import {
   type ProcessSection
 } from './message-timeline-process-grouping'
 
-export type TurnSteeringUserBlock = Extract<ChatBlock, { kind: 'user' }>
 export type TurnAssistantBlock = Extract<ChatBlock, { kind: 'assistant' }>
 export type TurnRuntimeErrorBlock = Extract<ChatBlock, { kind: 'system' }> & { runtimeError: true }
 
@@ -28,7 +26,6 @@ export type TurnSections = {
   processBlocks: ChatBlock[]
   /** Active-turn process blocks plus runtime errors in their original order. */
   processTimelineBlocks: ChatBlock[]
-  steeringUserBlocks: TurnSteeringUserBlock[]
   assistantContentBlocks: TurnAssistantBlock[]
   runtimeErrorBlocks: TurnRuntimeErrorBlock[]
   runtimeErrorsBeforeFinalContent: TurnRuntimeErrorBlock[]
@@ -164,7 +161,6 @@ export function deriveTurnSections({
   const timelineBlocks = dedupeTimelineTextBlocks(turn.blocks)
   const processBlocks: ChatBlock[] = []
   const processTimelineBlocks: ChatBlock[] = []
-  const steeringUserBlocks: TurnSteeringUserBlock[] = []
   const assistantContentBlocks: TurnAssistantBlock[] = []
   const runtimeErrorBlocks: TurnRuntimeErrorBlock[] = []
   const runtimeErrorsBeforeFinalContent: TurnRuntimeErrorBlock[] = []
@@ -184,10 +180,6 @@ export function deriveTurnSections({
       } else {
         runtimeErrorsAfterFinalContent.push(runtimeErrorBlock)
       }
-      continue
-    }
-    if (block.kind === 'user' && !isBackgroundNoticeBlock(block)) {
-      steeringUserBlocks.push(block)
       continue
     }
     if (block.kind === 'assistant') {
@@ -288,7 +280,6 @@ export function deriveTurnSections({
   return {
     processBlocks,
     processTimelineBlocks,
-    steeringUserBlocks,
     assistantContentBlocks,
     runtimeErrorBlocks,
     runtimeErrorsBeforeFinalContent,

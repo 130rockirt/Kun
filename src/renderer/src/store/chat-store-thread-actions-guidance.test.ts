@@ -273,19 +273,6 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.composerProviderId).toBe('gemini-cli-subscription')
   })
 
-  it('edits a plain queued message in place and refuses structured payloads', () => {
-    const { actions, state } = buildHarness()
-    state.queuedMessages = [
-      { id: 'q-text', text: 'before' },
-      { id: 'q-plan', text: 'internal', displayText: 'visible', mode: 'plan' }
-    ]
-
-    expect(actions.editQueuedMessage('q-text', ' after ')).toBe(true)
-    expect(state.queuedMessages[0]?.text).toBe('after')
-    expect(actions.editQueuedMessage('q-plan', 'changed')).toBe(false)
-    expect(state.queuedMessages[1]).toMatchObject({ text: 'internal', displayText: 'visible' })
-  })
-
   it('reorders queued messages in the order they will be sent', () => {
     const { actions, state } = buildHarness()
     state.queuedMessages = [

@@ -71,27 +71,6 @@ export function queuedMessageGuidancePayload(
   }
 }
 
-/** True when editing text cannot desynchronize a frozen structured payload. */
-export function canEditQueuedMessage(message: QueuedUserMessage): boolean {
-  const displayText = message.displayText?.trim()
-  return Boolean(
-    message.text.trim() &&
-    (!displayText || displayText === message.text.trim()) &&
-    message.mode !== 'plan' &&
-    !message.attachmentIds?.length &&
-    !message.attachments?.length &&
-    !message.fileReferences?.length &&
-    !message.composerContexts?.length &&
-    !message.guiPlan &&
-    !message.guiDesignCanvas &&
-    !message.guiDesignMode &&
-    !message.guiDesignArtifact &&
-    !message.writeContext &&
-    message.deliveryState !== 'starting' &&
-    message.deliveryState !== 'in_flight'
-  )
-}
-
 /** True when the steer contract can preserve the queued text and optional images. */
 export function canGuideQueuedMessage(message: QueuedUserMessage): boolean {
   return queuedMessageGuidancePayload(message) !== null
