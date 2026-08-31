@@ -5,7 +5,7 @@ import { brotliCompress, brotliDecompress, constants as zlibConstants } from 'no
 import { promisify } from 'node:util'
 import {
   PromptManifestSchema,
-  TRAJECTORY_SCHEMA_VERSION,
+  PROMPT_MANIFEST_SCHEMA_VERSION,
   type PromptBlobRef,
   type PromptManifest
 } from '../contracts/trajectory.js'
@@ -53,7 +53,7 @@ export class TrajectoryContentStore {
     const refs: PromptBlobRef[] = []
     for (const part of promptParts(sanitized)) refs.push(await this.putBlob(part))
     const manifest: PromptManifest = {
-      schemaVersion: TRAJECTORY_SCHEMA_VERSION,
+      schemaVersion: PROMPT_MANIFEST_SCHEMA_VERSION,
       manifestId: input.requestId,
       threadId: input.threadId,
       requestId: input.requestId,

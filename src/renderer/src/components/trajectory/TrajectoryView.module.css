@@ -1,0 +1,40 @@
+.root {
+  --trajectory-bg-1: var(--ds-main);
+  --trajectory-bg-2: var(--ds-card-muted, var(--ds-card));
+  --trajectory-sidebar: var(--ds-sidebar-bg, var(--ds-card-muted));
+  --trajectory-module: var(--ds-card-muted);
+  --trajectory-border-1: color-mix(in srgb, var(--ds-border-muted) 72%, transparent);
+  --trajectory-border-2: var(--ds-border-muted);
+  --trajectory-label-1: var(--ds-ink);
+  --trajectory-label-2: var(--ds-muted);
+  --trajectory-label-3: var(--ds-faint);
+  --trajectory-label-caption: color-mix(in srgb, var(--ds-faint) 72%, transparent);
+  --trajectory-hover: var(--ds-hover);
+  --trajectory-active: color-mix(in srgb, var(--ds-accent) 10%, var(--ds-main));
+  --trajectory-accent: var(--ds-accent);
+  --trajectory-turn-accent: color-mix(in srgb, var(--ds-accent) 16%, var(--ds-main));
+  --trajectory-error: var(--ds-danger, #ef4444);
+  --trajectory-success: var(--ds-success, #22a06b);
+  --trajectory-success-soft: color-mix(in srgb, var(--trajectory-success) 11%, var(--ds-main));
+  --trajectory-warning: #a86a18;
+  --trajectory-warning-soft: color-mix(in srgb, #d89028 12%, var(--ds-main));
+  --trajectory-business-soft: color-mix(in srgb, var(--ds-accent) 10%, var(--ds-main));
+  --trajectory-assistant-span: color-mix(in srgb, var(--ds-accent) 72%, #8b5cf6);
+  --trajectory-assistant-ttft: color-mix(in srgb, var(--trajectory-assistant-span) 52%, var(--ds-main));
+  --trajectory-assistant-soft: color-mix(in srgb, var(--trajectory-assistant-span) 12%, var(--ds-main));
+  --trajectory-input-span: #8c96a7;
+  --trajectory-tool-span: #66758a;
+  --trajectory-bottom-clearance: calc(var(--trajectory-composer-height, 152px) + 16px);
+
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--trajectory-label-1);
+  background: var(--trajectory-bg-1);
+}
+.ledger { position: relative; isolation: isolate; display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: var(--trajectory-label-3); font-size: 12px; }
+.empty svg { width: 24px; height: 24px; } .empty strong { color: var(--trajectory-label-1); font-size: 13px; }

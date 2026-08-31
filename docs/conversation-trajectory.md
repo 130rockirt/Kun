@@ -8,18 +8,20 @@ Use the **Trace** button in the conversation title bar to switch the center area
 
 The trajectory contains:
 
-- all/LLM/tool/error filters and bounded metadata/preview search;
-- conversation-wide token, cache, timing, speed, and reference-value metrics;
-- input/model/tool timing lanes;
-- a chronological, virtualized Turn ledger with backward pagination;
-- request and tool inspectors for overview, input, output, usage, timing, and normalized JSON;
+- a 32px Duration/Turns/Calls toolbar with loaded-window incremental search;
+- a 50px input/model/tool timing overview with sequence and recorded-duration modes;
+- a chronological two-column Event/Content ledger with Turn rails, request boundaries, backward pagination, independent Turn/call folding, and virtualization above 100 rows;
+- synchronized timeline range selection, wheel zoom, right-button pan/clear, delayed tooltips, and ledger selection;
+- record-specific System, Request, Markdown, Tool, and Subtool inspectors with Markdown, JSON/Schema, attachment, source, options, usage, timing, and Prompt Diff views;
 - live-edge following that pauses while older records are being inspected.
 
-The inspector docks at wide widths, overlays the ledger at medium widths, and becomes a full center view on narrow windows. The old Agent Perspective right-panel contribution is intentionally removed; saved references to that panel normalize to no panel.
+At wide widths the inspector docks at `clamp(320px, 38%, 440px)` and can be resized to 720px while retaining at least 280px for the ledger. At 760px and below it becomes a right overlay no wider than 420px. The Event column collapses from 122px to an icon-only 50px when its table container reaches 620px. The old Agent Perspective right-panel contribution remains removed; saved references to that panel normalize to no panel.
+
+The existing Composer floats over trajectory mode without being unmounted. A `ResizeObserver` publishes its live height, and the ledger and inspector reserve that height plus 16px so their final content stays reachable.
 
 ## Capture policy
 
-Lifecycle metadata is always recorded. The existing per-thread `modelRequestCaptureEnabled` switch controls only complete prompt detail and bounded in-memory wire diagnostics. It can be changed from the trajectory **More** menu; Settings controls the default for conversations created later.
+Lifecycle metadata is always recorded. The existing per-thread `modelRequestCaptureEnabled` switch controls only complete prompt detail and bounded in-memory wire diagnostics. Settings continues to control the default for conversations created later.
 
 When complete content capture is off, model/tool status, usage, timings, retries, errors, and canonical Session output remain available. Exact System Prompt, tool schemas, and request options display as not captured.
 
@@ -56,7 +58,7 @@ Default detail budgets are:
 
 Budget cleanup evicts old detail only. Lifecycle metadata remains until the conversation is deleted. Conversation deletion removes its manifests and legacy trace file, then mark-and-sweep removes unreferenced blobs.
 
-Legacy schema-v1 model-request JSONL remains readable without an eager destructive migration. New durable records omit raw request and response bodies.
+Legacy schema-v1 model-request JSONL remains readable without an eager destructive migration. New durable records omit raw request and response bodies. The query layer projects both formats into trajectory wire schema v2; the renderer also normalizes an older schema-v1 HTTP page when talking to an earlier runtime.
 
 ## API
 
@@ -68,7 +70,7 @@ GET /v1/threads/{threadId}/trajectory/summary
 GET /v1/threads/{threadId}/trajectory/{recordId}/detail?section=overview
 ```
 
-The page route accepts `limit`, opaque `cursor`, `filter=all|llm|tool|error`, and bounded `q` search. The detail route supports `overview`, `input`, `output`, `usage`, `timing`, `raw`, `arguments`, and `result` as appropriate for the record type.
+The page route accepts `limit` and an opaque `cursor`. Existing `filter=all|llm|tool|error` and bounded `q` parameters remain compatible, while the current UI searches the already-loaded page locally. Detail sections include `overview`, `input`, `output`, `usage`, `timing`, `raw`, `arguments`, `result`, `system-prompt`, `tools`, `diff`, `options`, `rendered`, `source`, and `schema` as appropriate for the selected record.
 
 `GET /v1/threads/{threadId}/model-requests` remains available for compatibility. The thread PATCH field remains the content-capture switch.
 
@@ -80,3 +82,9 @@ The page route accepts `limit`, opaque `cursor`, `filter=all|llm|tool|error`, an
 - A pending persisted attempt with no matching live request is projected as interrupted after restart.
 - Missing or budget-evicted manifests do not hide lifecycle metadata.
 - Query and capture failures never retry, rewrite, or block the Provider request.
+
+## UI reference and attribution
+
+The trajectory layout, timing interactions, dense ledger information architecture, inspector behavior, and reference-derived test matrix are adapted from DeepSeek Harness `packages/client/ui-trajectory`, frozen at commit `0a53fb55bea101816fa226bb964ae2bed71c343b`. That source is MIT licensed, Copyright (c) 2026 DeepSeek; the notice is retained in `THIRD_PARTY_NOTICES.md`.
+
+Kun does not import or runtime-link the Harness checkout. The port uses Kun's trajectory schema, Session records, Markdown/attachment renderers, persistence rules, accessibility conventions, and semantic theme tokens. Harness global navigation, page tabs, Cordis slots, and unrelated application shell are not included.

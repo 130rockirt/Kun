@@ -8,7 +8,7 @@ import {
 } from '../../agent/trajectory'
 
 const EMPTY_SUMMARY: TrajectorySummary = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   requestCount: 0,
   toolCount: 0,
   runningCount: 0,
@@ -77,9 +77,7 @@ export function useTrajectoryData(input: {
     setError(null)
     try {
       const page = await fetchTrajectoryPage(input.threadId, {
-        limit: 100,
-        filter: input.filter,
-        query: input.query
+        limit: 100
       })
       if (current !== generation.current) return
       setRecords((existing) => mergeRecords(existing, page.records))
@@ -92,7 +90,7 @@ export function useTrajectoryData(input: {
     } finally {
       if (showLoading && current === generation.current) setLoading(false)
     }
-  }, [input.filter, input.query, input.threadId, input.visible])
+  }, [input.threadId, input.visible])
 
   useEffect(() => {
     generation.current += 1
@@ -104,9 +102,9 @@ export function useTrajectoryData(input: {
     setSummary(EMPTY_SUMMARY)
     void loadSummary()
     if (!input.visible) return
-    const timer = globalThis.setTimeout(() => void loadLatest(true), input.query ? 180 : 0)
+    const timer = globalThis.setTimeout(() => void loadLatest(true), 0)
     return () => globalThis.clearTimeout(timer)
-  }, [input.filter, input.query, input.threadId, input.visible, loadLatest, loadSummary])
+  }, [input.threadId, input.visible, loadLatest, loadSummary])
 
   useEffect(() => {
     if (!input.threadId || (!input.threadRunning && summary.runningCount === 0)) return
@@ -124,9 +122,7 @@ export function useTrajectoryData(input: {
     try {
       const page = await fetchTrajectoryPage(input.threadId, {
         limit: 100,
-        cursor: nextCursor,
-        filter: input.filter,
-        query: input.query
+        cursor: nextCursor
       })
       if (current !== generation.current) return
       setRecords((existing) => mergeRecords(existing, page.records))
@@ -138,7 +134,7 @@ export function useTrajectoryData(input: {
     } finally {
       if (current === generation.current) setLoadingOlder(false)
     }
-  }, [input.filter, input.query, input.threadId, input.visible, loadingOlder, nextCursor])
+  }, [input.threadId, input.visible, loadingOlder, nextCursor])
 
   return {
     records,

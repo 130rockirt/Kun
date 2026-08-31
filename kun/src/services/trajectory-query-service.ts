@@ -2,7 +2,6 @@ import type { TurnItem } from '../contracts/items.js'
 import type { ModelRequestTraceRecord } from '../contracts/model-request-trace.js'
 import {
   TRAJECTORY_SCHEMA_VERSION,
-  TrajectoryDetailSchema,
   TrajectoryPageSchema,
   TrajectorySummarySchema,
   type TrajectoryDetail,
@@ -18,6 +17,7 @@ import {
 import type { SessionStore } from '../ports/session-store.js'
 import type { LlmDebugRecorder } from './llm-debug-recorder.js'
 import { TRAJECTORY_SEARCH_PREVIEW_BYTES } from './trajectory-content-store.js'
+import { resolveTrajectoryDetail } from './trajectory-query-detail.js'
 
 const MAX_QUERY_RECORDS = 20_000
 const REQUEST_PAGE_SIZE = 200
@@ -70,73 +70,18 @@ export class TrajectoryQueryService {
     const trace = record.kind === 'llm_request'
       ? source.requests.find((candidate) => candidate.id === record.requestId)
       : undefined
-    const base = {
-      schemaVersion: TRAJECTORY_SCHEMA_VERSION,
-      recordId,
+    return resolveTrajectoryDetail({
+      recorder: this.recorder,
+      threadId,
+      record,
+      trace,
       section,
-      state: record.detailState,
-      truncated: record.detailState === 'truncated'
-    }
-    if (section === 'overview' || section === 'raw') {
-      return TrajectoryDetailSchema.parse({ ...base, content: section === 'raw' ? record : overview(record) })
-    }
-    if (record.kind === 'llm_request') {
-      return TrajectoryDetailSchema.parse(await this.requestDetail(threadId, record, trace, section, source.items, base))
-    }
-    return TrajectoryDetailSchema.parse(this.itemDetail(record, section, source.items, base))
-  }
-
-  private async requestDetail(
-    threadId: string,
-    record: TrajectoryRequestRecord,
-    trace: ModelRequestTraceRecord | undefined,
-    section: TrajectoryDetailSection,
-    items: TurnItem[],
-    base: Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
-    if (section === 'usage') return { ...base, content: record.usage ?? null }
-    if (section === 'timing') return { ...base, content: timing(record) }
-    if (section === 'output' || section === 'result') {
-      return {
-        ...base,
-        state: 'available',
-        content: items
-          .filter((item) => item.turnId === record.turnId && outputItem(item))
-          .map(publicItemDetail)
-      }
-    }
-    if (section !== 'input' && section !== 'arguments') return base
-    if (trace?.manifestId) {
-      const captured = await this.recorder.loadPromptManifestContent(threadId, trace.manifestId)
-      if (captured) {
-        return {
-          ...base,
-          state: captured.parts.some((part) => part.truncated) ? 'truncated' : 'available',
-          truncated: captured.parts.some((part) => part.truncated),
-          content: { manifest: captured.manifest, parts: captured.parts }
-        }
-      }
-      return { ...base, state: 'evicted', warning: 'captured prompt detail was evicted' }
-    }
-    if (trace?.request?.body && trace.request.body.originalBytes > 0) {
-      return { ...base, state: 'legacy', content: legacyBody(trace.request.body.text) }
-    }
-    return { ...base, state: 'not_captured', warning: 'complete request content was not captured' }
-  }
-
-  private itemDetail(
-    record: Exclude<TrajectoryRecord, TrajectoryRequestRecord>,
-    section: TrajectoryDetailSection,
-    items: TurnItem[],
-    base: Record<string, unknown>
-  ): Record<string, unknown> {
-    if (section === 'timing') return { ...base, content: timing(record) }
-    const itemIds = record.kind === 'tool'
-      ? [record.argumentsItemId, record.resultItemId]
-      : [record.itemId]
-    const selected = items.filter((item) => itemIds.includes(item.id)).map(publicItemDetail)
-    if (section === 'usage') return { ...base, content: null }
-    return { ...base, state: 'available', content: selected }
+      items: source.items,
+      traces: source.requests,
+      requests: source.records.filter(
+        (candidate): candidate is TrajectoryRequestRecord => candidate.kind === 'llm_request'
+      )
+    })
   }
 
   private async source(threadId: string): Promise<{
@@ -151,7 +96,11 @@ export class TrajectoryQueryService {
       loadAllRequests(this.recorder, threadId),
       this.sessions.loadItems(threadId)
     ])
-    const requestRecords = projectRequests(requestSource.records)
+    const requestRecords = await projectRequests(
+      requestSource.records,
+      this.recorder,
+      threadId
+    )
     const itemRecords = projectItems(items, requestRecords)
     const records = [...requestRecords, ...itemRecords]
       .sort(newestFirst)
@@ -184,22 +133,39 @@ async function loadAllRequests(recorder: LlmDebugRecorder, threadId: string): Pr
   return { records: [...records.values()], warnings: [...warnings], truncated: Boolean(cursor) }
 }
 
-function projectRequests(records: ModelRequestTraceRecord[]): TrajectoryRequestRecord[] {
+async function projectRequests(
+  records: ModelRequestTraceRecord[],
+  recorder: LlmDebugRecorder,
+  threadId: string
+): Promise<TrajectoryRequestRecord[]> {
   const steps = new Map<string, Map<string, number>>()
-  return [...records].sort(oldestTraceFirst).map((trace) => {
+  let previousPromptFingerprint: string | undefined
+  const projected: TrajectoryRequestRecord[] = []
+  for (const trace of [...records].sort(oldestTraceFirst)) {
     const roundId = trace.roundId ?? trace.id
     const turnSteps = steps.get(trace.turnId) ?? new Map<string, number>()
     const step = trace.step ?? turnSteps.get(roundId) ?? turnSteps.size
     turnSteps.set(roundId, step)
     steps.set(trace.turnId, turnSteps)
     const usage = trace.decoded?.usage
-    return {
+    const manifest = trace.manifestId
+      ? await recorder.loadPromptManifest(threadId, trace.manifestId)
+      : null
+    const systemBlobId = manifest?.blobs.find((blob) => blob.kind === 'system')?.blobId
+    const toolsBlobId = manifest?.blobs.find((blob) => blob.kind === 'tools')?.blobId
+    const configBlobId = manifest?.blobs.find((blob) => blob.kind === 'config')?.blobId
+    const stablePromptBlobs = manifest?.blobs.filter((blob) => blob.kind !== 'message') ?? []
+    const promptFingerprint = stablePromptBlobs.length
+      ? stablePromptBlobs.map((blob) => `${blob.kind}:${blob.blobId}`).join(':')
+      : undefined
+    projected.push({
       schemaVersion: TRAJECTORY_SCHEMA_VERSION,
       id: `request:${trace.id}`,
       kind: 'llm_request',
       threadId: trace.threadId,
       turnId: trace.turnId,
       roundId,
+      sourceSeq: trace.sequence,
       requestId: trace.id,
       step,
       attempt: trace.attempt,
@@ -216,6 +182,12 @@ function projectRequests(records: ModelRequestTraceRecord[]): TrajectoryRequestR
       ...(trace.response?.status ? { responseStatus: trace.response.status } : {}),
       ...(usage ? { usage } : {}),
       ...(trace.manifestId ? { manifestId: trace.manifestId } : {}),
+      optionsAvailable: configBlobId !== undefined,
+      ...(promptFingerprint ? { promptFingerprint } : {}),
+      ...(previousPromptFingerprint ? { previousPromptFingerprint } : {}),
+      ...(systemBlobId ? { systemBlobId } : {}),
+      ...(toolsBlobId ? { toolsBlobId } : {}),
+      ...(configBlobId ? { configBlobId } : {}),
       preview: boundedPreview(trace.error || trace.decoded?.error || `${trace.model} · ${trace.provider}`),
       detailState: trace.manifestId
         ? 'available'
@@ -226,8 +198,10 @@ function projectRequests(records: ModelRequestTraceRecord[]): TrajectoryRequestR
       ...((trace.error || trace.decoded?.error)
         ? { errorMessage: boundedPreview(trace.error || trace.decoded?.error || '') }
         : {})
-    }
-  })
+    })
+    if (promptFingerprint) previousPromptFingerprint = promptFingerprint
+  }
+  return projected
 }
 
 function projectItems(items: TurnItem[], requests: TrajectoryRequestRecord[]): TrajectoryRecord[] {
@@ -235,23 +209,66 @@ function projectItems(items: TurnItem[], requests: TrajectoryRequestRecord[]): T
   const resultByCall = new Map(items
     .filter((item): item is Extract<TurnItem, { kind: 'tool_result' }> => item.kind === 'tool_result')
     .map((item) => [item.callId, item]))
-  const turns = new Map<string, number>()
+  for (const request of requests) {
+    if (!request.promptFingerprint) continue
+    if (request.previousPromptFingerprint === request.promptFingerprint) continue
+    records.push({
+      schemaVersion: TRAJECTORY_SCHEMA_VERSION,
+      id: `system:${request.requestId}`,
+      kind: 'system',
+      threadId: request.threadId,
+      turnId: request.turnId,
+      roundId: request.roundId,
+      step: request.step,
+      sourceSeq: request.sourceSeq,
+      status: request.status,
+      startedAt: request.startedAt,
+      completedAt: request.startedAt,
+      durationMs: 0,
+      itemId: `prompt:${request.requestId}`,
+      itemIds: [],
+      parentRequestId: request.requestId,
+      preview: request.previousPromptFingerprint
+        ? 'System Prompt Updated'
+        : 'Initial System Prompt',
+      detailState: request.detailState,
+      promptFingerprint: request.promptFingerprint,
+      ...(request.previousPromptFingerprint
+        ? { previousPromptFingerprint: request.previousPromptFingerprint }
+        : {}),
+      thinkingPreview: '',
+      attachmentIds: []
+    })
+  }
+  const assistantGroups = new Map<string, {
+    request?: TrajectoryRequestRecord
+    items: Array<Extract<TurnItem, { kind: 'assistant_text' | 'assistant_reasoning' }>>
+  }>()
   for (const item of items) {
     const request = latestRequestBefore(requests, item.turnId, item.createdAt)
     const roundId = request?.roundId ?? `turn:${item.turnId}`
-    const step = request?.step ?? turns.get(item.turnId) ?? 0
-    turns.set(item.turnId, step)
+    const step = request?.step ?? 0
     if (item.kind === 'tool_call') {
       const result = resultByCall.get(item.callId)
       records.push(projectTool(item, result, request, roundId, step))
+      records.push(...projectSubtools(item, result, request, roundId, step))
       continue
     }
-    if (item.kind === 'tool_result' || !['user_message', 'assistant_text', 'assistant_reasoning', 'compaction'].includes(item.kind)) continue
+    if (item.kind === 'assistant_text' || item.kind === 'assistant_reasoning') {
+      const key = request?.requestId ?? `${item.turnId}:${step}`
+      const group = assistantGroups.get(key) ?? { request, items: [] }
+      group.items.push(item)
+      assistantGroups.set(key, group)
+      continue
+    }
+    if (item.kind === 'tool_result' || ![
+      'user_message', 'model_context', 'runtime_context_source', 'compaction'
+    ].includes(item.kind)) continue
     const kind = item.kind === 'user_message'
-      ? 'input'
+      ? 'user'
       : item.kind === 'compaction'
-        ? 'compaction'
-        : 'assistant'
+        ? 'compacted'
+        : 'context'
     records.push({
       schemaVersion: TRAJECTORY_SCHEMA_VERSION,
       id: `item:${item.id}`,
@@ -265,9 +282,48 @@ function projectItems(items: TurnItem[], requests: TrajectoryRequestRecord[]): T
       ...(item.finishedAt ? { completedAt: item.finishedAt } : {}),
       ...(item.finishedAt ? { durationMs: elapsed(item.createdAt, item.finishedAt) } : {}),
       itemId: item.id,
+      itemIds: [item.id],
       ...(request ? { parentRequestId: request.requestId } : {}),
       preview: boundedPreview(itemPreview(item)),
-      detailState: 'available'
+      detailState: 'available',
+      sourceType: item.kind,
+      thinkingPreview: '',
+      attachmentIds: item.kind === 'user_message' ? item.attachmentIds ?? [] : []
+    })
+  }
+  for (const [key, group] of assistantGroups) {
+    const first = group.items[0]
+    if (!first) continue
+    const request = group.request
+    const texts = group.items.filter((item) => item.kind === 'assistant_text').map((item) => item.text)
+    const thinking = group.items.filter((item) => item.kind === 'assistant_reasoning').map((item) => item.text)
+    const completedAt = group.items.map((item) => item.finishedAt).filter((value): value is string => Boolean(value)).sort().at(-1)
+    records.push({
+      schemaVersion: TRAJECTORY_SCHEMA_VERSION,
+      id: `assistant:${key}`,
+      kind: 'assistant',
+      threadId: first.threadId,
+      turnId: first.turnId,
+      roundId: request?.roundId ?? `turn:${first.turnId}`,
+      step: request?.step ?? 0,
+      sourceSeq: request?.sourceSeq,
+      status: group.items.some((item) => item.status === 'failed')
+        ? 'failed'
+        : group.items.some((item) => item.status === 'running')
+          ? 'running'
+          : group.items.some((item) => item.status === 'aborted')
+            ? 'cancelled'
+            : 'completed',
+      startedAt: request?.startedAt ?? first.createdAt,
+      ...(completedAt ? { completedAt, durationMs: elapsed(request?.startedAt ?? first.createdAt, completedAt) } : {}),
+      itemId: first.id,
+      itemIds: group.items.map((item) => item.id),
+      ...(request ? { parentRequestId: request.requestId } : {}),
+      preview: boundedPreview(texts.join('\n') || thinking.join('\n')),
+      thinkingPreview: boundedPreview(thinking.join('\n')),
+      detailState: 'available',
+      sourceType: 'assistant',
+      attachmentIds: []
     })
   }
   return records
@@ -305,10 +361,58 @@ function projectTool(
     argumentsItemId: call.id,
     ...(result ? { resultItemId: result.id } : {}),
     isError: result?.isError === true,
+    argumentPreview: boundedPreview(stringifyPreview(call.arguments)),
+    resultPreview: result ? boundedPreview(stringifyPreview(result.output)) : '',
+    schemaAvailable: Boolean(request?.toolsBlobId),
+    attachmentIds: result ? collectAttachmentIds(result.output) : [],
     preview: boundedPreview(`${call.toolName} ${call.summary ?? stringifyPreview(call.arguments)}`),
     detailState: 'available',
     ...(result?.isError ? { errorMessage: boundedPreview(stringifyPreview(result.output)) } : {})
   }
+}
+
+function projectSubtools(
+  call: Extract<TurnItem, { kind: 'tool_call' }>,
+  result: Extract<TurnItem, { kind: 'tool_result' }> | undefined,
+  request: TrajectoryRequestRecord | undefined,
+  roundId: string,
+  step: number
+): TrajectoryToolRecord[] {
+  if (!result || !isRecord(result.output) || !Array.isArray(result.output.childRuns)) return []
+  return result.output.childRuns.flatMap((entry, index) => {
+    if (!isRecord(entry)) return []
+    const childId = textValue(entry.childId) || textValue(entry.id)
+    const activity = isRecord(entry.activity) ? entry.activity : undefined
+    const toolName = textValue(entry.toolName) || textValue(activity?.toolName) || textValue(entry.profile)
+    if (!childId || !toolName) return []
+    const startedAt = textValue(entry.startedAt) || textValue(entry.attemptStartedAt) || call.createdAt
+    const completedAt = textValue(entry.completedAt)
+    const failed = entry.status === 'failed' || entry.isError === true
+    return [{
+      schemaVersion: TRAJECTORY_SCHEMA_VERSION,
+      id: `subtool:${call.callId}:${childId}:${index}`,
+      kind: 'subtool' as const,
+      threadId: call.threadId,
+      turnId: call.turnId,
+      roundId,
+      step,
+      status: failed ? 'failed' as const : completedAt ? 'completed' as const : 'running' as const,
+      startedAt,
+      ...(completedAt ? { completedAt, durationMs: elapsed(startedAt, completedAt) } : {}),
+      callId: childId,
+      parentCallId: call.callId,
+      ...(request ? { parentRequestId: request.requestId } : {}),
+      toolName,
+      isError: failed,
+      argumentPreview: '',
+      resultPreview: boundedPreview(textValue(entry.summary) || textValue(entry.error)),
+      schemaAvailable: false,
+      attachmentIds: [],
+      preview: boundedPreview(textValue(entry.summary) || toolName),
+      detailState: 'available' as const,
+      ...(failed ? { errorMessage: boundedPreview(textValue(entry.error) || 'subtool failed') } : {})
+    }]
+  })
 }
 
 function summarize(records: TrajectoryRecord[]): TrajectorySummary {
@@ -408,40 +512,12 @@ function oldestTraceFirst(left: ModelRequestTraceRecord, right: ModelRequestTrac
   return left.startedAt.localeCompare(right.startedAt) || left.sequence - right.sequence
 }
 
-function outputItem(item: TurnItem): boolean {
-  return item.kind === 'assistant_text' || item.kind === 'assistant_reasoning' ||
-    item.kind === 'tool_call' || item.kind === 'tool_result'
-}
-
-function publicItemDetail(item: TurnItem): unknown {
-  if (item.kind === 'tool_result') return { ...item, output: boundedPreview(stringifyPreview(item.output), 16_384) }
-  if (item.kind === 'tool_call') return { ...item, arguments: boundedPreview(stringifyPreview(item.arguments), 16_384) }
-  return item
-}
-
-function overview(record: TrajectoryRecord): unknown {
-  const { preview: _preview, ...rest } = record
-  return rest
-}
-
-function timing(record: TrajectoryRecord): unknown {
-  return {
-    startedAt: record.startedAt,
-    firstTokenAt: record.firstTokenAt,
-    completedAt: record.completedAt,
-    durationMs: record.durationMs,
-    ttftMs: record.firstTokenAt ? elapsed(record.startedAt, record.firstTokenAt) : undefined
-  }
-}
-
 function itemPreview(item: TurnItem): string {
   if (item.kind === 'user_message' || item.kind === 'assistant_text' || item.kind === 'assistant_reasoning') return item.text
   if (item.kind === 'compaction') return item.summary
+  if (item.kind === 'model_context') return item.text
+  if (item.kind === 'runtime_context_source') return item.content
   return item.kind
-}
-
-function legacyBody(value: string): unknown {
-  try { return JSON.parse(value) as unknown } catch { return value }
 }
 
 function stringifyPreview(value: unknown): string {
@@ -455,4 +531,28 @@ function boundedPreview(value: string, max = TRAJECTORY_SEARCH_PREVIEW_BYTES): s
 
 function elapsed(start: string, end: string): number {
   return Math.max(0, Date.parse(end) - Date.parse(start))
+}
+
+function collectAttachmentIds(value: unknown): string[] {
+  const found = new Set<string>()
+  const visit = (entry: unknown): void => {
+    if (Array.isArray(entry)) return entry.forEach(visit)
+    if (!isRecord(entry)) return
+    for (const [key, child] of Object.entries(entry)) {
+      if ((key === 'attachmentId' || key === 'attachment_id') && typeof child === 'string') {
+        found.add(child)
+      }
+      visit(child)
+    }
+  }
+  visit(value)
+  return [...found]
+}
+
+function textValue(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }

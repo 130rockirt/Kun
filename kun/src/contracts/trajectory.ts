@@ -1,7 +1,8 @@
 import { z } from 'zod'
 import { UsageSnapshotSchema } from './usage.js'
 
-export const TRAJECTORY_SCHEMA_VERSION = 1 as const
+export const TRAJECTORY_SCHEMA_VERSION = 2 as const
+export const PROMPT_MANIFEST_SCHEMA_VERSION = 1 as const
 
 export const TrajectoryStatusSchema = z.enum([
   'running',
@@ -28,6 +29,7 @@ const TrajectoryRecordBaseSchema = z.object({
   turnId: z.string().min(1),
   roundId: z.string().min(1),
   step: z.number().int().nonnegative(),
+  sourceSeq: z.number().int().nonnegative().optional(),
   status: TrajectoryStatusSchema,
   startedAt: z.string(),
   firstTokenAt: z.string().optional(),
@@ -50,25 +52,42 @@ export const TrajectoryRequestRecordSchema = TrajectoryRecordBaseSchema.extend({
   endpointFormat: z.string(),
   responseStatus: z.number().int().min(100).max(599).optional(),
   usage: UsageSnapshotSchema.optional(),
-  manifestId: z.string().min(1).optional()
+  manifestId: z.string().min(1).optional(),
+  optionsAvailable: z.boolean().default(false),
+  promptFingerprint: z.string().min(1).optional(),
+  previousPromptFingerprint: z.string().min(1).optional(),
+  systemBlobId: z.string().min(1).optional(),
+  toolsBlobId: z.string().min(1).optional(),
+  configBlobId: z.string().min(1).optional()
 })
 export type TrajectoryRequestRecord = z.infer<typeof TrajectoryRequestRecordSchema>
 
 export const TrajectoryToolRecordSchema = TrajectoryRecordBaseSchema.extend({
-  kind: z.literal('tool'),
+  kind: z.enum(['tool', 'subtool']),
   callId: z.string().min(1),
   parentRequestId: z.string().min(1).optional(),
+  parentCallId: z.string().min(1).optional(),
   toolName: z.string().min(1),
   argumentsItemId: z.string().min(1).optional(),
   resultItemId: z.string().min(1).optional(),
-  isError: z.boolean().default(false)
+  isError: z.boolean().default(false),
+  argumentPreview: z.string().max(2_048).default(''),
+  resultPreview: z.string().max(2_048).default(''),
+  schemaAvailable: z.boolean().default(false),
+  attachmentIds: z.array(z.string()).default([])
 })
 export type TrajectoryToolRecord = z.infer<typeof TrajectoryToolRecordSchema>
 
 export const TrajectoryMessageRecordSchema = TrajectoryRecordBaseSchema.extend({
-  kind: z.enum(['input', 'assistant', 'compaction']),
+  kind: z.enum(['system', 'user', 'context', 'compacted', 'assistant']),
   itemId: z.string().min(1),
-  parentRequestId: z.string().min(1).optional()
+  itemIds: z.array(z.string()).default([]),
+  parentRequestId: z.string().min(1).optional(),
+  sourceType: z.string().max(128).optional(),
+  thinkingPreview: z.string().max(2_048).default(''),
+  attachmentIds: z.array(z.string()).default([]),
+  promptFingerprint: z.string().min(1).optional(),
+  previousPromptFingerprint: z.string().min(1).optional()
 })
 export type TrajectoryMessageRecord = z.infer<typeof TrajectoryMessageRecordSchema>
 
@@ -116,7 +135,8 @@ export const TrajectoryPageSchema = z.object({
 export type TrajectoryPage = z.infer<typeof TrajectoryPageSchema>
 
 export const TrajectoryDetailSectionSchema = z.enum([
-  'overview', 'input', 'output', 'usage', 'timing', 'raw', 'arguments', 'result'
+  'overview', 'input', 'output', 'usage', 'timing', 'raw', 'arguments', 'result',
+  'system-prompt', 'tools', 'diff', 'options', 'rendered', 'source', 'schema'
 ])
 export type TrajectoryDetailSection = z.infer<typeof TrajectoryDetailSectionSchema>
 
@@ -142,7 +162,7 @@ export const PromptBlobRefSchema = z.object({
 export type PromptBlobRef = z.infer<typeof PromptBlobRefSchema>
 
 export const PromptManifestSchema = z.object({
-  schemaVersion: z.literal(TRAJECTORY_SCHEMA_VERSION),
+  schemaVersion: z.literal(PROMPT_MANIFEST_SCHEMA_VERSION),
   manifestId: z.string().min(1),
   threadId: z.string().min(1),
   requestId: z.string().min(1),

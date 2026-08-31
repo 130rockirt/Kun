@@ -24,7 +24,7 @@ describe('trajectory routes', () => {
     expect((await dispatch(router, '/v1/threads/thread-1/trajectory')).status).toBe(401)
     const page = await dispatch(router, '/v1/threads/thread-1/trajectory?filter=llm', auth())
     expect(page.status).toBe(200)
-    expect(JSON.parse(page.body)).toMatchObject({ schemaVersion: 1, summary: { requestCount: 1 } })
+    expect(JSON.parse(page.body)).toMatchObject({ schemaVersion: 2, summary: { requestCount: 1 } })
     const summary = await dispatch(router, '/v1/threads/thread-1/trajectory/summary', auth())
     expect(JSON.parse(summary.body)).toMatchObject({ requestCount: 1, lastStatus: 'completed' })
     const detail = await dispatch(

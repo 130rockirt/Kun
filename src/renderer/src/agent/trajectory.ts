@@ -7,7 +7,7 @@ import {
 import { parseRuntimeErrorBody, runtimeErrorToError } from '@shared/runtime-error'
 import { rendererRuntimeClient } from './runtime-client'
 
-export const TRAJECTORY_SCHEMA_VERSION = 1 as const
+export const TRAJECTORY_SCHEMA_VERSION = 2 as const
 
 export const trajectoryStatusSchema = z.enum([
   'running', 'completed', 'failed', 'cancelled', 'interrupted'
@@ -42,6 +42,7 @@ const recordBaseSchema = z.object({
   turnId: z.string(),
   roundId: z.string(),
   step: z.number().int().nonnegative(),
+  sourceSeq: z.number().int().nonnegative().optional(),
   status: trajectoryStatusSchema,
   startedAt: z.string(),
   firstTokenAt: z.string().optional(),
@@ -64,23 +65,40 @@ export const trajectoryRequestRecordSchema = recordBaseSchema.extend({
   endpointFormat: z.string(),
   responseStatus: z.number().optional(),
   usage: usageSchema.optional(),
-  manifestId: z.string().optional()
+  manifestId: z.string().optional(),
+  optionsAvailable: z.boolean(),
+  promptFingerprint: z.string().optional(),
+  previousPromptFingerprint: z.string().optional(),
+  systemBlobId: z.string().optional(),
+  toolsBlobId: z.string().optional(),
+  configBlobId: z.string().optional()
 })
 
 export const trajectoryToolRecordSchema = recordBaseSchema.extend({
-  kind: z.literal('tool'),
+  kind: z.enum(['tool', 'subtool']),
   callId: z.string(),
   parentRequestId: z.string().optional(),
+  parentCallId: z.string().optional(),
   toolName: z.string(),
   argumentsItemId: z.string().optional(),
   resultItemId: z.string().optional(),
-  isError: z.boolean()
+  isError: z.boolean(),
+  argumentPreview: z.string(),
+  resultPreview: z.string(),
+  schemaAvailable: z.boolean(),
+  attachmentIds: z.array(z.string())
 })
 
 export const trajectoryMessageRecordSchema = recordBaseSchema.extend({
-  kind: z.enum(['input', 'assistant', 'compaction']),
+  kind: z.enum(['system', 'user', 'context', 'compacted', 'assistant']),
   itemId: z.string(),
-  parentRequestId: z.string().optional()
+  itemIds: z.array(z.string()),
+  parentRequestId: z.string().optional(),
+  sourceType: z.string().optional(),
+  thinkingPreview: z.string(),
+  attachmentIds: z.array(z.string()),
+  promptFingerprint: z.string().optional(),
+  previousPromptFingerprint: z.string().optional()
 })
 
 export const trajectoryRecordSchema = z.discriminatedUnion('kind', [
@@ -126,7 +144,8 @@ export const trajectoryPageSchema = z.object({
 export type TrajectoryPage = z.infer<typeof trajectoryPageSchema>
 
 export const trajectoryDetailSectionSchema = z.enum([
-  'overview', 'input', 'output', 'usage', 'timing', 'raw', 'arguments', 'result'
+  'overview', 'input', 'output', 'usage', 'timing', 'raw', 'arguments', 'result',
+  'system-prompt', 'tools', 'diff', 'options', 'rendered', 'source', 'schema'
 ])
 export type TrajectoryDetailSection = z.infer<typeof trajectoryDetailSectionSchema>
 
@@ -160,7 +179,7 @@ export async function fetchTrajectoryPage(
     'GET'
   )
   if (!response.ok) throw runtimeError(response.body, 'failed to load trajectory')
-  return trajectoryPageSchema.parse(JSON.parse(response.body))
+  return parseTrajectoryPage(JSON.parse(response.body))
 }
 
 export async function fetchTrajectorySummary(threadId: string): Promise<TrajectorySummary> {
@@ -187,4 +206,60 @@ export async function fetchTrajectoryDetail(
 
 function runtimeError(body: string, fallback: string): Error {
   return runtimeErrorToError(parseRuntimeErrorBody(body, fallback))
+}
+
+export function parseTrajectoryPage(value: unknown): TrajectoryPage {
+  if (isRecord(value) && value.schemaVersion === TRAJECTORY_SCHEMA_VERSION) {
+    return trajectoryPageSchema.parse(value)
+  }
+  return normalizeLegacyPage(value)
+}
+
+function normalizeLegacyPage(value: unknown): TrajectoryPage {
+  const page = z.object({
+    schemaVersion: z.literal(1),
+    records: z.array(z.record(z.string(), z.unknown())),
+    nextCursor: z.string().optional(),
+    summary: z.record(z.string(), z.unknown()),
+    warnings: z.array(z.string()),
+    historyIncomplete: z.boolean()
+  }).parse(value)
+  const records = page.records.map((record) => normalizeLegacyRecord(record))
+  return trajectoryPageSchema.parse({
+    schemaVersion: TRAJECTORY_SCHEMA_VERSION,
+    records,
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    summary: { ...page.summary, schemaVersion: TRAJECTORY_SCHEMA_VERSION },
+    warnings: page.warnings,
+    historyIncomplete: page.historyIncomplete
+  })
+}
+
+function normalizeLegacyRecord(record: Record<string, unknown>): TrajectoryRecord {
+  const kind = record.kind
+  const base = { ...record, schemaVersion: TRAJECTORY_SCHEMA_VERSION }
+  if (kind === 'llm_request') {
+    return trajectoryRequestRecordSchema.parse({ ...base, optionsAvailable: false })
+  }
+  if (kind === 'tool') {
+    return trajectoryToolRecordSchema.parse({
+      ...base,
+      argumentPreview: '',
+      resultPreview: '',
+      schemaAvailable: false,
+      attachmentIds: []
+    })
+  }
+  const mappedKind = kind === 'input' ? 'user' : kind === 'compaction' ? 'compacted' : kind
+  return trajectoryMessageRecordSchema.parse({
+    ...base,
+    kind: mappedKind,
+    itemIds: typeof record.itemId === 'string' ? [record.itemId] : [],
+    thinkingPreview: '',
+    attachmentIds: []
+  })
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }

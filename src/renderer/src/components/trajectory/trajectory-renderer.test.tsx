@@ -5,9 +5,10 @@ import type { TrajectoryRecord } from '../../agent/trajectory'
 import { trajectoryUiState } from '../../store/trajectory-ui-store'
 import { mergeRecords } from './useTrajectoryData'
 import { TrajectoryTimeline } from './TrajectoryTimeline'
+import { deriveHarnessLayout } from './trajectory-harness-model'
 
 const base = {
-  schemaVersion: 1 as const,
+  schemaVersion: 2 as const,
   threadId: 'thread-1', turnId: 'turn-1', roundId: 'round-1', step: 0,
   status: 'completed' as const, detailState: 'not_captured' as const, preview: ''
 }
@@ -16,7 +17,7 @@ function request(id: string, startedAt: string): TrajectoryRecord {
   return {
     ...base, id, kind: 'llm_request', requestId: id, attempt: 1,
     attemptReason: 'initial', purpose: 'assistant', provider: 'test', model: 'model',
-    endpointFormat: 'chat_completions', startedAt
+    endpointFormat: 'chat_completions', startedAt, optionsAvailable: false
   }
 }
 
@@ -32,11 +33,24 @@ describe('trajectory renderer primitives', () => {
 
   it('isolates default UI state by thread and renders all three timeline lanes', () => {
     expect(trajectoryUiState({}, 'thread-a')).toMatchObject({ view: 'chat', filter: 'all' })
+    const assistant: TrajectoryRecord = {
+      ...base,
+      id: 'assistant-1', kind: 'assistant', itemId: 'item-1', itemIds: ['item-1'],
+      parentRequestId: 'request-1', startedAt: '2026-01-01T00:00:01.000Z',
+      thinkingPreview: '', attachmentIds: []
+    }
+    const cells = deriveHarnessLayout([
+      request('request-1', '2026-01-01T00:00:00.000Z'), assistant
+    ]).cells
     const html = renderToStaticMarkup(createElement(TrajectoryTimeline, {
-      records: [request('request-1', '2026-01-01T00:00:00.000Z')],
+      cells,
       selectedId: null,
-      mode: 'actual',
-      onSelect: () => undefined
+      mode: 'sequence',
+      range: null,
+      hasEarlierRecords: false,
+      onRangeChange: () => undefined,
+      onRecordSelect: () => undefined,
+      onLoadEarlier: () => undefined
     }))
     expect(html).toContain('data-testid="trajectory-timeline"')
     expect(html).toContain('trajectoryLaneInput')

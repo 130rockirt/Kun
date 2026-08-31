@@ -6,10 +6,13 @@ export type TrajectoryUiState = {
   filter: TrajectoryFilter
   query: string
   selectedRecordId: string | null
+  selectedRequestId: string | null
   collapsedTurnIds: string[]
+  collapsedCallIds: string[]
   scrollOffset: number
-  inspectorWidth: number
+  inspectorWidth: number | null
   timelineMode: 'actual' | 'equal'
+  timelineRange: { start: number; end: number } | null
 }
 
 const DEFAULT_STATE: TrajectoryUiState = {
@@ -17,10 +20,13 @@ const DEFAULT_STATE: TrajectoryUiState = {
   filter: 'all',
   query: '',
   selectedRecordId: null,
+  selectedRequestId: null,
   collapsedTurnIds: [],
+  collapsedCallIds: [],
   scrollOffset: 0,
-  inspectorWidth: 420,
-  timelineMode: 'actual'
+  inspectorWidth: null,
+  timelineMode: 'actual',
+  timelineRange: null
 }
 
 type Store = {

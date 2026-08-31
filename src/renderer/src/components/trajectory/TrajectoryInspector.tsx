@@ -1,189 +1,175 @@
-import { ArrowLeft, Check, Clipboard, Loader2, X } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { Check, Clipboard, X } from 'lucide-react'
+import { diffLines } from 'diff'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  fetchTrajectoryDetail,
-  type TrajectoryDetail,
-  type TrajectoryDetailSection,
-  type TrajectoryRecord
-} from '../../agent/trajectory'
+import { kunAttachmentContentPath } from '@shared/kun-endpoints'
+import { fetchTrajectoryDetail, type TrajectoryDetail, type TrajectoryDetailSection } from '../../agent/trajectory'
+import { rendererRuntimeClient } from '../../agent/runtime-client'
+import { StreamdownAssistant } from '../chat/StreamdownAssistant'
+import type { HarnessCell, HarnessRequestBoundary } from './trajectory-harness-model'
+import styles from './TrajectoryInspector.module.css'
+
+type Tab = { id: TrajectoryDetailSection; label: string }
 
 export function TrajectoryInspector({
   threadId,
-  record,
-  displayMode,
+  cell,
+  request,
+  parentRequest,
   width,
-  onClose
+  onWidthChange,
+  onClose,
+  onSelectParentRequest,
+  loadDetail = fetchTrajectoryDetail
 }: {
   threadId: string
-  record: TrajectoryRecord | null
-  displayMode: 'docked' | 'overlay' | 'full'
-  width: number
+  cell: HarnessCell | null
+  request: HarnessRequestBoundary | null
+  parentRequest: HarnessRequestBoundary | null
+  width: number | null
+  onWidthChange: (width: number | null) => void
   onClose: () => void
+  onSelectParentRequest: (requestId: string) => void
+  loadDetail?: typeof fetchTrajectoryDetail
 }): ReactElement | null {
   const { t } = useTranslation('common')
-  const sections = useMemo(() => record ? sectionsFor(record) : [], [record])
-  const [section, setSection] = useState<TrajectoryDetailSection>('overview')
-  const [detail, setDetail] = useState<TrajectoryDetail | null>(null)
+  const targetId = request ? `request:${request.request.requestId}` : cell?.record.id
+  const tabs = useMemo(() => tabsFor(cell, request, t), [cell, request, t])
+  const [active, setActive] = useState<TrajectoryDetailSection>('overview')
+  const [cache, setCache] = useState<Map<string, TrajectoryDetail>>(new Map())
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [copied, setCopied] = useState(false)
-
+  const resize = useRef<{ pointerId: number; startX: number; startWidth: number; splitWidth: number } | null>(null)
+  useEffect(() => { setActive(tabs[0]?.id ?? 'overview') }, [tabs, targetId])
   useEffect(() => {
-    setSection('overview')
-    setDetail(null)
-    setError('')
-  }, [record?.id])
-
+    if (!targetId) return
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [onClose, targetId])
+  const key = targetId ? `${targetId}:${active}` : ''
+  const detail = cache.get(key)
   useEffect(() => {
-    if (!record) return
+    if (!targetId || detail) return
     let cancelled = false
     setLoading(true)
-    setError('')
-    void fetchTrajectoryDetail(threadId, record.id, section)
-      .then((value) => { if (!cancelled) setDetail(value) })
-      .catch((loadError) => { if (!cancelled) setError(message(loadError)) })
+    void loadDetail(threadId, targetId, active)
+      .then((value) => { if (!cancelled) setCache((current) => new Map(current).set(key, value)) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [record, section, threadId])
+  }, [active, detail, key, loadDetail, targetId, threadId])
+  if (!targetId) return null
 
-  if (!record) return null
-  const copyId = async (): Promise<void> => {
-    await navigator.clipboard.writeText(record.kind === 'llm_request' ? record.requestId : record.id)
-    setCopied(true)
-    globalThis.setTimeout(() => setCopied(false), 1_200)
-  }
+  const title = request
+    ? `Request #${request.number}`
+    : cell?.kind.toUpperCase() ?? 'Event'
+  const location = request
+    ? `Turn ${request.request.turnId} · Step ${request.request.step}`
+    : cell ? `Turn ${cell.turn} · Step ${cell.step}` : ''
+
   return (
-    <aside
-      className={`${displayMode === 'docked' ? 'relative shrink-0' : 'absolute inset-y-0 right-0 z-30 shadow-2xl'} flex min-h-0 flex-col border-l border-ds-border bg-ds-main ${displayMode === 'full' ? 'left-0 w-full' : ''}`}
-      style={displayMode === 'full' ? undefined : { width }}
-      data-testid="trajectory-inspector"
-    >
-      <div className="border-b border-ds-border-muted px-3 py-2.5">
-        <div className="flex items-start gap-2">
-          {displayMode !== 'docked' ? (
-            <button type="button" className="rounded p-1 text-ds-faint hover:bg-ds-hover" onClick={onClose} aria-label={t('trajectoryBack')}>
-              {displayMode === 'full' ? <ArrowLeft className="h-4 w-4" /> : <X className="h-4 w-4" />}
-            </button>
-          ) : null}
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[13px] font-semibold text-ds-ink">{recordTitle(record)}</div>
-            <div className="mt-0.5 flex items-center gap-2 text-[10px] text-ds-faint">
-              <span>{record.status}</span>
-              <span>Turn {shortId(record.turnId)}</span>
-              <span>Step {record.step + 1}</span>
-            </div>
-          </div>
-          <button type="button" className="rounded p-1 text-ds-faint hover:bg-ds-hover" onClick={() => void copyId()} aria-label={t('trajectoryCopyId')}>
-            {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Clipboard className="h-3.5 w-3.5" />}
-          </button>
-        </div>
-      </div>
-      <div className="flex shrink-0 overflow-x-auto border-b border-ds-border-muted px-2" role="tablist">
-        {sections.map((item) => (
-          <button
-            key={item}
-            type="button"
-            role="tab"
-            aria-selected={section === item}
-            className={`shrink-0 border-b-2 px-2 py-2 text-[10.5px] ${section === item ? 'border-violet-500 text-violet-600 dark:text-violet-300' : 'border-transparent text-ds-faint hover:text-ds-ink'}`}
-            onClick={() => setSection(item)}
-          >
-            {t(`trajectorySection_${item}`)}
-          </button>
-        ))}
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto p-3">
-        {loading ? (
-          <div className="flex h-40 items-center justify-center text-ds-faint"><Loader2 className="h-4 w-4 animate-spin" /></div>
-        ) : error ? (
-          <InspectorNotice tone="error" text={error} />
-        ) : detail?.state === 'not_captured' ? (
-          <InspectorNotice text={t('trajectoryDetailNotCaptured')} />
-        ) : detail?.state === 'evicted' ? (
-          <InspectorNotice text={t('trajectoryDetailEvicted')} />
-        ) : detail ? (
-          <DetailContent detail={detail} />
-        ) : null}
+    <aside className={styles.details} style={width === null ? undefined : { width }} aria-label={t('trajectoryDetails')}>
+      <div
+        className={styles.resizeHandle}
+        role="separator"
+        tabIndex={0}
+        aria-label={t('trajectoryResizeDetails')}
+        onDoubleClick={() => onWidthChange(null)}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return
+          const split = event.currentTarget.parentElement?.parentElement
+          if (!split) return
+          resize.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: event.currentTarget.parentElement!.getBoundingClientRect().width, splitWidth: split.getBoundingClientRect().width }
+          event.currentTarget.setPointerCapture(event.pointerId)
+        }}
+        onPointerMove={(event) => {
+          const drag = resize.current
+          if (!drag || drag.pointerId !== event.pointerId) return
+          onWidthChange(clampWidth(drag.startWidth + drag.startX - event.clientX, drag.splitWidth))
+        }}
+        onPointerUp={(event) => { if (resize.current?.pointerId === event.pointerId) { resize.current = null; event.currentTarget.releasePointerCapture(event.pointerId) } }}
+        onKeyDown={(event) => {
+          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+          const splitWidth = event.currentTarget.parentElement?.parentElement?.getBoundingClientRect().width ?? 720
+          const current = event.currentTarget.parentElement?.getBoundingClientRect().width ?? 380
+          onWidthChange(clampWidth(current + (event.key === 'ArrowLeft' ? 16 : -16), splitWidth))
+          event.preventDefault()
+        }}
+      />
+      <div className={styles.header}><div className={styles.title}><span className={styles.dot} /><strong>{title}</strong><span className={styles.location}>{location}</span>{parentRequest ? <button type="button" className={styles.parent} onClick={() => onSelectParentRequest(parentRequest.request.requestId)}>Request #{parentRequest.number}</button> : null}</div><button type="button" className={styles.close} onClick={onClose} aria-label={t('trajectoryBack')}><X /></button></div>
+      <div className={styles.tabs} role="tablist">{tabs.map((tab) => <button key={tab.id} type="button" role="tab" aria-selected={active === tab.id} className={active === tab.id ? `${styles.tab} ${styles.tabActive}` : styles.tab} onClick={() => setActive(tab.id)}>{tab.label}</button>)}</div>
+      <div className={styles.body} role="tabpanel">
+        {loading && !detail ? <div className={styles.empty}>{t('trajectoryLoading')}</div> : detail ? <DetailContent detail={detail} threadId={threadId} attachmentIds={cell?.attachmentIds ?? []} /> : null}
       </div>
     </aside>
   )
 }
 
-function DetailContent({ detail }: { detail: TrajectoryDetail }): ReactElement {
+function DetailContent({ detail, threadId, attachmentIds }: { detail: TrajectoryDetail; threadId: string; attachmentIds: readonly string[] }): ReactElement {
   const { t } = useTranslation('common')
-  const content = detail.content
-  if (content === null || content === undefined) return <InspectorNotice text={t('trajectoryDetailUnavailable')} />
-  if (isRecord(content) && !Array.isArray(content)) {
-    return (
-      <div className="space-y-2">
-        {detail.truncated ? <InspectorNotice text={t('trajectoryDetailTruncated')} /> : null}
-        <DefinitionOrJson value={content} />
-      </div>
-    )
-  }
-  return <JsonBlock value={content} />
-}
-
-function DefinitionOrJson({ value }: { value: Record<string, unknown> }): ReactElement {
-  const simple = Object.entries(value).every(([, entry]) =>
-    entry === null || ['string', 'number', 'boolean', 'undefined'].includes(typeof entry))
-  if (!simple) return <JsonBlock value={value} />
+  if (detail.state === 'not_captured') return <div className={styles.empty}>{t('trajectoryDetailNotCaptured')}</div>
+  if (detail.state === 'evicted') return <div className={styles.empty}>{t('trajectoryDetailEvicted')}</div>
+  if (detail.section === 'diff' && isRecord(detail.content)) return <PromptDiff content={detail.content} />
+  const markdown = markdownText(detail.content)
   return (
-    <dl className="space-y-2">
-      {Object.entries(value).filter(([, entry]) => entry !== undefined).map(([key, entry]) => (
-        <div key={key} className="grid grid-cols-[110px_minmax(0,1fr)] gap-2 border-b border-ds-border-muted pb-1.5 text-[11px]">
-          <dt className="text-ds-faint">{key}</dt>
-          <dd className="break-words text-ds-ink">{String(entry)}</dd>
-        </div>
-      ))}
-    </dl>
-  )
-}
-
-function JsonBlock({ value }: { value: unknown }): ReactElement {
-  const text = safeJson(value)
-  return (
-    <pre className="max-h-full overflow-auto whitespace-pre-wrap break-words rounded-md border border-ds-border-muted bg-ds-card p-2.5 font-mono text-[10.5px] leading-5 text-ds-muted">
-      {text}
-    </pre>
-  )
-}
-
-function InspectorNotice({ text, tone = 'neutral' }: { text: string; tone?: 'neutral' | 'error' }): ReactElement {
-  return (
-    <div className={`rounded-md border px-3 py-3 text-[11px] ${tone === 'error' ? 'border-red-500/30 bg-red-500/5 text-red-600' : 'border-ds-border-muted bg-ds-card text-ds-faint'}`}>
-      {text}
+    <div className={styles.payload}>
+      {detail.section === 'rendered' && markdown !== null
+        ? <StreamdownAssistant text={markdown} streaming={false} className={styles.markdown} />
+        : <JsonTree value={detail.content} />}
+      {attachmentIds.length ? <TrajectoryImages threadId={threadId} ids={attachmentIds} /> : null}
     </div>
   )
 }
 
-function sectionsFor(record: TrajectoryRecord): TrajectoryDetailSection[] {
-  if (record.kind === 'llm_request') return ['overview', 'input', 'output', 'usage', 'timing', 'raw']
-  if (record.kind === 'tool') return ['overview', 'arguments', 'result', 'timing', 'raw']
-  return ['overview', 'output', 'timing', 'raw']
+function JsonTree({ value, name = '$', path = '$' }: { value: unknown; name?: string; path?: string }): ReactElement {
+  const { t } = useTranslation('common')
+  const [copied, setCopied] = useState<'value' | 'path' | 'json' | null>(null)
+  const copy = (kind: 'value' | 'path' | 'json', text: string): void => {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(kind)
+      setTimeout(() => setCopied(null), 900)
+    }).catch(() => undefined)
+  }
+  if (value === null || typeof value !== 'object') return <div className={styles.leaf}><span>{name}</span><code>{JSON.stringify(value)}</code><span className={styles.copyActions}><button type="button" onClick={() => copy('value', String(value))} aria-label={t('trajectoryCopyValue')}>{copied === 'value' ? <Check /> : <Clipboard />}</button><button type="button" onClick={() => copy('path', path)} aria-label={t('trajectoryCopyPath')}>$</button></span></div>
+  const entries = Array.isArray(value) ? value.map((entry, index) => [String(index), entry] as const) : Object.entries(value)
+  return <details className={styles.tree} open><summary><span>{name}</span><span className={styles.copyActions}><button type="button" onClick={(event) => { event.preventDefault(); copy('path', path) }} aria-label={t('trajectoryCopyPath')}>$</button><button type="button" onClick={(event) => { event.preventDefault(); copy('json', JSON.stringify(value, null, 2)) }} aria-label={t('trajectoryCopyJson')}>{copied === 'json' ? <Check /> : <Clipboard />}</button></span></summary><div>{entries.map(([key, entry]) => <JsonTree key={key} name={key} path={Array.isArray(value) ? `${path}[${key}]` : `${path}.${key}`} value={entry} />)}</div></details>
 }
 
-function recordTitle(record: TrajectoryRecord): string {
-  if (record.kind === 'llm_request') return `${record.model} · Request #${record.step + 1}`
-  if (record.kind === 'tool') return record.toolName
-  if (record.kind === 'input') return 'User input'
-  if (record.kind === 'compaction') return 'Compaction'
-  return 'Assistant output'
+function PromptDiff({ content }: { content: Record<string, unknown> }): ReactElement {
+  const previous = JSON.stringify(content.previous ?? [], null, 2)
+  const current = JSON.stringify(content.current ?? [], null, 2)
+  return <pre className={styles.diff}>{diffLines(previous, current).map((part, index) => <span key={index} data-change={part.added ? 'added' : part.removed ? 'removed' : 'context'}>{part.value}</span>)}</pre>
 }
 
-function shortId(value: string): string {
-  return value.length > 12 ? `${value.slice(0, 8)}…` : value
+function TrajectoryImages({ threadId, ids }: { threadId: string; ids: readonly string[] }): ReactElement {
+  const [images, setImages] = useState<Array<{ id: string; url: string; name: string }>>([])
+  useEffect(() => {
+    let cancelled = false
+    void Promise.all(ids.map(async (id) => {
+      const response = await rendererRuntimeClient.runtimeRequest(`${kunAttachmentContentPath(id)}?thread_id=${encodeURIComponent(threadId)}`, 'GET')
+      if (!response.ok) return null
+      const body = JSON.parse(response.body) as { dataBase64?: string; attachment?: { mimeType?: string; name?: string } }
+      return body.dataBase64 ? { id, url: `data:${body.attachment?.mimeType ?? 'application/octet-stream'};base64,${body.dataBase64}`, name: body.attachment?.name ?? id } : null
+    })).then((values) => { if (!cancelled) setImages(values.filter((value): value is NonNullable<typeof value> => value !== null)) })
+    return () => { cancelled = true }
+  }, [ids, threadId])
+  return <div className={styles.images}>{images.map((image) => <img key={image.id} src={image.url} alt={image.name} />)}</div>
 }
 
-function safeJson(value: unknown): string {
-  try { return JSON.stringify(value, null, 2) } catch { return String(value) }
+function tabsFor(cell: HarnessCell | null, request: HarnessRequestBoundary | null, t: (key: string) => string): Tab[] {
+  if (request) return [{ id: 'overview', label: t('trajectoryTabSummary') }, ...(request.request.optionsAvailable ? [{ id: 'options' as const, label: t('trajectoryTabOptions') }] : []), { id: 'usage', label: t('trajectorySection_usage') }, { id: 'timing', label: t('trajectorySection_timing') }]
+  if (!cell) return []
+  if (cell.kind === 'system') return [...(cell.record.kind === 'system' && cell.record.previousPromptFingerprint ? [{ id: 'diff' as const, label: t('trajectoryTabDiff') }] : []), { id: 'system-prompt', label: t('trajectoryTabSystemPrompt') }, { id: 'tools', label: t('trajectoryTabTools') }]
+  if (cell.kind === 'tool' || cell.kind === 'subtool') return [{ id: 'overview', label: t('trajectoryTabSummary') }, { id: 'arguments', label: t('trajectoryTabPayload') }, { id: 'result', label: t('trajectorySection_result') }, { id: 'schema', label: t('trajectoryTabSchema') }, { id: 'timing', label: t('trajectorySection_timing') }]
+  if (cell.kind === 'compacted') return [{ id: 'overview', label: t('trajectoryTabSummary') }, { id: 'raw', label: t('trajectorySection_raw') }]
+  return [{ id: 'overview', label: t('trajectoryTabSummary') }, { id: 'rendered', label: t('trajectoryTabPreview') }, { id: 'raw', label: t('trajectorySection_raw') }, { id: 'source', label: t('trajectoryTabSource') }]
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+function markdownText(value: unknown): string | null {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map((entry) => isRecord(entry) && typeof entry.text === 'string' ? entry.text : '').filter(Boolean).join('\n') || null
+  return null
 }
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
+function clampWidth(width: number, splitWidth: number): number { return Math.round(Math.min(720, Math.max(320, Math.min(width, splitWidth - 280)))) }
+function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === 'object' && !Array.isArray(value) }

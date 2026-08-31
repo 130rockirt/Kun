@@ -1,6 +1,8 @@
 import {
   lazy,
   Suspense,
+  useEffect,
+  useRef,
   type ComponentProps,
   type PointerEventHandler,
   type ReactElement
@@ -183,6 +185,23 @@ export function WorkbenchChatStage({
     filter: trajectoryUi.filter,
     query: trajectoryUi.query
   })
+  const mainStackRef = useRef<HTMLDivElement>(null)
+  const composerDockRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const stack = mainStackRef.current
+    const composer = composerDockRef.current
+    if (!stack || !composer || !trajectoryOpen) return
+    const publish = (): void => {
+      stack.style.setProperty('--trajectory-composer-height', `${composer.offsetHeight}px`)
+    }
+    publish()
+    const observer = new ResizeObserver(publish)
+    observer.observe(composer)
+    return () => {
+      observer.disconnect()
+      stack.style.removeProperty('--trajectory-composer-height')
+    }
+  }, [trajectoryOpen])
   const effectiveConversationDropWorkspaceRoot = normalizeWorkspaceRoot(conversationDropWorkspaceRoot)
   const canComposeForConversationDrop =
     composerProps.fileReferenceEnabled === true &&
@@ -295,6 +314,7 @@ export function WorkbenchChatStage({
           <GraphChildSessionBar context={graphChildContext} onBack={onBackToParent} />
         ) : null}
         <div
+          ref={mainStackRef}
           className={`ds-chat-main-stack relative flex min-h-0 min-w-0 flex-1 flex-col ${
             emptyTaskLayout
               ? 'justify-center overflow-y-auto pb-[clamp(4rem,12vh,8rem)]'
@@ -356,7 +376,8 @@ export function WorkbenchChatStage({
             <TrajectoryView threadId={activeThreadId} data={trajectoryData} />
           ) : null}
           <div
-            className={`ds-composer-dock ds-no-drag relative flex shrink-0 justify-center px-2 pt-0 sm:px-4 md:px-6 lg:px-8 ${
+            ref={composerDockRef}
+            className={`ds-composer-dock ds-no-drag flex justify-center px-2 pt-0 sm:px-4 md:px-6 lg:px-8 ${trajectoryOpen ? 'absolute inset-x-0 bottom-0 z-20' : 'relative shrink-0'} ${
               emptyTaskLayout ? 'pb-0' : 'pb-3'
             }`}
             data-primary-floating-composer

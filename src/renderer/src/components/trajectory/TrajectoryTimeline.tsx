@@ -1,103 +1,268 @@
-import type { ReactElement } from 'react'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactElement, type WheelEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { TrajectoryRecord } from '../../agent/trajectory'
+import type { HarnessCell } from './trajectory-harness-model'
+import {
+  deriveHarnessTimeline,
+  type HarnessTimelineMode,
+  type HarnessTimelineRange
+} from './trajectory-harness-timeline'
+import styles from './TrajectoryTimeline.module.css'
+
+type SpanStyle = CSSProperties & {
+  '--span-left': string
+  '--span-width': string
+  '--span-lane': number
+  '--ttft-width'?: string
+}
+
+type Gesture = {
+  pointerId: number
+  button: number
+  startX: number
+  lastX: number
+  viewport: HarnessTimelineRange
+  selectionStart: number
+}
 
 export function TrajectoryTimeline({
-  records,
-  selectedId,
+  cells,
   mode,
-  onSelect
+  range,
+  selectedId,
+  hasEarlierRecords,
+  onRangeChange,
+  onRecordSelect,
+  onLoadEarlier
 }: {
-  records: readonly TrajectoryRecord[]
+  cells: readonly HarnessCell[]
+  mode: HarnessTimelineMode
+  range: HarnessTimelineRange | null
   selectedId: string | null
-  mode: 'actual' | 'equal'
-  onSelect: (id: string) => void
+  hasEarlierRecords: boolean
+  onRangeChange: (range: HarnessTimelineRange | null) => void
+  onRecordSelect: (id: string) => void
+  onLoadEarlier: () => void
 }): ReactElement {
   const { t } = useTranslation('common')
-  const blocks = useMemo(() => timelineBlocks(records, mode), [mode, records])
+  const model = useMemo(() => deriveHarnessTimeline(cells, mode), [cells, mode])
+  const trackRef = useRef<HTMLDivElement>(null)
+  const gesture = useRef<Gesture | null>(null)
+  const tooltipTimer = useRef<number | null>(null)
+  const edgePanTimer = useRef<{ direction: -1 | 1; id: number } | null>(null)
+  const rangeChange = useRef(onRangeChange)
+  const [viewport, setViewport] = useState<HarnessTimelineRange>({ start: 0, end: 1 })
+  const [tooltip, setTooltip] = useState<{ cell: HarnessCell; x: number } | null>(null)
+
+  useEffect(() => { rangeChange.current = onRangeChange }, [onRangeChange])
+  useEffect(() => { setViewport({ start: 0, end: 1 }); rangeChange.current(null) }, [mode])
+  useEffect(() => () => {
+    if (tooltipTimer.current !== null) clearTimeout(tooltipTimer.current)
+    if (edgePanTimer.current !== null) clearInterval(edgePanTimer.current.id)
+  }, [])
+
+  const stopEdgePan = (): void => {
+    if (edgePanTimer.current === null) return
+    clearInterval(edgePanTimer.current.id)
+    edgePanTimer.current = null
+  }
+  const startEdgePan = (direction: -1 | 1): void => {
+    if (edgePanTimer.current?.direction === direction) return
+    stopEdgePan()
+    const id = window.setInterval(() => {
+      setViewport((value) => clampViewport({
+        start: value.start + direction * 0.008,
+        end: value.end + direction * 0.008
+      }))
+    }, 16)
+    edgePanTimer.current = { direction, id }
+  }
+
+  const fractionAt = (clientX: number): number => {
+    const rect = trackRef.current?.getBoundingClientRect()
+    if (!rect || rect.width <= 0) return viewport.start
+    return viewport.start + Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)) * (viewport.end - viewport.start)
+  }
+  const domainAt = (clientX: number): number => {
+    if (!model) return 0
+    const fraction = fractionAt(clientX)
+    return model.start + fraction * (model.end - model.start)
+  }
+  const begin = (event: PointerEvent<HTMLDivElement>): void => {
+    if (!model || (event.button !== 0 && event.button !== 2)) return
+    gesture.current = {
+      pointerId: event.pointerId,
+      button: event.button,
+      startX: event.clientX,
+      lastX: event.clientX,
+      viewport,
+      selectionStart: domainAt(event.clientX)
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    if (event.button === 0) onRangeChange({ start: domainAt(event.clientX), end: domainAt(event.clientX) })
+    event.preventDefault()
+  }
+  const move = (event: PointerEvent<HTMLDivElement>): void => {
+    const active = gesture.current
+    if (!model || !active || active.pointerId !== event.pointerId) return
+    if (active.button === 2) {
+      stopEdgePan()
+      const rect = event.currentTarget.getBoundingClientRect()
+      const delta = rect.width ? (active.lastX - event.clientX) / rect.width * (viewport.end - viewport.start) : 0
+      active.lastX = event.clientX
+      setViewport((current) => clampViewport({ start: current.start + delta, end: current.end + delta }))
+      return
+    }
+    const current = domainAt(event.clientX)
+    onRangeChange({ start: Math.min(active.selectionStart, current), end: Math.max(active.selectionStart, current) })
+    const rect = event.currentTarget.getBoundingClientRect()
+    const edge = rect.width * 0.08
+    if (event.clientX < rect.left + edge) startEdgePan(-1)
+    else if (event.clientX > rect.right - edge) startEdgePan(1)
+    else stopEdgePan()
+  }
+  const end = (event: PointerEvent<HTMLDivElement>): void => {
+    if (gesture.current?.pointerId !== event.pointerId) return
+    stopEdgePan()
+    gesture.current = null
+    event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+  const zoom = (event: WheelEvent<HTMLDivElement>): void => {
+    if (!model || cells.length < 4) return
+    event.preventDefault()
+    const anchor = fractionAt(event.clientX)
+    const factor = event.deltaY > 0 ? 1.18 : 0.82
+    setViewport((current) => {
+      const width = Math.min(1, Math.max(0.04, (current.end - current.start) * factor))
+      const ratio = (anchor - current.start) / Math.max(0.0001, current.end - current.start)
+      return clampViewport({ start: anchor - width * ratio, end: anchor + width * (1 - ratio) })
+    })
+  }
+  const keyboard = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'Escape') {
+      onRangeChange(null)
+      event.preventDefault()
+      return
+    }
+    if (event.key === 'Home') {
+      setViewport({ start: 0, end: 1 })
+      event.preventDefault()
+      return
+    }
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      const direction = event.key === 'ArrowLeft' ? -1 : 1
+      setViewport((current) => clampViewport({
+        start: current.start + direction * (current.end - current.start) * 0.08,
+        end: current.end + direction * (current.end - current.start) * 0.08
+      }))
+      event.preventDefault()
+      return
+    }
+    if (event.key === '+' || event.key === '=' || event.key === '-') {
+      const factor = event.key === '-' ? 1.18 : 0.82
+      setViewport((current) => zoomViewport(current, (current.start + current.end) / 2, factor))
+      event.preventDefault()
+    }
+  }
+
+  const visible = model?.spans.map((span) => {
+    const full = Math.max(1, model.end - model.start)
+    const rawLeft = (span.start - model.start) / full
+    const rawRight = (span.end - model.start) / full
+    const viewWidth = viewport.end - viewport.start
+    const left = (rawLeft - viewport.start) / viewWidth
+    const right = (rawRight - viewport.start) / viewWidth
+    return { span, left, width: right - left }
+  }).filter((entry) => entry.left + entry.width >= 0 && entry.left <= 1) ?? []
+
   return (
-    <div className="border-b border-ds-border-muted px-3 py-2" data-testid="trajectory-timeline">
-      <div className="min-w-[520px] space-y-1 overflow-x-auto">
-        {(['input', 'model', 'tool'] as const).map((lane) => (
-          <div key={lane} className="flex h-6 items-center gap-2">
-            <div className="w-12 shrink-0 text-[10px] font-medium text-ds-faint">
-              {t(`trajectoryLane${lane[0].toUpperCase()}${lane.slice(1)}`)}
-            </div>
-            <div className="relative h-4 min-w-[440px] flex-1 rounded bg-ds-hover/50">
-              {blocks.filter((block) => block.lane === lane).map((block) => (
-                <button
-                  key={block.record.id}
-                  type="button"
-                  className={`absolute top-0 h-4 min-w-[3px] rounded-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-                    block.record.id === selectedId ? 'ring-2 ring-accent ring-offset-1' : ''
-                  } ${timelineColor(block.record)}`}
-                  style={{ left: `${block.left}%`, width: `${block.width}%` }}
-                  onClick={() => onSelect(block.record.id)}
-                  aria-label={`${recordLabel(block.record)} · ${formatDuration(block.record.durationMs)}`}
-                  title={`${recordLabel(block.record)}\n${formatTimestamp(block.record.startedAt)}\n${formatDuration(block.record.durationMs)}`}
-                />
-              ))}
-            </div>
-          </div>
-        ))}
+    <div className={styles.root} role="region" aria-label={t('trajectoryTimelineAria')} data-testid="trajectory-timeline">
+      <div className={styles.plot}>
+        <div className={styles.labels}><span>{t('trajectoryLaneInput')}</span><span>{t('trajectoryLaneModel')}</span><span>{t('trajectoryLaneTool')}</span></div>
+        <div
+          ref={trackRef}
+          className={styles.track}
+          tabIndex={0}
+          onPointerDown={begin}
+          onPointerMove={move}
+          onPointerUp={end}
+          onPointerCancel={end}
+          onWheel={zoom}
+          onKeyDown={keyboard}
+          onContextMenu={(event) => { event.preventDefault(); onRangeChange(null) }}
+        >
+          {hasEarlierRecords ? <button type="button" className={styles.earlierHistory} onClick={onLoadEarlier} aria-label={t('trajectoryLoadOlder')}>‹</button> : null}
+          {!model ? <div className={styles.empty}>{t('trajectoryNoTiming')}</div> : (
+            <>
+              <div className={styles.boundaries}>
+                {model.boundaries.map((boundary) => {
+                  const fraction = (boundary.time - model.start) / Math.max(1, model.end - model.start)
+                  const left = (fraction - viewport.start) / (viewport.end - viewport.start)
+                  return left >= 0 && left <= 1 ? <span key={boundary.turn} className={styles.boundary} style={{ left: `${left * 100}%` }} /> : null
+                })}
+              </div>
+              <div className={styles.lanes}>
+                {visible.map(({ span, left, width }) => {
+                  const cell = cells[span.index]
+                  if (!cell) return null
+                  const style: SpanStyle = {
+                    '--span-left': `${left * 100}%`,
+                    '--span-width': `${Math.max(0.002, width) * 100}%`,
+                    '--span-lane': span.lane,
+                    ...(span.ttftFraction ? { '--ttft-width': `${span.ttftFraction * 100}%` } : {})
+                  }
+                  return (
+                    <button
+                      key={span.id}
+                      type="button"
+                      className={styles.span}
+                      data-kind={span.kind}
+                      data-error={span.error || undefined}
+                      data-selected={selectedId === span.id || undefined}
+                      style={style}
+                      onClick={(event) => { event.stopPropagation(); onRangeChange(null); onRecordSelect(span.id) }}
+                      onMouseEnter={(event) => {
+                        if (tooltipTimer.current !== null) clearTimeout(tooltipTimer.current)
+                        const x = event.currentTarget.getBoundingClientRect().left
+                        tooltipTimer.current = window.setTimeout(() => setTooltip({ cell, x }), 500)
+                      }}
+                      onMouseLeave={() => { if (tooltipTimer.current !== null) clearTimeout(tooltipTimer.current); setTooltip(null) }}
+                      aria-label={`${cell.kind} ${cell.text}`}
+                    />
+                  )
+                })}
+              </div>
+              {range && model ? <div className={styles.selection} style={selectionStyle(range, model, viewport)} /> : null}
+              {tooltip ? <div className={styles.tooltip} style={{ left: Math.max(4, tooltip.x) }}>{tooltipText(tooltip.cell)}</div> : null}
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
 }
 
-type TimelineBlock = {
-  lane: 'input' | 'model' | 'tool'
-  record: TrajectoryRecord
-  left: number
-  width: number
+function clampViewport(value: HarnessTimelineRange): HarnessTimelineRange {
+  const width = value.end - value.start
+  if (value.start < 0) return { start: 0, end: width }
+  if (value.end > 1) return { start: 1 - width, end: 1 }
+  return value
 }
 
-function timelineBlocks(records: readonly TrajectoryRecord[], mode: 'actual' | 'equal'): TimelineBlock[] {
-  if (!records.length) return []
-  const start = Math.min(...records.map((record) => Date.parse(record.startedAt) || 0))
-  const end = Math.max(...records.map((record) =>
-    Date.parse(record.completedAt ?? record.startedAt) || start))
-  const span = Math.max(1, end - start)
-  return records.map((record, index) => {
-    const started = Date.parse(record.startedAt) || start
-    const duration = Math.max(1, record.durationMs ?? (record.status === 'running' ? Date.now() - started : 1))
-    const left = mode === 'actual' ? ((started - start) / span) * 100 : (index / records.length) * 100
-    const width = mode === 'actual'
-      ? Math.max(0.7, Math.min(100 - left, (duration / span) * 100))
-      : Math.max(1.5, 85 / records.length)
-    return { lane: laneFor(record), record, left, width }
-  })
+function zoomViewport(viewport: HarnessTimelineRange, anchor: number, factor: number): HarnessTimelineRange {
+  const width = Math.min(1, Math.max(0.04, (viewport.end - viewport.start) * factor))
+  const ratio = (anchor - viewport.start) / Math.max(0.0001, viewport.end - viewport.start)
+  return clampViewport({ start: anchor - width * ratio, end: anchor + width * (1 - ratio) })
 }
 
-function laneFor(record: TrajectoryRecord): TimelineBlock['lane'] {
-  if (record.kind === 'input' || record.kind === 'compaction') return 'input'
-  if (record.kind === 'tool') return 'tool'
-  return 'model'
+function selectionStyle(range: HarnessTimelineRange, model: NonNullable<ReturnType<typeof deriveHarnessTimeline>>, viewport: HarnessTimelineRange): CSSProperties {
+  const full = Math.max(1, model.end - model.start)
+  const left = ((range.start - model.start) / full - viewport.start) / (viewport.end - viewport.start)
+  const right = ((range.end - model.start) / full - viewport.start) / (viewport.end - viewport.start)
+  return { left: `${Math.max(0, left) * 100}%`, width: `${Math.max(0.2, (Math.min(1, right) - Math.max(0, left)) * 100)}%` }
 }
 
-function timelineColor(record: TrajectoryRecord): string {
-  if (record.status === 'failed') return 'bg-red-500'
-  if (record.status === 'cancelled' || record.status === 'interrupted') return 'bg-ds-faint/70'
-  if (record.status === 'running') return 'animate-pulse bg-violet-500'
-  if (record.kind === 'tool') return 'bg-slate-500 dark:bg-slate-400'
-  if (record.kind === 'input' || record.kind === 'compaction') return 'bg-ds-faint'
-  return 'bg-violet-500/85'
-}
-
-function recordLabel(record: TrajectoryRecord): string {
-  if (record.kind === 'llm_request') return `${record.model} · ${record.provider}`
-  if (record.kind === 'tool') return record.toolName
-  return record.preview
-}
-
-function formatTimestamp(value: string): string {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString([], { hour12: false })
-}
-
-export function formatDuration(value: number | undefined): string {
-  if (value === undefined) return '—'
-  if (value < 1_000) return `${Math.round(value)}ms`
-  return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)}s`
+function tooltipText(cell: HarnessCell): string {
+  const duration = cell.durationMs === null ? '—' : `${Math.round(cell.durationMs)}ms`
+  const ttft = cell.request?.request.usage?.requestTtftMs
+  return `${cell.kind.toUpperCase()} · ${duration}${ttft === undefined ? '' : ` · TTFT ${Math.round(ttft)}ms`}`
 }
