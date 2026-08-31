@@ -17,7 +17,7 @@ export function useFloatingComposerActions(
     activeThreadId, archiveThread, buildResearchPrompt, canAcceptComposerFileDrop,
     canAddFileReference, canEditComposer, canOpenComposerMenu, canOpenGoalPanel,
     canOptimizePrompt, canPickAttachment, canPickDesignReference, canPickFileReference,
-    canPickLocalFileReference, canSetGoalPanelDraft, canToggleGraphMode, canTogglePlanMode,
+    canPickLocalFileReference, canSetGoalPanelDraft, canToggleAutoPlanBuildMode, canToggleGraphMode, canTogglePlanMode,
     clearActiveThreadGoal, compact, compactActiveThread, composerRootRef, composerSendKey,
     dictationPrimaryActionRef, draft, effectiveWorkspaceRoot, fileInputRef, fileMentions,
     forkActiveThread, goalInputMode, goalPanelDraftObjective, handleComposerImagePaste,
@@ -204,6 +204,19 @@ export function useFloatingComposerActions(
       onOrchestrationChange?.('direct')
       setMode('plan')
       onPlanCommand?.()
+    }
+    draft.focusComposer()
+  }
+
+  const handleAutoPlanBuildToolbarClick = (): void => {
+    if (!canToggleAutoPlanBuildMode) return
+    setComposerMenuOpen(false)
+    if (mode === 'auto') {
+      setMode('agent')
+    } else {
+      setGoalInputMode(false)
+      onOrchestrationChange?.('direct')
+      setMode('auto')
     }
     draft.focusComposer()
   }
@@ -469,6 +482,7 @@ export function useFloatingComposerActions(
     handleGoalMenuClick,
     handleGraphToolbarClick,
     handleLocalFileReferenceMenuClick,
+    handleAutoPlanBuildToolbarClick,
     handlePlanToolbarClick,
     handlePrimaryAction,
     handlePromptOptimizationClick,

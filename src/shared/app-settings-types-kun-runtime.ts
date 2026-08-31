@@ -32,7 +32,8 @@ import {
 import {
   ModelProviderModelProfileV1,
   ModelReasoningEffort,
-  ModelRequestRetrySettingsV1
+  ModelRequestRetrySettingsV1,
+  ScheduleReasoningEffort
 } from './app-settings-types-provider'
 
 export type KunSubagentSurfaceV1 = 'shared' | 'code' | 'write' | 'design'
@@ -140,16 +141,41 @@ export type KunLabConversationVisualizationSettingsV1 = {
   enabled: boolean
 }
 
+export type KunLabAutoPlanBuildMode = 'direct' | 'scheduled'
+export type KunLabAutoPlanBuildConfirmation = 'always' | 'defaults'
+
+export type KunLabAutoPlanBuildScheduledDefaultsV1 = {
+  /** Empty values inherit the active composer/runtime selection. */
+  providerId: string
+  model: string
+  reasoningEffort: ScheduleReasoningEffort
+  /** Empty uses the host system time zone. Exact date/time is never persisted here. */
+  timeZone: string
+}
+
+/** GUI-only Laboratory defaults for the Automatic (plan + build) composer mode. */
+export type KunLabAutoPlanBuildSettingsV1 = {
+  enabled: boolean
+  confirmation: KunLabAutoPlanBuildConfirmation
+  defaultBuildMode: KunLabAutoPlanBuildMode
+  useWorktreeByDefault: boolean
+  scheduledDefaults: KunLabAutoPlanBuildScheduledDefaultsV1
+}
+
 /** Experimental Lab feature settings written into Kun config `lab`. */
 export type KunLabSettingsV1 = {
   pptAgent: KunLabPptAgentSettingsV1
   conversationVisualization: KunLabConversationVisualizationSettingsV1
+  autoPlanBuild: KunLabAutoPlanBuildSettingsV1
 }
 
 /** Partial settings patch for the Lab section. Nested fields merge with current values. */
 export type KunLabSettingsPatchV1 = {
   pptAgent?: Partial<KunLabPptAgentSettingsV1>
   conversationVisualization?: Partial<KunLabConversationVisualizationSettingsV1>
+  autoPlanBuild?: Partial<Omit<KunLabAutoPlanBuildSettingsV1, 'scheduledDefaults'>> & {
+    scheduledDefaults?: Partial<KunLabAutoPlanBuildScheduledDefaultsV1>
+  }
 }
 
 export const KUN_GRAPH_ROLLOUT_STAGES = [

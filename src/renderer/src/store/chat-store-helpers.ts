@@ -55,7 +55,8 @@ const LEGACY_COMPOSER_REASONING_EFFORTS: readonly ModelReasoningEffort[] = [
   'max'
 ]
 
-export type ComposerPlanMode = 'plan' | 'agent'
+/** Renderer composer intent. `auto` is translated into plan/agent runtime turns. */
+export type ComposerPlanMode = 'plan' | 'agent' | 'auto'
 
 export type ThreadComposerSelection = {
   model: string
@@ -202,7 +203,7 @@ export function readThreadComposerSelection(threadId: string): ThreadComposerSel
 }
 
 export function normalizeComposerPlanMode(raw: unknown): ComposerPlanMode | null {
-  if (raw === 'plan' || raw === 'agent') return raw
+  if (raw === 'plan' || raw === 'agent' || raw === 'auto') return raw
   return null
 }
 

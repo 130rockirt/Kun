@@ -228,5 +228,19 @@
   "labConversationVisualizationTitle": "Conversation visualizations and charts",
   "labConversationVisualizationDescription": "Experimental structured visuals and governed data charts for analysis, trends, rankings, comparisons, proportions, metrics, and tables. Agents provide validated data intent while Kun controls rendering and safety.",
   "labConversationVisualizationEnabled": "Allow agent visualizations",
-  "labConversationVisualizationEnabledDesc": "Adds show_visualization, show_diagram, and render_chart to future desktop agent requests. Turning it off removes the tools while preserving visualizations already stored in conversation history."
+  "labConversationVisualizationEnabledDesc": "Adds show_visualization, show_diagram, and render_chart to future desktop agent requests. Turning it off removes the tools while preserving visualizations already stored in conversation history.",
+  "labAutoPlanBuildTitle": "Automatic plan and build",
+  "labAutoPlanBuildDescription": "Experimental Code mode that creates a GUI plan and then continues with a Direct or one-shot scheduled build.",
+  "labAutoPlanBuildEnabled": "Enable Automatic mode",
+  "labAutoPlanBuildEnabledDesc": "Adds Automatic (plan + build) to the Code composer. Kun runtime turn modes remain unchanged.",
+  "labAutoPlanBuildConfirmation": "Before starting",
+  "labAutoPlanBuildConfirmationDesc": "Choose whether Direct requests ask for execution settings every time.",
+  "labAutoPlanBuildConfirmationAlways": "Always ask",
+  "labAutoPlanBuildConfirmationDefaults": "Use defaults",
+  "labAutoPlanBuildDefaultMode": "Default build mode",
+  "labAutoPlanBuildDefaultModeDesc": "Scheduled builds still ask for an exact date and time.",
+  "labAutoPlanBuildDefaultWorktree": "Use worktree by default",
+  "labAutoPlanBuildDefaultWorktreeDesc": "This Automatic-mode default is independent from manual plan builds.",
+  "labAutoPlanBuildScheduledModelDesc": "Default model selection for scheduled Automatic builds.",
+  "labAutoPlanBuildTimeZoneDesc": "Remember the time zone, but ask for a fresh date and time for every scheduled build."
 }

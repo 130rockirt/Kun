@@ -13,6 +13,7 @@ type UseWorkbenchChatComposerPropsInput = {
   input: string
   setInput: ComposerProps['setInput']
   composerMode: ComposerProps['mode']
+  autoPlanBuildEnabled: boolean
   setComposerMode: ComposerProps['setMode']
   taskSurface: NonNullable<ComposerProps['taskSurface']>
   taskSurfaceLocked: boolean
@@ -101,6 +102,7 @@ export function useWorkbenchChatComposerProps({
   input,
   setInput,
   composerMode,
+  autoPlanBuildEnabled,
   setComposerMode,
   taskSurface,
   taskSurfaceLocked,
@@ -192,6 +194,9 @@ export function useWorkbenchChatComposerProps({
     input,
     setInput,
     mode: designTaskActive ? 'agent' : composerMode,
+    autoPlanBuildEnabled: route === 'chat' && !activeSddDraft && taskSurface === 'code'
+      ? autoPlanBuildEnabled
+      : false,
     setMode: setComposerMode,
     taskSurface: route === 'chat' && !activeSddDraft ? taskSurface : undefined,
     taskSurfaceLocked,
@@ -346,6 +351,7 @@ export function useWorkbenchChatComposerProps({
     extraFileMentionCandidates,
     composerFileReferences,
     composerMode,
+    autoPlanBuildEnabled,
     composerOrchestration,
     composerModel,
     composerModelGroups,

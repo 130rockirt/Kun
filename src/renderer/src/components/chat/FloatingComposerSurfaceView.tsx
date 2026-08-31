@@ -26,7 +26,7 @@ export function FloatingComposerSurfaceView({
     executionSettings, executionSettingsApplying, fileInputRef, fileMentions, fileReferences,
     goalInputMode, graphEnabled, graphPlanningNeedsCorrection, handleAttachmentInput,
     handleComposerDragOver, handleComposerDrop, handleComposerKeyDown, handleComposerMenuButtonClick,
-    handleComposerPaste, handleComposerShellMouseDown, handlePlanToolbarClick, handlePrimaryAction,
+    handleComposerPaste, handleComposerShellMouseDown, handleAutoPlanBuildToolbarClick, handlePlanToolbarClick, handlePrimaryAction,
     handlePromptOptimizationClick, hideModelPicker, input, isComposerDirectoryReference, mode,
     imageGenerationEnabled, imageGenerationAvailable, imageGenerationReason, modelControlVariant, modelPickerMode, onComposerFastModeChange, onComposerModelChange,
     onComposerReasoningEffortChange, onConfigureImageGeneration, onConfigureProviders, onDesignTaskProfileChange, onExecutionSettingsChange, onInterrupt,
@@ -246,6 +246,19 @@ export function FloatingComposerSurfaceView({
                       >
                         <ListTodo className="h-3.5 w-3.5" strokeWidth={1.9} />
                         <span className="ds-composer-mode-label">{t('slashCommandPlanTitle')}</span>
+                        <X className="h-3 w-3" strokeWidth={2} />
+                      </button>
+                    ) : showCodeExecutionControls && mode === 'auto' ? (
+                      <button
+                        type="button"
+                        data-composer-auto-plan-build-mode-badge
+                        onClick={handleAutoPlanBuildToolbarClick}
+                        className="ds-composer-mode-badge ds-no-drag inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-accent-soft px-2.5 text-[13px] font-medium text-accent transition hover:brightness-95"
+                        title={`${t('cancel')} ${t('composerMenuAutoPlanBuild')}`}
+                        aria-label={`${t('cancel')} ${t('composerMenuAutoPlanBuild')}`}
+                      >
+                        <Sparkles className="h-3.5 w-3.5" strokeWidth={1.9} />
+                        <span className="ds-composer-mode-label">{t('composerMenuAutoPlanBuild')}</span>
                         <X className="h-3 w-3" strokeWidth={2} />
                       </button>
                     ) : null}

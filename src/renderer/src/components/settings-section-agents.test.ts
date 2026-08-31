@@ -19,6 +19,7 @@ import {
   type ModelProviderProfileV1,
   type ReactTestRenderer
 } from './settings-section-agents.test-support'
+import { defaultKunLabSettings } from '@shared/app-settings'
 
 
 describe('AgentsSettingsSection Kun diagnostics smoke', () => {
@@ -176,6 +177,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
         renderer = createRenderer(createElement(PptAgentSettingsPanel, {
           t,
           value: {
+            ...defaultKunLabSettings(),
             pptAgent: {
               enabled: true,
               model: 'gpt-5.4',

@@ -623,5 +623,13 @@
   "knowledgeBaseDescription": "ワークスペースを、このタスクの読み取り専用かつベクトル不要の構造インデックスとしてマウントします。",
   "knowledgeBaseOpenWrite": "ワークで開く",
   "knowledgeBaseEmpty": "ワークスペースがまだありません。",
-  "knowledgeBaseAddDirectory": "ワークスペースを追加してマウント"
+  "knowledgeBaseAddDirectory": "ワークスペースを追加してマウント",
+  "composerMenuAutoPlanBuild": "自動モード（計画 + ビルド）",
+  "composerAutoPlanBuildPlaceholder": "要件を入力すると、Kun が計画を作成して自動的にビルドします…",
+  "autoPlanBuildDialogTitle": "自動計画とビルド",
+  "autoPlanBuildDialogSubtitle": "計画の完成後にこのリクエストをどうビルドするか選択します。",
+  "autoPlanBuildDirectHint": "計画完了後すぐにビルドを開始",
+  "autoPlanBuildUseWorktree": "Agent 管理の Worktree を使用",
+  "autoPlanBuildUseOnce": "今回のみ使用",
+  "autoPlanBuildSaveDefault": "既定に設定して続行"
 }

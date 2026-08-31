@@ -673,5 +673,13 @@
   "knowledgeBaseStatus_ready": "可用",
   "knowledgeBaseStatus_stale": "待更新",
   "knowledgeBaseStatus_unavailable": "不可用",
-  "knowledgeBaseStatus_error": "错误"
+  "knowledgeBaseStatus_error": "错误",
+  "composerMenuAutoPlanBuild": "自动模式（计划 + 构建）",
+  "composerAutoPlanBuildPlaceholder": "描述需求，Kun 会先生成计划，再按设置自动构建…（Shift+Enter 换行）",
+  "autoPlanBuildDialogTitle": "自动计划与构建",
+  "autoPlanBuildDialogSubtitle": "选择计划生成后如何构建本次需求。",
+  "autoPlanBuildDirectHint": "计划完成后立即开始构建",
+  "autoPlanBuildUseWorktree": "使用 Agent 管理的 Worktree",
+  "autoPlanBuildUseOnce": "仅本次使用",
+  "autoPlanBuildSaveDefault": "设为默认并继续"
 }

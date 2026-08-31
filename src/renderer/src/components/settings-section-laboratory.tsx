@@ -18,6 +18,7 @@ import {
   Globe2,
   Monitor,
   Presentation,
+  Sparkles,
   UserRound,
   Waypoints,
   Workflow
@@ -38,10 +39,12 @@ import { GraphModeSettingsPanel } from './settings-section-graph-panel'
 import { ComposerPersonaSettingsPanel } from './settings-section-lab-persona'
 import { ConversationVisualizationSettingsPanel } from './settings-section-lab-conversation-visualization'
 import { PptAgentSettingsPanel } from './settings-section-lab-ppt'
+import { AutoPlanBuildSettingsPanel } from './settings-section-lab-auto-plan-build'
 
 type LaboratorySettingsPanel =
   | 'persona'
   | 'visualization'
+  | 'autoPlanBuild'
   | 'computer'
   | 'browser'
   | 'graph'
@@ -89,6 +92,7 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
         items={[
           { id: 'persona', label: t('labComposerPersonaTitle'), icon: UserRound },
           { id: 'visualization', label: t('labConversationVisualizationTitle'), icon: Waypoints },
+          { id: 'autoPlanBuild', label: t('labAutoPlanBuildTitle'), icon: Sparkles },
           { id: 'computer', label: t('computerUseTitle'), icon: Monitor },
           { id: 'browser', label: t('browserUseSettingsTitle'), icon: Globe2 },
           { id: 'graph', label: t('graphSettingsTitle'), icon: Workflow },
@@ -122,6 +126,21 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
         <ConversationVisualizationSettingsPanel
           t={t}
           value={lab}
+          onChange={(patch) => updateKun({ lab: patch })}
+        />
+      </SettingsTabPanel>
+
+      <SettingsTabPanel<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        tabId="autoPlanBuild"
+        active={activePanel === 'autoPlanBuild'}
+        className="[&>div]:mt-0"
+      >
+        <AutoPlanBuildSettingsPanel
+          t={t}
+          settings={form}
+          value={lab}
+          selectControlClass={selectControlClass}
           onChange={(patch) => updateKun({ lab: patch })}
         />
       </SettingsTabPanel>

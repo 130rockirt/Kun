@@ -21,6 +21,7 @@ import {
   type ModelProviderModelProfileV1, type ModelProviderProfileV1,
   type ReactTestRenderer
 } from './settings-section-agents.test-support'
+import { defaultKunLabSettings } from '@shared/app-settings'
 
 
 describe('AgentsSettingsSection Kun diagnostics smoke', () => {
@@ -145,7 +146,10 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
 
     act(() => {
       renderer = createRenderer(createElement(LaboratorySettingsSection, {
-        ctx: baseCtx()
+        ctx: {
+          ...baseCtx(),
+          t: (key: string) => key === 'labAutoPlanBuildTitle' ? 'Automatic plan and build' : t(key)
+        }
       }))
     })
 
@@ -155,16 +159,18 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(laboratoryTabs.map(instanceText)).toEqual([
       'Personas',
       'Conversation visualization',
+      'Automatic plan and build',
       'Computer control',
       'Browser',
       'Graph mode',
       'PPT agent'
     ])
     expect(laboratoryTabs.map((tab) => tab.props['aria-selected']))
-      .toEqual([true, false, false, false, false, false])
+      .toEqual([true, false, false, false, false, false, false])
     expect(laboratoryTabs.map((tab) => tab.props['aria-controls'])).toEqual([
       'laboratory-settings-panel-persona',
       'laboratory-settings-panel-visualization',
+      'laboratory-settings-panel-autoPlanBuild',
       'laboratory-settings-panel-computer',
       'laboratory-settings-panel-browser',
       'laboratory-settings-panel-graph',
@@ -177,9 +183,9 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     const laboratoryPanels = renderer.root
       .findAllByProps({ role: 'tabpanel' })
       .filter((panel) => String(panel.props.id ?? '').startsWith('laboratory-settings-panel-'))
-    expect(laboratoryPanels).toHaveLength(6)
+    expect(laboratoryPanels).toHaveLength(7)
     expect(laboratoryPanels.map((panel) => panel.props.hidden))
-      .toEqual([false, true, true, true, true, true])
+      .toEqual([false, true, true, true, true, true, true])
   })
 
   it('passes the runtime Browser Use capability into its settings panel', () => {
@@ -288,6 +294,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     ))
 
     const followMain = renderPanel({
+      ...defaultKunLabSettings(),
       pptAgent: { enabled: true, model: '', providerId: '', fast: false, imageFirst: true },
       conversationVisualization: { enabled: false }
     })
@@ -296,6 +303,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(followMain).not.toContain('Codex Fast mode')
 
     const fixed = renderPanel({
+      ...defaultKunLabSettings(),
       pptAgent: { enabled: true, model: 'deepseek-v4-pro', providerId: 'deepseek', fast: false, imageFirst: true },
       conversationVisualization: { enabled: false }
     })
@@ -304,6 +312,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(fixed).toContain('Codex Fast mode')
 
     const disabled = renderPanel({
+      ...defaultKunLabSettings(),
       pptAgent: { enabled: false, model: '', providerId: '', fast: false, imageFirst: true },
       conversationVisualization: { enabled: false }
     })

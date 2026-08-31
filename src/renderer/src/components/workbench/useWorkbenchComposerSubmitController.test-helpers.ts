@@ -27,6 +27,7 @@ export function controllerParams(overrides: Partial<ControllerParams> = {}): Con
     handleGuiPlanCommand: vi.fn(),
     input: 'keep this prompt',
     resetClawChannelSession: vi.fn(async () => undefined),
+    requestAutoPlanBuild: vi.fn(async () => 'rejected' as const),
     rightPanelMode: null,
     route: 'write',
     selectClawChannel: vi.fn(async () => undefined),

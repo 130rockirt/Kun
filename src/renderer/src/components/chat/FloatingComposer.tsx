@@ -156,6 +156,7 @@ export function FloatingComposer({
   mode,
   setMode,
   taskSurface, taskSurfaceLocked = false, emptyTaskLayout = false, designTaskProfile,
+  autoPlanBuildEnabled = false,
   designProfileLocked = false,
   imageGenerationEnabled, imageGenerationAvailable = false, imageGenerationReason,
   onTaskSurfaceChange, onDesignTaskProfileChange, onConfigureImageGeneration,
@@ -369,6 +370,8 @@ export function FloatingComposer({
   const showIntentToolbar = !compact && route === 'chat', showComposerMenuButton = showIntentToolbar
   const showCodeExecutionControls = codeExecutionControlsAvailable(taskSurface)
   const showPlanMenuOption = showCodeExecutionControls && Boolean(onPlanCommand), canTogglePlanMode = canCompose && showPlanMenuOption
+  const showAutoPlanBuildMenuOption = showPlanMenuOption && autoPlanBuildEnabled
+  const canToggleAutoPlanBuildMode = canCompose && showAutoPlanBuildMenuOption
   const showGraphMenuOption = showCodeExecutionControls && graphEnabled && Boolean(onOrchestrationChange)
   const canToggleGraphMode = canCompose && !busy && showGraphMenuOption
   const graphPlanningNeedsCorrection = Boolean(
@@ -384,7 +387,7 @@ export function FloatingComposer({
   const canRunReview = canCompose && route !== 'claw' && Boolean(onReviewCommand)
   const canToggleWorktreeMode = canCompose && route !== 'claw' && Boolean(onToggleWorktreeMode)
   const canOpenComposerMenu = showComposerMenuButton
-    && (canPickFileReference || canPickDesignReference || canPickLocalFileReference || canTogglePlanMode || showGraphMenuOption || canCreateNewThread || canOpenGoalPanel || canRunReview || (canCompose && Boolean(codeAgentPresets && onComposerPersonaChange)))
+    && (canPickFileReference || canPickDesignReference || canPickLocalFileReference || canTogglePlanMode || canToggleAutoPlanBuildMode || showGraphMenuOption || canCreateNewThread || canOpenGoalPanel || canRunReview || (canCompose && Boolean(codeAgentPresets && onComposerPersonaChange)))
   const showToolbarStartControls = showComposerMenuButton
   const showExecutionSettingsPicker = showIntentToolbar
     && Boolean(executionSettings)
@@ -418,7 +421,7 @@ export function FloatingComposer({
     setGoalPanelOpen(false)
   }, [activeThreadId, route])
   useEffect(() => {
-    if (mode === 'plan') setGoalInputMode(false)
+    if (mode === 'plan' || mode === 'auto') setGoalInputMode(false)
   }, [mode])
   const fileMentions = useComposerFileMentions({
     enabled: fileReferenceEnabled,
@@ -479,6 +482,8 @@ export function FloatingComposer({
             ? clawHasInboundConversation
               ? t('clawPlaceholder', { name: clawAgentName })
               : t('clawPlaceholderNeedsInbound')
+            : mode === 'auto'
+              ? t('composerAutoPlanBuildPlaceholder')
             : mode === 'plan'
               ? t('composerPlanPlaceholder')
               : emptyTaskLayout
@@ -609,7 +614,7 @@ export function FloatingComposer({
     activeThreadId, archiveThread, buildResearchPrompt, canAcceptComposerFileDrop,
     canAddFileReference, canEditComposer, canOpenComposerMenu, canOpenGoalPanel,
     canOptimizePrompt, canPickAttachment, canPickDesignReference, canPickFileReference,
-    canPickLocalFileReference, canSetGoalPanelDraft, canToggleGraphMode, canTogglePlanMode,
+    canPickLocalFileReference, canSetGoalPanelDraft, canToggleAutoPlanBuildMode, canToggleGraphMode, canTogglePlanMode,
     clearActiveThreadGoal, compact, compactActiveThread, composerRootRef, composerSendKey,
     dictationPrimaryActionRef, draft, effectiveWorkspaceRoot, fileInputRef, fileMentions,
     forkActiveThread, goalInputMode, goalPanelDraftObjective, handleComposerImagePaste,
@@ -637,7 +642,7 @@ export function FloatingComposer({
     Square, Target, Trash2, TypeIcon, VoiceRecordingStrip, WorkspaceProjectPicker, X, activeThreadGoal,
     activeThreadId, activeThreadTodos, attachmentUploadBusy, attachmentUploadEnabled, attachmentUploadError, attachments, busy, canChangeModel,
     canCompose, canEditComposer, canOpenComposerMenu, canOpenGoalPanel, canOptimizePrompt, canPickAttachment, canPickDesignReference, canPickFileReference,
-    canPickLocalFileReference, canSetGoalPanelDraft, canToggleGraphMode, canTogglePlanMode, canToggleWorktreeMode, clearActiveThreadGoal, compact, composerFastMode,
+    canPickLocalFileReference, canSetGoalPanelDraft, canToggleAutoPlanBuildMode, canToggleGraphMode, canTogglePlanMode, canToggleWorktreeMode, clearActiveThreadGoal, compact, composerFastMode,
     composerMenuButtonRef, composerMenuOpen, composerMenuPanelRef, composerShellRef, composerModel, composerModelGroups, composerPickList, composerProviderId, composerReasoningEffort,
     contextChips, primaryCacheHitRate, currentTurnOrchestration, designTaskProfile, designProfileLocked, dictation, draft, effectiveWorkspaceRoot, executionSettings, executionSettingsApplying,
     fileInputRef, fileMentions, fileReferenceEnabled, fileReferences, filteredSlashCommands, footerHint, formatCompactNumber, formatCost,
@@ -649,7 +654,7 @@ export function FloatingComposer({
     onRemoveQueuedMessage, onToggleWorktreeMode, onWorktreeBranchChange, openSettings, orchestration, pendingUserInputBlock, placeholder, primaryActionDisabled,
     primaryActionLabel, primaryActionLoading, promptOptimizationBusy, promptOptimizationError, onDismissPromptOptimizationError, promptOptimizationSettings, queuedMessages, reorderQueuedMessage, returnQueuedMessageToComposer,
     route, runningGraphTurn, runtimeReady, setActiveThreadGoalStatus, setGoalInputMode, setGoalPanelOpen, setInput, showComposerMenuButton,
-    showCodeExecutionControls, showExecutionSettingsPicker, showGoalFloater, showGoalMenuOption, showGraphMenuOption, showGraphProgress, showPlanMenuOption, showProviderInModelLabel, showTodoProgress, showToolbarStartControls, showUsageHistoryFooter,
+    showAutoPlanBuildMenuOption, showCodeExecutionControls, showExecutionSettingsPicker, showGoalFloater, showGoalMenuOption, showGraphMenuOption, showGraphProgress, showPlanMenuOption, showProviderInModelLabel, showTodoProgress, showToolbarStartControls, showUsageHistoryFooter,
     showVoiceDictation, showWorkspaceControls, side, slashCommandMenu, slashQuery, stretchModelPicker, t, threadUsage, primaryActionKind,
     taskSurface, taskSurfaceLocked, emptyTaskLayout, onTaskSurfaceChange, onNewRequirement, threadUsageState, timingThreadUsage, useWorktreePool, userInput, worktreeBranch
   }

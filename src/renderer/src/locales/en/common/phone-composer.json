@@ -675,5 +675,13 @@
   "knowledgeBaseStatus_ready": "Ready",
   "knowledgeBaseStatus_stale": "Stale",
   "knowledgeBaseStatus_unavailable": "Unavailable",
-  "knowledgeBaseStatus_error": "Error"
+  "knowledgeBaseStatus_error": "Error",
+  "composerMenuAutoPlanBuild": "Automatic (plan + build)",
+  "composerAutoPlanBuildPlaceholder": "Describe the change; Kun will plan it and then build it automatically… (Shift+Enter for newline)",
+  "autoPlanBuildDialogTitle": "Automatic plan and build",
+  "autoPlanBuildDialogSubtitle": "Choose how this request should build after its plan is ready.",
+  "autoPlanBuildDirectHint": "Start the build as soon as planning finishes",
+  "autoPlanBuildUseWorktree": "Use an Agent-managed worktree",
+  "autoPlanBuildUseOnce": "Use once",
+  "autoPlanBuildSaveDefault": "Set as default and continue"
 }

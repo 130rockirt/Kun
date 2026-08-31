@@ -199,6 +199,83 @@ describe('Fast Context settings', () => {
     expect(bad.lab.pptAgent.reasoningEffort).toBeUndefined()
   })
 
+  it('defaults and merges GUI-only Automatic plan-build settings independently', () => {
+    const defaults = defaultKunRuntimeSettings().lab.autoPlanBuild
+    expect(defaults).toEqual({
+      enabled: false,
+      confirmation: 'always',
+      defaultBuildMode: 'direct',
+      useWorktreeByDefault: true,
+      scheduledDefaults: {
+        providerId: '',
+        model: '',
+        reasoningEffort: 'auto',
+        timeZone: ''
+      }
+    })
+
+    const configured = mergeKunRuntimeSettings(defaultKunRuntimeSettings(), {
+      lab: {
+        autoPlanBuild: {
+          enabled: true,
+          confirmation: 'defaults',
+          defaultBuildMode: 'scheduled',
+          useWorktreeByDefault: false,
+          scheduledDefaults: {
+            providerId: 'codex',
+            model: 'gpt-5.4',
+            reasoningEffort: 'high',
+            timeZone: 'Asia/Shanghai'
+          }
+        }
+      }
+    })
+    expect(configured.lab.autoPlanBuild).toEqual({
+      enabled: true,
+      confirmation: 'defaults',
+      defaultBuildMode: 'scheduled',
+      useWorktreeByDefault: false,
+      scheduledDefaults: {
+        providerId: 'codex',
+        model: 'gpt-5.4',
+        reasoningEffort: 'high',
+        timeZone: 'Asia/Shanghai'
+      }
+    })
+    expect(configured.planExecution.useWorktreeByDefault).toBe(true)
+
+    const partial = mergeKunRuntimeSettings(configured, {
+      lab: { autoPlanBuild: { scheduledDefaults: { reasoningEffort: 'low' } } }
+    })
+    expect(partial.lab.autoPlanBuild.scheduledDefaults).toEqual({
+      providerId: 'codex',
+      model: 'gpt-5.4',
+      reasoningEffort: 'low',
+      timeZone: 'Asia/Shanghai'
+    })
+
+    const invalid = mergeKunRuntimeSettings({
+      ...defaultKunRuntimeSettings(),
+      lab: {
+        ...defaultKunRuntimeSettings().lab,
+        autoPlanBuild: {
+          ...defaults,
+          confirmation: 'never' as never,
+          defaultBuildMode: 'graph' as never,
+          scheduledDefaults: {
+            ...defaults.scheduledDefaults,
+            reasoningEffort: 'ultra' as never
+          }
+        }
+      }
+    }, undefined)
+    expect(invalid.lab.autoPlanBuild).toMatchObject({
+      confirmation: 'always',
+      defaultBuildMode: 'direct',
+      scheduledDefaults: { reasoningEffort: 'auto' }
+    })
+  })
+
   it('merges top-level Fast Context patches field by field', () => {
     const current = defaultKunRuntimeSettings()
     const next = mergeKunRuntimeSettings(current, {

@@ -80,5 +80,19 @@
   "labConversationVisualizationTitle": "Conversation visualization",
   "labConversationVisualizationDescription": "Experimental structured visuals for flows, grouped explanations, and important constraints. The agent uses them only when spatial structure is clearer than prose.",
   "labConversationVisualizationEnabled": "Allow agent visualizations",
-  "labConversationVisualizationEnabledDesc": "Adds show_visualization to future desktop agent requests. Turning it off removes the tool while preserving visualizations already stored in conversation history."
+  "labConversationVisualizationEnabledDesc": "Adds show_visualization to future desktop agent requests. Turning it off removes the tool while preserving visualizations already stored in conversation history.",
+  "labAutoPlanBuildTitle": "Автоматический план и сборка",
+  "labAutoPlanBuildDescription": "Экспериментальный режим Code: создаёт GUI-план и продолжает прямой или одноразовой запланированной сборкой.",
+  "labAutoPlanBuildEnabled": "Включить автоматический режим",
+  "labAutoPlanBuildEnabledDesc": "Добавляет в Code режим «план + сборка».",
+  "labAutoPlanBuildConfirmation": "Подтверждение перед запуском",
+  "labAutoPlanBuildConfirmationDesc": "Определяет, спрашивать ли настройки прямой сборки каждый раз.",
+  "labAutoPlanBuildConfirmationAlways": "Всегда спрашивать",
+  "labAutoPlanBuildConfirmationDefaults": "Использовать значения по умолчанию",
+  "labAutoPlanBuildDefaultMode": "Режим сборки по умолчанию",
+  "labAutoPlanBuildDefaultModeDesc": "Для запланированной сборки точные дата и время выбираются каждый раз.",
+  "labAutoPlanBuildDefaultWorktree": "Использовать Worktree по умолчанию",
+  "labAutoPlanBuildDefaultWorktreeDesc": "Не изменяет настройки ручной сборки плана.",
+  "labAutoPlanBuildScheduledModelDesc": "Модель для автоматических запланированных сборок.",
+  "labAutoPlanBuildTimeZoneDesc": "Часовой пояс запоминается, дата и время выбираются заново."
 }

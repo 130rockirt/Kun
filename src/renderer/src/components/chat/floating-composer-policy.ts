@@ -105,13 +105,15 @@ export type FloatingComposerProps = {
   onResolveUserInput?: ResolveUserInput
   input: string
   setInput: (v: string) => void
-  mode: 'plan' | 'agent'
-  setMode: (m: 'plan' | 'agent') => void
+  mode: 'plan' | 'agent' | 'auto'
+  setMode: (m: 'plan' | 'agent' | 'auto') => void
   /** Next-turn intent. Undefined hides the control on compact/non-Code surfaces. */
   taskSurface?: ComposerTaskSurface
   taskSurfaceLocked?: boolean
   /** Gives an empty conversation a larger composer; task intent remains in its toolbar. */
   emptyTaskLayout?: boolean
+  /** GUI-only Laboratory availability for Automatic (plan + build). */
+  autoPlanBuildEnabled?: boolean
   designTaskProfile?: DesignTaskComposerProfile
   designProfileLocked?: boolean
   imageGenerationEnabled?: boolean

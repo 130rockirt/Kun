@@ -464,6 +464,18 @@ export function defaultKunLabSettings(): KunLabSettingsV1 {
     },
     conversationVisualization: {
       enabled: false
+    },
+    autoPlanBuild: {
+      enabled: false,
+      confirmation: 'always',
+      defaultBuildMode: 'direct',
+      useWorktreeByDefault: true,
+      scheduledDefaults: {
+        providerId: '',
+        model: '',
+        reasoningEffort: 'auto',
+        timeZone: ''
+      }
     }
   }
 }
@@ -480,10 +492,27 @@ export function mergeKunLabSettings(
 ): KunLabSettingsV1 {
   const defaults = defaultKunLabSettings()
   const legacyCurrent = current as Partial<KunLabSettingsV1> | undefined
+  const legacyAutomatic = legacyCurrent?.autoPlanBuild
+  const legacyScheduled = legacyAutomatic?.scheduledDefaults
   const base: KunLabSettingsV1 = {
     pptAgent: legacyCurrent?.pptAgent ?? defaults.pptAgent,
     conversationVisualization:
-      legacyCurrent?.conversationVisualization ?? defaults.conversationVisualization
+      legacyCurrent?.conversationVisualization ?? defaults.conversationVisualization,
+    autoPlanBuild: {
+      enabled: legacyAutomatic?.enabled ?? defaults.autoPlanBuild.enabled,
+      confirmation: legacyAutomatic?.confirmation === 'defaults' ? 'defaults' : 'always',
+      defaultBuildMode: legacyAutomatic?.defaultBuildMode === 'scheduled' ? 'scheduled' : 'direct',
+      useWorktreeByDefault: legacyAutomatic?.useWorktreeByDefault
+        ?? defaults.autoPlanBuild.useWorktreeByDefault,
+      scheduledDefaults: {
+        providerId: stringOrFallback(legacyScheduled?.providerId, '').trim(),
+        model: stringOrFallback(legacyScheduled?.model, '').trim(),
+        reasoningEffort: isModelReasoningEffortValue(legacyScheduled?.reasoningEffort)
+          ? legacyScheduled.reasoningEffort
+          : defaults.autoPlanBuild.scheduledDefaults.reasoningEffort,
+        timeZone: stringOrFallback(legacyScheduled?.timeZone, '').trim()
+      }
+    }
   }
   if (!patch) return base
   return {
@@ -494,6 +523,38 @@ export function mergeKunLabSettings(
     conversationVisualization: {
       enabled: patch.conversationVisualization?.enabled
         ?? base.conversationVisualization.enabled
+    },
+    autoPlanBuild: {
+      enabled: patch.autoPlanBuild?.enabled ?? base.autoPlanBuild.enabled,
+      confirmation: patch.autoPlanBuild?.confirmation === 'defaults' ||
+        patch.autoPlanBuild?.confirmation === 'always'
+        ? patch.autoPlanBuild.confirmation
+        : base.autoPlanBuild.confirmation,
+      defaultBuildMode: patch.autoPlanBuild?.defaultBuildMode === 'scheduled' ||
+        patch.autoPlanBuild?.defaultBuildMode === 'direct'
+        ? patch.autoPlanBuild.defaultBuildMode
+        : base.autoPlanBuild.defaultBuildMode,
+      useWorktreeByDefault: patch.autoPlanBuild?.useWorktreeByDefault
+        ?? base.autoPlanBuild.useWorktreeByDefault,
+      scheduledDefaults: {
+        providerId: stringOrFallback(
+          patch.autoPlanBuild?.scheduledDefaults?.providerId,
+          base.autoPlanBuild.scheduledDefaults.providerId
+        ).trim(),
+        model: stringOrFallback(
+          patch.autoPlanBuild?.scheduledDefaults?.model,
+          base.autoPlanBuild.scheduledDefaults.model
+        ).trim(),
+        reasoningEffort: isModelReasoningEffortValue(
+          patch.autoPlanBuild?.scheduledDefaults?.reasoningEffort
+        )
+          ? patch.autoPlanBuild.scheduledDefaults.reasoningEffort
+          : base.autoPlanBuild.scheduledDefaults.reasoningEffort,
+        timeZone: stringOrFallback(
+          patch.autoPlanBuild?.scheduledDefaults?.timeZone,
+          base.autoPlanBuild.scheduledDefaults.timeZone
+        ).trim()
+      }
     }
   }
 }

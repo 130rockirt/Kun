@@ -80,5 +80,19 @@
   "labConversationVisualizationTitle": "Conversation visualization",
   "labConversationVisualizationDescription": "Experimental structured visuals for flows, grouped explanations, and important constraints. The agent uses them only when spatial structure is clearer than prose.",
   "labConversationVisualizationEnabled": "Allow agent visualizations",
-  "labConversationVisualizationEnabledDesc": "Adds show_visualization to future desktop agent requests. Turning it off removes the tool while preserving visualizations already stored in conversation history."
+  "labConversationVisualizationEnabledDesc": "Adds show_visualization to future desktop agent requests. Turning it off removes the tool while preserving visualizations already stored in conversation history.",
+  "labAutoPlanBuildTitle": "자동 계획 및 빌드",
+  "labAutoPlanBuildDescription": "GUI 계획을 만든 뒤 직접 또는 일회성 예약 빌드로 이어지는 실험적 Code 모드입니다.",
+  "labAutoPlanBuildEnabled": "자동 모드 사용",
+  "labAutoPlanBuildEnabledDesc": "Code 작성기에 자동(계획 + 빌드)을 추가합니다.",
+  "labAutoPlanBuildConfirmation": "시작 전 확인",
+  "labAutoPlanBuildConfirmationDesc": "직접 빌드 설정을 매번 물을지 선택합니다.",
+  "labAutoPlanBuildConfirmationAlways": "항상 묻기",
+  "labAutoPlanBuildConfirmationDefaults": "기본값 사용",
+  "labAutoPlanBuildDefaultMode": "기본 빌드 모드",
+  "labAutoPlanBuildDefaultModeDesc": "예약 빌드는 매번 정확한 날짜와 시간을 묻습니다.",
+  "labAutoPlanBuildDefaultWorktree": "기본적으로 Worktree 사용",
+  "labAutoPlanBuildDefaultWorktreeDesc": "수동 계획 빌드와 독립된 설정입니다.",
+  "labAutoPlanBuildScheduledModelDesc": "예약 자동 빌드의 기본 모델입니다.",
+  "labAutoPlanBuildTimeZoneDesc": "시간대를 기억하고 날짜와 시간은 매번 묻습니다."
 }

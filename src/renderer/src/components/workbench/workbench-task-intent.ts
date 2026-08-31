@@ -8,7 +8,7 @@ export type WorkbenchTaskIntentDraft = {
   surface: ComposerTaskSurface
   profile: DesignTaskComposerProfile
   codeExecution?: {
-    mode: 'plan' | 'agent'
+    mode: 'plan' | 'agent' | 'auto'
     orchestration: 'direct' | 'graph'
   }
 }

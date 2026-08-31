@@ -44,6 +44,8 @@ import { readWorkbenchComposerFileContextEntries } from './workbench-composer-fi
 import { mirrorWorkbenchClawCommand } from './workbench-claw-message-mirror'
 import { restoreWorkbenchWritePrompt } from './workbench-write-prompt-state'
 import { workbenchWriteSourceContext } from './workbench-write-source-reference'
+import { submitWorkbenchPlanIntent } from './workbench-plan-submit'
+import { buildWorkbenchClawHelpText } from './workbench-claw-help'
 export type { WorkbenchComposerSubmitController } from './workbench-composer-submit-types'
 import {
   listClawComposerModelOptions,
@@ -75,6 +77,7 @@ export function useWorkbenchComposerSubmitController({
   handleGuiPlanCommand,
   input,
   resetClawChannelSession,
+  requestAutoPlanBuild,
   rightPanelMode,
   route,
   selectClawChannel,
@@ -94,16 +97,7 @@ export function useWorkbenchComposerSubmitController({
     (userText: string, replyText: string) => mirrorWorkbenchClawCommand(activeThreadId, userText, replyText),
     [activeThreadId]
   )
-  const clawHelpText = useCallback((): string =>
-    [
-      t('clawHelpTitle'),
-      '',
-      `- \`/help\`: ${t('clawHelpCommandHelp')}`,
-      `- \`/new\`: ${t('clawHelpCommandNew')}`,
-      `- \`/clear\`: ${t('clawHelpCommandClear')}`,
-      `- \`/list-model\`: ${t('clawHelpCommandModelList')}`,
-      `- \`/model <number>\`: ${t('clawHelpCommandModelSwitch')}`
-    ].join('\n'), [t])
+  const clawHelpText = useCallback(() => buildWorkbenchClawHelpText(t), [t])
 
   const clawModelListText = useCallback((): string => {
     const options = listClawComposerModelOptions(composerModelGroups)
@@ -482,20 +476,28 @@ export function useWorkbenchComposerSubmitController({
         void handleGuiPlanCommand(planCommand.kind === 'create' ? planCommand.request : undefined)
         return
       }
-      if (route === 'chat' && composerMode === 'plan') {
+      if (route === 'chat' && (composerMode === 'plan' || composerMode === 'auto')) {
         const prepared = await prepareChatMessage()
         if (!prepared) return
-        setInput('')
-        clearComposerAttachments(attachmentScope)
-        clearComposerFileReferences()
-        void sendPlanTurn(prepared.text, {
-          agentSurface: taskSurface,
-          ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
-          ...(reasoningEffort ? { reasoningEffort } : {}),
-          ...(serviceTier ? { serviceTier } : {}),
-          ...(attachmentIds.length ? { attachmentIds } : {}),
-          ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
-          ...(userFileReferences.length ? { fileReferences: userFileReferences } : {})
+        await submitWorkbenchPlanIntent({
+          mode: composerMode,
+          text: prepared.text,
+          overrides: {
+            agentSurface: taskSurface,
+            ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
+            ...(reasoningEffort ? { reasoningEffort } : {}),
+            ...(serviceTier ? { serviceTier } : {}),
+            ...(attachmentIds.length ? { attachmentIds } : {}),
+            ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
+            ...(userFileReferences.length ? { fileReferences: userFileReferences } : {})
+          },
+          sendPlanTurn,
+          requestAutoPlanBuild,
+          consumeComposer: () => {
+            setInput('')
+            clearComposerAttachments(attachmentScope)
+            clearComposerFileReferences()
+          }
         })
         return
       }
@@ -572,7 +574,7 @@ export function useWorkbenchComposerSubmitController({
                 channelId: activeClawChannelId,
                 modelHint: activeClawChannelModel,
                 ...(reasoningEffort ? { reasoningEffort } : {}),
-                mode: composerMode
+                mode: composerMode === 'plan' ? 'plan' : 'agent'
               })
             : { kind: 'noop' as const }
           if (taskResult.kind === 'created') {
@@ -673,6 +675,7 @@ export function useWorkbenchComposerSubmitController({
     mirrorClawCommand,
     readComposerFileContextEntries,
     resetClawChannelSession,
+    requestAutoPlanBuild,
     rightPanelMode,
     route,
     selectClawChannel,

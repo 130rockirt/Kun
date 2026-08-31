@@ -415,7 +415,7 @@ export type ChatState = {
   turnReasoningFirstAtByUserId: Record<string, number>
   turnReasoningLastAtByUserId: Record<string, number>
   inspectorSelectedId: string | null
-  composerMode: 'plan' | 'agent'
+  composerMode: 'plan' | 'agent' | 'auto'
   composerOrchestration: 'direct' | 'graph'
   graphEnabled: boolean
   composerModel: string
@@ -459,7 +459,7 @@ export type ChatState = {
   activeClawChannelId: string
   appendLocalClawTurn: (userText: string, replyText: string) => void
   setError: (message: string | null) => void
-  setComposerMode: (mode: 'plan' | 'agent') => void
+  setComposerMode: (mode: 'plan' | 'agent' | 'auto') => void
   setComposerOrchestration: (mode: 'direct' | 'graph') => void
   setComposerModel: (modelId: string, providerId?: string) => void
   setComposerReasoningEffort: (effort: ModelReasoningEffort) => void

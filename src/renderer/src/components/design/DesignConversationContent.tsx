@@ -92,8 +92,8 @@ export function DesignConversationContent({
 }: {
   input: string
   setInput: (value: string) => void
-  mode: 'plan' | 'agent'
-  setMode: (value: 'plan' | 'agent') => void
+  mode: 'plan' | 'agent' | 'auto'
+  setMode: (value: 'plan' | 'agent' | 'auto') => void
   busy: boolean
   runtimeConnection: RuntimeConnectionStatus
   activeThreadId: string | null

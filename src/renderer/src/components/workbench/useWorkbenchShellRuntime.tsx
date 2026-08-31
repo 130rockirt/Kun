@@ -30,6 +30,7 @@ export function useWorkbenchShellRuntime(context: Context): {
     leftSidebarCollapsed,
     toggleLeftSidebar,
     input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
+    autoPlanBuildEnabled,
     taskSurface, taskSurfaceLocked, taskSurfaceTransitioning, designTaskProfile, designProfileLocked,
     threadHasDesignDocument, lockedDesignProfile, onTaskSurfaceChange,
     onDesignTaskProfileChange,
@@ -90,6 +91,7 @@ export function useWorkbenchShellRuntime(context: Context): {
   }
   const chatComposerProps = useWorkbenchChatComposerProps({
     input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
+    autoPlanBuildEnabled,
     taskSurface, taskSurfaceLocked, taskSurfaceTransitioning, designTaskProfile, designProfileLocked, onTaskSurfaceChange,
     onDesignTaskProfileChange,
     imageGenerationEnabled: runtimeInfo

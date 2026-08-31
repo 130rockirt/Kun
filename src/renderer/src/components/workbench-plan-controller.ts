@@ -43,12 +43,14 @@ type PlanTurnOverrides = Pick<
   SendMessageOverrides,
   | 'attachmentIds'
   | 'attachments'
+  | 'clientRequestId'
   | 'displayText'
   | 'fileReferences'
   | 'guiPlan'
   | 'model'
   | 'providerId'
   | 'reasoningEffort'
+  | 'waitForRuntimeAdmission'
 > & {
   workspaceRoot?: string
 }
@@ -56,7 +58,7 @@ type PlanTurnOverrides = Pick<
 type WorkbenchPlanControllerOptions = {
   blocks: ChatBlock[]
   busy: boolean
-  mode: 'plan' | 'agent'
+  mode: 'plan' | 'agent' | 'auto'
   route: ChatState['route']
   sendMessage: ChatState['sendMessage']
   setError: ChatState['setError']
@@ -529,7 +531,7 @@ export function useWorkbenchPlanController({
   }
 
   useEffect(() => {
-    if (route !== 'chat' && mode === 'plan') {
+    if (route !== 'chat' && (mode === 'plan' || mode === 'auto')) {
       setComposerMode('agent')
     }
   }, [mode, route, setComposerMode])

@@ -102,8 +102,16 @@ Kun 的缓存命中率要按 provider 原生 usage 字段优先计算和优化�
   模式规则、Design profile 与画布快照只作为 append-only `model_context` 追加在历史末尾。
   Code / Design 模式切换不得改变 immutable prefix；计划 Worktree 的分支、路径、脏文件数和
   Markdown 快照也只允许进入当次 user input。
-  工具执行仍按当前回合的真实 surface / canvas 状态重新校验，所以稳定 schema 不会扩大执行权限。
+工具执行仍按当前回合的真实 surface / canvas 状态重新校验，所以稳定 schema 不会扩大执行权限。
   Plan、Graph 与专用 SVG 回合属于真实能力阶段，继续使用独立分区和受限工具目录。
+
+实验室中的“自动模式（计划 + 构建）”只是一层 Renderer 编排，不新增 Kun mode：用户请求先以
+`plan` 回合生成绑定 workspace/thread/path 的 `create_plan` 结果，只有精确匹配后才以普通
+Direct `agent` 回合构建，或复用现有一次性定时任务。Renderer 持久化有界 intent，并用稳定
+request id、计划身份和定时任务指纹处理任务切换与重启恢复；无法证明安全时进入
+`needs_attention`，不得降级执行。自动模式的 worktree 默认值独立于手动计划，但最终仍复用
+同一套 `preparePlanBuild` 和 Agent 管理的 worktree prompt。Graph 不参与此模式，所有选择和
+恢复事实都留在动态 GUI 状态中，不写入 Kun config 或 immutable prefix。
 - Work turn 按 `agentSurface: write` 追加稳定的 Work mode system instruction；Renderer
   持久化的用户正文只保留用户原话。当前资源、精确选区、检索/Office 摘录和白板快照
   通过有界 `composerContexts` 引用随 turn 传入，不再把工作区、工具手册或画布规则拼进

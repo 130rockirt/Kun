@@ -138,7 +138,7 @@ async function flushAsyncWork(): Promise<void> {
 function expectComposerState(
   state: ChatState,
   expected: {
-    composerMode: 'plan' | 'agent'
+    composerMode: 'plan' | 'agent' | 'auto'
     composerModel: string
     composerProviderId: string
   }

@@ -39,6 +39,7 @@ import { releaseSddAssistantThread } from '../sdd/sdd-thread-registry'
 import { useWorkbenchLayout } from './workbench-layout'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
 import { useGuiPlanStore } from '../plan/plan-store'
+import { useAutoPlanBuildController } from '../plan/use-auto-plan-build-controller'
 import { normalizeWorkspaceRoot, workspaceRootScopeKey } from '../lib/workspace-path'
 import { relativeWorkspacePath } from '../lib/composer-file-references'
 import { useDesignWorkspaceStore } from '../design/design-workspace-store'
@@ -521,6 +522,8 @@ export function Workbench(): ReactElement {
     startNewSddAssistantConversation: startNewSddThreadConversation
   })
 
+  const { requestAutoPlanBuild, dialog: autoPlanBuildDialog, enabled: autoPlanBuildEnabled } =
+    useAutoPlanBuildController({ workspaceRoot, sendPlanTurn, setError })
   const { handleSend: handleCodeSend, sendWritePrompt } = useWorkbenchComposerSubmitController({
     activeClawChannelId, activeClawChannelModel: activeClawChannel?.model,
     activeClawChannelProviderId: activeClawChannel?.providerId,
@@ -528,7 +531,7 @@ export function Workbench(): ReactElement {
     buildCodeCanvasOutboundPrompt, clearComposerAttachments, removeComposerAttachments, clearComposerFileReferences,
     composerAttachments, composerFileReferences, composerMode, composerModel, composerProviderId,
     composerModelGroups, composerReasoningEffort, composerFastMode, getAttachmentScope,
-    handleGuiPlanCommand, input, resetClawChannelSession, rightPanelMode, route,
+    handleGuiPlanCommand, input, resetClawChannelSession, requestAutoPlanBuild, rightPanelMode, route,
     selectClawChannel, sendMessage, sendPlanTurn, sendSddAssistantPrompt,
     setAttachmentUploadError, setClawChannelModel, setError, setInput, threads, workspaceRoot,
     appendLocalClawTurn
@@ -584,6 +587,7 @@ export function Workbench(): ReactElement {
     leftSidebarCollapsed,
     toggleLeftSidebar,
     input, setInput, composerMode, setComposerMode, composerOrchestration, graphEnabled,
+    autoPlanBuildEnabled,
     taskSurface, taskSurfaceLocked, taskSurfaceTransitioning, designTaskProfile, designProfileLocked,
     threadHasDesignDocument, lockedDesignProfile, onTaskSurfaceChange, onDesignTaskProfileChange,
     setComposerOrchestration, openComposerGraph, openComposerGraphChild, busy,
@@ -633,6 +637,7 @@ export function Workbench(): ReactElement {
     handleDesignRuntimeQualityFindings, handleDesignQualityRepairRequest
   })
   return <>
+    {autoPlanBuildDialog}
     <WorkbenchContent context={{
     shellRef, extensionHostContextMenus, activeExtensionCenterView, route, setWorkspaceContextMenu,
     leftSidebarCollapsed, leftSidebarWidth, codeThreads, activeThreadId, sidebarView,

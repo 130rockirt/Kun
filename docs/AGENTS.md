@@ -63,6 +63,27 @@ uses the internal `claw` name, and Work retains the internal `write` name, for c
   history, but they are inert: they do not freeze input, recover a run, rebind a
   workspace, or receive special task presentation.
 
+## Automatic Plan And Build
+
+- `agents.kun.lab.autoPlanBuild.enabled` gates the GUI-only Code composer mode.
+  It defaults off and never becomes a Kun thread/turn mode: the first turn is
+  `plan`, and a matching continuation is an ordinary Direct `agent` turn or an
+  existing one-shot scheduled task.
+- Renderer intent records bind the exact workspace, thread, reserved plan path,
+  and stable request ids. Recovery must match the successful `create_plan`
+  result before dispatching and must reconcile idempotently without selecting
+  another task.
+- Automatic worktree defaults are independent from manual plan execution. Both
+  immediate and scheduled builds reuse `preparePlanBuild` and the prompt-managed
+  worktree protocol; the scheduler must not create a second nested worktree.
+- Scheduled Automatic requests always choose a fresh exact wall-clock time.
+  Expired time, invalid model selection, missing plan content, detached HEAD, or
+  failed worktree preparation requires attention and must never fall back to an
+  immediate/current-workspace build.
+- Graph is not an Automatic build target. All Automatic settings and dynamic
+  intent facts remain renderer/app settings state and must not enter Kun config
+  or the immutable system prefix.
+
 ## Forbidden Paths
 
 - No `AgentSwitcher`.

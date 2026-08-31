@@ -59,6 +59,39 @@ describe('useWorkbenchComposerSubmitController', () => {
     vi.unstubAllGlobals()
   })
 
+  it('keeps an Automatic draft until configuration starts the plan turn', async () => {
+    useChatStore.setState({ route: 'chat', runtimeConnection: 'ready' })
+    const input = inputHarness('implement automatic mode')
+    let onStarted: (() => void) | undefined
+    const requestAutoPlanBuild = vi.fn(async (request: { onStarted: () => void }) => {
+      onStarted = request.onStarted
+      return 'dialog' as const
+    })
+    const clearComposerAttachments = vi.fn()
+    const clearComposerFileReferences = vi.fn()
+    const controller = useWorkbenchComposerSubmitController(controllerParams({
+      route: 'chat',
+      composerMode: 'auto',
+      input: input.getValue(),
+      setInput: input.setInput,
+      requestAutoPlanBuild,
+      clearComposerAttachments,
+      clearComposerFileReferences,
+      workspaceRoot: '/tmp/write'
+    }))
+
+    controller.handleSend()
+    await vi.waitFor(() => expect(requestAutoPlanBuild).toHaveBeenCalledOnce())
+    expect(input.getValue()).toBe('implement automatic mode')
+    expect(clearComposerAttachments).not.toHaveBeenCalled()
+    expect(clearComposerFileReferences).not.toHaveBeenCalled()
+
+    onStarted?.()
+    expect(input.getValue()).toBe('')
+    expect(clearComposerAttachments).toHaveBeenCalledOnce()
+    expect(clearComposerFileReferences).toHaveBeenCalledOnce()
+  })
+
   it('restores the Write prompt when the send is rejected', async () => {
     const input = inputHarness('keep this prompt')
     const sendMessage = vi.fn(async () => false)

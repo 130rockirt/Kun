@@ -28,7 +28,7 @@ type WorkbenchAttachmentRuntimeOptions = {
   activeThreadId: string | null
   canvasDocument: CanvasDocument
   canvasSelectedIds: ReadonlySet<string>
-  composerMode: 'plan' | 'agent'
+  composerMode: 'plan' | 'agent' | 'auto'
   modelUnsupportedMessage: string
   rightPanelMode: RightPanelMode | null
   route: string
