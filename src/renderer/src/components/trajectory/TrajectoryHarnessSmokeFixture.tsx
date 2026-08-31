@@ -34,7 +34,7 @@ export function mountTrajectoryHarnessSmokeFixture(
   const host = document.createElement('div')
   host.dataset.trajectorySmokeHost = scenario
   Object.assign(host.style, {
-    position: 'fixed', inset: '0', display: 'flex', background: 'var(--ds-main)'
+    position: 'fixed', inset: '0', display: 'flex', background: 'var(--ds-bg-main)'
   })
   host.style.setProperty('-webkit-app-region', 'drag')
   document.body.append(host)
@@ -59,7 +59,7 @@ export function mountTrajectoryHarnessSmokeFixture(
         style={{
           position: 'absolute', zIndex: 20, right: '18%', bottom: 0, left: '18%', height: 112,
           border: '1px solid var(--ds-border-muted)', borderRadius: '18px 18px 0 0',
-          background: 'var(--ds-main)', boxShadow: '0 -8px 24px rgb(0 0 0 / 6%)',
+          background: 'var(--ds-bg-main)', boxShadow: '0 -8px 24px rgb(0 0 0 / 6%)',
           visibility: 'hidden', pointerEvents: 'none'
         }}
       />

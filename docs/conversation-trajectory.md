@@ -91,4 +91,6 @@ The page route accepts `limit` and an opaque `cursor`. Existing `filter=all|llm|
 
 The trajectory layout, timing interactions, dense ledger information architecture, inspector behavior, and reference-derived test matrix are adapted from DeepSeek Harness `packages/client/ui-trajectory`, frozen at commit `0a53fb55bea101816fa226bb964ae2bed71c343b`. That source is MIT licensed, Copyright (c) 2026 DeepSeek; the notice is retained in `THIRD_PARTY_NOTICES.md`.
 
+Role colors follow the same semantic model across the timeline and ledger: System/Compacted neutral, User blue, Context green, Assistant violet with a lighter TTFT segment, Tool/Subtool amber, and failures red. These map to Kun theme tokens rather than fixed light-theme colors. Timeline range selection uses a tinted interior, solid accent edges, and outside masking; opening the view clears a stale range from an earlier visit.
+
 Kun does not import or runtime-link the Harness checkout. The port uses Kun's trajectory schema, Session records, Markdown/attachment renderers, persistence rules, accessibility conventions, and semantic theme tokens. Harness global navigation, page tabs, Cordis slots, and unrelated application shell are not included.

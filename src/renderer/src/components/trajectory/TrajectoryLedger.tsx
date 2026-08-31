@@ -173,6 +173,7 @@ export function TrajectoryLedger({
                   tabIndex={0}
                   aria-rowindex={item.index + (hasOlder ? 3 : 2)}
                   data-trajectory-row-key={cell.id}
+                  data-kind={cell.kind}
                   data-turn-start={turnStart || undefined}
                   data-selected={selected || undefined}
                   data-error={cell.status === 'failed' || undefined}
@@ -230,13 +231,13 @@ export function TrajectoryLedger({
 
 function KindTag({ cell }: { cell: HarnessCell }): ReactElement {
   const Icon = cell.kind === 'assistant' ? Bot : cell.kind === 'tool' || cell.kind === 'subtool' ? Wrench : cell.kind === 'context' ? Info : FileText
-  return <span className={styles.kindTag} data-kind={cell.kind}><Icon className={styles.kindIcon} /><span className={styles.kindLabel}>{cell.kind.toUpperCase()}</span></span>
+  return <span className={styles.kindTag} data-trajectory-kind-tag="" data-kind={cell.kind}><Icon className={styles.kindIcon} /><span className={styles.kindLabel}>{cell.kind.toUpperCase()}</span></span>
 }
 
 function Status({ cell }: { cell: HarnessCell }): ReactElement | null {
-  if (cell.status === 'completed') return <Check className={styles.statusComplete} />
-  if (cell.status === 'failed') return <AlertTriangle className={styles.statusError} />
-  if (cell.status === 'running') return <span className={styles.statusRunning} />
+  if (cell.status === 'completed') return <Check className={styles.statusComplete} data-trajectory-status="completed" />
+  if (cell.status === 'failed') return <AlertTriangle className={styles.statusError} data-trajectory-status="failed" />
+  if (cell.status === 'running') return <span className={styles.statusRunning} data-trajectory-status="running" />
   return null
 }
 

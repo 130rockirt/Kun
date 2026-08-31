@@ -181,6 +181,7 @@ export function TrajectoryTimeline({
         <div
           ref={trackRef}
           className={styles.track}
+          data-trajectory-timeline-track=""
           tabIndex={0}
           onPointerDown={begin}
           onPointerMove={move}
@@ -215,6 +216,7 @@ export function TrajectoryTimeline({
                       key={span.id}
                       type="button"
                       className={styles.span}
+                      data-trajectory-timeline-span=""
                       data-kind={span.kind}
                       data-error={span.error || undefined}
                       data-selected={selectedId === span.id || undefined}
@@ -231,7 +233,7 @@ export function TrajectoryTimeline({
                   )
                 })}
               </div>
-              {range && model ? <div className={styles.selection} style={selectionStyle(range, model, viewport)} /> : null}
+              {range && model ? <div className={styles.selection} data-trajectory-timeline-selection="" style={selectionStyle(range, model, viewport)} /> : null}
               {tooltip ? <div className={styles.tooltip} style={{ left: Math.max(4, tooltip.x) }}>{tooltipText(tooltip.cell)}</div> : null}
             </>
           )}

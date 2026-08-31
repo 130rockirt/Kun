@@ -27,5 +27,6 @@ describe('WorkbenchChatStage refresh status i18n', () => {
     expect(source).toContain("stack.style.setProperty('--trajectory-composer-height', '0px')")
     expect(source).toContain("'pointer-events-none invisible absolute inset-x-0 bottom-0 z-20'")
     expect(source).toContain('inert={trajectoryOpen || undefined}')
+    expect(source).toContain('timelineRange: null')
   })
 })

@@ -297,7 +297,12 @@ export function WorkbenchChatStage({
                   if (!activeThreadId) return
                   updateTrajectoryUi(activeThreadId, trajectoryOpen
                     ? { view: 'chat' }
-                    : { view: 'trajectory', selectedRecordId: null, selectedRequestId: null })
+                    : {
+                        view: 'trajectory',
+                        selectedRecordId: null,
+                        selectedRequestId: null,
+                        timelineRange: null
+                      })
                 }}
                 terminalOpen={terminalOpen}
                 onToggleTerminal={onToggleTerminal}

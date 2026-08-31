@@ -21,10 +21,11 @@ tr[data-error='true'] .turnRail, tr[data-error='true'] .selectionRail { backgrou
 .turnLabelCompact { max-width: 0; opacity: 0; }
 .eventInner { display: flex; align-items: center; justify-content: flex-end; min-width: 0; height: 100%; }
 .kindTag { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: 76px; height: 19px; padding: 0 5px; border-radius: 4px; color: var(--trajectory-label-2); background: var(--trajectory-module); font-size: 10px; line-height: 16px; font-weight: 650; letter-spacing: .035em; }
-.kindTag[data-kind='user'] { color: var(--trajectory-accent); background: var(--trajectory-business-soft); }
-.kindTag[data-kind='context'] { color: var(--trajectory-success); background: var(--trajectory-success-soft); }
+.kindTag[data-kind='user'] { color: var(--trajectory-user); background: var(--trajectory-business-soft); }
+.kindTag[data-kind='context'] { color: var(--trajectory-context); background: var(--trajectory-success-soft); }
 .kindTag[data-kind='assistant'] { color: var(--trajectory-assistant-span); background: var(--trajectory-assistant-soft); }
-.kindTag[data-kind='tool'], .kindTag[data-kind='subtool'] { color: var(--trajectory-warning); background: var(--trajectory-warning-soft); }
+.kindTag[data-kind='tool'] { color: var(--trajectory-warning); background: var(--trajectory-warning-soft); }
+.kindTag[data-kind='subtool'] { color: var(--trajectory-subtool); background: var(--trajectory-subtool-soft); }
 .kindIcon { width: 0; height: 13px; opacity: 0; }
 .kindLabel { max-width: 72px; overflow: hidden; white-space: nowrap; }
 .content { padding-left: 4px !important; }

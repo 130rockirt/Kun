@@ -172,12 +172,38 @@ async function main() {
     if (!beforeWidth || !afterWidth || afterWidth <= beforeWidth) {
       throw new Error(`Inspector keyboard resize failed: ${beforeWidth} -> ${afterWidth}`)
     }
+    const timelineTrack = page.locator('[data-trajectory-timeline-track]')
+    const timelineBox = await timelineTrack.boundingBox()
+    if (!timelineBox) throw new Error('Trajectory timeline has no drag target')
+    const rangeY = timelineBox.y + timelineBox.height - 2
+    await page.mouse.move(timelineBox.x + timelineBox.width * 0.28, rangeY)
+    await page.mouse.down()
+    await page.mouse.move(timelineBox.x + timelineBox.width * 0.62, rangeY, { steps: 8 })
+    await page.mouse.up()
+    const rangeSelection = page.locator('[data-trajectory-timeline-selection]')
+    await rangeSelection.waitFor({ state: 'visible' })
+    const rangeVisual = await rangeSelection.evaluate((element) => {
+      const style = getComputedStyle(element)
+      const before = getComputedStyle(element, '::before')
+      return {
+        backgroundColor: style.backgroundColor,
+        boxShadow: style.boxShadow,
+        edgeColor: before.backgroundColor
+      }
+    })
+    const focusedOutRows = await page.locator('[data-timeline-focus="outside"]').count()
+    if (focusedOutRows === 0 || rangeVisual.boxShadow === 'none' || transparent(rangeVisual.backgroundColor)) {
+      throw new Error(`Trajectory range focus is not visibly projected: ${JSON.stringify({ focusedOutRows, rangeVisual })}`)
+    }
+    const rangeEvidencePath = join(evidenceRoot, 'interaction-range-selection.png')
+    await page.screenshot({ path: rangeEvidencePath })
     result = {
       ok: true,
       evidenceRoot,
       captures,
       rowClickOpenedInspector,
       wheelScroll: { beforeScrollTop, afterScrollTop },
+      rangeSelection: { focusedOutRows, evidencePath: rangeEvidencePath, ...rangeVisual },
       localSearchRows: filteredRows,
       inspectorResize: { beforeWidth, afterWidth }
     }
@@ -241,6 +267,19 @@ async function layoutSnapshot(page) {
       const element = document.querySelector(selector)
       return element ? getComputedStyle(element).getPropertyValue(property).trim() : null
     }
+    const visual = (selector) => {
+      const element = document.querySelector(selector)
+      if (!element) return null
+      const value = getComputedStyle(element)
+      return {
+        color: value.color,
+        backgroundColor: value.backgroundColor,
+        backgroundImage: value.backgroundImage,
+        opacity: value.opacity
+      }
+    }
+    const timelineVisual = (kind) => visual(`[data-testid="trajectory-timeline"] [data-trajectory-timeline-span][data-kind="${kind}"]`)
+    const tagVisual = (kind) => visual(`[data-trajectory-kind-tag][data-kind="${kind}"]`)
     return {
       viewportWidth: innerWidth,
       appRegion: style('[data-testid="trajectory-view"]', '-webkit-app-region'),
@@ -257,6 +296,11 @@ async function layoutSnapshot(page) {
       composer: rect('[data-testid="trajectory-smoke-composer"]'),
       composerVisibility: style('[data-testid="trajectory-smoke-composer"]', 'visibility'),
       composerPointerEvents: style('[data-testid="trajectory-smoke-composer"]', 'pointer-events'),
+      semanticColors: {
+        timeline: Object.fromEntries(['system', 'user', 'context', 'assistant', 'compacted', 'tool', 'subtool'].map((kind) => [kind, timelineVisual(kind)])),
+        tags: Object.fromEntries(['system', 'user', 'context', 'assistant', 'compacted', 'tool', 'subtool'].map((kind) => [kind, tagVisual(kind)])),
+        failedTimeline: visual('[data-testid="trajectory-timeline"] [data-trajectory-timeline-span][data-error="true"]')
+      },
       mountedRows: document.querySelectorAll('tbody tr[data-trajectory-row-key]').length
     }
   })
@@ -288,6 +332,7 @@ function assertGeometry(value, context) {
   if (value.composerVisibility !== 'hidden' || value.composerPointerEvents !== 'none') {
     throw new Error(`${context.name}: hidden Composer still participates in layout or pointer hit-testing`)
   }
+  if (!['empty', 'loading', 'long'].includes(context.scenario)) assertSemanticColors(value, context)
   if (context.bounds.width === TABLE_BREAKPOINT.width && value.eventColumnWidth > 51) {
     throw new Error(`${context.name}: compact Event column is ${value.eventColumnWidth}px`)
   }
@@ -298,6 +343,32 @@ function assertGeometry(value, context) {
   if (context.scenario === 'long' && value.mountedRows > 48) {
     throw new Error(`${context.name}: virtualization mounted ${value.mountedRows} rows`)
   }
+}
+
+function assertSemanticColors(value, context) {
+  const timeline = value.semanticColors.timeline
+  const tags = value.semanticColors.tags
+  const timelinePaints = ['system', 'user', 'context', 'tool'].map((kind) => timeline[kind]?.backgroundColor)
+  if (timelinePaints.some((paint) => !paint || transparent(paint)) || new Set(timelinePaints).size !== 4) {
+    throw new Error(`${context.name}: timeline role colors are not distinct: ${JSON.stringify(timelinePaints)}`)
+  }
+  if (!timeline.assistant?.backgroundImage?.includes('linear-gradient')) {
+    throw new Error(`${context.name}: Assistant timing is missing its TTFT/decoding gradient`)
+  }
+  const tagPaints = ['user', 'context', 'assistant', 'tool', 'subtool'].map((kind) => `${tags[kind]?.color}|${tags[kind]?.backgroundColor}`)
+  if (tagPaints.some((paint) => paint.includes('undefined') || paint.includes('rgba(0, 0, 0, 0)')) || new Set(tagPaints).size !== 5) {
+    throw new Error(`${context.name}: ledger tag colors are not distinct: ${JSON.stringify(tagPaints)}`)
+  }
+  if (context.scenario === 'failed') {
+    const failed = value.semanticColors.failedTimeline?.backgroundColor
+    if (!failed || transparent(failed) || failed === timeline.tool?.backgroundColor) {
+      throw new Error(`${context.name}: failed timeline span did not override role color`)
+    }
+  }
+}
+
+function transparent(value) {
+  return !value || value === 'transparent' || value === 'rgba(0, 0, 0, 0)'
 }
 
 function diagnostics(rendererOutput, electronOutput) {
