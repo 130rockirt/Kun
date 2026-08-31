@@ -4,7 +4,10 @@ import {
   ServiceManagerTransportError,
   UsageIndexUnavailableError
 } from '../../manager/usage-errors.js'
-import type { UsageService } from '../../services/usage-service.js'
+import type {
+  UsageHistoryReadStrategy,
+  UsageService
+} from '../../services/usage-service.js'
 import {
   UsageFallbackLimitError,
   buildDailyUsageResponse,
@@ -74,54 +77,68 @@ export async function usageJsonResponse(
   try {
     if (groupBy === 'thread') {
       const threadId = stringParam(query, 'thread_id')
-      const fallback = async () => buildThreadUsageResponse(await loadUsageHistory(runtime, { threadId }))
-      if (!runtime.sessionStore.aggregateUsage) return jsonResponse(markFallback(await fallback()))
+      const buildFallback = async (strategy: UsageHistoryReadStrategy) => buildThreadUsageResponse(
+        await loadUsageHistory(runtime, { threadId }, strategy)
+      )
+      if (!runtime.sessionStore.aggregateUsage) {
+        return jsonResponse(markFallback(await buildFallback('index-first')))
+      }
       return jsonResponse(await indexOrFallback(
         async () => runtime.sessionStore.aggregateUsage!(
           { groupBy: 'thread', ...(threadId ? { threadId } : {}) },
           await loadLiveUsageRemainders(runtime, { ...(threadId ? { threadId } : {}) }, true)
         ),
-        fallback
+        () => buildFallback('jsonl-only')
       ))
     }
     if (groupBy === 'day') {
       const dayQuery = parseDailyUsageQuery(query)
       const range = usageQueryUtcRange(dayQuery)
-      const fallback = async () => buildDailyUsageResponse(await loadUsageHistory(runtime, range), dayQuery)
-      if (!runtime.sessionStore.aggregateUsage) return jsonResponse(markFallback(await fallback()))
+      const buildFallback = async (strategy: UsageHistoryReadStrategy) => buildDailyUsageResponse(
+        await loadUsageHistory(runtime, range, strategy), dayQuery
+      )
+      if (!runtime.sessionStore.aggregateUsage) {
+        return jsonResponse(markFallback(await buildFallback('index-first')))
+      }
       return jsonResponse(await indexOrFallback(
         async () => runtime.sessionStore.aggregateUsage!(
           { ...dayQuery, ...range }, await loadLiveUsageRemainders(runtime, range, true)
         ),
-        fallback
+        () => buildFallback('jsonl-only')
       ))
     }
     if (groupBy === 'model') {
       const modelQuery = parseModelUsageQuery(query)
       const range = usageQueryUtcRange(modelQuery)
-      const fallback = async () => buildModelUsageResponse(await loadUsageHistory(runtime, range), modelQuery)
-      if (!runtime.sessionStore.aggregateUsage) return jsonResponse(markFallback(await fallback()))
+      const buildFallback = async (strategy: UsageHistoryReadStrategy) => buildModelUsageResponse(
+        await loadUsageHistory(runtime, range, strategy), modelQuery
+      )
+      if (!runtime.sessionStore.aggregateUsage) {
+        return jsonResponse(markFallback(await buildFallback('index-first')))
+      }
       return jsonResponse(await indexOrFallback(
         async () => runtime.sessionStore.aggregateUsage!(
           { ...modelQuery, ...range }, await loadLiveUsageRemainders(runtime, range, true)
         ),
-        fallback
+        () => buildFallback('jsonl-only')
       ))
     }
     if (groupBy === 'turn') {
       const turnQuery = parseTurnUsageQuery(query)
-      const fallback = async () => buildTurnUsageResponse(
-        await loadUsageHistory(runtime, { threadId: turnQuery.threadId }), turnQuery
+      const buildFallback = async (strategy: UsageHistoryReadStrategy) => buildTurnUsageResponse(
+        await loadUsageHistory(runtime, { threadId: turnQuery.threadId }, strategy), turnQuery
       )
       if (!runtime.sessionStore.aggregateUsage) {
-        return jsonResponse(TurnUsageResponseSchema.parse(markFallback(await fallback())))
+        return jsonResponse(TurnUsageResponseSchema.parse(
+          markFallback(await buildFallback('index-first'))
+        ))
       }
       return jsonResponse(TurnUsageResponseSchema.parse(await indexOrFallback(
         async () => runtime.sessionStore.aggregateUsage!(
           turnQuery,
           await loadLiveUsageRemainders(runtime, { threadId: turnQuery.threadId }, true)
         ),
-        fallback
+        () => buildFallback('jsonl-only')
       )))
     }
   } catch (error) {

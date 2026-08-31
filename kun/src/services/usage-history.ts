@@ -119,6 +119,8 @@ function usageAttributionFromThread(thread: ThreadRecord): UsageAttributionThrea
   }
 }
 
+export type UsageHistoryReadStrategy = 'index-first' | 'jsonl-only'
+
 /**
  * Load durable differential usage with the optional SQLite index first and a
  * JSONL replay fallback. Live counters newer than persistence are appended as
@@ -126,10 +128,12 @@ function usageAttributionFromThread(thread: ThreadRecord): UsageAttributionThrea
  */
 export async function loadUsageHistory(
   source: UsageHistorySource,
-  options: SessionUsageQueryOptions = {}
+  options: SessionUsageQueryOptions = {},
+  strategy: UsageHistoryReadStrategy = 'index-first'
 ): Promise<ThreadUsageRecord[]> {
   const threadId = options.threadId?.trim()
   const key = JSON.stringify({
+    strategy,
     threadId: threadId || null,
     fromInclusive: options.fromInclusive ?? null,
     toExclusive: options.toExclusive ?? null
@@ -143,7 +147,7 @@ export async function loadUsageHistory(
     ...(threadId ? { threadId } : {}),
     ...(options.fromInclusive ? { fromInclusive: options.fromInclusive } : {}),
     ...(options.toExclusive ? { toExclusive: options.toExclusive } : {})
-  }).finally(() => {
+  }, strategy).finally(() => {
     if (loads.get(key) === load) loads.delete(key)
     if (loads.size === 0) usageRecordLoads.delete(source)
   })
@@ -210,7 +214,8 @@ export async function loadLiveUsageRemainders(
 
 async function loadUsageRecords(
   source: UsageHistorySource,
-  options: SessionUsageQueryOptions
+  options: SessionUsageQueryOptions,
+  strategy: UsageHistoryReadStrategy
 ): Promise<ThreadUsageRecord[]> {
   const readThreadMetadata = (threadId: string) => source.threadService.getMetadata
     ? source.threadService.getMetadata(threadId)
@@ -255,7 +260,7 @@ async function loadUsageRecords(
     return load
   }
 
-  if (typeof source.sessionStore.loadUsageRecords !== 'function') {
+  if (strategy === 'jsonl-only' || typeof source.sessionStore.loadUsageRecords !== 'function') {
     return loadUsageFallback(source, explicitThread, threadSummaries, hydrateThread, options)
   }
 

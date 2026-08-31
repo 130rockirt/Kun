@@ -5,42 +5,73 @@ import type { ServerRuntime } from './server-runtime.js'
 import { usageJsonResponse } from './usage.js'
 
 describe('usageJsonResponse', () => {
-  it('returns a recoverable 503 when the usage index and JSONL fallback both fail', async () => {
+  it('returns a recoverable 503 when the bounded JSONL fallback cannot run', async () => {
     const runtime = runtimeFixture({
-      get: vi.fn(async () => ({ id: 'thread-1', model: 'fixture-model', updatedAt: '2026-08-09T00:00:00.000Z' })),
-      list: vi.fn(async () => [{ id: 'thread-1', status: 'active', updatedAt: '2026-08-09T00:00:00.000Z' }]),
-      loadUsageRecords: vi.fn(async () => { throw new UsageIndexUnavailableError('usage_index_unavailable', 'index down') }),
-      aggregateUsage: vi.fn(async () => { throw new UsageIndexUnavailableError('usage_query_timeout', 'usage query timed out') })
+      list: vi.fn(async () => Array.from({ length: 2_001 }, (_value, index) => ({
+        id: `thread-${index}`,
+        status: 'active',
+        updatedAt: '2026-08-09T00:00:00.000Z'
+      }))),
+      loadUsageRecords: vi.fn(async () => { throw new Error('index must be bypassed') }),
+      aggregateUsage: vi.fn(async () => {
+        throw new UsageIndexUnavailableError('usage_query_timeout', 'usage query timed out')
+      })
     })
 
     const response = await usageJsonResponse(request('day', '2026-08-01', '2026-08-09'), runtime)
 
     expect(response.status).toBe(503)
     expect(JSON.parse(response.body)).toEqual({
-      code: 'usage_index_unavailable',
-      message: 'Usage index is unavailable: index down'
+      code: 'usage_fallback_limit_exceeded',
+      message: 'Usage JSONL fallback is limited to 2000 threads.'
     })
+    expect(runtime.sessionStore.loadUsageRecords).not.toHaveBeenCalled()
   })
 
-  it('falls back to JSONL history when the usage index aggregate is degraded', async () => {
-    const loadUsageRecords = vi.fn(async () => [{
-      threadId: 'thread-1',
-      model: 'fixture-model',
-      completedAt: '2026-08-09T00:00:00.000Z',
-      usage: { ...emptyUsageSnapshot(), promptTokens: 5, totalTokens: 5, turns: 1 }
-    }])
+  it('shares a JSONL scan across concurrent degraded day and model queries', async () => {
+    const loadUsageRecords = vi.fn(async () => { throw new Error('index must be bypassed') })
+    const loadEventsSince = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      return [{
+        kind: 'usage',
+        seq: 1,
+        timestamp: '2026-08-09T00:00:00.000Z',
+        threadId: 'thread-degraded',
+        turnId: 'turn-degraded',
+        model: 'fixture-model',
+        usage: { ...emptyUsageSnapshot(), promptTokens: 5, totalTokens: 5, turns: 1 }
+      }]
+    })
     const runtime = runtimeFixture({
-      list: vi.fn(async () => [{ id: 'thread-1', status: 'active', updatedAt: '2026-08-09T00:00:00.000Z' }]),
+      get: vi.fn(async () => ({
+        id: 'thread-degraded',
+        model: 'fixture-model',
+        updatedAt: '2026-08-09T00:00:00.000Z',
+        turns: [{ id: 'turn-degraded', model: 'fixture-model' }]
+      })),
+      list: vi.fn(async () => [{
+        id: 'thread-degraded',
+        model: 'fixture-model',
+        status: 'active',
+        updatedAt: '2026-08-09T00:00:00.000Z'
+      }]),
+      loadEventsSince,
       loadUsageRecords,
       aggregateUsage: vi.fn(async () => {
         throw new UsageIndexUnavailableError('usage_index_unavailable', 'Hybrid SQLite usage index is unavailable')
       })
     })
 
-    const daily = await usageJsonResponse(request('day', '2026-08-01', '2026-08-09'), runtime)
+    const [daily, model] = await Promise.all([
+      usageJsonResponse(request('day', '2026-08-01', '2026-08-09'), runtime),
+      usageJsonResponse(request('model', '2026-08-01', '2026-08-09'), runtime)
+    ])
 
     expect(daily.status).toBe(200)
-    expect(aggregateCalls(runtime)).toBe(1)
+    expect(model.status).toBe(200)
+    expect(aggregateCalls(runtime)).toBe(2)
+    expect(loadUsageRecords).not.toHaveBeenCalled()
+    expect(loadEventsSince).toHaveBeenCalledTimes(1)
     const dailyBody = JSON.parse(daily.body) as {
       source?: string
       degraded?: boolean
@@ -52,10 +83,6 @@ describe('usageJsonResponse', () => {
       input_tokens: 5,
       turns: 1
     }))
-
-    const model = await usageJsonResponse(request('model', '2026-08-01', '2026-08-09'), runtime)
-
-    expect(model.status).toBe(200)
     const modelBody = JSON.parse(model.body) as {
       source?: string
       degraded?: boolean

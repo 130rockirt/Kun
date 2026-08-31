@@ -180,6 +180,60 @@ describe('loadUsageHistory provider attribution', () => {
     })
   })
 
+  it('bypasses every SQLite usage read in jsonl-only mode', async () => {
+    const source = makeSwitchedThreadSource()
+    source.sessionStore.loadEventsSince = vi.fn(async () => [
+      jsonlUsageEvent(1, 'turn-1', 1_000, 100)
+    ])
+
+    const records = await loadUsageHistory(source as never, {}, 'jsonl-only')
+
+    expect(records).toHaveLength(1)
+    expect(source.sessionStore.loadUsageRecords).not.toHaveBeenCalled()
+    expect(source.sessionStore.loadEventsSince).toHaveBeenCalledTimes(1)
+  })
+
+  it('shares one JSONL scan across concurrent ranges before filtering', async () => {
+    const source = makeSwitchedThreadSource()
+    source.sessionStore.loadEventsSince = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      return [
+        jsonlUsageEvent(1, 'turn-1', 1_000, 100),
+        jsonlUsageEvent(2, 'turn-2', 1_200, 140)
+      ]
+    })
+
+    const [first, second] = await Promise.all([
+      loadUsageHistory(source as never, {
+        fromInclusive: '2026-08-23T00:00:01.000Z',
+        toExclusive: '2026-08-23T00:00:02.000Z'
+      }, 'jsonl-only'),
+      loadUsageHistory(source as never, {
+        fromInclusive: '2026-08-23T00:00:02.000Z',
+        toExclusive: '2026-08-23T00:00:03.000Z'
+      }, 'jsonl-only')
+    ])
+
+    expect(first.map((record) => record.turnId)).toEqual(['turn-1'])
+    expect(second.map((record) => record.turnId)).toEqual(['turn-2'])
+    expect(source.sessionStore.loadUsageRecords).not.toHaveBeenCalled()
+    expect(source.sessionStore.loadEventsSince).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears a failed JSONL-only load so a later refresh can retry', async () => {
+    const source = makeSwitchedThreadSource()
+    source.sessionStore.loadEventsSince = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary JSONL read failure'))
+      .mockResolvedValueOnce([jsonlUsageEvent(1, 'turn-1', 1_000, 100)])
+
+    await expect(loadUsageHistory(source as never, {}, 'jsonl-only'))
+      .rejects.toThrow('temporary JSONL read failure')
+    await expect(loadUsageHistory(source as never, {}, 'jsonl-only'))
+      .resolves.toHaveLength(1)
+
+    expect(source.sessionStore.loadEventsSince).toHaveBeenCalledTimes(2)
+  })
+
   it('uses compatible thread reads in the JSONL fallback path too', async () => {
     const source = makeSwitchedThreadSource({
       loadUsageRecords: vi.fn(async () => {
