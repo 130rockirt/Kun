@@ -137,6 +137,25 @@ async function main() {
       captures.push(await capture({ electronApplication, page, evidenceRoot, scenario, theme: 'light', bounds: WIDE, name: scenario }))
     }
 
+    await capture({ electronApplication, page, evidenceRoot, scenario: 'unselected', theme: 'light', bounds: WIDE, name: 'interaction-unselected' })
+    await page.locator('[data-trajectory-row-key="assistant:1"]').click()
+    await page.locator('aside [data-trajectory-summary]').waitFor({ state: 'visible' })
+    const rowClickOpenedInspector = await page.locator('aside').isVisible()
+
+    await capture({ electronApplication, page, evidenceRoot, scenario: 'long', theme: 'light', bounds: WIDE, name: 'interaction-scroll' })
+    const scrollPane = page.locator('[data-trajectory-scroll]')
+    await scrollPane.evaluate((element) => { element.scrollTop = 0 })
+    const beforeScrollTop = await scrollPane.evaluate((element) => element.scrollTop)
+    const scrollBox = await scrollPane.boundingBox()
+    if (!scrollBox) throw new Error('Trajectory scroll pane has no pointer target')
+    await page.mouse.move(scrollBox.x + scrollBox.width * 0.6, scrollBox.y + scrollBox.height * 0.5)
+    await page.mouse.wheel(0, 480)
+    await page.waitForTimeout(150)
+    const afterScrollTop = await scrollPane.evaluate((element) => element.scrollTop)
+    if (afterScrollTop <= beforeScrollTop) {
+      throw new Error(`Trajectory wheel did not scroll the ledger: ${beforeScrollTop} -> ${afterScrollTop}`)
+    }
+
     await capture({ electronApplication, page, evidenceRoot, scenario: 'default', theme: 'light', bounds: WIDE, name: 'interaction-base' })
     const search = page.getByRole('searchbox')
     await search.fill('run_tests')
@@ -153,7 +172,15 @@ async function main() {
     if (!beforeWidth || !afterWidth || afterWidth <= beforeWidth) {
       throw new Error(`Inspector keyboard resize failed: ${beforeWidth} -> ${afterWidth}`)
     }
-    result = { ok: true, evidenceRoot, captures, localSearchRows: filteredRows, inspectorResize: { beforeWidth, afterWidth } }
+    result = {
+      ok: true,
+      evidenceRoot,
+      captures,
+      rowClickOpenedInspector,
+      wheelScroll: { beforeScrollTop, afterScrollTop },
+      localSearchRows: filteredRows,
+      inspectorResize: { beforeWidth, afterWidth }
+    }
   } catch (error) {
     primaryError = new Error(`${error instanceof Error ? error.stack ?? error.message : String(error)}${diagnostics(rendererOutput, electronOutput)}`)
   } finally {
@@ -189,7 +216,7 @@ async function capture({ electronApplication, page, evidenceRoot, scenario, them
   await page.waitForTimeout(100)
   await page.evaluate(async ({ nextScenario, nextTheme }) => {
     document.documentElement.dataset.theme = nextTheme
-    document.documentElement.style.setProperty('--trajectory-composer-height', '112px')
+    document.documentElement.style.setProperty('--trajectory-composer-height', '0px')
     const fixture = await import('/src/components/trajectory/TrajectoryHarnessSmokeFixture.tsx')
     fixture.mountTrajectoryHarnessSmokeFixture(nextScenario)
   }, { nextScenario: scenario, nextTheme: theme })
@@ -227,6 +254,8 @@ async function layoutSnapshot(page) {
       eventColumnWidth: Number.parseFloat(style('col:first-child', 'width') || '0'),
       tablePanePaddingBottom: Number.parseFloat(style('[data-trajectory-scroll]', 'padding-bottom') || '0'),
       composer: rect('[data-testid="trajectory-smoke-composer"]'),
+      composerVisibility: style('[data-testid="trajectory-smoke-composer"]', 'visibility'),
+      composerPointerEvents: style('[data-testid="trajectory-smoke-composer"]', 'pointer-events'),
       mountedRows: document.querySelectorAll('tbody tr[data-trajectory-row-key]').length
     }
   })
@@ -247,10 +276,13 @@ function assertGeometry(value, context) {
       exact(value.inspectorHeader?.height ?? null, 42, 'inspector header height')
       exact(value.inspectorTabs?.height ?? null, 34, 'inspector tabs height')
     }
-    exact(value.tablePanePaddingBottom, 128, 'composer clearance')
+    exact(value.tablePanePaddingBottom, 16, 'hidden composer clearance')
   }
   if (context.scenario === 'unselected' && value.inspector !== null) {
     throw new Error(`${context.name}: inspector opened before the user selected a record`)
+  }
+  if (value.composerVisibility !== 'hidden' || value.composerPointerEvents !== 'none') {
+    throw new Error(`${context.name}: hidden Composer still participates in layout or pointer hit-testing`)
   }
   if (context.bounds.width === TABLE_BREAKPOINT.width && value.eventColumnWidth > 51) {
     throw new Error(`${context.name}: compact Event column is ${value.eventColumnWidth}px`)

@@ -19,7 +19,7 @@ At wide widths the inspector docks at `clamp(320px, 38%, 440px)` and can be resi
 
 Trajectory opens with no selected record, leaving the ledger at full width. Selecting a ledger row, request boundary, or timing span opens the typed inspector; its Summary view presents status, hierarchy, usage, timing, and bounded previews rather than dumping the normalized wire record as JSON.
 
-The existing Composer floats over trajectory mode without being unmounted. A `ResizeObserver` publishes its live height, and the ledger and inspector reserve that height plus 16px so their final content stays reachable.
+The existing Composer remains mounted in trajectory mode so its draft/model state survives, but it is visually hidden, inert, and removed from pointer hit-testing. The ledger and inspector therefore use the full interaction surface with only 16px bottom clearance; returning to Chat restores the same Composer instance.
 
 ## Capture policy
 

@@ -189,16 +189,12 @@ export function WorkbenchChatStage({
   const composerDockRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const stack = mainStackRef.current
-    const composer = composerDockRef.current
-    if (!stack || !composer || !trajectoryOpen) return
-    const publish = (): void => {
-      stack.style.setProperty('--trajectory-composer-height', `${composer.offsetHeight}px`)
-    }
-    publish()
-    const observer = new ResizeObserver(publish)
-    observer.observe(composer)
+    if (!stack || !trajectoryOpen) return
+    // DSH keeps the Composer state resident while its Trajectory view owns the
+    // interaction surface. Remove the hidden seat from hit-testing and from
+    // the ledger's bottom clearance without unmounting the draft/model state.
+    stack.style.setProperty('--trajectory-composer-height', '0px')
     return () => {
-      observer.disconnect()
       stack.style.removeProperty('--trajectory-composer-height')
     }
   }, [trajectoryOpen])
@@ -379,9 +375,12 @@ export function WorkbenchChatStage({
           ) : null}
           <div
             ref={composerDockRef}
-            className={`ds-composer-dock ds-no-drag flex justify-center px-2 pt-0 sm:px-4 md:px-6 lg:px-8 ${trajectoryOpen ? 'absolute inset-x-0 bottom-0 z-20' : 'relative shrink-0'} ${
+            className={`ds-composer-dock ds-no-drag flex justify-center px-2 pt-0 sm:px-4 md:px-6 lg:px-8 ${trajectoryOpen ? 'pointer-events-none invisible absolute inset-x-0 bottom-0 z-20' : 'relative shrink-0'} ${
               emptyTaskLayout ? 'pb-0' : 'pb-3'
             }`}
+            aria-hidden={trajectoryOpen || undefined}
+            inert={trajectoryOpen || undefined}
+            data-trajectory-composer-hidden={trajectoryOpen || undefined}
             data-primary-floating-composer
             data-usage-history-boundary
           >

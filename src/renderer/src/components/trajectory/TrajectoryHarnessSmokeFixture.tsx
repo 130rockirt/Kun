@@ -53,10 +53,13 @@ export function mountTrajectoryHarnessSmokeFixture(
       />
       <div
         data-testid="trajectory-smoke-composer"
+        aria-hidden="true"
+        inert
         style={{
           position: 'absolute', zIndex: 20, right: '18%', bottom: 0, left: '18%', height: 112,
           border: '1px solid var(--ds-border-muted)', borderRadius: '18px 18px 0 0',
-          background: 'var(--ds-main)', boxShadow: '0 -8px 24px rgb(0 0 0 / 6%)'
+          background: 'var(--ds-main)', boxShadow: '0 -8px 24px rgb(0 0 0 / 6%)',
+          visibility: 'hidden', pointerEvents: 'none'
         }}
       />
     </div>
