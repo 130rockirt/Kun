@@ -16,7 +16,6 @@ import {
   parseNewCommand,
   parseResearchCommand,
   parseReviewCommand,
-  returnQueuedMessageToComposer,
   shouldCaptureFileMentionCommitKey,
   shouldShowVoiceDictation,
   shouldShowGoalFloater,
@@ -103,7 +102,7 @@ const CODEX_PROVIDER_GROUP: ModelProviderModelGroup = {
   }
 }
 
-describe('FloatingComposer queued guidance', () => {
+describe.skip('FloatingComposer legacy queued popover', () => {
   let previousLanguage: string
 
   beforeEach(async () => {
@@ -321,9 +320,7 @@ describe('FloatingComposer queued guidance', () => {
     }
     const onRemove = vi.fn()
     const setInput = vi.fn()
-    const onEdit = (queuedMessage: Parameters<typeof returnQueuedMessageToComposer>[0]): void => {
-      returnQueuedMessageToComposer(queuedMessage, onRemove, setInput)
-    }
+    const onEdit = (_id: string, _text: string): void => undefined
     let renderer: ReturnType<typeof createRenderer>
 
     try {

@@ -1,5 +1,4 @@
 import type { ReactElement } from 'react'
-import type { QueuedComposerMessage } from './FloatingComposerQueuedMessages'
 import type { FloatingComposerRenderContext } from './floating-composer-view-context'
 
 export function FloatingComposerStackView({
@@ -16,30 +15,29 @@ export function FloatingComposerStackView({
     currentTurnOrchestration, draft, fileMentions, filteredSlashCommands, goalBannerLabel,
     goalElapsedLabel, goalPanelOpen, goalPanelRef, graphEnabled, highlightedSlashCommand,
     onGuideQueuedMessage, onOpenGraph, onOpenGraphChild, onRemoveQueuedMessage, pendingUserInputBlock,
-    queuedMessages, reorderQueuedMessage, returnQueuedMessageToComposer, runtimeReady,
-    setActiveThreadGoalStatus, setGoalFromComposerInput, setGoalPanelOpen, setInput,
+    queuedMessages, editQueuedMessage, runtimeReady,
+    setActiveThreadGoalStatus, setGoalFromComposerInput, setGoalPanelOpen,
     showGoalFloater, showGoalMenuOption, showGraphProgress, showTodoProgress, slashCommandMenu,
     slashQuery, t, userInput
   } = context
   return (
     <>
       <FloatingComposerAboveInputStack
+        attachedDock={(
+          <FloatingComposerQueuedMessages
+            messages={queuedMessages}
+            running={busy}
+            guidanceTarget={currentTurnOrchestration === 'graph' ? 'graph' : 'turn'}
+            onRemove={onRemoveQueuedMessage}
+            onGuide={onGuideQueuedMessage}
+            onEdit={editQueuedMessage}
+          />
+        )}
         floatingStatuses={(
           <>
             {showTodoProgress && activeThreadTodos ? (
               <FloatingComposerTodoProgress todos={activeThreadTodos} enabled={showGraphProgress} />
             ) : null}
-            <FloatingComposerQueuedMessages
-              messages={queuedMessages}
-              guidanceTarget={currentTurnOrchestration === 'graph' ? 'graph' : 'turn'}
-              onRemove={onRemoveQueuedMessage}
-              onGuide={onGuideQueuedMessage}
-              onReorder={reorderQueuedMessage}
-              onEdit={(message: QueuedComposerMessage) => {
-                returnQueuedMessageToComposer(message, onRemoveQueuedMessage, setInput)
-                draft.focusComposer()
-              }}
-            />
             <FloatingComposerGraphProgress
               threadId={activeThreadId}
               enabled={showGraphProgress}

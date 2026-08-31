@@ -28,6 +28,18 @@ function processingSections(input: {
 }
 
 describe('deriveTurnSections', () => {
+  it('projects same-turn follow-up users as steering bubbles and excludes internal notices', () => {
+    const result = sections([
+      { kind: 'user', id: 'steer-1', turnId: 'turn-1', text: 'Use the compact logo' },
+      { kind: 'user', id: 'graph-notice', turnId: 'turn-1', text: 'internal', meta: { messageSource: 'graph_runtime' } },
+      { kind: 'assistant', id: 'answer', turnId: 'turn-1', text: 'Done' }
+    ])
+
+    expect(result.steeringUserBlocks.map((block) => block.id)).toEqual(['steer-1'])
+    expect(result.processBlocks).toEqual([])
+    expect(result.assistantContentBlocks.map((block) => block.id)).toEqual(['answer'])
+  })
+
   it('surfaces show_diagram metadata in its dedicated timeline section', () => {
     const result = sections([{
       kind: 'tool',

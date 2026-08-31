@@ -141,6 +141,7 @@ export function ConversationTurn({
   const {
     processBlocks,
     processTimelineBlocks,
+    steeringUserBlocks,
     assistantContentBlocks,
     runtimeErrorBlocks,
     runtimeErrorsBeforeFinalContent,
@@ -376,6 +377,14 @@ export function ConversationTurn({
 
       {chartBlocks.map((block) => (
         <ChartRenderer key={block.id} spec={block.spec} />
+      ))}
+
+      {steeringUserBlocks.map((block) => (
+        <MessageBubble
+          key={block.id}
+          block={block}
+          allowThreadActions={false}
+        />
       ))}
 
       {assistantContentBlocks.map((block) => (
