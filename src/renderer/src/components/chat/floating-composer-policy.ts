@@ -10,10 +10,8 @@ import type { QueuedComposerMessage } from './FloatingComposerQueuedMessages'
 import type { ComposerExecutionSettings } from './FloatingComposerExecutionPicker'
 import type { ComposerReasoningEffort } from './FloatingComposerModelPicker'
 import type { PendingUserInputBlock, ResolveUserInput } from './use-composer-user-input'
-import type {
-  ComposerTaskSurface,
-  DesignTaskComposerProfile
-} from './FloatingComposerTaskProfile'
+import type { DesignTaskComposerProfile } from './FloatingComposerTaskProfile'
+import type { ComposerTaskSurface } from './FloatingComposerTaskSurfacePicker'
 
 export function shouldShowVoiceDictation(
   speechToText: KunSpeechToTextSettingsV1 | null | undefined,
@@ -112,7 +110,7 @@ export type FloatingComposerProps = {
   /** Next-turn intent. Undefined hides the control on compact/non-Code surfaces. */
   taskSurface?: ComposerTaskSurface
   taskSurfaceLocked?: boolean
-  /** Gives an empty conversation a larger composer and moves its intent selector into the hero. */
+  /** Gives an empty conversation a larger composer; task intent remains in its toolbar. */
   emptyTaskLayout?: boolean
   designTaskProfile?: DesignTaskComposerProfile
   designProfileLocked?: boolean

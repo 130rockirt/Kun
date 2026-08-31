@@ -4,7 +4,6 @@ import type { ChatBlock, RuntimeConnectionStatus } from '../../agent/types'
 import type { RegisteredContribution } from '../../extensions/contribution-registry'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import type { GuiPlanToolMeta } from '../../plan/plan-tool'
-import type { EmptyTaskSurfaceControl } from './message-timeline-empty'
 import type { OpenChildThreadHandler } from './SubagentCallCard'
 import type {
   GeneratedDocumentArtifact,
@@ -21,7 +20,6 @@ export type MessageTimelineProps = {
   onRetryConnection: () => void
   onOpenSettings: () => void
   onSelectSuggestion?: (prompt: string) => void
-  taskSurfaceControl?: EmptyTaskSurfaceControl
   focusModeEnabled?: boolean
   devPreviewCard?: ReactElement | null
   planActionsBusy?: boolean

@@ -15,7 +15,7 @@ export function FloatingComposerSurfaceView({
   const {
     FileText, FloatingComposerAgentPicker, FloatingComposerAttachments,
     FloatingComposerContextCapacity, FloatingComposerExecutionPicker, FloatingComposerModelPicker,
-    FloatingComposerTaskProfile,
+    FloatingComposerTaskProfile, FloatingComposerTaskSurfacePicker,
     Folder, GitBranchPicker, ListTodo, Loader2, Mic, Plus, Send, Share2, Sparkles,
     Square, Target, VoiceRecordingStrip, WorkspaceProjectPicker, X, activeThreadGoal,
     activeThreadId, attachmentUploadEnabled, attachmentUploadError, attachments, busy,
@@ -42,21 +42,17 @@ export function FloatingComposerSurfaceView({
   const documentQuoteAttached = contextChips.some((chip: { kind: string }) => chip.kind === 'document-quote')
   return (
     <>
-        {!compact && !emptyTaskLayout && taskSurface && designTaskProfile && (
-          !taskSurfaceLocked || taskSurface === 'design'
-        ) ? (
+        {!compact && !emptyTaskLayout && taskSurface === 'design' && designTaskProfile ? (
           <div className="ds-composer-task-controls ds-no-drag flex min-h-9 min-w-0 flex-wrap items-center gap-2 px-3 pb-1">
             <FloatingComposerTaskProfile
-              surface={taskSurface}
+              surface="design"
               locked={taskSurfaceLocked === true}
               profileLocked={designProfileLocked === true}
-              showSurfaceSelector={!taskSurfaceLocked}
               disabled={!canCompose || busy}
               profile={designTaskProfile}
               imageGenerationEnabled={imageGenerationEnabled}
               imageGenerationAvailable={imageGenerationAvailable === true}
               imageGenerationReason={imageGenerationReason}
-              onSurfaceChange={onTaskSurfaceChange}
               onProfileChange={onDesignTaskProfileChange}
               onConfigureImageGeneration={onConfigureImageGeneration}
             />
@@ -94,8 +90,6 @@ export function FloatingComposerSurfaceView({
                 surface="design"
                 locked={taskSurfaceLocked === true}
                 profileLocked={designProfileLocked === true}
-                showSurfaceSelector={false}
-                variant="summary"
                 disabled={!canCompose || busy}
                 profile={designTaskProfile}
                 imageGenerationEnabled={imageGenerationEnabled}
@@ -234,6 +228,13 @@ export function FloatingComposerSurfaceView({
                     >
                       <Plus className="h-5 w-5" strokeWidth={1.8} />
                     </button>
+                    {taskSurface && onTaskSurfaceChange && !taskSurfaceLocked ? (
+                      <FloatingComposerTaskSurfacePicker
+                        surface={taskSurface}
+                        disabled={!canCompose || busy}
+                        onSurfaceChange={onTaskSurfaceChange}
+                      />
+                    ) : null}
                     {showCodeExecutionControls && mode === 'plan' ? (
                       <button
                         type="button"

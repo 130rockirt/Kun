@@ -31,7 +31,7 @@ import {
 } from '../../extensions/contribution-registry'
 import { readBrowserStorageItem, removeBrowserStorageItem, writeBrowserStorageItem } from '../../lib/browser-storage'
 import type { useWorkbenchChatStoreState } from './useWorkbenchChatStoreState'
-import type { ComposerTaskSurface } from '../chat/FloatingComposerTaskProfile'
+import type { ComposerTaskSurface } from '../chat/FloatingComposerTaskSurfacePicker'
 
 type WorkbenchState = ReturnType<typeof useWorkbenchChatStoreState>
 const extensionSurfaceLayoutStorage = {

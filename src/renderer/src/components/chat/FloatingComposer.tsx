@@ -142,6 +142,7 @@ import type { FloatingComposerRenderContext } from './floating-composer-view-con
 import { FloatingComposerStackView } from './FloatingComposerStackView'
 import { FloatingComposerSurfaceView } from './FloatingComposerSurfaceView'
 import { FloatingComposerTaskProfile } from './FloatingComposerTaskProfile'
+import { FloatingComposerTaskSurfacePicker } from './FloatingComposerTaskSurfacePicker'
 export * from './floating-composer-public'
 
 export function FloatingComposer({
@@ -629,7 +630,7 @@ export function FloatingComposer({
     ...actionContext,
     ...composerActions,
     BackgroundShellOverlay, BarChart3, FileText, FloatingComposerAboveInputStack, FloatingComposerAgentPicker, FloatingComposerAttachments, FloatingComposerContextCapacity, FloatingComposerExecutionPicker,
-    FloatingComposerFileMentionMenu, FloatingComposerGraphProgress, FloatingComposerModelPicker, FloatingComposerQueuedMessages, FloatingComposerSlashCommandMenu, FloatingComposerTaskProfile, FloatingComposerTodoProgress, FloatingComposerUsageHistory, FloatingComposerUserInputPanel,
+    FloatingComposerFileMentionMenu, FloatingComposerGraphProgress, FloatingComposerModelPicker, FloatingComposerQueuedMessages, FloatingComposerSlashCommandMenu, FloatingComposerTaskProfile, FloatingComposerTaskSurfacePicker, FloatingComposerTodoProgress, FloatingComposerUsageHistory, FloatingComposerUserInputPanel,
     FloatingComposerActionMenu,
     Folder, GitBranchPicker, ImagePlus, ListTodo, Loader2, Mic, Monitor, Paperclip,
     PauseCircle, Pencil, PlayCircle, Plus, Puzzle, Send, Share2, Sparkles,

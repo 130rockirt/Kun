@@ -334,11 +334,6 @@ export function WorkbenchChatStage({
               onRetryConnection={onRetryConnection}
               onOpenSettings={onOpenSettings}
               onSelectSuggestion={onSelectSuggestion}
-              taskSurfaceControl={composerProps.taskSurface ? {
-                surface: composerProps.taskSurface,
-                locked: composerProps.taskSurfaceLocked,
-                onChange: composerProps.onTaskSurfaceChange
-              } : undefined}
               focusModeEnabled={focusModeEnabled}
               planActionsBusy={planActionsBusy}
               graphEnabled={graphEnabled}

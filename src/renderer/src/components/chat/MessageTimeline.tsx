@@ -84,7 +84,6 @@ export function MessageTimeline({
   onRetryConnection,
   onOpenSettings,
   onSelectSuggestion,
-  taskSurfaceControl,
   focusModeEnabled = false,
   devPreviewCard,
   planActionsBusy,
@@ -441,7 +440,6 @@ export function MessageTimeline({
             onRetry={onRetryConnection}
             onOpenSettings={onOpenSettings}
             onSelectSuggestion={onSelectSuggestion}
-            taskSurfaceControl={taskSurfaceControl}
             focusModeEnabled={focusModeEnabled}
           />
         ) : null}
