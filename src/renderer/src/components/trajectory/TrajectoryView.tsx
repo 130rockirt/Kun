@@ -73,7 +73,7 @@ export function TrajectoryView({
   const toggleAllCalls = (): void => update(threadId, { collapsedCallIds: allCallsCollapsed ? [] : callAssistants.map((cell) => cell.id) })
 
   return (
-    <div className={styles.root} data-testid="trajectory-view" data-conversation-composer-overlay="">
+    <div className={`${styles.root} ds-no-drag`} data-testid="trajectory-view" data-conversation-composer-overlay="">
       <TrajectoryToolbar
         actualDuration={actualDuration}
         allTurnsCollapsed={allTurnsCollapsed}

@@ -19,6 +19,8 @@ At wide widths the inspector docks at `clamp(320px, 38%, 440px)` and can be resi
 
 Trajectory opens with no selected record, leaving the ledger at full width. Selecting a ledger row, request boundary, or timing span opens the typed inspector; its Summary view presents status, hierarchy, usage, timing, and bounded previews rather than dumping the normalized wire record as JSON.
 
+The entire trajectory surface explicitly opts out of Electron's draggable window region. This is required because the surrounding Workbench shell is draggable; without the `no-drag` boundary Chromium consumes ledger clicks and wheel gestures as title-bar interaction.
+
 The existing Composer remains mounted in trajectory mode so its draft/model state survives, but it is visually hidden, inert, and removed from pointer hit-testing. The ledger and inspector therefore use the full interaction surface with only 16px bottom clearance; returning to Chat restores the same Composer instance.
 
 ## Capture policy

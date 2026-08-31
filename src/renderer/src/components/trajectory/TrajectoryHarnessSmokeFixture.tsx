@@ -36,6 +36,7 @@ export function mountTrajectoryHarnessSmokeFixture(
   Object.assign(host.style, {
     position: 'fixed', inset: '0', display: 'flex', background: 'var(--ds-main)'
   })
+  host.style.setProperty('-webkit-app-region', 'drag')
   document.body.append(host)
   const records = scenarioRecords(scenario)
   const selected = scenario === 'unselected'
