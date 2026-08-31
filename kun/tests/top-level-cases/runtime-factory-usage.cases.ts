@@ -438,10 +438,6 @@ describe('runtime factory usage carryover', () => {
 
       try {
         const recorder = runtime.llmDebug
-        if (name === 'disabled') {
-          expect(recorder).toBeUndefined()
-          continue
-        }
         expect(recorder).toBeDefined()
         if (!recorder) throw new Error('expected Agent Perspective recorder')
         const thread = await runtime.threadService.create({
@@ -456,13 +452,9 @@ describe('runtime factory usage carryover', () => {
           provider: 'compat',
           model: 'model-before'
         })
-        if (!expectedCapture) {
-          expect(round).toBeUndefined()
-          await expect(recorder.listThread(thread.id)).resolves.toMatchObject({ records: [] })
-          continue
-        }
         expect(round).toBeDefined()
-        if (!round) throw new Error('expected enabled thread trace')
+        expect(round?.captureContent).toBe(expectedCapture)
+        if (!round) throw new Error('expected trajectory metadata round')
         recorder.beginHttpAttempt(round, {
           endpointFormat: 'chat_completions',
           attempt: 1,
@@ -477,7 +469,8 @@ describe('runtime factory usage carryover', () => {
             provider: 'compat',
             model: 'model-before',
             attempt: 1,
-            endpointFormat: 'chat_completions'
+            endpointFormat: 'chat_completions',
+            captureMode: expectedCapture ? 'full' : 'metadata'
           })]
         })
       } finally {

@@ -98,16 +98,14 @@ export async function createRuntimeCore(
   const nowIso = () => new Date().toISOString()
   const allocateSeq = (threadId: string) =>
     sessionStore.allocateEventSeq?.(threadId) ?? eventBus.allocateSeq(threadId)
-  // Agent Perspective is a visible runtime capability, so capture is available
-  // by default. Advanced configurations can explicitly opt out when local
-  // sensitive-content retention or request-path overhead is undesirable.
-  const llmDebug = llmDebugCaptureEnabled(activeOptions)
-    ? new LlmDebugRecorder({
-        dataDir: activeOptions.dataDir,
-        shouldCapture: async (threadId) =>
-          (await threadStore.get(threadId))?.modelRequestCaptureEnabled === true
-      })
-    : undefined
+  // Compact lifecycle metadata is always available. The legacy llmDebug
+  // facility flag and per-thread switch now gate optional prompt/wire content.
+  const llmDebug = new LlmDebugRecorder({
+    dataDir: activeOptions.dataDir,
+    shouldCapture: async (threadId) =>
+      llmDebugCaptureEnabled(activeOptions) &&
+      (await threadStore.get(threadId))?.modelRequestCaptureEnabled === true
+  })
   const agentObservability = createAgentObservabilityRecorder({
     config: activeOptions.observability,
     dataDir: activeOptions.dataDir

@@ -116,12 +116,12 @@ export function useWorkbenchRightTools({
 
   useEffect(() => {
     const unavailable: RightPanelContributionId[] = []
+    unavailable.push(BUILTIN_RIGHT_PANEL_IDS.agentPerspective)
     if (!activeGuiPlan) unavailable.push(BUILTIN_RIGHT_PANEL_IDS.plan)
     if (!fileTreeWorkspaceRoot) unavailable.push(BUILTIN_RIGHT_PANEL_IDS.files)
     if (!filePreviewTarget) unavailable.push(BUILTIN_RIGHT_PANEL_IDS.file)
     if (!activeThreadId) {
       unavailable.push(BUILTIN_RIGHT_PANEL_IDS.sideConversations)
-      unavailable.push(BUILTIN_RIGHT_PANEL_IDS.agentPerspective)
     }
     for (const id of unavailable) {
       if (codeRightTabs.tabs.includes(id)) closeRightPanelTab(id)

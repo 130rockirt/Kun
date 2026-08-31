@@ -107,6 +107,7 @@
     "@larksuiteoapi/node-sdk": "^1.71.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@napi-rs/canvas": "^0.1.100",
+    "@tanstack/react-virtual": "3.14.10",
     "@tencent-weixin/openclaw-weixin": "2.4.3",
     "@tesseract.js-data/eng": "^1.0.0",
     "@trycua/cua-driver": "0.22.2",

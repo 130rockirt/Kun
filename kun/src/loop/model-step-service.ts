@@ -447,7 +447,10 @@ export class ModelStepService extends ModelStepPreparationService {
       fallbackCompactionAttempted,
       fallbackCompactionApplied
     })
-    const { request, rawInputTokens, sentInputTokens, tokenEconomy } = composedRequest
+    const { request: composedModelRequest, rawInputTokens, sentInputTokens, tokenEconomy } = composedRequest
+    const request = { ...composedModelRequest, trace: {
+      roundId: this.deps.ids.next('round_model'), step: stepIndex, purpose: 'assistant' as const
+    } }
     const requestContext = estimateModelRequestInputTokenBreakdown(request, {
       skillContextInstructions
     })

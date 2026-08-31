@@ -567,6 +567,18 @@ describe('app-ipc-schemas runtime', () => {
     }).path).toBe('/v1/debug/llm-rounds')
   })
 
+  it('accepts read-only conversation trajectory endpoints', () => {
+    for (const path of [
+      '/v1/threads/thr_1/trajectory?filter=tool&q=read',
+      '/v1/threads/thr_1/trajectory/summary',
+      '/v1/threads/thr_1/trajectory/request%3Aabc/detail?section=timing'
+    ]) {
+      expect(runtimeRequestPayloadSchema.parse({ path, method: 'GET' }).path).toBe(path)
+      expect(() => runtimeRequestPayloadSchema.parse({ path, method: 'POST' }))
+        .toThrow(/runtime request path is not allowed/)
+    }
+  })
+
   it('rejects runtime request paths outside the modeled Kun API surface', () => {
     expect(() =>
       runtimeRequestPayloadSchema.parse({

@@ -249,7 +249,6 @@ export function WorkbenchContent({ context }: { context: Context }): ReactElemen
             sideChatRunningCount: currentSideRunningCount,
             sideChatOpen: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.sideConversations,
             sideChatEnabled: runtimeConnection === 'ready' && Boolean(activeThreadId),
-            agentPerspectiveEnabled: Boolean(activeThreadId),
             fileTreeOpen: rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.files,
             fileTreeEnabled: Boolean(fileTreeWorkspaceRoot),
             onToggleFileTree: () => openCodeRightTool(BUILTIN_RIGHT_PANEL_IDS.files),

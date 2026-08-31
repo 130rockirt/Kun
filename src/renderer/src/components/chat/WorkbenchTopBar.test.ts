@@ -54,6 +54,21 @@ describe('WorkbenchTopActions', () => {
     )
   })
 
+  it('renders the conversation trajectory toggle and live status before external actions', () => {
+    const html = renderToStaticMarkup(createElement(WorkbenchTopActions, {
+      trajectoryEnabled: true,
+      trajectoryOpen: true,
+      trajectoryRunning: true,
+      onToggleTrajectory: vi.fn(),
+      onToggleTerminal: vi.fn()
+    }))
+
+    expect(html).toContain('aria-label="View this conversation&#x27;s model and tool trajectory"')
+    expect(html).toContain('aria-pressed="true"')
+    expect(html).toContain('animate-pulse rounded-full bg-violet-500')
+    expect(html.indexOf('model and tool trajectory')).toBeLessThan(html.indexOf('aria-label="Terminal"'))
+  })
+
   it('shows the complete Chinese restart scope in the wrapped tooltip', async () => {
     await i18n.changeLanguage('zh')
     const html = renderToStaticMarkup(createElement(WorkbenchTopActions, {}))
@@ -238,7 +253,6 @@ describe('WorkbenchSideRail', () => {
 
     for (const label of [
       'Open branch conversation',
-      'Agent Perspective',
       'Plan',
       'Changes',
       'Preview',
@@ -307,18 +321,12 @@ describe('WorkbenchSideRail', () => {
     expect(enabledHtml).toContain('data-tooltip="Graph"')
   })
 
-  it('disables Agent Perspective until a Code conversation is selected', () => {
-    let renderer!: ReturnType<typeof createRenderer>
-    act(() => {
-      renderer = createRenderer(createElement(WorkbenchSideRail, {
-        rightPanelMode: null,
-        onToggleRightPanelMode: vi.fn(),
-        agentPerspectiveEnabled: false
-      }))
-    })
-    const button = renderer.root.findByProps({ 'aria-label': 'Agent Perspective' })
-    expect(button.props.disabled).toBe(true)
-    act(() => renderer.unmount())
+  it('does not expose the migrated Agent Perspective right-rail entry', () => {
+    const html = renderToStaticMarkup(createElement(WorkbenchSideRail, {
+      rightPanelMode: null,
+      onToggleRightPanelMode: vi.fn()
+    }))
+    expect(html).not.toContain('Agent Perspective')
   })
 
   it('keeps the branch rail launcher free of a numeric count badge', () => {

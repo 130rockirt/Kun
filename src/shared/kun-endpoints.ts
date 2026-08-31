@@ -351,6 +351,20 @@ export function kunThreadModelRequestsPath(threadId: string): string {
   return `${kunThreadPath(threadId)}/model-requests`
 }
 
+export const KUN_THREAD_TRAJECTORY_TEMPLATE = '/v1/threads/{id}/trajectory'
+export const KUN_THREAD_TRAJECTORY_SUMMARY_TEMPLATE = '/v1/threads/{id}/trajectory/summary'
+export const KUN_THREAD_TRAJECTORY_DETAIL_TEMPLATE =
+  '/v1/threads/{id}/trajectory/{id}/detail'
+export function kunThreadTrajectoryPath(threadId: string): string {
+  return `${kunThreadPath(threadId)}/trajectory`
+}
+export function kunThreadTrajectorySummaryPath(threadId: string): string {
+  return `${kunThreadTrajectoryPath(threadId)}/summary`
+}
+export function kunThreadTrajectoryDetailPath(threadId: string, recordId: string): string {
+  return `${kunThreadTrajectoryPath(threadId)}/${encodeURIComponent(recordId)}/detail`
+}
+
 export const KUN_APPROVAL_TEMPLATE = '/v1/approvals/{id}'
 export function kunApprovalPath(approvalId: string): string {
   return `/v1/approvals/${encodeURIComponent(approvalId)}`

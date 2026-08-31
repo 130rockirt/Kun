@@ -31,20 +31,24 @@ const DEFAULT_MAX_CACHED_TRACE_THREADS = 64
 /** Private, append-only, per-thread JSONL storage for completed model transports. */
 export class ModelRequestTraceStore {
   private readonly root: string
+  private readonly legacyRoot: string
   private readonly writes = new Map<string, Promise<void>>()
   private readonly recent = new Map<string, { records: ModelRequestTraceRecord[]; hasMore: boolean }>()
   private readonly recentLoads = new Map<string, Promise<void>>()
   private readonly pendingRecent = new Map<string, ModelRequestTraceRecord[]>()
   private readonly cacheLru = new Map<string, true>()
   private readonly warningSet = new Set<string>()
-  private readonly retention: ModelRequestTraceRetention
+  private readonly retention?: ModelRequestTraceRetention
   private readonly maxCachedThreads: number
   private writeTail: Promise<void> = Promise.resolve()
   private ready: Promise<void> | undefined
 
   constructor(dataDir: string, options: ModelRequestTraceStoreOptions = {}) {
-    this.root = join(dataDir, 'observability', 'model-http')
-    this.retention = new ModelRequestTraceRetention(this.root, options)
+    this.root = join(dataDir, 'observability', 'trajectory', 'records')
+    this.legacyRoot = join(dataDir, 'observability', 'model-http')
+    if (hasExplicitRetention(options)) {
+      this.retention = new ModelRequestTraceRetention(this.root, options)
+    }
     this.maxCachedThreads = normalizeCachedThreadLimit(options.maxCachedThreads)
   }
 
@@ -60,7 +64,7 @@ export class ModelRequestTraceStore {
           await appendFile(path, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 })
           await applyPosixMode(path, 0o600)
           this.rememberRecent(threadId, record)
-          if (await this.retention.afterAppend(path)) this.invalidateRecentCaches()
+          if (await this.retention?.afterAppend(path)) this.invalidateRecentCaches()
         } catch (error) {
           this.rememberWarning(classifyTracePersistenceError(error))
         }
@@ -100,9 +104,8 @@ export class ModelRequestTraceStore {
     options: { limit: number; cursor?: string }
   ): Promise<ModelRequestTraceStorePage> {
     const before = decodeCursor(options.cursor)
-    const retained: ModelRequestTraceRecord[] = []
-    const path = this.pathForThread(threadId)
-    try {
+    const retainedById = new Map<string, ModelRequestTraceRecord>()
+    for (const path of this.pathsForThread(threadId)) try {
       const input = createReadStream(path, { encoding: 'utf8' })
       const lines = createInterface({ input, crlfDelay: Infinity })
       for await (const line of lines) {
@@ -120,13 +123,14 @@ export class ModelRequestTraceStore {
           continue
         }
         if (before && compareTraceKey(traceKey(parsed.data), before) >= 0) continue
-        retained.push(parsed.data)
-        if (retained.length > options.limit + 1) retained.shift()
+        retainedById.set(parsed.data.id, parsed.data)
       }
     } catch (error) {
       if (!isMissingFileError(error)) this.rememberWarning(`trace read failed: ${safeError(error)}`)
     }
-    retained.sort((left, right) => compareTraceKey(traceKey(right), traceKey(left)))
+    const retained = [...retainedById.values()]
+      .sort((left, right) => compareTraceKey(traceKey(right), traceKey(left)))
+      .slice(0, options.limit + 1)
     const hasMore = retained.length > options.limit
     const records = retained.slice(0, options.limit)
     return {
@@ -143,7 +147,7 @@ export class ModelRequestTraceStore {
     this.pendingRecent.delete(threadId)
     this.cacheLru.delete(threadId)
     try {
-      await rm(this.pathForThread(threadId), { force: true })
+      await Promise.all(this.pathsForThread(threadId).map((path) => rm(path, { force: true })))
     } catch (error) {
       this.rememberWarning(`trace deletion failed: ${safeError(error)}`)
     }
@@ -216,8 +220,16 @@ export class ModelRequestTraceStore {
   }
 
   private pathForThread(threadId: string): string {
+    return this.pathInRoot(this.root, threadId)
+  }
+
+  private pathsForThread(threadId: string): string[] {
+    return [this.pathInRoot(this.legacyRoot, threadId), this.pathInRoot(this.root, threadId)]
+  }
+
+  private pathInRoot(root: string, threadId: string): string {
     const name = Buffer.from(threadId, 'utf8').toString('base64url') || 'empty'
-    return join(this.root, `${name}.jsonl`)
+    return join(root, `${name}.jsonl`)
   }
 
   private touchCacheThread(threadId: string): void {
@@ -287,6 +299,14 @@ function normalizeCachedThreadLimit(value: number | undefined): number {
     return DEFAULT_MAX_CACHED_TRACE_THREADS
   }
   return Math.max(1, Math.floor(value))
+}
+
+function hasExplicitRetention(options: ModelRequestTraceStoreOptions): boolean {
+  return options.maxBytesPerThread !== undefined ||
+    options.maxTotalBytes !== undefined ||
+    options.maxAgeMs !== undefined ||
+    options.maintenanceIntervalMs !== undefined ||
+    options.now !== undefined
 }
 
 function isMissingFileError(error: unknown): boolean {

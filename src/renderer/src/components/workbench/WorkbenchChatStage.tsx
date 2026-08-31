@@ -36,6 +36,9 @@ import type {
   GeneratedDocumentArtifact,
   GeneratedDocumentCollection
 } from '../chat/generated-document-artifacts'
+import { trajectoryUiState, useTrajectoryUiStore } from '../../store/trajectory-ui-store'
+import { useTrajectoryData } from '../trajectory/useTrajectoryData'
+import { TrajectoryView } from '../trajectory/TrajectoryView'
 
 const TerminalPanel = lazy(() =>
   import('../terminal/TerminalPanel').then((module) => ({ default: module.TerminalPanel }))
@@ -169,6 +172,17 @@ export function WorkbenchChatStage({
   const { t } = useTranslation('common')
   const threadLoadingId = useChatStore((state) => state.threadLoadingId)
   const threadRefreshingId = useChatStore((state) => state.threadRefreshingId)
+  const trajectoryByThread = useTrajectoryUiStore((state) => state.byThread)
+  const updateTrajectoryUi = useTrajectoryUiStore((state) => state.update)
+  const trajectoryUi = trajectoryUiState(trajectoryByThread, activeThreadId)
+  const trajectoryOpen = trajectoryUi.view === 'trajectory' && Boolean(activeThreadId)
+  const trajectoryData = useTrajectoryData({
+    threadId: activeThreadId,
+    visible: trajectoryOpen,
+    threadRunning: busy,
+    filter: trajectoryUi.filter,
+    query: trajectoryUi.query
+  })
   const effectiveConversationDropWorkspaceRoot = normalizeWorkspaceRoot(conversationDropWorkspaceRoot)
   const canComposeForConversationDrop =
     composerProps.fileReferenceEnabled === true &&
@@ -260,6 +274,14 @@ export function WorkbenchChatStage({
                 )
               ) : null}
               <WorkbenchTopActions
+                trajectoryEnabled={Boolean(activeThreadId)}
+                trajectoryOpen={trajectoryOpen}
+                trajectoryRunning={trajectoryData.summary.runningCount > 0}
+                trajectoryFailed={trajectoryData.summary.lastStatus === 'failed'}
+                onToggleTrajectory={() => {
+                  if (!activeThreadId) return
+                  updateTrajectoryUi(activeThreadId, { view: trajectoryOpen ? 'chat' : 'trajectory' })
+                }}
                 terminalOpen={terminalOpen}
                 onToggleTerminal={onToggleTerminal}
                 rightWorkspaceExpanded={rightWorkspaceExpanded}
@@ -280,7 +302,7 @@ export function WorkbenchChatStage({
           }`}
         >
           <ConversationFileDropZone
-            className={`flex min-h-0 min-w-0 flex-col ${emptyTaskLayout ? 'flex-none' : 'flex-1'}`}
+            className={`${trajectoryOpen ? 'hidden' : 'flex'} min-h-0 min-w-0 flex-col ${emptyTaskLayout ? 'flex-none' : 'flex-1'}`}
             options={conversationFileDropOptions}
           >
             <LazyMessageTimeline
@@ -330,6 +352,9 @@ export function WorkbenchChatStage({
             {uiModeCameosEnabled && !focusModeEnabled && !emptyTaskLayout ? <IkunCameoLayer /> : null}
             {!focusModeEnabled ? <KunCelebrationLayer active={busy} suppressed={Boolean(runtimeError)} /> : null}
           </ConversationFileDropZone>
+          {trajectoryOpen && activeThreadId ? (
+            <TrajectoryView threadId={activeThreadId} data={trajectoryData} />
+          ) : null}
           <div
             className={`ds-composer-dock ds-no-drag relative flex shrink-0 justify-center px-2 pt-0 sm:px-4 md:px-6 lg:px-8 ${
               emptyTaskLayout ? 'pb-0' : 'pb-3'

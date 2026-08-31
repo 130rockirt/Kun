@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -56,7 +56,7 @@ describe('ModelRequestTraceStore', () => {
     const second = await store.list('thread-1', { limit: 2, cursor: first.nextCursor })
     expect(second.records.map((item) => item.id)).toEqual(['trace-1'])
 
-    const root = join(dataDir, 'observability', 'model-http')
+    const root = join(dataDir, 'observability', 'trajectory', 'records')
     const files = await import('node:fs/promises').then((fs) => fs.readdir(root))
     expect(files).toHaveLength(1)
     if (process.platform !== 'win32') {
@@ -71,7 +71,7 @@ describe('ModelRequestTraceStore', () => {
     const store = new ModelRequestTraceStore(dataDir)
     await store.append(record('trace-1', '2026-01-01T00:00:01.000Z'))
     await store.append(record('other', '2026-01-01T00:00:01.000Z', 'thread-2'))
-    const root = join(dataDir, 'observability', 'model-http')
+    const root = join(dataDir, 'observability', 'trajectory', 'records')
     const file = (await import('node:fs/promises').then((fs) => fs.readdir(root)))
       .find((name) => name === `${Buffer.from('thread-1').toString('base64url')}.jsonl`)!
     await appendFile(join(root, file), '{"broken":\n')
@@ -104,6 +104,20 @@ describe('ModelRequestTraceStore', () => {
     expect(page.records[1].toolCatalog).toBeUndefined()
   })
 
+  it('reads legacy schema-v1 files without rewriting them', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kun-model-traces-legacy-'))
+    cleanup.push(dataDir)
+    const legacyRoot = join(dataDir, 'observability', 'model-http')
+    await mkdir(legacyRoot, { recursive: true })
+    const legacy = record('legacy-trace', '2026-01-01T00:00:01.000Z')
+    const legacyPath = join(legacyRoot, `${Buffer.from('thread-1').toString('base64url')}.jsonl`)
+    await writeFile(legacyPath, `${JSON.stringify(legacy)}\n`)
+
+    const store = new ModelRequestTraceStore(dataDir)
+    expect((await store.list('thread-1')).records).toContainEqual(legacy)
+    expect(await readFile(legacyPath, 'utf8')).toBe(`${JSON.stringify(legacy)}\n`)
+  })
+
   it('serves repeated latest-page reads from the tail cache and keeps it current on append', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'kun-model-traces-'))
     cleanup.push(dataDir)
@@ -115,7 +129,7 @@ describe('ModelRequestTraceStore', () => {
       warnings: []
     })
 
-    const root = join(dataDir, 'observability', 'model-http')
+    const root = join(dataDir, 'observability', 'trajectory', 'records')
     const path = join(root, `${Buffer.from('thread-1').toString('base64url')}.jsonl`)
     await appendFile(path, '{"malformed-after-cache":\n')
     await store.append(record('trace-2', '2026-01-01T00:00:02.000Z'))
@@ -149,7 +163,8 @@ describe('ModelRequestTraceStore', () => {
     const path = join(
       dataDir,
       'observability',
-      'model-http',
+      'trajectory',
+      'records',
       `${Buffer.from('thread-1').toString('base64url')}.jsonl`
     )
     expect((await stat(path)).size).toBeLessThanOrEqual(maxBytesPerThread)
@@ -175,7 +190,7 @@ describe('ModelRequestTraceStore', () => {
     for (const threadId of ['thread-1', 'thread-2', 'thread-3']) {
       expect((await store.list(threadId)).records.map((item) => item.id)).toEqual(['trace-2'])
     }
-    const root = join(dataDir, 'observability', 'model-http')
+    const root = join(dataDir, 'observability', 'trajectory', 'records')
     const sizes = await Promise.all((await readdir(root)).map(async (name) => (await stat(join(root, name))).size))
     expect(sizes.reduce((sum, size) => sum + size, 0)).toBeLessThanOrEqual(maxTotalBytes)
   })
@@ -191,7 +206,8 @@ describe('ModelRequestTraceStore', () => {
     const path = join(
       dataDir,
       'observability',
-      'model-http',
+      'trajectory',
+      'records',
       `${Buffer.from('thread-1').toString('base64url')}.jsonl`
     )
     await appendFile(path, '{"malformed-after-eviction":\n')

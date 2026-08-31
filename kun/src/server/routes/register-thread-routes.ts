@@ -51,6 +51,11 @@ import { usageJsonResponse } from './usage.js'
 import { listProviderQuotas } from './provider-quotas.js'
 import { llmDebugRoundsResponse } from './debug-llm.js'
 import { modelRequestsResponse } from './model-requests.js'
+import {
+  trajectoryDetailResponse,
+  trajectoryPageResponse,
+  trajectorySummaryResponse
+} from './trajectory.js'
 import { getThreadSummary } from './thread-summary.js'
 import { threadActivityResponse } from './thread-activity.js'
 import { jsonResponse } from '../response.js'
@@ -160,6 +165,18 @@ export function registerThreadRoutes(
   router.add('GET', '/v1/threads/:id/model-requests', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return modelRequestsResponse(runtime, ctx.params.id, request)
+  })
+  router.add('GET', '/v1/threads/:id/trajectory', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return trajectoryPageResponse(runtime, ctx.params.id, request)
+  })
+  router.add('GET', '/v1/threads/:id/trajectory/summary', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return trajectorySummaryResponse(runtime, ctx.params.id)
+  })
+  router.add('GET', '/v1/threads/:id/trajectory/:recordId/detail', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return trajectoryDetailResponse(runtime, ctx.params.id, ctx.params.recordId, request)
   })
   router.add('PATCH', '/v1/threads/:id', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
