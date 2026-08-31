@@ -10,6 +10,7 @@ import {
   ManagerRemoteThreadStore,
   resolveManagerDataRequestTimeoutMs
 } from './remote-data-stores.js'
+import { USAGE_QUERY_TIMEOUT_MS } from './usage-query-executor.js'
 import { runWithTurnMutationFence } from './turn-mutation-context.js'
 import {
   AttachmentsCapabilityConfig,
@@ -61,6 +62,10 @@ describe('resolveManagerDataRequestTimeoutMs', () => {
   it('allows cold timeline scans to outlive ordinary manager data requests', () => {
     expect(resolveManagerDataRequestTimeoutMs('session', 'highestSeq')).toBe(120_000)
     expect(resolveManagerDataRequestTimeoutMs('session', 'loadItemPage')).toBe(120_000)
+    expect(resolveManagerDataRequestTimeoutMs('session', 'aggregateUsage')).toBe(30_000)
+    expect(USAGE_QUERY_TIMEOUT_MS).toBeLessThan(
+      resolveManagerDataRequestTimeoutMs('session', 'aggregateUsage')
+    )
     expect(resolveManagerDataRequestTimeoutMs('session', 'loadItems')).toBe(30_000)
     expect(resolveManagerDataRequestTimeoutMs('thread', 'get')).toBe(30_000)
   })

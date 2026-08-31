@@ -37,11 +37,15 @@ export function runUsageAggregateQuery(
           toExclusive: new Date(Date.parse(query.now) + 1).toISOString()
         }
       : null
-    const indexedRecords = loadIndexedUsageRecords(db, query.groupBy === 'thread' || query.groupBy === 'turn'
-      ? { ...(query.threadId ? { threadId: query.threadId } : {}) }
-      : query.groupBy === 'day' || query.groupBy === 'model'
-        ? { fromInclusive: query.fromInclusive, toExclusive: query.toExclusive }
-        : providerRange ?? {})
+    const indexedRecords = loadIndexedUsageRecords(
+      db,
+      query.groupBy === 'thread' || query.groupBy === 'turn'
+        ? { ...(query.threadId ? { threadId: query.threadId } : {}) }
+        : query.groupBy === 'day' || query.groupBy === 'model'
+          ? { fromInclusive: query.fromInclusive, toExclusive: query.toExclusive }
+          : providerRange ?? {},
+      { visibleThreadsOnly: true }
+    )
     const visibleThreadIds = readVisibleThreadIds(db)
     const records = [...indexedRecords, ...reconcileLiveUsageRecords(db, liveRecords)].filter((record) =>
       (!visibleThreadIds || visibleThreadIds.has(record.threadId)) &&

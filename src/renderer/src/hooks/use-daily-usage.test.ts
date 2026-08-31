@@ -221,6 +221,23 @@ describe('daily usage helpers', () => {
     ).rejects.toThrow('daily usage request failed: 400')
   })
 
+  it('preserves a structured runtime error code for diagnostics', async () => {
+    setRuntimeRequest(async () => ({
+      ok: false,
+      status: 503,
+      body: JSON.stringify({
+        code: 'usage_query_timeout',
+        message: 'Usage index query timed out.'
+      })
+    }))
+
+    await expect(
+      loadDailyUsage({ from: '2026-05-01', to: '2026-05-01', timezone: 'UTC' })
+    ).rejects.toThrow(
+      'daily usage request failed: 503 (usage_query_timeout: Usage index query timed out.)'
+    )
+  })
+
   it('waits for the runtime bridge to settle without a renderer timeout', async () => {
     let resolve!: (value: { ok: boolean; status: number; body: string }) => void
     setRuntimeRequest(() => new Promise((done) => { resolve = done }))

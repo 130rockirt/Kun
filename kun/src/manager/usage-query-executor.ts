@@ -6,7 +6,7 @@ import type {
 import type { SessionUsageRecord } from '../ports/session-store.js'
 import { UsageIndexUnavailableError } from './usage-errors.js'
 
-const USAGE_QUERY_TIMEOUT_MS = 8_000
+export const USAGE_QUERY_TIMEOUT_MS = 20_000
 const USAGE_QUERY_RESULT_TTL_MS = 1_000
 const USAGE_QUERY_RECENT_MAX = 32
 
@@ -19,6 +19,7 @@ type RecentResult = { value: SessionUsageAggregateResponse; settledAt: number }
 export class UsageQueryExecutor {
   private readonly inflight = new Map<string, Promise<SessionUsageAggregateResponse>>()
   private readonly recent = new Map<string, RecentResult>()
+  private globalQueryTail: Promise<void> = Promise.resolve()
   private epoch = 0
 
   constructor(
@@ -48,7 +49,12 @@ export class UsageQueryExecutor {
     }
     const active = this.inflight.get(key)
     if (active) return active
-    const request = (this.workerRunner?.(query, liveRecords) ?? this.runWorker(query, liveRecords)).then((value) => {
+    const run = (): Promise<SessionUsageAggregateResponse> =>
+      this.workerRunner?.(query, liveRecords) ?? this.runWorker(query, liveRecords)
+    const execution = isGlobalUsageQuery(query)
+      ? this.enqueueGlobalQuery(run)
+      : run()
+    const request = execution.then((value) => {
       if (this.epoch === epoch) {
         this.recent.set(key, { value, settledAt: Date.now() })
         this.pruneRecent()
@@ -58,6 +64,14 @@ export class UsageQueryExecutor {
       if (this.inflight.get(key) === request) this.inflight.delete(key)
     })
     this.inflight.set(key, request)
+    return request
+  }
+
+  private enqueueGlobalQuery(
+    run: () => Promise<SessionUsageAggregateResponse>
+  ): Promise<SessionUsageAggregateResponse> {
+    const request = this.globalQueryTail.then(run, run)
+    this.globalQueryTail = request.then(() => undefined, () => undefined)
     return request
   }
 
@@ -106,4 +120,11 @@ export class UsageQueryExecutor {
       })
     })
   }
+}
+
+function isGlobalUsageQuery(query: SessionUsageAggregateQuery): boolean {
+  return query.groupBy === 'day' ||
+    query.groupBy === 'model' ||
+    query.groupBy === 'provider_local_cost' ||
+    query.groupBy === 'thread' && !query.threadId
 }

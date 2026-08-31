@@ -26,11 +26,21 @@ async function createStore(): Promise<{ root: string; store: HybridThreadStore }
 }
 
 function backfillInternals(store: HybridThreadStore): {
-  db: { prepare(sql: string): { get(...args: unknown[]): unknown } } | null
+  db: {
+    prepare(sql: string): {
+      get(...args: unknown[]): unknown
+      all(...args: unknown[]): unknown[]
+    }
+  } | null
   backfill: { wait(): Promise<void> } | null
 } {
   return store as unknown as {
-    db: { prepare(sql: string): { get(...args: unknown[]): unknown } } | null
+    db: {
+      prepare(sql: string): {
+        get(...args: unknown[]): unknown
+        all(...args: unknown[]): unknown[]
+      }
+    } | null
     backfill: { wait(): Promise<void> } | null
   }
 }
@@ -48,6 +58,22 @@ function usageEvent(seq: number, usage: UsageSnapshot): UsageEvent {
 }
 
 describe('HybridThreadStore usage timing persistence', () => {
+  it('creates the composite range-baseline usage index', async () => {
+    const { store } = await createStore()
+    try {
+      await store.list({ limit: 1 })
+      const db = backfillInternals(store).db
+      const indexes = db?.prepare(`PRAGMA index_list('usage_events')`).all() as
+        | Array<{ name?: string }>
+        | undefined
+      expect(indexes?.map((index) => index.name)).toContain(
+        'usage_events_thread_timestamp_seq_idx'
+      )
+    } finally {
+      store.close()
+    }
+  })
+
   it('keeps cumulative TTFT/TPS averages after the differential fold', async () => {
     const { store } = await createStore()
     try {

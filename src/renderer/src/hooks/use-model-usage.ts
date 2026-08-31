@@ -5,7 +5,7 @@ import {
   defaultDailyUsageRange
 } from './use-daily-usage'
 import { requestUsage } from './usage-request-cache'
-import { parseUsageResponse } from './usage-response'
+import { parseUsageResponse, usageRequestError } from './usage-response'
 import { readUsageSummaryCache, writeUsageSummaryCache } from './usage-summary-cache'
 
 export type ModelUsageBucket = Omit<DailyUsageBucket, 'date'> & {
@@ -170,7 +170,7 @@ export async function loadModelUsage(
   if (typeof window.kunGui?.runtimeRequest !== 'function') return null
   const response = await requestUsage(buildModelUsagePath(range), 'model usage', generation)
   if (!response.ok || !response.body.trim()) {
-    throw new Error(`model usage request failed: ${response.status}`)
+    throw usageRequestError('model usage', response.status, response.body)
   }
   const parsed = parseUsageResponse<RawModelUsageResponse>(response.body, 'model usage')
   if (parsed.group_by !== 'model') {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { requestUsage } from './usage-request-cache'
-import { parseUsageResponse } from './usage-response'
+import { parseUsageResponse, usageRequestError } from './usage-response'
 import { readUsageSummaryCache, writeUsageSummaryCache } from './usage-summary-cache'
 
 export const DEFAULT_USAGE_HEATMAP_DAYS = 90
@@ -221,7 +221,7 @@ export async function loadDailyUsage(
   if (typeof window.kunGui?.runtimeRequest !== 'function') return null
   const response = await requestUsage(buildDailyUsagePath(range), 'daily usage', generation)
   if (!response.ok || !response.body.trim()) {
-    throw new Error(`daily usage request failed: ${response.status}`)
+    throw usageRequestError('daily usage', response.status, response.body)
   }
   const parsed = parseUsageResponse<RawDailyUsageResponse>(response.body, 'daily usage')
   if (parsed.group_by !== 'day') {

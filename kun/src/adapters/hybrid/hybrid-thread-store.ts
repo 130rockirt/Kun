@@ -21,7 +21,6 @@ import { insertUsageEventsChunked, markUsageBackfilled } from './hybrid-usage-ba
 import { scanEventsForUsageBackfill } from './hybrid-thread-usage-scan.js'
 import {
   METADATA_COMPACT_MIN_BYTES,
-  addColumnIfMissing,
   appendJsonlLine,
   latestUsageSnapshotsFromRows,
   pathExists,
@@ -41,7 +40,7 @@ import { UsageQueryExecutor } from '../../manager/usage-query-executor.js'
 import { UsageIndexUnavailableError } from '../../manager/usage-errors.js'
 import { JsonlFileAccessCoordinator } from '../file/jsonl-file-access.js'
 import { renameFileWithRetry } from '../file/atomic-write.js'
-import { migrateHybridUsageBackfillState } from './hybrid-thread-store-migrations.js'
+import { migrateHybridThreadSchema } from './hybrid-thread-store-migrations.js'
 
 export { describeSqliteAbiMismatch } from './hybrid-thread-support.js'
 
@@ -480,13 +479,7 @@ export class HybridThreadStore implements ThreadStore {
       CREATE INDEX IF NOT EXISTS usage_events_timestamp_idx
         ON usage_events(timestamp);
     `)
-    addColumnIfMissing(this.db, 'threads', 'todos_json TEXT')
-    addColumnIfMissing(this.db, 'threads', 'extension_metadata_json TEXT')
-    addColumnIfMissing(this.db, 'threads', 'model_request_capture_enabled INTEGER NOT NULL DEFAULT 0')
-    addColumnIfMissing(this.db, 'threads', "approval_reviewer TEXT NOT NULL DEFAULT 'user'")
-    migrateHybridUsageBackfillState(this.db)
-    addColumnIfMissing(this.db, 'threads', 'agent_surface TEXT')
-    addColumnIfMissing(this.db, 'usage_events', 'provider_id TEXT')
+    migrateHybridThreadSchema(this.db)
   }
 
   private cachedStatement(sql: string): Statement {

@@ -6,7 +6,7 @@ import { mutationFenceForValue } from './turn-mutation-context.js'
 type ManagerStore = 'thread' | 'session' | 'artifact' | 'memory' | 'graph' | 'attachment'
 
 const ResultSchema = z.object({ result: z.unknown() }).strict()
-const MANAGER_DATA_REQUEST_TIMEOUT_MS = 30_000
+export const MANAGER_USAGE_REQUEST_TIMEOUT_MS = 30_000
 const MANAGER_TIMELINE_DATA_REQUEST_TIMEOUT_MS = 120_000
 
 export async function callManagerStore(
@@ -41,8 +41,11 @@ export function resolveManagerDataRequestTimeoutMs(
   store: ManagerStore,
   operation: string
 ): number {
+  if (store === 'session' && operation === 'aggregateUsage') {
+    return MANAGER_USAGE_REQUEST_TIMEOUT_MS
+  }
   if (store === 'session' && (operation === 'loadItemPage' || operation === 'highestSeq')) {
     return MANAGER_TIMELINE_DATA_REQUEST_TIMEOUT_MS
   }
-  return MANAGER_DATA_REQUEST_TIMEOUT_MS
+  return MANAGER_USAGE_REQUEST_TIMEOUT_MS
 }
