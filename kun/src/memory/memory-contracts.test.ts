@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MEMORY_MAX_SOURCE_EXCERPT_CHARS,
+  MemoryCreateRequest,
   MemoryRecord,
   MemorySourceEvidence
 } from '../contracts/memory.js'
@@ -47,6 +48,24 @@ describe('memory V2 contracts and pure helpers', () => {
         { id: 'duplicate', kind: 'user', trust: 'explicit-user' },
         { id: 'duplicate', kind: 'file', trust: 'observed' }
       ]
+    }).success).toBe(false)
+  })
+
+  it('accepts exact import lifecycle fields but rejects conflicting expiry inputs', () => {
+    expect(MemoryCreateRequest.parse({
+      content: 'Portable disabled memory',
+      scope: 'user',
+      expiresAt: '2027-01-01T00:00:00.000Z',
+      disabled: true
+    })).toMatchObject({
+      expiresAt: '2027-01-01T00:00:00.000Z',
+      disabled: true
+    })
+    expect(MemoryCreateRequest.safeParse({
+      content: 'Conflicting expiry',
+      scope: 'user',
+      ttlMs: 60_000,
+      expiresAt: '2027-01-01T00:00:00.000Z'
     }).success).toBe(false)
   })
 

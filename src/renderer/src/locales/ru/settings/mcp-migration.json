@@ -461,6 +461,8 @@
   "memoryImportSkippedPrefix": "Пропущено ",
   "memoryImportSkippedSuffix": " дубликатов(а).",
   "memoryImportAllDuplicate": "Новых записей нет — все уже существуют.",
+  "memoryImportInvalidPortable": "This Kun Memory V2 archive is invalid or unsupported.",
+  "memoryImportPortableScopeHint": "Portable records keep their original scope and target path.",
   "memoryCreate": "Новая",
   "memoryCreateTitle": "Создать запись памяти",
   "memoryEditTitle": "Редактировать запись",

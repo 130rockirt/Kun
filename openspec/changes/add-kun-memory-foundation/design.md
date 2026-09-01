@@ -56,6 +56,8 @@ The public `MemoryRecord` contract will gain fields with deterministic defaults 
 
 Each source descriptor has a stable id, source kind, optional thread/turn/item locator, optional relative or external locator, bounded excerpt, content hash, and trust level. Existing `provenance`, `sourceThreadId`, and `sourceTurnId` remain readable and are normalized into source evidence without eagerly rewriting the original file. Existing outward fields remain available during the compatibility window.
 
+The settings export remains human-readable and also carries a strictly validated Kun Memory V2 block for portable round-trips. Import preserves semantic fields, scope paths, bounded evidence, validity, expiry, and disabled state, but intentionally generates fresh ids and audit timestamps so importing an archive cannot overwrite an existing canonical identity or replay a tombstone.
+
 Freshness is computed at retrieval time from validity, observation, confirmation, and update timestamps. A mutable freshness scalar is not canonical. Existing `confidence` remains the belief-strength signal and is no longer multiplied in place by age before being exposed to callers.
 
 ### 3. Preserve one logical Manager-owned memory repository
@@ -122,6 +124,10 @@ Rollback removes hybrid adapter selection and uses `FileMemoryStore`; canonical 
 ### 9. Extend diagnostics without adding a runtime control surface
 
 Memory diagnostics will add bounded fields for canonical record count, index state, indexed count, stale/missing row count, schema version, backfill state, last retrieval summary, and degraded reason. Existing fields remain compatible.
+
+Degraded reasons redact credentials and absolute Windows, UNC, POSIX, and file-URL paths before reaching logs or the renderer. Module basenames and Node/Electron ABI details remain available when they are needed to diagnose native dependency failures.
+
+External canonical drift is detected by diagnostics, which marks the projection stale. The next retrieval then uses filesystem fallback and starts reconciliation before indexed retrieval resumes; normal indexed retrieval does not scan every canonical file on every query.
 
 The existing settings memory section may show health and the last retrieval explanation. This must not recreate the removed runtime diagnostics panel or add `/runtime` control commands. Reindex is an internal recovery operation or a narrowly scoped memory action, not a general runtime controller.
 

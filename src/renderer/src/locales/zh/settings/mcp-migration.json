@@ -461,6 +461,8 @@
   "memoryImportSkippedPrefix": "已跳过 ",
   "memoryImportSkippedSuffix": " 条重复记忆。",
   "memoryImportAllDuplicate": "没有新的记忆可导入，解析出的条目都已存在。",
+  "memoryImportInvalidPortable": "这份 Kun Memory V2 归档无效或版本不受支持。",
+  "memoryImportPortableScopeHint": "可移植记录会保留原有作用域和目标路径。",
   "memoryCreate": "新建",
   "memoryCreateTitle": "新建记忆",
   "memoryEditTitle": "编辑记忆",

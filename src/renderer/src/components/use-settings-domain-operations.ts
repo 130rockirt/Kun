@@ -363,17 +363,25 @@ export function useSettingsDomainOperations(scope: Record<string, any>): Record<
     content: string
     scope?: 'user' | 'workspace' | 'project'
     targetPath?: string
+    workspace?: string
+    project?: string
     tags?: string[]
     confidence?: number
     type?: CoreMemoryRecordJson['type']
     importance?: number
     observedAt?: string
+    validFrom?: string
+    validTo?: string
+    expiresAt?: string
+    disabled?: boolean
     sources?: Array<Omit<NonNullable<CoreMemoryRecordJson['sources']>[number], 'id'> & { id?: string }>
   }): Promise<boolean> => {
     const provider = getProvider()
     if (typeof provider.createMemory !== 'function') return false
     try {
-      const workspace = normalizeWorkspaceRoot(expandHomePath(input.targetPath ?? ''))
+      const targetPath = normalizeWorkspaceRoot(expandHomePath(input.targetPath ?? ''))
+      const workspace = normalizeWorkspaceRoot(expandHomePath(input.workspace ?? targetPath))
+      const project = normalizeWorkspaceRoot(expandHomePath(input.project ?? targetPath))
       const memory = await provider.createMemory({
         content: input.content,
         scope: input.scope,
@@ -382,9 +390,13 @@ export function useSettingsDomainOperations(scope: Record<string, any>): Record<
         type: input.type,
         importance: input.importance,
         observedAt: input.observedAt,
+        validFrom: input.validFrom,
+        validTo: input.validTo,
+        expiresAt: input.expiresAt,
+        disabled: input.disabled,
         sources: input.sources,
-        ...(input.scope === 'user' ? {} : { workspace }),
-        ...(input.scope === 'project' ? { project: workspace } : {})
+        ...(input.scope === 'user' || !workspace ? {} : { workspace }),
+        ...(input.scope === 'project' && project ? { project } : {})
       })
       setMemoryRecords((records) => [memory, ...records])
       return true

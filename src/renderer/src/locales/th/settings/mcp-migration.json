@@ -461,6 +461,8 @@
   "memoryImportSkippedPrefix": "ข้ามไป",
   "memoryImportSkippedSuffix": "รายการหน่วยความจำที่ซ้ำกัน",
   "memoryImportAllDuplicate": "ไม่มีความทรงจำใหม่ที่จะนำเข้า ทุกรายการแยกวิเคราะห์มีอยู่แล้ว",
+  "memoryImportInvalidPortable": "This Kun Memory V2 archive is invalid or unsupported.",
+  "memoryImportPortableScopeHint": "Portable records keep their original scope and target path.",
   "memoryCreate": "ใหม่",
   "memoryCreateTitle": "สร้างความทรงจำ",
   "memoryEditTitle": "แก้ไขความทรงจำ",

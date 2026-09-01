@@ -461,6 +461,8 @@
   "memoryImportSkippedPrefix": "Skipped ",
   "memoryImportSkippedSuffix": " duplicate memory item(s).",
   "memoryImportAllDuplicate": "No new memories to import; every parsed item already exists.",
+  "memoryImportInvalidPortable": "This Kun Memory V2 archive is invalid or unsupported.",
+  "memoryImportPortableScopeHint": "Portable records keep their original scope and target path.",
   "memoryCreate": "New",
   "memoryCreateTitle": "Create memory",
   "memoryEditTitle": "Edit memory",

@@ -38,6 +38,11 @@ Kun SHALL parse existing memory JSON through a compatibility normalizer and SHAL
 - **WHEN** an existing GUI, TUI, tool, import/export path, or Manager proxy reads a normalized V2 record
 - **THEN** the current id, content, scope, workspace, project, provenance, tags, confidence, timestamps, and lifecycle fields retain their compatible meanings
 
+#### Scenario: Round-trip a portable V2 export
+
+- **WHEN** the settings UI exports active memories and imports the resulting Kun Memory V2 archive
+- **THEN** content, scope paths, tags, confidence, type, reference authority, importance, validity, expiry, bounded sources, and disabled state are preserved while each imported record receives a fresh id and audit timestamps
+
 ### Requirement: Memory evidence and authority are explicit and bounded
 
 Every normalized memory SHALL have reference authority and SHALL expose a bounded source-evidence list derived from explicit input or compatible legacy provenance.
@@ -127,3 +132,8 @@ Memory diagnostics SHALL report canonical count, index status and schema, indexe
 
 - **WHEN** SQLite integrity, schema, or query validation fails
 - **THEN** diagnostics report a degraded/rebuildable index without including memory bodies, credentials, or machine-private source excerpts
+
+#### Scenario: Native failure contains a local path
+
+- **WHEN** a SQLite or native-module error contains Windows, UNC, POSIX, or file-URL paths
+- **THEN** the bounded degraded reason redacts the absolute path while retaining actionable module, platform, architecture, and ABI details

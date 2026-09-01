@@ -461,6 +461,8 @@
   "memoryImportSkippedPrefix": "スキップされました",
   "memoryImportSkippedSuffix": "メモリ項目が重複しています。",
   "memoryImportAllDuplicate": "新しい思い出をインポートする必要はありません。解析されたすべての項目はすでに存在します。",
+  "memoryImportInvalidPortable": "This Kun Memory V2 archive is invalid or unsupported.",
+  "memoryImportPortableScopeHint": "Portable records keep their original scope and target path.",
   "memoryCreate": "新しい",
   "memoryCreateTitle": "思い出を作る",
   "memoryEditTitle": "メモリの編集",

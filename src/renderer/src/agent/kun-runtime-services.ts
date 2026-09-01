@@ -317,6 +317,8 @@ export class KunRuntimeProviderServices {
     observedAt?: string
     validFrom?: string
     validTo?: string
+    expiresAt?: string
+    disabled?: boolean
     sources?: Array<Omit<NonNullable<CoreMemoryRecordJson['sources']>[number], 'id'> & { id?: string }>
   }): Promise<CoreMemoryRecordJson> {
     const response = await rendererRuntimeClient.runtimeRequest(

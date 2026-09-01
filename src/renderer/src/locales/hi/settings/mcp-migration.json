@@ -461,6 +461,8 @@
   "memoryImportSkippedPrefix": "छोड़ दिया गया",
   "memoryImportSkippedSuffix": "डुप्लिकेट मेमोरी आइटम।",
   "memoryImportAllDuplicate": "आयात करने के लिए कोई नई यादें नहीं; प्रत्येक पार्स किया गया आइटम पहले से मौजूद है।",
+  "memoryImportInvalidPortable": "This Kun Memory V2 archive is invalid or unsupported.",
+  "memoryImportPortableScopeHint": "Portable records keep their original scope and target path.",
   "memoryCreate": "नया",
   "memoryCreateTitle": "स्मृति बनाएँ",
   "memoryEditTitle": "स्मृति संपादित करें",

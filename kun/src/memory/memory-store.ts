@@ -110,7 +110,12 @@ export class FileMemoryStore implements MemoryStore {
       validFrom: input.validFrom,
       validTo: input.validTo,
       sources: normalizeCreateSources(input),
-      ...(input.ttlMs ? { expiresAt: new Date(Date.parse(now) + input.ttlMs).toISOString() } : {}),
+      ...(input.expiresAt
+        ? { expiresAt: input.expiresAt }
+        : input.ttlMs
+          ? { expiresAt: new Date(Date.parse(now) + input.ttlMs).toISOString() }
+          : {}),
+      ...(input.disabled ? { disabledAt: now } : {}),
       ...(input.supersedes ? { supersedes: input.supersedes } : {})
     })
     assertValidInterval(parsed)

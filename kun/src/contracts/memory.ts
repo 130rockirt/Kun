@@ -124,6 +124,8 @@ export const MemoryCreateRequest = z.object({
   sourceTurnId: z.string().optional(),
   provenance: MemoryProvenance.optional(),
   ttlMs: z.number().int().positive().optional(),
+  expiresAt: z.string().datetime().optional(),
+  disabled: z.boolean().optional(),
   supersedes: z.string().min(1).optional(),
   tags: z.array(z.string()).default([]),
   confidence: z.number().min(0).max(1).optional(),
@@ -133,7 +135,9 @@ export const MemoryCreateRequest = z.object({
   validFrom: z.string().datetime().optional(),
   validTo: z.string().datetime().optional(),
   sources: MemorySourceEvidenceInputList.optional()
-}).strict().superRefine(reportInvalidValidityInterval)
+}).strict()
+  .superRefine(reportInvalidValidityInterval)
+  .superRefine(reportConflictingExpiry)
 export type MemoryCreateRequest = z.input<typeof MemoryCreateRequest>
 
 export const MemoryUpdateRequest = z.object({
@@ -289,5 +293,17 @@ function reportInvalidValidityInterval(
     code: 'custom',
     path: ['validTo'],
     message: 'memory validFrom must not be after validTo'
+  })
+}
+
+function reportConflictingExpiry(
+  value: { ttlMs?: number; expiresAt?: string },
+  context: z.RefinementCtx
+): void {
+  if (value.ttlMs === undefined || value.expiresAt === undefined) return
+  context.addIssue({
+    code: 'custom',
+    path: ['expiresAt'],
+    message: 'memory ttlMs and expiresAt are mutually exclusive'
   })
 }
