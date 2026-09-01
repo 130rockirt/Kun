@@ -53,12 +53,39 @@ export function KunStartupArtwork({
         </span>
       </div>
 
-      <div className="kun-startup-artwork__console" aria-hidden="true">
-        <span className="kun-startup-artwork__console-grid" />
-        <span
-          className="kun-startup-artwork__console-core kun-startup__motion"
-          data-testid="kun-startup-console-glow"
-        />
+      <div
+        className="kun-startup-artwork__workspace-link"
+        data-testid="kun-startup-workspace-link"
+      >
+        <svg
+          className="kun-startup-artwork__workspace-rail"
+          viewBox="0 0 300 78"
+          preserveAspectRatio="none"
+          focusable="false"
+        >
+          <path
+            className="kun-startup-artwork__workspace-track"
+            d="M 6 60 C 47 58, 72 31, 99 36 S 121 53, 134 48"
+            pathLength="100"
+          />
+          <path
+            className="kun-startup-artwork__workspace-flow kun-startup__motion"
+            d="M 6 60 C 47 58, 72 31, 99 36 S 121 53, 134 48"
+            pathLength="100"
+          />
+        </svg>
+        <span className="kun-startup-artwork__workspace-node kun-startup-artwork__workspace-node--source" />
+        <span className="kun-startup-artwork__workspace-node kun-startup-artwork__workspace-node--relay" />
+        <span className="kun-startup-artwork__workspace-target kun-startup__motion">
+          <svg
+            className="kun-startup-artwork__workspace-icon"
+            viewBox="0 0 28 24"
+            focusable="false"
+          >
+            <path d="M3.5 8.5h8l2.4-3h5.6c1.1 0 2 .9 2 2v1" />
+            <path d="M4 8.5h20l-2.2 10.2a2 2 0 0 1-2 1.6H5.7a2 2 0 0 1-2-2V10.5c0-1.1.9-2 2-2" />
+          </svg>
+        </span>
       </div>
 
       <span

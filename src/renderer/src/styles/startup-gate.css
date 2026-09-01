@@ -1,5 +1,6 @@
 @import './startup-gate-motion.css';
 @import './startup-gate-props.css';
+@import './startup-gate-workspace-link.css';
 
 .kun-startup {
   display: flex;
@@ -140,48 +141,6 @@
   box-shadow:
     0 0 0 5px rgb(var(--kun-startup-secondary-rgb) / 0.12),
     0 0 14px rgb(var(--kun-startup-secondary-rgb) / 0.7);
-}
-
-.kun-startup-artwork__console {
-  position: absolute;
-  z-index: 3;
-  bottom: 10%;
-  left: 22%;
-  width: 34%;
-  height: 17%;
-  overflow: hidden;
-  border: 1px solid rgba(125, 211, 252, 0.86);
-  border-radius: 12px;
-  background: linear-gradient(135deg, rgba(224, 242, 254, 0.82), rgba(37, 99, 235, 0.2));
-  box-shadow:
-    0 0 22px rgba(34, 211, 238, 0.3),
-    inset 0 0 18px rgba(255, 255, 255, 0.52);
-  transform: perspective(260px) rotateX(62deg) rotateZ(-3deg);
-}
-
-.kun-startup-artwork__console-grid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(14, 165, 233, 0.2) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(14, 165, 233, 0.2) 1px, transparent 1px);
-  background-size: 14px 14px;
-  opacity: 0.76;
-}
-
-.kun-startup-artwork__console-core {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 28%;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: rgb(var(--kun-startup-accent-rgb));
-  box-shadow:
-    0 0 0 10px rgb(var(--kun-startup-accent-rgb) / 0.15),
-    0 0 28px rgb(var(--kun-startup-accent-rgb) / 0.9);
-  transform: translate(-50%, -50%);
-  animation: kun-startup-console-pulse 2.1s ease-in-out infinite;
 }
 
 .kun-startup-artwork__hologram {
@@ -439,10 +398,6 @@
   animation-duration: 7.4s;
 }
 
-.kun-startup__artwork[data-variant='focus'] .kun-startup-artwork__console-core {
-  animation-duration: 3.8s;
-}
-
 .kun-startup__artwork[data-variant='focus'] .kun-startup-artwork__variant-streaks {
   inset: 11% 7% 2% 7%;
   border-radius: 50%;
@@ -584,13 +539,6 @@
 
 [data-theme='dark'] .kun-startup-artwork__orbit-track {
   opacity: 0.32;
-}
-
-[data-theme='dark'] .kun-startup-artwork__console {
-  background: linear-gradient(135deg, rgba(14, 116, 144, 0.42), rgba(37, 99, 235, 0.22));
-  box-shadow:
-    0 0 26px rgba(34, 211, 238, 0.38),
-    inset 0 0 18px rgba(191, 219, 254, 0.16);
 }
 
 [data-theme='dark'] .kun-startup-artwork__hologram {

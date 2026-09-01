@@ -45,6 +45,7 @@ describe('KunStartupArtwork variants', () => {
     expect(html).toContain('data-testid="kun-startup-kun"')
     expect(html).toContain('data-testid="kun-startup-bird"')
     expect(html).toContain('data-testid="kun-startup-prop"')
+    expect(html).toContain('data-testid="kun-startup-workspace-link"')
     expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG[variant].avatarUrl}"`)
     expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG[variant].birdUrl}"`)
     expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG[variant].propUrl}"`)
@@ -78,5 +79,16 @@ describe('KunStartupArtwork variants', () => {
 
     expect(html).toContain('kun-startup-artwork__prop-wrap kun-startup__motion')
     expect(html).toMatch(/class="kun-startup-artwork__prop"[^>]*alt=""/)
+  })
+
+  it('uses a directional workspace link instead of a rectangular console', () => {
+    const html = renderToStaticMarkup(createElement(KunStartupArtwork, {
+      motion: 'running',
+      variant: 'signal'
+    }))
+
+    expect(html).toContain('kun-startup-artwork__workspace-flow kun-startup__motion')
+    expect(html).toContain('kun-startup-artwork__workspace-icon')
+    expect(html).not.toContain('kun-startup-artwork__console')
   })
 })

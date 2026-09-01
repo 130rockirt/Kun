@@ -73,8 +73,8 @@
 }
 
 @keyframes kun-startup-prop-signal {
-  0%, 100% { opacity: 0.7; transform: translate3d(0, 2px, 0) scale(0.96); }
-  50% { opacity: 1; transform: translate3d(0, -4px, 0) scale(1.04); }
+  0%, 100% { opacity: 0.7; transform: translate3d(0, 2px, 0); }
+  50% { opacity: 1; transform: translate3d(0, -4px, 0); }
 }
 
 @keyframes kun-startup-prop-wave {
@@ -83,19 +83,19 @@
 }
 
 @keyframes kun-startup-prop-dash {
-  0% { opacity: 0.28; transform: translate3d(11px, 0, 0) scaleX(-1) scale(0.94); }
+  0% { opacity: 0.28; transform: translate3d(11px, 0, 0) scaleX(-1); }
   42% { opacity: 1; }
-  100% { opacity: 0.28; transform: translate3d(-8px, 1px, 0) scaleX(-1) scale(1.03); }
+  100% { opacity: 0.28; transform: translate3d(-8px, 1px, 0) scaleX(-1); }
 }
 
 @keyframes kun-startup-prop-focus {
-  0%, 100% { opacity: 0.52; transform: scale(0.94) scaleY(0.58) rotate(-2deg); }
-  50% { opacity: 0.84; transform: scale(1.04) scaleY(0.58) rotate(2deg); }
+  0%, 100% { opacity: 0.52; transform: scaleY(0.58) rotate(-2deg); }
+  50% { opacity: 0.84; transform: scaleY(0.58) rotate(2deg); }
 }
 
 @keyframes kun-startup-prop-cast {
-  0%, 100% { opacity: 0.62; transform: scale(0.84) rotate(-5deg); }
-  50% { opacity: 1; transform: scale(1.08) rotate(6deg); }
+  0%, 100% { opacity: 0.62; transform: rotate(-5deg); }
+  50% { opacity: 1; transform: rotate(6deg); }
 }
 
 @media (max-height: 620px) {

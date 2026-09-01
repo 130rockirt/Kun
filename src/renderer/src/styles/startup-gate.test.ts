@@ -6,7 +6,7 @@ describe('Kun startup motion styles', () => {
     const css = await readStylesheetBundle(new URL('./startup-gate.css', import.meta.url))
 
     expect(css).toMatch(/\.kun-startup__artwork\[data-motion='paused'\][\s\S]*?animation: none !important;/)
-    expect(css).toMatch(/\.kun-startup-artwork__console-core\s*{[\s\S]*?transform: translate\(-50%, -50%\);/)
+    expect(css).toMatch(/\.kun-startup-artwork__workspace-flow\s*{[\s\S]*?animation: kun-startup-workspace-flow/)
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.kun-startup__motion\s*{[\s\S]*?animation: none !important;/)
   })
@@ -30,5 +30,17 @@ describe('Kun startup motion styles', () => {
       expect(css).toContain(`@keyframes kun-startup-prop-${variant}`)
     }
     expect(css).toMatch(/\.kun-startup-artwork__prop-wrap\s*{[\s\S]*?opacity:/)
+  })
+
+  it('keeps every looping startup element at a constant size', async () => {
+    const css = await readStylesheetBundle(new URL('./startup-gate.css', import.meta.url))
+    const keyframes = [...css.matchAll(/@keyframes (kun-startup-[^{]+)\s*\{([\s\S]*?)\n\}/gu)]
+
+    for (const [, name, body] of keyframes) {
+      const scaleTransforms = [...body.matchAll(/scale(?:X|Y)?\(([^)]+)\)/gu)]
+        .map((match) => match[0])
+      expect(new Set(scaleTransforms).size, `${name} changes scale while loading`)
+        .toBeLessThanOrEqual(1)
+    }
   })
 })
