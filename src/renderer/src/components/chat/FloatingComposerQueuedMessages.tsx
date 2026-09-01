@@ -21,6 +21,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { queuedMessageGuidancePayload } from '../../store/queued-message-guidance'
 import { parseWritePromptForDisplay } from '../../write/quoted-selection'
+import { FloatingComposerQueueStrip } from './FloatingComposerQueueStrip'
 import {
 calculateComposerPopoverPlacement,
 type ComposerPopoverAnchorRect,
@@ -310,6 +311,23 @@ export function FloatingComposerQueuedMessages({
   }, [openMenuId])
 
   if (visibleMessages.length === 0) return null
+
+  const previewMessage = visibleMessages[0]!
+  const previewPaused = previewMessage.deliveryState === 'paused'
+  const previewGuidanceEligible =
+    previewMessage.guidanceEligible !== false && canGuideQueuedComposerMessage(previewMessage)
+  const previewGuideLabel = previewPaused
+    ? t('sendPausedQueuedMessage')
+    : guidanceTarget === 'graph'
+      ? t('guideQueuedMessageGraph')
+      : t('guideQueuedMessage')
+  const previewGuideTitle = previewPaused
+    ? t('sendPausedQueuedMessage')
+    : previewGuidanceEligible
+      ? guidanceTarget === 'graph'
+        ? t('guideQueuedMessageGraphHint')
+        : t('guideQueuedMessageHint')
+      : t('guideQueuedMessageTextOnly')
 
   const cancelClose = (): void => {
     if (hoverCloseTimerRef.current == null || typeof window === 'undefined') return
@@ -614,28 +632,29 @@ export function FloatingComposerQueuedMessages({
           ? createPortal(queueList, document.body)
           : queueList
         : null}
-      <div
-        ref={rootRef}
-        data-composer-stack-item="queue"
-        className="pointer-events-auto relative shrink-0"
-      >
-        <button
-          ref={buttonRef}
-          type="button"
-          onClick={openDetails}
-          onFocus={openDetails}
-          onBlur={closeDetailsSoon}
-          onMouseEnter={openDetails}
-          onMouseLeave={closeDetailsSoon}
-          className="ds-no-drag ds-composer-status-glass inline-flex h-11 items-center gap-2.5 rounded-full border px-4 text-[14px] font-medium text-ds-muted transition hover:border-ds-border-strong hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-          aria-label={t('queuedMessagesTitle', { count: visibleMessages.length })}
-          aria-expanded={open}
-          aria-haspopup="dialog"
-        >
-          <ListPlus className="h-5 w-5 shrink-0 text-ds-faint" strokeWidth={1.9} />
-          <span>{t('queuedMessagesTitle', { count: visibleMessages.length })}</span>
-        </button>
-      </div>
+      <FloatingComposerQueueStrip
+        rootRef={rootRef}
+        previewButtonRef={buttonRef}
+        previewText={queuedComposerMessageDisplayText(previewMessage)}
+        count={visibleMessages.length}
+        open={open}
+        guiding={guidingIds.has(previewMessage.id)}
+        canEdit={Boolean(onEdit && canEditQueuedComposerMessage(previewMessage))}
+        canGuide={previewPaused || previewGuidanceEligible}
+        queueLabel={t('queuedMessagesTitle', { count: visibleMessages.length })}
+        editLabel={t('queuedMessageEdit')}
+        removeLabel={t('queuedMessageRemove')}
+        guideLabel={previewGuideLabel}
+        guideTitle={previewGuideTitle}
+        guidingLabel={t('guideQueuedMessagePending')}
+        onOpen={openDetails}
+        onCloseSoon={closeDetailsSoon}
+        onEdit={onEdit && canEditQueuedComposerMessage(previewMessage)
+          ? () => onEdit(previewMessage)
+          : undefined}
+        onRemove={() => onRemove(previewMessage.id)}
+        onGuide={onGuide ? () => void guide(previewMessage.id) : undefined}
+      />
       {editMenu && typeof document !== 'undefined'
         ? createPortal(editMenu, document.body)
         : editMenu}

@@ -122,7 +122,7 @@ describe('FloatingComposer queued guidance', () => {
     await act(async () => {
       renderer = createRenderer(createElement(FloatingComposerQueuedMessages, props))
     })
-    const trigger = renderer!.root.findByProps({ 'data-composer-stack-item': 'queue' }).findByType('button')
+    const trigger = renderer!.root.findByProps({ 'data-queued-message-preview': true })
     await act(async () => {
       trigger.props.onMouseEnter()
     })
@@ -136,7 +136,7 @@ describe('FloatingComposer queued guidance', () => {
         messages: [{ id: 'q-one', text: 'first' }],
         onRemove: () => undefined
       })
-      const trigger = renderer.root.findByProps({ 'data-composer-stack-item': 'queue' }).findByType('button')
+      const trigger = renderer.root.findByProps({ 'data-queued-message-preview': true })
       expect(trigger.props['aria-expanded']).toBe(true)
       expect(trigger.props['aria-haspopup']).toBe('dialog')
       expect(renderer.root.findByProps({ role: 'dialog' })).toBeDefined()
@@ -177,7 +177,8 @@ describe('FloatingComposer queued guidance', () => {
       const tree = JSON.stringify(renderer.toJSON())
 
       expect(tree).toContain('Use compact logo')
-      const guideButtons = renderer.root.findAllByType('button').filter(
+      const dialog = renderer.root.findByProps({ role: 'dialog' })
+      const guideButtons = dialog.findAllByType('button').filter(
         (button) => button.props['aria-label'] === 'Guide'
       )
       expect(guideButtons).toHaveLength(2)
