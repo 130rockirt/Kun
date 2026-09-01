@@ -19,7 +19,6 @@ import {
   Monitor,
   Presentation,
   Sparkles,
-  UserRound,
   Waypoints,
   Workflow
 } from 'lucide-react'
@@ -36,13 +35,11 @@ import {
   ComputerUseSettingsPanel
 } from './settings-section-agent-panels'
 import { GraphModeSettingsPanel } from './settings-section-graph-panel'
-import { ComposerPersonaSettingsPanel } from './settings-section-lab-persona'
 import { ConversationVisualizationSettingsPanel } from './settings-section-lab-conversation-visualization'
 import { PptAgentSettingsPanel } from './settings-section-lab-ppt'
 import { AutoPlanBuildSettingsPanel } from './settings-section-lab-auto-plan-build'
 
 type LaboratorySettingsPanel =
-  | 'persona'
   | 'visualization'
   | 'autoPlanBuild'
   | 'computer'
@@ -51,8 +48,8 @@ type LaboratorySettingsPanel =
   | 'ppt'
 
 export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> }): ReactElement {
-  const { t, form, kun, update, updateKun, selectControlClass, runtimeInfo } = ctx
-  const [activePanel, setActivePanel] = useState<LaboratorySettingsPanel>('persona')
+  const { t, form, kun, updateKun, selectControlClass, runtimeInfo } = ctx
+  const [activePanel, setActivePanel] = useState<LaboratorySettingsPanel>('visualization')
   const provider = form.provider ?? defaultModelProviderSettings()
   const modelProviders = provider.providers as ModelProviderProfileV1[]
   const activeProviderId = kun.providerId?.trim() || DEFAULT_MODEL_PROVIDER_ID
@@ -90,7 +87,6 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
         ariaLabel={t('agentsQuickLaboratory')}
         contentSized
         items={[
-          { id: 'persona', label: t('labComposerPersonaTitle'), icon: UserRound },
           { id: 'visualization', label: t('labConversationVisualizationTitle'), icon: Waypoints },
           { id: 'autoPlanBuild', label: t('labAutoPlanBuildTitle'), icon: Sparkles },
           { id: 'computer', label: t('computerUseTitle'), icon: Monitor },
@@ -101,21 +97,6 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
         value={activePanel}
         onChange={setActivePanel}
       />
-
-      <SettingsTabPanel<LaboratorySettingsPanel>
-        baseId="laboratory-settings"
-        tabId="persona"
-        active={activePanel === 'persona'}
-        className="[&>div]:mt-0"
-      >
-        <ComposerPersonaSettingsPanel
-          t={t}
-          enabled={form.codeAgentPersonaEnabled !== false}
-          presets={form.codeAgentPresets ?? []}
-          onEnabledChange={(enabled) => update({ codeAgentPersonaEnabled: enabled })}
-          onPresetsChange={(next) => update({ codeAgentPresets: next })}
-        />
-      </SettingsTabPanel>
 
       <SettingsTabPanel<LaboratorySettingsPanel>
         baseId="laboratory-settings"

@@ -157,7 +157,6 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       .findAllByProps({ role: 'tab' })
       .filter((tab) => String(tab.props.id ?? '').startsWith('laboratory-settings-tab-'))
     expect(laboratoryTabs.map(instanceText)).toEqual([
-      'Personas',
       'Conversation visualization',
       'Automatic plan and build',
       'Computer control',
@@ -166,9 +165,8 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       'PPT agent'
     ])
     expect(laboratoryTabs.map((tab) => tab.props['aria-selected']))
-      .toEqual([true, false, false, false, false, false, false])
+      .toEqual([true, false, false, false, false, false])
     expect(laboratoryTabs.map((tab) => tab.props['aria-controls'])).toEqual([
-      'laboratory-settings-panel-persona',
       'laboratory-settings-panel-visualization',
       'laboratory-settings-panel-autoPlanBuild',
       'laboratory-settings-panel-computer',
@@ -183,9 +181,12 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     const laboratoryPanels = renderer.root
       .findAllByProps({ role: 'tabpanel' })
       .filter((panel) => String(panel.props.id ?? '').startsWith('laboratory-settings-panel-'))
-    expect(laboratoryPanels).toHaveLength(7)
+    expect(laboratoryPanels).toHaveLength(6)
     expect(laboratoryPanels.map((panel) => panel.props.hidden))
-      .toEqual([false, true, true, true, true, true, true])
+      .toEqual([false, true, true, true, true, true])
+    expect(renderer.root.findAllByProps({
+      id: 'laboratory-settings-panel-persona'
+    })).toHaveLength(0)
   })
 
   it('passes the runtime Browser Use capability into its settings panel', () => {
@@ -216,20 +217,27 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     )
   })
 
-  it('updates the composer persona experiment from the laboratory switch', () => {
+  it('renders and updates composer personas from the assistant panel', () => {
     const update = vi.fn()
     let renderer!: ReactTestRenderer
     act(() => {
-      renderer = createRenderer(createElement(LaboratorySettingsSection, {
+      renderer = createRenderer(createElement(AgentsSettingsSection, {
         ctx: { ...baseCtx(), update }
       }))
     })
 
-    const personaPanel = renderer.root.findByProps({
-      id: 'laboratory-settings-panel-persona'
+    const assistantPanel = renderer.root.findByProps({
+      id: 'agents-settings-panel-assistant'
     })
-    expect(instanceText(personaPanel)).toContain('Enable composer personas')
-    const toggle = personaPanel.findByProps({ role: 'switch' })
+    const assistantText = instanceText(assistantPanel)
+    expect(assistantText.indexOf('Personas')).toBeGreaterThanOrEqual(0)
+    expect(assistantText.indexOf('Personas')).toBeLessThan(assistantText.indexOf('Fast Context'))
+    const personaCard = assistantPanel
+      .findAllByType('section')
+      .find((section) => instanceText(section).startsWith('Personas'))
+    expect(personaCard).toBeDefined()
+    expect(instanceText(personaCard!)).toContain('Add persona')
+    const toggle = personaCard!.findByProps({ role: 'switch' })
     expect(toggle.props['aria-checked']).toBe(true)
 
     act(() => toggle.props.onClick())

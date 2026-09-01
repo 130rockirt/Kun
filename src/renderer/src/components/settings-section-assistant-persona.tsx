@@ -20,10 +20,10 @@ export function ComposerPersonaSettingsPanel({
 }): ReactElement {
   return (
     <div className="mt-6">
-      <SettingsCard title={t('labComposerPersonaTitle')}>
+      <SettingsCard title={t('composerPersonaTitle')}>
         <SettingRow
-          title={t('labComposerPersonaEnabled')}
-          description={t('labComposerPersonaEnabledDesc')}
+          title={t('composerPersonaEnabled')}
+          description={t('composerPersonaEnabledDesc')}
           control={
             <Toggle
               checked={enabled}
