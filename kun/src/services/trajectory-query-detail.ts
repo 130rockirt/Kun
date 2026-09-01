@@ -5,10 +5,16 @@ import {
   TrajectoryDetailSchema,
   type TrajectoryDetail,
   type TrajectoryDetailSection,
+  type TrajectoryMessageRecord,
   type TrajectoryRecord,
   type TrajectoryRequestRecord
 } from '../contracts/trajectory.js'
 import type { LlmDebugRecorder } from './llm-debug-recorder.js'
+import {
+  projectMessageRawDetail,
+  projectMessageRenderedDetail,
+  projectMessageSourceDetail
+} from './trajectory-query-message-detail.js'
 
 type DetailInput = {
   recorder: LlmDebugRecorder
@@ -132,6 +138,11 @@ async function itemDetail(
       }
     }
   }
+  if (isMessageRecord(record)) {
+    if (section === 'raw') return { ...base, ...projectMessageRawDetail(record, items, requests) }
+    if (section === 'rendered') return { ...base, ...projectMessageRenderedDetail(record, items) }
+    if (section === 'source') return { ...base, ...projectMessageSourceDetail(record, items) }
+  }
   if ((record.kind === 'tool' || record.kind === 'subtool') && section === 'schema') {
     return { ...base, content: findToolSchema(captured?.parts ?? [], record.toolName) }
   }
@@ -147,10 +158,12 @@ async function itemDetail(
   if (record.kind === 'tool' && section === 'result') {
     return { ...base, content: selected.filter((item) => isItemKind(item, 'tool_result')) }
   }
-  if (section === 'source' || section === 'rendered' || section === 'raw') {
-    return { ...base, content: selected }
-  }
   return { ...base, state: 'available', content: selected }
+}
+
+function isMessageRecord(record: TrajectoryRecord): record is TrajectoryMessageRecord {
+  return record.kind === 'system' || record.kind === 'user' || record.kind === 'context' ||
+    record.kind === 'compacted' || record.kind === 'assistant'
 }
 
 function requestOwnsItem(

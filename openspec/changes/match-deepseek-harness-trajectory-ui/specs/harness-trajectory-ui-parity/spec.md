@@ -43,6 +43,10 @@ Kun SHALL expose record-specific tabs and rich Markdown, JSON, Schema, source, i
 - **WHEN** a Tool row with arguments, result, schema, timing, and images is selected
 - **THEN** Summary, Payload, Result, Schema, and Timing tabs render only data belonging to that Tool/request relationship
 
+#### Scenario: Inspect message Raw and Source
+- **WHEN** a User, Context, Assistant, or Compacted row is inspected
+- **THEN** Raw renders ordered content blocks without the Session-item envelope, Source renders only recorded producer provenance when available, and neither section exposes provider metadata, credential fields, or inline binary payloads
+
 ### Requirement: Floating composer integration
 Trajectory mode SHALL keep Chat and Composer mounted, float the Composer over the full-height ledger, and reserve the measured Composer height plus 16px in ledger and inspector scrollers.
 

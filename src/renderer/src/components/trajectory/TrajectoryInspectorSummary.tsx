@@ -3,6 +3,7 @@ import type { ReactElement, ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TrajectoryDetailSection } from '../../agent/trajectory'
 import type { HarnessCell, HarnessRequestBoundary } from './trajectory-harness-model'
+import { trajectorySourceTypeLabel } from './trajectory-source-label'
 import styles from './TrajectoryInspector.module.css'
 
 export function TrajectoryInspectorSummary({
@@ -49,6 +50,16 @@ export function TrajectoryInspectorSummary({
             <SummaryRow label={t('trajectoryDetailTool')}>{cell.record.toolName}</SummaryRow>
             <SummaryRow label={t('trajectoryDetailCallId')}><code>{cell.record.callId}</code></SummaryRow>
           </>
+        ) : null}
+        {cell && (cell.kind === 'user' || cell.kind === 'context') &&
+        ('sourceAvailable' in cell.record ? cell.record.sourceAvailable ?? true : true) ? (
+          <SummaryRow label={t('trajectoryTabSource')}>
+            <button type="button" className={styles.summaryLink} onClick={() => onSelectSection('source')}>
+              {'sourceLabel' in cell.record
+                ? trajectorySourceTypeLabel(cell.record.sourceType, t, cell.record.sourceLabel ?? t('trajectoryTabSource'))
+                : t('trajectoryTabSource')}<ChevronRight />
+            </button>
+          </SummaryRow>
         ) : null}
         {cell?.durationMs !== null && cell?.durationMs !== undefined ? (
           <SummaryRow label={t('trajectoryDetailDuration')}>{formatDuration(cell.durationMs)}</SummaryRow>

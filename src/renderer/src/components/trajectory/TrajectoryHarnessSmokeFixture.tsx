@@ -120,13 +120,13 @@ function baseRecords(): TrajectoryRecord[] {
   return [
     request({ id: 'request:1', requestId: 'request-1', roundId: 'round-1', turnId: 'turn-1', step: 0, startedAt: iso(0), firstTokenAt: iso(540), completedAt: iso(1_800), durationMs: 1_800 }),
     message({ id: 'system:1', kind: 'system', turnId: 'turn-1', step: 0, startedAt: iso(0), completedAt: iso(0), durationMs: 0, preview: 'Initial System Prompt', itemId: 'prompt-1', itemIds: [], parentRequestId: 'request-1', thinkingPreview: '', promptFingerprint: 'system-a' }),
-    message({ id: 'user:1', kind: 'user', turnId: 'turn-1', step: 0, startedAt: iso(80), completedAt: iso(100), durationMs: 20, preview: 'Review the current implementation and fix the trajectory UI.', itemId: 'user-1', itemIds: ['user-1'], parentRequestId: 'request-1', thinkingPreview: '' }),
-    message({ id: 'assistant:1', kind: 'assistant', turnId: 'turn-1', step: 0, startedAt: iso(540), completedAt: iso(1_800), durationMs: 1_260, preview: 'I will inspect the implementation and reproduce the Harness interaction model.', itemId: 'answer-1', itemIds: ['reasoning-1', 'answer-1'], parentRequestId: 'request-1', thinkingPreview: 'Inspecting the renderer structure and timeline geometry.' }),
+    message({ id: 'user:1', kind: 'user', turnId: 'turn-1', step: 0, startedAt: iso(80), completedAt: iso(100), durationMs: 20, preview: 'Review the current implementation and fix the trajectory UI.', itemId: 'user-1', itemIds: ['user-1'], parentRequestId: 'request-1', thinkingPreview: '', sourceAvailable: true, sourceType: 'user', sourceLabel: 'User' }),
+    message({ id: 'assistant:1', kind: 'assistant', turnId: 'turn-1', step: 0, startedAt: iso(540), completedAt: iso(1_800), durationMs: 1_260, preview: 'I will inspect the implementation and reproduce the Harness interaction model.', itemId: 'answer-1', itemIds: ['reasoning-1', 'answer-1'], parentRequestId: 'request-1', thinkingPreview: 'Inspecting the renderer structure and timeline geometry.', sourceAvailable: false }),
     tool({ id: 'tool:1', callId: 'call-1', turnId: 'turn-1', step: 0, startedAt: iso(1_900), completedAt: iso(2_900), durationMs: 1_000, parentRequestId: 'request-1', toolName: 'read_file', argumentPreview: '{"path":"TrajectoryView.tsx"}', resultPreview: 'Loaded 337 lines' }),
     request({ id: 'request:2', requestId: 'request-2', roundId: 'round-2', turnId: 'turn-2', step: 1, startedAt: iso(3_200), firstTokenAt: iso(3_940), completedAt: iso(6_200), durationMs: 3_000, previousPromptFingerprint: 'system-a', promptFingerprint: 'system-b' }),
     message({ id: 'system:2', kind: 'system', turnId: 'turn-2', step: 1, startedAt: iso(3_200), completedAt: iso(3_200), durationMs: 0, preview: 'System Prompt Updated', itemId: 'prompt-2', itemIds: [], parentRequestId: 'request-2', thinkingPreview: '', previousPromptFingerprint: 'system-a', promptFingerprint: 'system-b' }),
-    message({ id: 'context:2', kind: 'context', turnId: 'turn-2', step: 1, startedAt: iso(3_280), completedAt: iso(3_300), durationMs: 20, preview: 'Workspace and active OpenSpec context', itemId: 'context-2', itemIds: ['context-2'], parentRequestId: 'request-2', thinkingPreview: '' }),
-    message({ id: 'assistant:2', kind: 'assistant', turnId: 'turn-2', step: 1, startedAt: iso(3_940), completedAt: iso(5_100), durationMs: 1_160, preview: 'The dense ledger and synchronized inspector are now wired.', itemId: 'answer-2', itemIds: ['reasoning-2', 'answer-2'], parentRequestId: 'request-2', thinkingPreview: 'Checking turn boundaries, request markers, and responsive behavior.' }),
+    message({ id: 'context:2', kind: 'context', turnId: 'turn-2', step: 1, startedAt: iso(3_280), completedAt: iso(3_300), durationMs: 20, preview: 'Workspace and active OpenSpec context', itemId: 'context-2', itemIds: ['context-2'], parentRequestId: 'request-2', thinkingPreview: '', sourceAvailable: true, sourceType: 'model_context', sourceLabel: 'Model context' }),
+    message({ id: 'assistant:2', kind: 'assistant', turnId: 'turn-2', step: 1, startedAt: iso(3_940), completedAt: iso(5_100), durationMs: 1_160, preview: 'The dense ledger and synchronized inspector are now wired.', itemId: 'answer-2', itemIds: ['reasoning-2', 'answer-2'], parentRequestId: 'request-2', thinkingPreview: 'Checking turn boundaries, request markers, and responsive behavior.', sourceAvailable: false }),
     tool({ id: 'tool:2', callId: 'call-2', turnId: 'turn-2', step: 1, startedAt: iso(5_200), completedAt: iso(6_000), durationMs: 800, parentRequestId: 'request-2', toolName: 'run_tests', argumentPreview: '{"suite":"trajectory"}', resultPreview: '19 tests passed' }),
     tool({ id: 'subtool:2', kind: 'subtool', callId: 'child-2', parentCallId: 'call-2', turnId: 'turn-2', step: 1, startedAt: iso(5_400), completedAt: iso(5_900), durationMs: 500, parentRequestId: 'request-2', toolName: 'vitest', argumentPreview: '', resultPreview: 'renderer suite passed' }),
     message({ id: 'compacted:2', kind: 'compacted', turnId: 'turn-2', step: 1, startedAt: iso(6_100), completedAt: iso(6_120), durationMs: 20, preview: 'Older context compacted into a stable summary.', itemId: 'compact-2', itemIds: ['compact-2'], parentRequestId: 'request-2', thinkingPreview: '' })
@@ -178,6 +178,26 @@ async function fixtureDetail(
   recordId: string,
   section: TrajectoryDetailSection
 ): Promise<TrajectoryDetail> {
+  if (section === 'raw') {
+    const blocks = recordId === 'assistant:1'
+      ? [
+          { type: 'thinking', content: 'Inspecting the renderer structure and timeline geometry.' },
+          { type: 'text', content: 'I will inspect the implementation and reproduce the Harness interaction model.' },
+          { type: 'tool-call', content: { path: 'TrajectoryView.tsx' }, callId: 'call-1', toolName: 'read_file' }
+        ]
+      : [{ type: 'text', content: 'Review the current implementation and fix the trajectory UI.' }]
+    return { schemaVersion: 2, recordId, section, state: 'available', truncated: false, content: { kind: 'blocks', blocks } }
+  }
+  if (section === 'source') {
+    return {
+      schemaVersion: 2,
+      recordId,
+      section,
+      state: 'available',
+      truncated: false,
+      content: { kind: 'message-source', label: 'User', value: { kind: 'user' } }
+    }
+  }
   return {
     schemaVersion: 2,
     recordId,

@@ -95,6 +95,8 @@ export const trajectoryMessageRecordSchema = recordBaseSchema.extend({
   itemIds: z.array(z.string()),
   parentRequestId: z.string().optional(),
   sourceType: z.string().optional(),
+  sourceAvailable: z.boolean().optional(),
+  sourceLabel: z.string().optional(),
   thinkingPreview: z.string(),
   attachmentIds: z.array(z.string()),
   promptFingerprint: z.string().optional(),

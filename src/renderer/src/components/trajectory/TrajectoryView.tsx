@@ -126,6 +126,10 @@ export function TrajectoryView({
             onWidthChange={(inspectorWidth) => update(threadId, { inspectorWidth })}
             onClose={() => update(threadId, { selectedRecordId: null, selectedRequestId: null })}
             onSelectParentRequest={(selectedRequestId) => update(threadId, { selectedRequestId, selectedRecordId: null })}
+            onSelectToolCall={(callId) => {
+              const target = layout.cells.find((cell) => cell.callId === callId)
+              if (target) update(threadId, { selectedRecordId: target.id, selectedRequestId: null })
+            }}
             loadDetail={detailLoader}
           />
         </div>

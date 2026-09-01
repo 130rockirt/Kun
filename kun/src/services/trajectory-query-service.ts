@@ -232,6 +232,7 @@ function projectItems(items: TurnItem[], requests: TrajectoryRequestRecord[]): T
         ? 'System Prompt Updated'
         : 'Initial System Prompt',
       detailState: request.detailState,
+      sourceAvailable: false,
       promptFingerprint: request.promptFingerprint,
       ...(request.previousPromptFingerprint
         ? { previousPromptFingerprint: request.previousPromptFingerprint }
@@ -261,11 +262,9 @@ function projectItems(items: TurnItem[], requests: TrajectoryRequestRecord[]): T
       assistantGroups.set(key, group)
       continue
     }
-    if (item.kind === 'tool_result' || ![
-      'user_message', 'model_context', 'runtime_context_source', 'compaction'
-    ].includes(item.kind)) continue
+    if (!isTrajectoryMessageItem(item)) continue
     const kind = item.kind === 'user_message'
-      ? 'user'
+      ? item.messageSource ? 'context' : 'user'
       : item.kind === 'compaction'
         ? 'compacted'
         : 'context'
@@ -286,7 +285,9 @@ function projectItems(items: TurnItem[], requests: TrajectoryRequestRecord[]): T
       ...(request ? { parentRequestId: request.requestId } : {}),
       preview: boundedPreview(itemPreview(item)),
       detailState: 'available',
-      sourceType: item.kind,
+      sourceType: item.kind === 'user_message' ? item.messageSource ?? 'user' : item.kind,
+      sourceAvailable: item.kind !== 'compaction',
+      ...(item.kind !== 'compaction' ? { sourceLabel: messageSourceLabel(item) } : {}),
       thinkingPreview: '',
       attachmentIds: item.kind === 'user_message' ? item.attachmentIds ?? [] : []
     })
@@ -323,10 +324,30 @@ function projectItems(items: TurnItem[], requests: TrajectoryRequestRecord[]): T
       thinkingPreview: boundedPreview(thinking.join('\n')),
       detailState: 'available',
       sourceType: 'assistant',
+      sourceAvailable: false,
       attachmentIds: []
     })
   }
   return records
+}
+
+function messageSourceLabel(item: Extract<TurnItem, {
+  kind: 'user_message' | 'model_context' | 'runtime_context_source' | 'compaction'
+}>): string {
+  if (item.kind === 'model_context') return 'Model context'
+  if (item.kind === 'runtime_context_source') return 'Runtime context'
+  if (item.kind === 'compaction') return 'Compaction'
+  if (!item.messageSource) return 'User'
+  return item.messageSource.split('_').map((part) =>
+    `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`
+  ).join(' ')
+}
+
+function isTrajectoryMessageItem(item: TurnItem): item is Extract<TurnItem, {
+  kind: 'user_message' | 'model_context' | 'runtime_context_source' | 'compaction'
+}> {
+  return item.kind === 'user_message' || item.kind === 'model_context' ||
+    item.kind === 'runtime_context_source' || item.kind === 'compaction'
 }
 
 function projectTool(

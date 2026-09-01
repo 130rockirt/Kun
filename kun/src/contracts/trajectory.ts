@@ -84,12 +84,37 @@ export const TrajectoryMessageRecordSchema = TrajectoryRecordBaseSchema.extend({
   itemIds: z.array(z.string()).default([]),
   parentRequestId: z.string().min(1).optional(),
   sourceType: z.string().max(128).optional(),
+  sourceAvailable: z.boolean().optional(),
+  sourceLabel: z.string().max(128).optional(),
   thinkingPreview: z.string().max(2_048).default(''),
   attachmentIds: z.array(z.string()).default([]),
   promptFingerprint: z.string().min(1).optional(),
   previousPromptFingerprint: z.string().min(1).optional()
 })
 export type TrajectoryMessageRecord = z.infer<typeof TrajectoryMessageRecordSchema>
+
+export const TrajectoryRawBlockSchema = z.object({
+  type: z.string().min(1).max(64),
+  content: z.unknown().optional(),
+  itemId: z.string().min(1).optional(),
+  attachmentId: z.string().min(1).optional(),
+  callId: z.string().min(1).optional(),
+  toolName: z.string().min(1).optional()
+})
+export type TrajectoryRawBlock = z.infer<typeof TrajectoryRawBlockSchema>
+
+export const TrajectoryRawDetailContentSchema = z.object({
+  kind: z.literal('blocks'),
+  blocks: z.array(TrajectoryRawBlockSchema)
+})
+export type TrajectoryRawDetailContent = z.infer<typeof TrajectoryRawDetailContentSchema>
+
+export const TrajectoryMessageSourceDetailSchema = z.object({
+  kind: z.literal('message-source'),
+  label: z.string().min(1).max(128),
+  value: z.unknown()
+})
+export type TrajectoryMessageSourceDetail = z.infer<typeof TrajectoryMessageSourceDetailSchema>
 
 export const TrajectoryRecordSchema = z.discriminatedUnion('kind', [
   TrajectoryRequestRecordSchema,

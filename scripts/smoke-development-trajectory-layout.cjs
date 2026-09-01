@@ -142,6 +142,45 @@ async function main() {
     await page.locator('aside [data-trajectory-summary]').waitFor({ state: 'visible' })
     const rowClickOpenedInspector = await page.locator('aside').isVisible()
 
+    await page.locator('[data-trajectory-row-key="user:1"]').click()
+    await page.getByRole('tab', { name: 'Raw' }).click()
+    const rawBlocks = page.locator('[data-trajectory-raw-block]')
+    await rawBlocks.first().waitFor({ state: 'visible' })
+    const rawBlockCount = await rawBlocks.count()
+    const rawText = await page.locator('[data-testid="trajectory-raw-blocks"]').innerText()
+    if (rawBlockCount !== 1 || !rawText.includes('Review the current implementation')) {
+      throw new Error(`User Raw did not render its ordered content block: ${JSON.stringify({ rawBlockCount, rawText })}`)
+    }
+    if (/threadId|roundId|schemaVersion/.test(rawText)) {
+      throw new Error(`User Raw leaked its trajectory envelope: ${rawText}`)
+    }
+    const rawEvidencePath = join(evidenceRoot, 'inspector-user-raw-light.png')
+    await page.screenshot({ path: rawEvidencePath })
+
+    await page.getByRole('tab', { name: 'Source' }).click()
+    const sourceTree = page.getByRole('tree', { name: 'Message source' })
+    await sourceTree.waitFor({ state: 'visible' })
+    const sourceText = await sourceTree.innerText()
+    if (!sourceText.includes('user') || /Review the current|threadId|workspace/.test(sourceText)) {
+      throw new Error(`User Source did not isolate producer provenance: ${sourceText}`)
+    }
+    const sourceLightEvidencePath = join(evidenceRoot, 'inspector-user-source-light.png')
+    await page.screenshot({ path: sourceLightEvidencePath })
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'dark' })
+    await page.waitForTimeout(100)
+    const sourceDarkEvidencePath = join(evidenceRoot, 'inspector-user-source-dark.png')
+    await page.screenshot({ path: sourceDarkEvidencePath })
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'light' })
+
+    await page.locator('[data-trajectory-row-key="assistant:1"]').click()
+    if (await page.getByRole('tab', { name: 'Source' }).count()) {
+      throw new Error('Assistant exposed a Source tab without producer provenance')
+    }
+    await page.getByRole('tab', { name: 'Raw' }).click()
+    await page.locator('[data-trajectory-raw-block]').first().waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: /Block.*tool-call/i }).click()
+    await page.locator('[data-trajectory-row-key="tool:1"][data-selected="true"]').waitFor({ state: 'visible' })
+
     await capture({ electronApplication, page, evidenceRoot, scenario: 'long', theme: 'light', bounds: WIDE, name: 'interaction-scroll' })
     const scrollPane = page.locator('[data-trajectory-scroll]')
     await scrollPane.evaluate((element) => { element.scrollTop = 0 })
@@ -202,6 +241,12 @@ async function main() {
       evidenceRoot,
       captures,
       rowClickOpenedInspector,
+      rawSourceInspector: {
+        rawBlockCount,
+        rawEvidencePath,
+        sourceLightEvidencePath,
+        sourceDarkEvidencePath
+      },
       wheelScroll: { beforeScrollTop, afterScrollTop },
       rangeSelection: { focusedOutRows, evidencePath: rangeEvidencePath, ...rangeVisual },
       localSearchRows: filteredRows,

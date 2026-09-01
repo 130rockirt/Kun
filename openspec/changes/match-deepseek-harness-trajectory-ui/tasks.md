@@ -20,3 +20,10 @@
 - [x] 3.3 Update trajectory documentation and record MIT reference commit/source attribution.
 - [x] 3.4 Run focused tests, typecheck, Kun build, production build, changed-file ESLint, file-line, OpenSpec, and diff checks; separate baseline failures.
 - [x] 3.5 Commit, rebase onto latest local develop, resolve/retest conflicts, fast-forward merge, and remove the worktree/branch after containment proof.
+
+## 4. Raw and Source Inspector Parity Follow-up
+
+- [x] 4.1 Split trajectory Raw content blocks from allowlisted Source provenance in the on-demand detail projection, including legacy-safe and sensitive-data behavior.
+- [x] 4.2 Add DSH-style ordered Raw block and compact Source JSON-tree presenters, with Source-tab availability derived from real provenance.
+- [x] 4.3 Cover Raw/Source projection, redaction, compatibility, keyboard/copy interaction, and deterministic inspector rendering with focused tests and smoke evidence.
+- [x] 4.4 Run the scoped and repository validation gates, commit, rebase onto latest local develop, fast-forward merge, and remove the temporary worktree/branch after containment proof.

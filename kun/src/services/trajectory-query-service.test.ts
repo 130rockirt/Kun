@@ -3,8 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { TurnItem } from '../contracts/items.js'
+import type { TrajectoryMessageRecord } from '../contracts/trajectory.js'
 import type { SessionStore } from '../ports/session-store.js'
 import { LlmDebugRecorder } from './llm-debug-recorder.js'
+import {
+  projectMessageRawDetail,
+  projectMessageSourceDetail
+} from './trajectory-query-message-detail.js'
 import { TrajectoryQueryService } from './trajectory-query-service.js'
 
 describe('TrajectoryQueryService', () => {
@@ -203,5 +208,140 @@ describe('TrajectoryQueryService', () => {
     } finally {
       await rm(dataDir, { recursive: true, force: true })
     }
+  })
+
+  it('separates raw message blocks from whitelisted message source metadata', async () => {
+    const recorder = new LlmDebugRecorder()
+    const round = recorder.start({
+      threadId: 'thread-detail', turnId: 'turn-detail', provider: 'test', model: 'model-detail',
+      roundId: 'round-detail', step: 0, captureContent: false
+    })
+    const request = recorder.beginHttpAttempt(round, {
+      endpointFormat: 'chat_completions', attempt: 1, reason: 'initial',
+      url: 'https://provider.example/v1/chat/completions', headers: {}, bodyText: '{}'
+    })
+    request.startedAt = '2026-02-01T00:00:00.000Z'
+    recorder.captureChunk(round, { kind: 'completed', stopReason: 'tool_calls' })
+    await recorder.finish(round)
+
+    const base = {
+      threadId: 'thread-detail', turnId: 'turn-detail', status: 'completed' as const
+    }
+    const items: TurnItem[] = [
+      {
+        ...base, id: 'user-detail', kind: 'user_message', role: 'user',
+        text: 'inspect this', attachmentIds: ['attachment-detail'],
+        workspace: '/private/workspace', threadAgentSurface: 'code', agentSurface: 'code',
+        createdAt: '2026-02-01T00:00:00.010Z'
+      },
+      {
+        ...base, id: 'background-detail', kind: 'user_message', role: 'user',
+        text: '<background_subagent_completed>done</background_subagent_completed>',
+        messageSource: 'background_subagent',
+        createdAt: '2026-02-01T00:00:00.020Z'
+      },
+      {
+        ...base, id: 'reasoning-detail', kind: 'assistant_reasoning', role: 'assistant',
+        text: 'reason first', createdAt: '2026-02-01T00:00:00.100Z'
+      },
+      {
+        ...base, id: 'text-detail', kind: 'assistant_text', role: 'assistant',
+        text: 'answer second\nCookie: session=cookie-sentinel\nAWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF\nprefix data:image/png;base64,EMBEDDED_BINARY_SENTINEL',
+        createdAt: '2026-02-01T00:00:00.100Z'
+      },
+      {
+        ...base, id: 'tool-detail', kind: 'tool_call', role: 'assistant',
+        callId: 'call-detail', toolName: 'read', toolKind: 'tool_call',
+        arguments: {
+          path: 'src/example.ts',
+          authorization: 'Bearer sk-test-credential-key',
+          cookie: 'session=object-cookie-sentinel',
+          auth: 'object-auth-sentinel',
+          accessKeyId: 'object-access-key-sentinel',
+          credentials: { apiKey: 'sk-test-credential-key' },
+          image: 'data:image/png;base64,BASE64_SENTINEL',
+          note: 'prefix data:image/png;base64,EMBEDDED_OBJECT_BINARY_SENTINEL'
+        },
+        providerMetadata: { gemini: { thoughtSignature: 'provider-signature-sentinel' } },
+        createdAt: '2026-02-01T00:00:00.100Z'
+      }
+    ]
+    const sessions = { loadItems: async () => items } as unknown as SessionStore
+    const service = new TrajectoryQueryService(recorder, sessions)
+    const page = await service.page('thread-detail', { limit: 30, filter: 'all', query: '' })
+
+    const user = page.records.find((record) => record.id === 'item:user-detail')
+    expect(user).toMatchObject({ kind: 'user', sourceType: 'user', sourceAvailable: true })
+    const userRaw = await service.detail('thread-detail', 'item:user-detail', 'raw')
+    expect(userRaw).toMatchObject({
+      state: 'available',
+      content: {
+        kind: 'blocks',
+        blocks: [
+          { type: 'text', content: 'inspect this', itemId: 'user-detail' },
+          { type: 'attachment', attachmentId: 'attachment-detail', itemId: 'user-detail' }
+        ]
+      }
+    })
+    const userSource = await service.detail('thread-detail', 'item:user-detail', 'source')
+    expect(userSource).toMatchObject({
+      state: 'available',
+      content: { kind: 'message-source', label: 'User', value: { kind: 'user' } }
+    })
+    expect(JSON.stringify(userSource)).not.toMatch(/threadId|workspace|inspect this/)
+
+    const background = page.records.find((record) => record.id === 'item:background-detail')
+    expect(background).toMatchObject({
+      kind: 'context', sourceType: 'background_subagent', sourceLabel: 'Background Subagent'
+    })
+    const backgroundSource = await service.detail(
+      'thread-detail', 'item:background-detail', 'source'
+    )
+    expect(backgroundSource).toMatchObject({
+      state: 'available',
+      content: {
+        kind: 'message-source',
+        label: 'Background Subagent',
+        value: { kind: 'background_subagent' }
+      }
+    })
+
+    const assistantRaw = await service.detail(
+      'thread-detail', `assistant:${request.id}`, 'raw'
+    )
+    expect(assistantRaw).toMatchObject({
+      state: 'available',
+      content: {
+        kind: 'blocks',
+        blocks: [
+          { type: 'thinking', content: 'reason first', itemId: 'reasoning-detail' },
+          { type: 'text', content: expect.stringContaining('answer second'), itemId: 'text-detail' },
+          {
+            type: 'tool-call', itemId: 'tool-detail', callId: 'call-detail', toolName: 'read',
+            content: { path: 'src/example.ts' }
+          }
+        ]
+      }
+    })
+    const serializedRaw = JSON.stringify(assistantRaw)
+    expect(serializedRaw).not.toContain('providerMetadata')
+    expect(serializedRaw).not.toContain('provider-signature-sentinel')
+    expect(serializedRaw).not.toContain('sk-test-credential-key')
+    expect(serializedRaw).not.toContain('BASE64_SENTINEL')
+    expect(serializedRaw).not.toContain('cookie-sentinel')
+    expect(serializedRaw).not.toContain('object-auth-sentinel')
+    expect(serializedRaw).not.toContain('object-access-key-sentinel')
+    expect(serializedRaw).not.toContain('AKIA1234567890ABCDEF')
+    expect(serializedRaw).not.toContain('EMBEDDED_BINARY_SENTINEL')
+    expect(serializedRaw).not.toContain('EMBEDDED_OBJECT_BINARY_SENTINEL')
+
+    expect(user).toBeDefined()
+    const missingRecord = user as TrajectoryMessageRecord
+    expect(projectMessageRawDetail(missingRecord, [], [])).toMatchObject({
+      state: 'evicted', warning: 'referenced Session content is unavailable'
+    })
+    expect(projectMessageSourceDetail(missingRecord, [])).toMatchObject({
+      state: 'evicted', warning: 'referenced Session content is unavailable'
+    })
   })
 })
