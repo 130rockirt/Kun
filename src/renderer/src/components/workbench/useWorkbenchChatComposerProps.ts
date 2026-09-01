@@ -5,6 +5,7 @@ import {
   queuedMessageMatchesRunningTurn
 } from '../../store/queued-message-guidance'
 import { useChatStore } from '../../store/chat-store'
+import { canInlineEditQueuedMessage } from '../../store/queued-message-edit'
 import type { WorkbenchChatStageProps } from './WorkbenchChatStage'
 
 type ComposerProps = WorkbenchChatStageProps['composerProps']
@@ -78,6 +79,7 @@ type UseWorkbenchChatComposerPropsInput = {
   removeComposerFileReference: NonNullable<ComposerProps['onRemoveFileReference']>
   queuedMessages: QueuedUserMessage[]
   removeQueuedMessage: ComposerProps['onRemoveQueuedMessage']
+  editQueuedMessage: NonNullable<ComposerProps['onEditQueuedMessage']>
   guideQueuedMessage: NonNullable<ComposerProps['onGuideQueuedMessage']>
   interrupt: ComposerProps['onInterrupt']
   handleGuiPlanCommand: () => void | Promise<unknown>
@@ -167,6 +169,7 @@ export function useWorkbenchChatComposerProps({
   removeComposerFileReference,
   queuedMessages,
   removeQueuedMessage,
+  editQueuedMessage,
   guideQueuedMessage,
   interrupt,
   handleGuiPlanCommand,
@@ -266,8 +269,14 @@ export function useWorkbenchChatComposerProps({
       id: message.id,
       text: message.text,
       ...(message.deliveryState ? { deliveryState: message.deliveryState } : {}),
+      ...(message.waitForRuntimeAdmission ? { waitForRuntimeAdmission: true } : {}),
       ...(message.deliveryTurnId ? { deliveryTurnId: message.deliveryTurnId } : {}),
+      ...(message.deliveryUserMessageItemId
+        ? { deliveryUserMessageItemId: message.deliveryUserMessageItemId }
+        : {}),
       ...(message.displayText ? { displayText: message.displayText } : {}),
+      ...(message.errorCode ? { errorCode: message.errorCode } : {}),
+      ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
       ...(message.mode ? { mode: message.mode } : {}),
       ...(message.guiPlan ? { guiPlan: message.guiPlan } : {}),
       ...(message.attachmentIds?.length ? { attachmentIds: message.attachmentIds } : {}),
@@ -278,10 +287,12 @@ export function useWorkbenchChatComposerProps({
       ...(message.guiDesignMode ? { guiDesignMode: true } : {}),
       ...(message.guiDesignArtifact ? { guiDesignArtifact: message.guiDesignArtifact } : {}),
       ...(message.writeContext ? { writeContext: message.writeContext } : {}),
+      inlineEditEligible: canInlineEditQueuedMessage(message),
       guidanceEligible: canGuideQueuedMessage(message) &&
         queuedMessageMatchesRunningTurn(message, runningTurnMeta)
     })),
     onRemoveQueuedMessage: removeQueuedMessage,
+    onEditQueuedMessage: editQueuedMessage,
     onGuideQueuedMessage: guideQueuedMessage,
     onInterrupt: (options) => void interrupt(options),
     onPlanCommand: designTaskActive ? undefined : () => void handleGuiPlanCommand(),
@@ -367,6 +378,7 @@ export function useWorkbenchChatComposerProps({
     handlePickAttachments,
     handleSend,
     guideQueuedMessage,
+    editQueuedMessage,
     graphEnabled,
     input,
     interrupt,

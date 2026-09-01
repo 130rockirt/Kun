@@ -160,6 +160,7 @@ export type FloatingComposerProps = {
   modelControlVariant?: 'combined' | 'split'
   queuedMessages: QueuedComposerMessage[]
   onRemoveQueuedMessage: (id: string) => void
+  onEditQueuedMessage?: (id: string, text: string) => boolean | void | Promise<boolean | void>
   onGuideQueuedMessage?: (id: string) => void | Promise<unknown>
   attachments?: AttachmentReference[]
   attachmentUploadEnabled?: boolean

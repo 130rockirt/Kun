@@ -58,6 +58,7 @@ import {
   reconcileQueuedMessages,
   saveQueuedMessagesForThread
 } from './queued-message-persistence'
+import { editQueuedMessageInQueue } from './queued-message-edit'
 import {
   accountIdForComposerSelection,
   activeClawChannel,
@@ -170,7 +171,7 @@ import {
 export function createThreadQueueActions(
   context: StoreActionContext,
   runtime: ThreadActionRuntime
-): Pick<ChatState, 'drainQueuedMessages' | 'removeQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage'> {
+): Pick<ChatState, 'drainQueuedMessages' | 'removeQueuedMessage' | 'editQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage'> {
   const { set, get, sseAbortRef } = context
   return {
   drainQueuedMessages: async () => {
@@ -231,6 +232,19 @@ export function createThreadQueueActions(
     }
   },
 
+  editQueuedMessage: (id, text) => {
+    const edited = editQueuedMessageInQueue(
+      get().queuedMessages,
+      id,
+      text,
+      createClientTurnRequestId()
+    )
+    if (!edited.edited) return false
+    set({ queuedMessages: edited.messages })
+    runtime.persistActiveQueuedMessages()
+    return true
+  },
+
   reorderQueuedMessage: (id, targetId, position) => {
     set((state) => {
       if (id === targetId) return {}
@@ -258,6 +272,10 @@ export function createThreadQueueActions(
     const message = state.queuedMessages.find((candidate) => candidate.id === id)
     if (!message) return false
     if (message.deliveryState === 'paused' || message.deliveryState === 'failed') {
+      if (message.waitForRuntimeAdmission) {
+        set({ error: i18n.t('common:queuedMessageRetryUnavailable') })
+        return false
+      }
       if (state.busy) return false
       set((current) => ({
         queuedMessages: current.queuedMessages.map((candidate) => candidate.id === id

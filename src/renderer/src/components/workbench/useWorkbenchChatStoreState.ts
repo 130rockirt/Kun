@@ -64,6 +64,7 @@ export function useWorkbenchChatStoreState() {
       removeComposerContext: s.removeComposerContext,
       clearComposerContexts: s.clearComposerContexts,
       removeQueuedMessage: s.removeQueuedMessage,
+      editQueuedMessage: s.editQueuedMessage,
       guideQueuedMessage: s.guideQueuedMessage,
       interrupt: s.interrupt,
       probeRuntime: s.probeRuntime,
