@@ -203,7 +203,7 @@ Changelog 记录公开 Extension API，而不是 Kun 内部重构。每项包含
 
 ### v1.4.0 — 可恢复的 Agent 会话历史
 
-Compatible Kun: `>=0.3.9`。
+Compatible Kun: `>=0.3.8`。
 
 Added:
 
@@ -218,7 +218,7 @@ Security:
 
 Migration:
 
-- 需要可恢复会话历史的扩展升级到 `apiVersion: 1.4.0` 和 `engines.kun >=0.3.9`。既有 v1.3 及更早扩展继续兼容。
+- 需要可恢复会话历史的扩展升级到 `apiVersion: 1.4.0` 和 `engines.kun >=0.3.8`。既有 v1.3 及更早扩展继续兼容。
 
 ### v1.3.0 — 受保护的扩展秘密
 

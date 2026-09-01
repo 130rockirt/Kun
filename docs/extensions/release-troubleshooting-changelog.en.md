@@ -203,7 +203,7 @@ The public surface snapshots below are computed from package entries, public exp
 
 ### v1.4.0 — Recoverable Agent conversation history
 
-Compatible Kun: `>=0.3.9`.
+Compatible Kun: `>=0.3.8`.
 
 Added:
 
@@ -218,7 +218,7 @@ Security:
 
 Migration:
 
-- Extensions that need recoverable conversation history use `apiVersion: 1.4.0` and `engines.kun >=0.3.9`. Existing v1.3 and earlier extensions remain compatible.
+- Extensions that need recoverable conversation history use `apiVersion: 1.4.0` and `engines.kun >=0.3.8`. Existing v1.3 and earlier extensions remain compatible.
 
 ### v1.3.0 — Protected extension secrets
 
