@@ -36,23 +36,6 @@
   filter: drop-shadow(0 18px 26px rgba(15, 23, 42, 0.1));
 }
 
-.kun-startup-artwork__ground-glow {
-  position: absolute;
-  z-index: 0;
-  right: 2%;
-  bottom: 5%;
-  left: 12%;
-  height: 18%;
-  border-radius: 50%;
-  background: radial-gradient(
-    ellipse,
-    rgb(var(--kun-startup-accent-rgb) / 0.18) 0,
-    transparent 72%
-  );
-  animation: kun-startup-ground-pulse 2.8s ease-in-out infinite;
-  filter: blur(8px);
-}
-
 .kun-startup-artwork__variant-aura,
 .kun-startup-artwork__variant-streaks {
   position: absolute;
@@ -515,11 +498,6 @@
   animation: none !important;
 }
 
-.kun-startup__artwork[data-motion='paused'] .kun-startup-artwork__ground-glow {
-  opacity: 0.72;
-  transform: scale(1);
-}
-
 .kun-startup__artwork[data-motion='paused'] .kun-startup-artwork__orbit-runner {
   transform: rotate(48deg);
 }
@@ -596,7 +574,6 @@
     animation: none !important;
   }
 
-  .kun-startup-artwork__ground-glow,
   .kun-startup-artwork__variant-aura {
     opacity: 0.72;
     transform: scale(1);

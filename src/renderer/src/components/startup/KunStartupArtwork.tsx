@@ -24,7 +24,6 @@ export function KunStartupArtwork({
       data-testid="kun-startup-artwork"
       aria-hidden="true"
     >
-      <span className="kun-startup-artwork__ground-glow kun-startup__motion" />
       <span className="kun-startup-artwork__variant-aura kun-startup__motion" />
       <span className="kun-startup-artwork__variant-streaks kun-startup__motion" />
       <span className="kun-startup-artwork__prop-wrap kun-startup__motion">

@@ -49,6 +49,8 @@ describe('KunStartupArtwork variants', () => {
     expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG[variant].avatarUrl}"`)
     expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG[variant].birdUrl}"`)
     expect(html).toContain(`src="${KUN_STARTUP_VARIANT_CONFIG[variant].propUrl}"`)
+    expect(html).not.toContain('kun-startup-artwork__console')
+    expect(html).not.toContain('kun-startup-artwork__ground-glow')
   })
 
   it('defaults to the signal variant for existing callers', () => {
@@ -89,6 +91,5 @@ describe('KunStartupArtwork variants', () => {
 
     expect(html).toContain('kun-startup-artwork__workspace-flow kun-startup__motion')
     expect(html).toContain('kun-startup-artwork__workspace-icon')
-    expect(html).not.toContain('kun-startup-artwork__console')
   })
 })

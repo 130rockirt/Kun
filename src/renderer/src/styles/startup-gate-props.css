@@ -50,11 +50,10 @@
 }
 
 .kun-startup__artwork[data-variant='focus'] .kun-startup-artwork__prop-wrap {
-  z-index: 2;
-  right: 0;
-  bottom: -14%;
-  width: 53%;
-  transform: scaleY(0.58);
+  z-index: 4;
+  top: 27%;
+  right: 45%;
+  width: 16%;
   animation: kun-startup-prop-focus 5.2s ease-in-out infinite;
 }
 
@@ -89,8 +88,8 @@
 }
 
 @keyframes kun-startup-prop-focus {
-  0%, 100% { opacity: 0.52; transform: scaleY(0.58) rotate(-2deg); }
-  50% { opacity: 0.84; transform: scaleY(0.58) rotate(2deg); }
+  0%, 100% { opacity: 0.52; transform: translate3d(0, 2px, 0) rotate(-2deg); }
+  50% { opacity: 0.84; transform: translate3d(0, -3px, 0) rotate(2deg); }
 }
 
 @keyframes kun-startup-prop-cast {
@@ -113,7 +112,6 @@
   }
 
   .kun-startup__artwork[data-variant='focus'] .kun-startup-artwork__prop-wrap {
-    bottom: -10%;
-    width: 50%;
+    width: 14%;
   }
 }

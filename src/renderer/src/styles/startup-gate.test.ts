@@ -43,4 +43,13 @@ describe('Kun startup motion styles', () => {
         .toBeLessThanOrEqual(1)
     }
   })
+
+  it('removes the shared floor pad and presents the focus lotus as a compact signal', async () => {
+    const css = await readStylesheetBundle(new URL('./startup-gate.css', import.meta.url))
+
+    expect(css).not.toContain('.kun-startup-artwork__ground-glow')
+    expect(css).toMatch(
+      /\[data-variant='focus'\] \.kun-startup-artwork__prop-wrap\s*{[\s\S]*?top: 27%;[\s\S]*?right: 45%;[\s\S]*?width: 16%;/
+    )
+  })
 })

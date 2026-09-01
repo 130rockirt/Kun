@@ -23,11 +23,6 @@
   50% { transform: translate3d(0, -3px, 0); }
 }
 
-@keyframes kun-startup-ground-pulse {
-  0%, 100% { opacity: 0.52; }
-  50% { opacity: 0.88; }
-}
-
 @keyframes kun-startup-variant-aura {
   0%, 100% { opacity: 0.42; }
   50% { opacity: 0.72; }
