@@ -550,7 +550,7 @@
   "queuedMessageRetry": "대기 메시지 다시 시도",
   "queuedMessageRetryUnavailable": "이 임시 메시지는 안전하게 다시 시도할 수 없습니다. 삭제한 뒤 다시 제출하세요",
   "queuedMessageFailed": "전송 실패",
-  "queuedMessageReorder": "드래그하여 대기 순서 변경",
+  "queuedMessageReorder": "드래그하거나 위/아래 방향키로 대기 순서 변경",
   "guideQueuedMessage": "가이드",
   "queuedMessagePaused": "일시 중지됨",
   "sendPausedQueuedMessage": "보내기",

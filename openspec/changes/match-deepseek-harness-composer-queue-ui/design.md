@@ -11,13 +11,14 @@ The source checkout contains unrelated Startup UI work, so implementation must s
 - Match the frozen Harness QueueDock hierarchy, geometry, collapse rules, editing workflow, action order, accessibility, theme behavior, and narrow-width containment.
 - Preserve Kun's existing FIFO delivery, image/Plan/Graph guidance eligibility, paused/failed recovery, idempotency, frozen model/provider/routing snapshots, and thread-local persistence.
 - Make failed queued messages visible and recoverable.
+- Let users move later queued messages earlier through direct manipulation without leaving the attached QueueDock.
 - Add deterministic component, store, and Electron interaction/visual evidence.
 
 **Non-Goals:**
 
 - Change runtime steering routes, terminal sealing, delivery order, persistence format, send-key preferences, or ordinary busy-turn submission behavior.
 - Add DSH's global queue/steer shortcut policy or automatically steer queued messages.
-- Expose drag reorder or an overflow menu in the QueueDock; the existing store reorder action may remain for compatibility but is not rendered.
+- Add an overflow menu or allow ordering while the list is collapsed, a row is being edited, or another queue mutation is pending.
 - Restore unrelated turn-section changes from the reverted historical QueueDock experiment.
 
 ## Decisions
@@ -44,6 +45,12 @@ Save is rejected for blank text, unsupported payloads, missing ids, or rows alre
 
 The dock keeps one local busy id while Guide/Retry or future asynchronous Edit operations settle. Collapse and all row mutations are disabled during that window. A failed Guide/Retry keeps the authoritative row; existing store error reporting remains the user notification path. Remove stays synchronous but is disabled while another action owns the dock.
 
+### Reorder expanded queues by stable identity
+
+When two or more visible rows are expanded and no edit/mutation is active, each row exposes a 28px drag handle. HTML drag-over compares the pointer with the target row midpoint to choose `before` or `after`, renders a 2px insertion indicator, and calls the existing persisted `reorderQueuedMessage(sourceId, targetId, position)` action on drop. The queue store remains the single ordering authority; local drag state never mutates a shadow array.
+
+The same handle supports ArrowUp/ArrowDown to move one visible position for keyboard users. Single-row and collapsed queues expose no handle. Dragging is cancelled when queue ownership changes, the source row disappears, editing begins, or an asynchronous action starts.
+
 ### Use Kun semantic tokens with fixed Harness geometry
 
 A CSS module owns the 36px header/row, 28px editor/actions, 10px action spacing, 12px top corners, square bottom, 180px list cap, separators, ellipsis, focus rings, and a 3px tuck beneath the composer top edge. Colors map the Harness tip/border/label semantics to Kun tokens; no literal light-only colors or queue-specific dark branch is introduced.
@@ -54,7 +61,8 @@ A CSS module owns the 36px header/row, 28px editor/actions, 10px action spacing,
 - [A live queue update removes the row being edited] → Cancel the local editor when its stable id disappears.
 - [A second item arrives during edit] → Interaction state forces the newly multi-row dock open.
 - [Long queues grow over the composer] → Cap the list at 180px and scroll only the list.
-- [Existing hover/reorder tests encode the regressed design] → Replace them with reference-derived dock tests instead of retaining contradictory assertions.
+- [Existing hover/Portal tests encode the regressed design] → Replace them with reference-derived dock tests while adding ordering coverage for the user-requested extension.
+- [Dragging races with queue delivery] → Address rows by stable ids, disable drag during active mutations, clear transient drag state on live retirement, and let no-op/missing-id store operations safely converge.
 - [Failed items contain long error text] → Keep the row at 36px, show a compact failure indicator/status and expose the full error through accessible title text.
 - [A provisional admission failure is retried after its waiter settled] → Disable unsafe retry, retain the row, and direct the user to remove and resubmit.
 

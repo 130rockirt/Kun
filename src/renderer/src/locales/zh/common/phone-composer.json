@@ -585,7 +585,7 @@
   "queuedMessageRetry": "重试排队消息",
   "queuedMessageRetryUnavailable": "这条临时消息无法安全重试，请移除后重新提交",
   "queuedMessageFailed": "发送失败",
-  "queuedMessageReorder": "拖动调整排队顺序",
+  "queuedMessageReorder": "拖动或使用上下方向键调整排队顺序",
   "guideQueuedMessage": "引导",
   "queuedMessagePaused": "已暂停",
   "sendPausedQueuedMessage": "发送",

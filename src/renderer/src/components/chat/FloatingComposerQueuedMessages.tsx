@@ -2,7 +2,9 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement
 } from 'react'
@@ -11,6 +13,7 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  GripVertical,
   ImageIcon,
   Loader2,
   MessageCircle,
@@ -69,6 +72,13 @@ export type QueuedComposerMessage = {
 }
 
 type QueueActionKind = 'edit' | 'remove' | 'guide'
+type QueueDropPosition = 'before' | 'after'
+
+type QueueDragState = {
+  sourceId: string
+  targetId?: string
+  position?: QueueDropPosition
+}
 
 type Props = {
   messages: QueuedComposerMessage[]
@@ -77,6 +87,7 @@ type Props = {
   onRemove: (id: string) => void
   onGuide?: (id: string) => void | Promise<unknown>
   onEdit?: (id: string, text: string) => boolean | void | Promise<boolean | void>
+  onReorder?: (id: string, targetId: string, position: QueueDropPosition) => void
 }
 
 /** True when the steer contract can preserve the whole queued payload. */
@@ -119,14 +130,22 @@ export function FloatingComposerQueuedMessages({
   guidanceTarget = 'turn',
   onRemove,
   onGuide,
-  onEdit
+  onEdit,
+  onReorder
 }: Props): ReactElement | null {
   const { t } = useTranslation('common')
   const queue = useMemo(() => visibleQueue(messages), [messages])
   const [collapsed, setCollapsed] = useState(true)
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [busy, setBusy] = useState<{ id: string; kind: QueueActionKind } | null>(null)
+  const [dragState, setDragState] = useState<QueueDragState | null>(null)
+  const reorderHandleRefs = useRef(new Map<string, HTMLButtonElement>())
   const listId = useId()
+  const queueRevision = useMemo(() => JSON.stringify(queue.map((message) => [
+    message.id,
+    message.deliveryState,
+    message.text
+  ])), [queue])
 
   useEffect(() => {
     if (queue.length === 0) setCollapsed(true)
@@ -135,10 +154,88 @@ export function FloatingComposerQueuedMessages({
     ))) setEditing(null)
   }, [editing, queue])
 
+  useEffect(() => {
+    setDragState(null)
+  }, [queueRevision])
+
+  useEffect(() => {
+    if (editing || busy) setDragState(null)
+  }, [busy, editing])
+
   if (queue.length === 0) return null
 
   const interactionActive = editing !== null || busy !== null
   const expanded = queue.length === 1 || !collapsed || interactionActive
+  const reorderEnabled = Boolean(onReorder && expanded && queue.length > 1 && !interactionActive)
+
+  const focusReorderHandle = (id: string): void => {
+    queueMicrotask(() => reorderHandleRefs.current.get(id)?.focus())
+  }
+
+  const reorderWithKeyboard = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    id: string
+  ): void => {
+    if (!reorderEnabled || !onReorder || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) {
+      return
+    }
+    const sourceIndex = queue.findIndex((message) => message.id === id)
+    const targetIndex = event.key === 'ArrowUp' ? sourceIndex - 1 : sourceIndex + 1
+    const target = queue[targetIndex]
+    if (sourceIndex < 0 || !target) return
+    event.preventDefault()
+    event.stopPropagation()
+    onReorder(id, target.id, event.key === 'ArrowUp' ? 'before' : 'after')
+    focusReorderHandle(id)
+  }
+
+  const startDragging = (event: ReactDragEvent<HTMLButtonElement>, id: string): void => {
+    if (!reorderEnabled) {
+      event.preventDefault()
+      return
+    }
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', id)
+    setDragState({ sourceId: id })
+  }
+
+  const updateDropTarget = (
+    event: ReactDragEvent<HTMLLIElement>,
+    targetId: string
+  ): void => {
+    if (!reorderEnabled || !dragState || dragState.sourceId === targetId) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const position: QueueDropPosition = event.clientY < bounds.top + bounds.height / 2
+      ? 'before'
+      : 'after'
+    setDragState((current) => current
+      ? { sourceId: current.sourceId, targetId, position }
+      : null)
+  }
+
+  const dropQueuedMessage = (
+    event: ReactDragEvent<HTMLLIElement>,
+    targetId: string
+  ): void => {
+    event.preventDefault()
+    const sourceId = dragState?.sourceId || event.dataTransfer.getData('text/plain')
+    const position = dragState?.targetId === targetId ? dragState.position : undefined
+    const ids = new Set(queue.map((message) => message.id))
+    if (
+      reorderEnabled &&
+      onReorder &&
+      sourceId &&
+      sourceId !== targetId &&
+      position &&
+      ids.has(sourceId) &&
+      ids.has(targetId)
+    ) {
+      onReorder(sourceId, targetId, position)
+    }
+    setDragState(null)
+  }
   const applyAction = async (
     id: string,
     kind: QueueActionKind,
@@ -170,6 +267,7 @@ export function FloatingComposerQueuedMessages({
       data-queue-dock
       data-queued-message-count={queue.length}
       data-busy-message-id={busy?.id}
+      data-queue-reorder-enabled={reorderEnabled || undefined}
     >
       <div className={css.panel}>
         {queue.length > 1 ? (
@@ -236,11 +334,45 @@ export function FloatingComposerQueuedMessages({
                 className={css.row}
                 data-queued-message-id={message.id}
                 data-delivery-state={message.deliveryState ?? 'pending'}
+                data-queue-dragging={dragState?.sourceId === message.id || undefined}
+                data-drop-position={dragState?.targetId === message.id
+                  ? dragState.position
+                  : undefined}
+                onDragOver={(event) => updateDropTarget(event, message.id)}
+                onDragLeave={(event) => {
+                  if (
+                    event.currentTarget.contains(event.relatedTarget as Node | null) ||
+                    dragState?.targetId !== message.id
+                  ) return
+                  setDragState((current) => current ? { sourceId: current.sourceId } : null)
+                }}
+                onDrop={(event) => dropQueuedMessage(event, message.id)}
               >
                 {queue.length === 1 ? (
                   <span className={css.lead} aria-hidden="true">
                     <MessageCircle size={14} strokeWidth={1.7} />
                   </span>
+                ) : null}
+
+                {reorderEnabled ? (
+                  <button
+                    type="button"
+                    className={css.dragHandle}
+                    data-queued-message-drag-handle
+                    data-queued-message-drag-id={message.id}
+                    draggable={reorderEnabled}
+                    aria-label={t('queuedMessageReorder')}
+                    title={t('queuedMessageReorder')}
+                    ref={(node) => {
+                      if (node) reorderHandleRefs.current.set(message.id, node)
+                      else reorderHandleRefs.current.delete(message.id)
+                    }}
+                    onKeyDown={(event) => reorderWithKeyboard(event, message.id)}
+                    onDragStart={(event) => startDragging(event, message.id)}
+                    onDragEnd={() => setDragState(null)}
+                  >
+                    <GripVertical size={15} strokeWidth={1.8} aria-hidden="true" />
+                  </button>
                 ) : null}
 
                 {isEditing ? (

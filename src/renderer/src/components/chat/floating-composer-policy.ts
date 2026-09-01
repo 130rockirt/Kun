@@ -161,6 +161,11 @@ export type FloatingComposerProps = {
   queuedMessages: QueuedComposerMessage[]
   onRemoveQueuedMessage: (id: string) => void
   onEditQueuedMessage?: (id: string, text: string) => boolean | void | Promise<boolean | void>
+  onReorderQueuedMessage?: (
+    id: string,
+    targetId: string,
+    position: 'before' | 'after'
+  ) => void
   onGuideQueuedMessage?: (id: string) => void | Promise<unknown>
   attachments?: AttachmentReference[]
   attachmentUploadEnabled?: boolean

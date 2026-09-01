@@ -72,6 +72,25 @@ Kun SHALL use the frozen Harness QueueDock dimensions and interaction semantics 
 - **WHEN** light, dark, custom-theme, or reduced-motion preferences are active
 - **THEN** the dock uses semantic surfaces/borders/text, preserves readable state contrast, and does not require motion to communicate queue state
 
+### Requirement: Expanded queues can be reordered
+Kun SHALL let users reorder two or more visible queued rows inside an expanded QueueDock, and SHALL persist the resulting order as the FIFO order used for later delivery.
+
+#### Scenario: Drag before or after a row
+- **WHEN** the user drags one queued row over the upper or lower half of another visible row and drops it
+- **THEN** a visible insertion indicator identifies the before/after target and the store persists the source row at that position by stable queue id
+
+#### Scenario: Keyboard reorder
+- **WHEN** a focused drag handle receives ArrowUp or ArrowDown and a visible neighbor exists
+- **THEN** the row moves one position before or after that neighbor and focus remains on its stable handle
+
+#### Scenario: Ordering is unavailable
+- **WHEN** the queue is collapsed, contains one visible row, is being edited, or has a pending mutation
+- **THEN** drag handles are hidden or disabled and no reorder operation is emitted
+
+#### Scenario: Queue changes during drag
+- **WHEN** the dragged row or target is retired by live queue state before drop
+- **THEN** transient drag state clears and no unrelated row is reordered
+
 ### Requirement: Existing queue delivery contract remains compatible
 The QueueDock SHALL reuse Kun's current renderer queue, persistence, FIFO drain, and mid-turn guidance contracts without changing runtime or disk schemas.
 

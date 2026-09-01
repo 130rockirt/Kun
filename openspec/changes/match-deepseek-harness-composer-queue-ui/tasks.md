@@ -18,3 +18,10 @@
 - [x] 3.3 Add a deterministic Electron QueueDock smoke covering single/multi disclosure, inline edit, failure/retry, 36/28/12/180 geometry, attachment to composer, narrow layout, and light/dark screenshots.
 - [x] 3.4 Run focused tests, `npm run typecheck`, `npm run build:kun`, `npm run build`, changed-file ESLint, file-line/OpenSpec/diff checks, and separate existing baseline failures.
 - [x] 3.5 Commit, rebase onto latest local `develop`, rerun affected checks, fast-forward merge without overwriting source changes, prove containment, and remove the worktree/branch.
+
+## 4. Multi-row Ordering Follow-up
+
+- [x] 4.1 Wire the existing persisted `reorderQueuedMessage` action through every composer variant to the attached QueueDock.
+- [x] 4.2 Add expanded-list drag handles, midpoint before/after drop indicators, keyboard ArrowUp/ArrowDown ordering, and live drag-state cleanup without changing DSH disclosure geometry.
+- [x] 4.3 Add focused component/store and Electron smoke coverage for drag, keyboard order, persistence, action locking, collapsed/single states, and race-safe no-ops.
+- [x] 4.4 Run validation, commit, rebase onto latest local `develop`, fast-forward merge, prove containment, and remove the worktree/branch.

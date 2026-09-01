@@ -550,7 +550,7 @@
   "queuedMessageRetry": "待機メッセージを再試行",
   "queuedMessageRetryUnavailable": "この仮メッセージは安全に再試行できません。削除して再送信してください",
   "queuedMessageFailed": "送信に失敗しました",
-  "queuedMessageReorder": "ドラッグしてキューの順序を変更",
+  "queuedMessageReorder": "ドラッグまたは上下キーでキューの順序を変更",
   "guideQueuedMessage": "ガイド",
   "queuedMessagePaused": "一時停止中",
   "sendPausedQueuedMessage": "送信",

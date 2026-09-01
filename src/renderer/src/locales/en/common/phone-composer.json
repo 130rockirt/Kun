@@ -587,7 +587,7 @@
   "queuedMessageRetry": "Retry queued message",
   "queuedMessageRetryUnavailable": "This provisional message cannot be retried safely; remove it and submit again",
   "queuedMessageFailed": "Delivery failed",
-  "queuedMessageReorder": "Drag to reorder queued message",
+  "queuedMessageReorder": "Drag or use the arrow keys to reorder",
   "guideQueuedMessage": "Guide",
   "queuedMessagePaused": "Paused",
   "sendPausedQueuedMessage": "Send",

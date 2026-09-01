@@ -49,6 +49,7 @@
 }
 
 .header:focus-visible,
+.dragHandle:focus-visible,
 .action:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--ds-accent) 48%, transparent);
   outline-offset: -2px;
@@ -89,8 +90,33 @@
 }
 
 .row {
+  position: relative;
   padding: 4px 5px 4px 12px;
   border-radius: 8px;
+}
+
+.row[data-queue-dragging='true'] {
+  opacity: 0.55;
+}
+
+.row[data-drop-position]::before {
+  position: absolute;
+  z-index: 1;
+  right: 8px;
+  left: 8px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--ds-accent);
+  content: '';
+  pointer-events: none;
+}
+
+.row[data-drop-position='before']::before {
+  top: 0;
+}
+
+.row[data-drop-position='after']::before {
+  bottom: 0;
 }
 
 .row + .row {
@@ -162,6 +188,29 @@
   flex: none;
   align-items: center;
   gap: 10px;
+}
+
+.dragHandle {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ds-text-faint);
+  cursor: grab;
+}
+
+.dragHandle:hover {
+  background: var(--ds-surface-hover);
+  color: var(--ds-text);
+}
+
+.dragHandle:active {
+  cursor: grabbing;
 }
 
 .action {

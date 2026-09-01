@@ -550,7 +550,7 @@
   "queuedMessageRetry": "Повторить сообщение из очереди",
   "queuedMessageRetryUnavailable": "Это временное сообщение нельзя безопасно повторить; удалите его и отправьте снова",
   "queuedMessageFailed": "Ошибка отправки",
-  "queuedMessageReorder": "Перетащите, чтобы изменить порядок",
+  "queuedMessageReorder": "Перетащите или используйте стрелки вверх/вниз, чтобы изменить порядок",
   "guideQueuedMessage": "Руководство",
   "queuedMessagePaused": "Приостановлено",
   "sendPausedQueuedMessage": "Отправить",

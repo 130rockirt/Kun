@@ -54,6 +54,7 @@ function ComposerQueueFixture({
   return (
     <main
       data-testid="composer-queue-smoke-stage"
+      data-queued-message-order={messages.map((message) => message.id).join(',')}
       className="ds-composer-dock"
       style={{ position: 'relative', width: 'min(980px, 100%)' }}
     >
@@ -80,8 +81,11 @@ function ComposerQueueFixture({
           )))
           return true
         }}
+        onReorderQueuedMessage={(id, targetId, position) => {
+          setMessages((current) => reorderMessages(current, id, targetId, position))
+        }}
         onGuideQueuedMessage={(id) => {
-          if (scenario !== 'failed') return Promise.resolve()
+          if (scenario !== 'failed' && scenario !== 'multi') return Promise.resolve()
           return new Promise<void>((resolve) => {
             settleRetry = () => {
               setMessages((current) => current.filter((message) => message.id !== id))
@@ -94,6 +98,21 @@ function ComposerQueueFixture({
       />
     </main>
   )
+}
+
+function reorderMessages(
+  messages: QueuedComposerMessage[],
+  id: string,
+  targetId: string,
+  position: 'before' | 'after'
+): QueuedComposerMessage[] {
+  if (id === targetId) return messages
+  const source = messages.find((message) => message.id === id)
+  if (!source || !messages.some((message) => message.id === targetId)) return messages
+  const next = messages.filter((message) => message.id !== id)
+  const targetIndex = next.findIndex((message) => message.id === targetId)
+  next.splice(targetIndex + (position === 'after' ? 1 : 0), 0, source)
+  return next
 }
 
 function fixtureMessages(scenario: ComposerQueueSmokeScenario): QueuedComposerMessage[] {

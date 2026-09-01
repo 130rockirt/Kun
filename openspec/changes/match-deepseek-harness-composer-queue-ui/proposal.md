@@ -10,7 +10,7 @@ Kun's current busy-turn queue presentation shows only the first message plus a `
 - Keep Remove and current-turn Guide explicit, serialize queue mutations while one action is pending, and retain rows on failure.
 - Surface failed and paused queue entries with retry/removal actions instead of filtering them out.
 - Match the reference 36px rows, 28px actions/editor, 12px attached top corners, 180px internal scroll budget, semantic light/dark colors, and narrow-layout containment.
-- Remove queue-specific hover opening, `+N` preview, fixed popover, overflow Edit menu, and drag-reorder UI; the existing store/runtime queue and steering contracts remain authoritative.
+- Remove queue-specific hover opening, `+N` preview, fixed popover, and overflow Edit menu; add explicit multi-row drag/keyboard ordering inside the expanded QueueDock while keeping the existing persisted queue order authoritative.
 
 ## Capabilities
 

@@ -126,14 +126,18 @@ async function main() {
       electronApplication, page, evidenceRoot, scenario: 'single', theme: 'light',
       bounds: WIDE, name: 'wide-single-light'
     }))
+    await assertNoReorderHandles(page, 'single queue')
     await assertSingleAndEdit(page)
 
     captures.push(await capture({
       electronApplication, page, evidenceRoot, scenario: 'multi', theme: 'light',
       bounds: WIDE, name: 'wide-multi-collapsed-light'
     }))
+    await assertNoReorderHandles(page, 'collapsed multi queue')
     const disclosure = await assertMultiDisclosure(page)
     await page.screenshot({ path: join(evidenceRoot, 'wide-multi-expanded-light.png') })
+    const reorder = await assertExpandedMultiReordering(page, evidenceRoot)
+    const busyReorder = await assertBusyPreventsReordering(page, evidenceRoot)
 
     captures.push(await capture({
       electronApplication, page, evidenceRoot, scenario: 'long', theme: 'dark',
@@ -178,6 +182,8 @@ async function main() {
       evidenceRoot,
       captures,
       disclosure,
+      reorder,
+      busyReorder,
       longGeometry,
       narrowGeometry,
       retryBusy: { disabledActions, allActions }
@@ -285,6 +291,186 @@ async function assertMultiDisclosure(page) {
   return { rowCount, expandedGeometry }
 }
 
+async function assertNoReorderHandles(page, label) {
+  const count = await page.locator('[data-queued-message-drag-handle]').count()
+  if (count !== 0) throw new Error(`${label} rendered ${count} reorder handles`)
+}
+
+async function assertExpandedMultiReordering(page, evidenceRoot) {
+  const initial = await queuedMessageOrder(page)
+  sameOrder(initial, ['queue-first', 'queue-second'], 'initial expanded queue')
+  const handles = page.locator('[data-queued-message-drag-handle]')
+  if (await handles.count() !== 2) throw new Error('Expanded multi queue did not render two handles')
+  const handleBox = await handles.first().boundingBox()
+  exact(handleBox?.width ?? null, 28, 'reorder handle width')
+  exact(handleBox?.height ?? null, 28, 'reorder handle height')
+
+  const source = page.locator('[data-queued-message-drag-id="queue-second"]')
+  const target = page.locator('[data-queued-message-id="queue-first"]')
+  let dragStrategy = 'locator.dragTo'
+  try {
+    await source.dragTo(target, {
+      targetPosition: { x: 24, y: 3 },
+      timeout: 5_000
+    })
+    await waitForQueuedMessageOrder(page, ['queue-second', 'queue-first'], 2_000)
+  } catch {
+    dragStrategy = 'synthetic DragEvent fallback'
+    await dragBefore(page, 'queue-second', 'queue-first')
+    await waitForQueuedMessageOrder(page, ['queue-second', 'queue-first'])
+  }
+  await page.screenshot({ path: join(evidenceRoot, 'wide-multi-drag-reordered-light.png') })
+
+  const secondHandle = page.locator('[data-queued-message-drag-id="queue-second"]')
+  await secondHandle.focus()
+  await secondHandle.press('ArrowDown')
+  await waitForQueuedMessageOrder(page, ['queue-first', 'queue-second'])
+  await assertFocusedReorderHandle(page, 'queue-second', 'ArrowDown')
+  await page.locator('[data-queued-message-drag-id="queue-second"]').press('ArrowUp')
+  await waitForQueuedMessageOrder(page, ['queue-second', 'queue-first'])
+  await assertFocusedReorderHandle(page, 'queue-second', 'ArrowUp')
+  await page.screenshot({ path: join(evidenceRoot, 'wide-multi-keyboard-reordered-light.png') })
+
+  const indicator = await exposeDropIndicator(page, 'queue-first', 'queue-second')
+  exact(indicator.height, 2, 'drop indicator height')
+  if (indicator.position !== 'before') {
+    throw new Error(`Drop indicator position is ${indicator.position}, expected before`)
+  }
+  await page.screenshot({ path: join(evidenceRoot, 'wide-multi-drop-indicator-light.png') })
+  await endSyntheticDrag(page, 'queue-first')
+  sameOrder(await queuedMessageOrder(page), ['queue-second', 'queue-first'], 'indicator-only drag')
+
+  return { dragStrategy, handle: handleBox, indicator }
+}
+
+async function assertBusyPreventsReordering(page, evidenceRoot) {
+  const guide = page.locator('[data-queued-message-action="guide"]').first()
+  await guide.click()
+  await page.locator('[data-busy-message-id="queue-second"]').waitFor({ state: 'visible' })
+  await assertNoReorderHandles(page, 'busy multi queue')
+  const draggableRows = await page.locator('[data-queue-dock] [draggable="true"]').count()
+  if (draggableRows !== 0) throw new Error(`Busy multi queue left ${draggableRows} draggable controls`)
+  const order = await queuedMessageOrder(page)
+  await page.keyboard.press('ArrowDown')
+  sameOrder(await queuedMessageOrder(page), order, 'busy queue keyboard attempt')
+  await page.screenshot({ path: join(evidenceRoot, 'wide-multi-reorder-busy-light.png') })
+  await page.evaluate(async () => {
+    const fixture = await import('/src/components/chat/FloatingComposerQueueDockSmokeFixture.tsx')
+    fixture.settleComposerQueueSmokeRetry()
+  })
+  await page.locator('[data-busy-message-id]').waitFor({ state: 'detached' })
+  return { order, draggableRows }
+}
+
+async function queuedMessageOrder(page) {
+  return page.locator('[data-queued-message-id]').evaluateAll((rows) => (
+    rows.map((row) => row.getAttribute('data-queued-message-id'))
+  ))
+}
+
+async function waitForQueuedMessageOrder(page, expected, timeout = 5_000) {
+  await page.waitForFunction((ids) => {
+    const actual = [...document.querySelectorAll('[data-queued-message-id]')]
+      .map((row) => row.getAttribute('data-queued-message-id'))
+    const persisted = document.querySelector('[data-testid="composer-queue-smoke-stage"]')
+      ?.getAttribute('data-queued-message-order')
+    return actual.join(',') === ids.join(',') && persisted === ids.join(',')
+  }, expected, { timeout })
+}
+
+async function assertFocusedReorderHandle(page, id, key) {
+  await page.waitForFunction((expectedId) => (
+    document.activeElement?.getAttribute('data-queued-message-drag-id') === expectedId
+  ), id)
+  const focused = await page.evaluate(() => (
+    document.activeElement?.getAttribute('data-queued-message-drag-id') ?? null
+  ))
+  if (focused !== id) throw new Error(`${key} lost reorder focus: ${focused}`)
+}
+
+async function dragBefore(page, sourceId, targetId) {
+  await beginSyntheticDrag(page, sourceId)
+  await exposeDropTarget(page, targetId, 'before')
+  await page.locator(`[data-queued-message-id="${targetId}"][data-drop-position="before"]`)
+    .waitFor({ state: 'attached' })
+  await page.evaluate(({ source, target }) => {
+    const row = document.querySelector(`[data-queued-message-id="${target}"]`)
+    const handle = document.querySelector(`[data-queued-message-drag-id="${source}"]`)
+    const transfer = window.__kunQueueSmokeDataTransfer
+    if (!row || !handle || !transfer) throw new Error('Synthetic drop target is missing')
+    const bounds = row.getBoundingClientRect()
+    row.dispatchEvent(new DragEvent('drop', {
+      bubbles: true, cancelable: true, clientY: bounds.top + 1, dataTransfer: transfer
+    }))
+    handle.dispatchEvent(new DragEvent('dragend', {
+      bubbles: true, cancelable: true, dataTransfer: transfer
+    }))
+    delete window.__kunQueueSmokeDataTransfer
+  }, { source: sourceId, target: targetId })
+}
+
+async function exposeDropIndicator(page, sourceId, targetId) {
+  await beginSyntheticDrag(page, sourceId)
+  await exposeDropTarget(page, targetId, 'before')
+  const row = page.locator(`[data-queued-message-id="${targetId}"][data-drop-position="before"]`)
+  await row.waitFor({ state: 'attached' })
+  return row.evaluate((element) => {
+    const indicator = getComputedStyle(element, '::before')
+    return {
+      height: Number.parseFloat(indicator.height || '0'),
+      position: element.getAttribute('data-drop-position'),
+      background: indicator.backgroundColor
+    }
+  })
+}
+
+async function beginSyntheticDrag(page, sourceId) {
+  await page.evaluate((id) => {
+    const handle = document.querySelector(`[data-queued-message-drag-id="${id}"]`)
+    if (!handle) throw new Error(`Missing reorder handle ${id}`)
+    const transfer = new DataTransfer()
+    window.__kunQueueSmokeDataTransfer = transfer
+    handle.dispatchEvent(new DragEvent('dragstart', {
+      bubbles: true, cancelable: true, dataTransfer: transfer
+    }))
+  }, sourceId)
+  await page.locator(`[data-queued-message-id="${sourceId}"][data-queue-dragging="true"]`)
+    .waitFor({ state: 'attached' })
+}
+
+async function exposeDropTarget(page, targetId, position) {
+  await page.evaluate(({ id, side }) => {
+    const row = document.querySelector(`[data-queued-message-id="${id}"]`)
+    const transfer = window.__kunQueueSmokeDataTransfer
+    if (!row || !transfer) throw new Error(`Missing synthetic drag target ${id}`)
+    const bounds = row.getBoundingClientRect()
+    row.dispatchEvent(new DragEvent('dragover', {
+      bubbles: true,
+      cancelable: true,
+      clientY: side === 'before' ? bounds.top + 1 : bounds.bottom - 1,
+      dataTransfer: transfer
+    }))
+  }, { id: targetId, side: position })
+}
+
+async function endSyntheticDrag(page, sourceId) {
+  await page.evaluate((id) => {
+    const handle = document.querySelector(`[data-queued-message-drag-id="${id}"]`)
+    const transfer = window.__kunQueueSmokeDataTransfer
+    handle?.dispatchEvent(new DragEvent('dragend', {
+      bubbles: true, cancelable: true, dataTransfer: transfer
+    }))
+    delete window.__kunQueueSmokeDataTransfer
+  }, sourceId)
+  await page.locator('[data-queue-dragging="true"]').waitFor({ state: 'detached' })
+}
+
+function sameOrder(actual, expected, label) {
+  if (actual.join(',') !== expected.join(',')) {
+    throw new Error(`${label} order is ${actual.join(',')}, expected ${expected.join(',')}`)
+  }
+}
+
 async function geometry(page) {
   return page.evaluate(() => {
     const box = (selector) => {
@@ -316,6 +502,7 @@ async function geometry(page) {
       composer: box('[data-floating-composer]'), shell: box('.ds-composer-shell'),
       header: box('[data-queued-message-header]'),
       firstRow: box('[data-queued-message-id]'),
+      firstHandle: box('[data-queued-message-drag-handle]'),
       firstAction: box('[data-queued-message-action]'),
       list: box('[data-queue-dock] ul'), listStyle: css('[data-queue-dock] ul'),
       insideComposer: Boolean(dock && composer && composer.contains(dock)),
@@ -331,6 +518,10 @@ function assertGeometry(value, { scenario, expanded, narrow = false }) {
   const rowLike = scenario === 'single' || scenario === 'failed' ? value.firstRow : value.header
   exact(rowLike?.height ?? null, 36, `${scenario} header/row height`)
   if (expanded && value.firstRow) exact(value.firstRow.height, 36, `${scenario} row height`)
+  if (expanded && value.firstHandle) {
+    exact(value.firstHandle.width, 28, `${scenario} reorder handle width`)
+    exact(value.firstHandle.height, 28, `${scenario} reorder handle height`)
+  }
   if (expanded && value.firstAction) exact(value.firstAction.height, 28, `${scenario} action height`)
   exact(number(value.panelStyle?.borderTopLeftRadius), 12, `${scenario} top radius`)
   exact(number(value.panelStyle?.borderTopRightRadius), 12, `${scenario} top radius`)
