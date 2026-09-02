@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { open, writeFile } from 'node:fs/promises'
+import { RuntimeEvent } from '../../contracts/events.js'
 
 const SCAN_CHUNK_BYTES = 64 * 1024
 const EVIDENCE_SAMPLE_BYTES = 16 * 1024
@@ -7,6 +8,7 @@ const EVIDENCE_SAMPLE_BYTES = 16 * 1024
 export type EventTailRepairResult = {
   repaired: boolean
   truncatedBytes: number
+  appendedNewline: boolean
 }
 
 export async function ensureEventTailReady(input: {
@@ -20,9 +22,9 @@ export async function ensureEventTailReady(input: {
 }
 
 /**
- * Remove an unterminated final JSONL record before the next append. Readers
- * already treat these bytes as an uncommitted crash tail; leaving them in place
- * would concatenate the next valid event into one malformed line.
+ * Complete a valid final event record that lost only its JSONL newline. Other
+ * unterminated bytes are crash tails and must be preserved as evidence then
+ * removed before a later append can concatenate them with a valid record.
  */
 export async function repairIncompleteEventTail(input: {
   path: string
@@ -32,15 +34,17 @@ export async function repairIncompleteEventTail(input: {
   try {
     handle = await open(input.path, 'r+')
   } catch (error) {
-    if ((error as { code?: string }).code === 'ENOENT') return { repaired: false, truncatedBytes: 0 }
+    if ((error as { code?: string }).code === 'ENOENT') {
+      return { repaired: false, truncatedBytes: 0, appendedNewline: false }
+    }
     throw error
   }
   try {
     const info = await handle.stat()
-    if (info.size === 0) return { repaired: false, truncatedBytes: 0 }
+    if (info.size === 0) return { repaired: false, truncatedBytes: 0, appendedNewline: false }
     const finalByte = Buffer.allocUnsafe(1)
     await handle.read(finalByte, 0, 1, info.size - 1)
-    if (finalByte[0] === 0x0a) return { repaired: false, truncatedBytes: 0 }
+    if (finalByte[0] === 0x0a) return { repaired: false, truncatedBytes: 0, appendedNewline: false }
 
     let cursor = info.size
     let truncateAt = 0
@@ -56,20 +60,32 @@ export async function repairIncompleteEventTail(input: {
       cursor = start
     }
 
-    const truncatedBytes = info.size - truncateAt
-    const sampleLength = Math.min(truncatedBytes, EVIDENCE_SAMPLE_BYTES)
-    const sample = Buffer.alloc(sampleLength)
-    if (sampleLength > 0) await handle.read(sample, 0, sampleLength, truncateAt)
+    const tailLength = info.size - truncateAt
+    const tail = Buffer.alloc(tailLength)
+    await handle.read(tail, 0, tail.length, truncateAt)
+    try {
+      const parsed = RuntimeEvent.safeParse(JSON.parse(tail.toString('utf8')))
+      if (parsed.success) {
+        await handle.write(Buffer.from('\n'), 0, 1, info.size)
+        await handle.sync()
+        return { repaired: true, truncatedBytes: 0, appendedNewline: true }
+      }
+    } catch {
+      // The evidence and truncation path below handles invalid JSON.
+    }
+
+    const sampleLength = Math.min(tailLength, EVIDENCE_SAMPLE_BYTES)
+    const sample = tail.subarray(0, sampleLength)
     await writeFile(input.evidencePath, `${JSON.stringify({
       repairedAt: new Date().toISOString(),
-      truncatedBytes,
+      truncatedBytes: tailLength,
       sha256: createHash('sha256').update(sample).digest('hex'),
       sampleBase64: sample.toString('base64'),
-      sampleTruncated: truncatedBytes > sampleLength
+      sampleTruncated: tailLength > sampleLength
     })}\n`, { encoding: 'utf8', mode: 0o600 })
     await handle.truncate(truncateAt)
     await handle.sync()
-    return { repaired: true, truncatedBytes }
+    return { repaired: true, truncatedBytes: tailLength, appendedNewline: false }
   } finally {
     await handle.close()
   }
