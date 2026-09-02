@@ -26,6 +26,8 @@ import {
 
 import {
   ManagerResourceFenceSchema,
+  RESOURCE_COMMIT_TTL_MS,
+  RESOURCE_LEASE_TTL_MS,
   ResourceFenceStaleError
 } from './resource-lease-state.js'
 import {
@@ -35,10 +37,12 @@ import {
   KUN_MANAGER_CAPABILITIES,
   MAX_MANAGER_DATA_BODY_BYTES,
   MemoryStoreOperationSchema,
+  RUNTIME_HEARTBEAT_TTL_MS,
   RuntimeRegistrationRequiredError,
   ServiceManagerState,
   SessionStoreOperationSchema,
   StaleTurnFenceError,
+  THREAD_EXECUTION_LEASE_TTL_MS,
   ThreadLeaseBusyError,
   ThreadStoreOperationSchema
 } from './service-manager-state.js'
@@ -70,6 +74,12 @@ export function buildServiceManagerRouter(input: {
   documents?: RevisionedDocumentStore
   requestShutdown?: () => void
   flushState?: () => Promise<void>
+  /**
+   * Renewal-only durability: responds as soon as the in-memory mutation is
+   * queued, within the safe TTL window; falls back to a full flush once the
+   * deferred window is exhausted so a persisted copy never lags the lease TTL.
+   */
+  flushStateForRenewal?: (ttlMs: number) => Promise<void>
 }): Router {
   const router = new Router()
   const capabilities = input.sharedData
@@ -156,7 +166,7 @@ export function buildServiceManagerRouter(input: {
       const parsed = leaseOwnerBody(body.value)
       if (!parsed.success) return validation('invalid thread lease renewal', parsed.error.issues)
       const lease = input.state.renewLease({ threadId: context.params.threadId, ...parsed.data })
-      await input.flushState?.()
+      if (lease) await flushRenewal(input, THREAD_EXECUTION_LEASE_TTL_MS)
       return lease
         ? jsonResponse({ lease })
         : jsonResponse({ code: 'thread_lease_lost', message: 'thread lease is no longer owned by this runtime' }, 409)
@@ -206,7 +216,7 @@ export function buildServiceManagerRouter(input: {
       const parsed = resourceFenceBody(context.params.resource, body.value)
       if (!parsed.success) return validation('invalid resource lease renewal', parsed.error.issues)
       const lease = input.state.renewResource(parsed.data)
-      if (lease) await input.flushState?.()
+      if (lease) await flushRenewal(input, RESOURCE_LEASE_TTL_MS)
       return lease
         ? jsonResponse({ lease })
         : resourceFenceStale()
@@ -249,7 +259,7 @@ export function buildServiceManagerRouter(input: {
       if (!parsed.success) return validation('invalid resource commit renewal', parsed.error.issues)
       const lease = input.state.renewResourceCommit(parsed.data, context.params.commitId)
       if (!lease) return resourceFenceStale()
-      await input.flushState?.()
+      await flushRenewal(input, RESOURCE_COMMIT_TTL_MS)
       return jsonResponse({ lease })
     }
   ))
@@ -293,6 +303,7 @@ export function buildServiceManagerRouter(input: {
       if (!input.state.heartbeat(flavor.data, parsed.data.instanceId)) {
         return jsonResponse({ code: 'runtime_instance_changed', message: 'runtime slot owner changed' }, 409)
       }
+      await flushRenewal(input, RUNTIME_HEARTBEAT_TTL_MS)
       return jsonResponse({ accepted: true })
     }
   ))
@@ -599,8 +610,26 @@ export function buildServiceManagerRouter(input: {
   return router
 }
 
+async function flushRenewal(
+  input: {
+    flushState?: () => Promise<void>
+    flushStateForRenewal?: (ttlMs: number) => Promise<void>
+  },
+  ttlMs: number
+): Promise<void> {
+  if (input.flushStateForRenewal) {
+    await input.flushStateForRenewal(ttlMs)
+    return
+  }
+  await input.flushState?.()
+}
+
 async function fencedAtomicJsonMutation<T>(
-  input: { state: ServiceManagerState; flushState?: () => Promise<void> },
+  input: {
+    state: ServiceManagerState
+    flushState?: () => Promise<void>
+    flushStateForRenewal?: (ttlMs: number) => Promise<void>
+  },
   mutation: { fence?: z.infer<typeof ManagerResourceFenceSchema>; commitId?: string },
   operation: (commitId?: string) => Promise<T>
 ): Promise<JsonResponse> {
@@ -618,7 +647,7 @@ async function fencedAtomicJsonMutation<T>(
         renewalInFlight = Promise.resolve().then(async () => {
           const lease = input.state.renewResourceCommit(mutation.fence!, commitId)
           if (!lease) throw new ResourceFenceStaleError()
-          await input.flushState?.()
+          await flushRenewal(input, RESOURCE_COMMIT_TTL_MS)
         }).finally(() => { renewalInFlight = undefined })
         void renewalInFlight.catch(() => undefined)
       }, 3_000)

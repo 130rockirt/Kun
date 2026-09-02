@@ -11,7 +11,10 @@ export {
   ServiceManagerState,
   reconcileVerifiedForcedRuntimeRecovery
 } from './service-manager-state.js'
-export { startServiceManager } from './service-manager-startup.js'
+export {
+  startServiceManager,
+  MANAGER_STATE_DEFERRED_FLUSH_SAFE_MS
+} from './service-manager-startup.js'
 export type {
   ManagerResourceLease,
   ServiceManagerHandle

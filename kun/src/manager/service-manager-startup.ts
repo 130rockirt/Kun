@@ -16,10 +16,12 @@ import {
   type ServiceManagerHandle
 } from './service-manager-state.js'
 import {
-  readPersistedManagerState,
-  writePersistedManagerState
+  readPersistedManagerState
 } from './service-manager-state-persistence.js'
+import { ManagerStateWriteQueue } from './service-manager-state-write-queue.js'
 import { ManagerSharedDataStore } from './shared-data-store.js'
+
+export const MANAGER_STATE_DEFERRED_FLUSH_SAFE_MS = 2_000
 
 export async function startServiceManager(input: {
   controlDir: string
@@ -49,23 +51,33 @@ export async function startServiceManager(input: {
     await dataDirLease.release().catch(() => undefined)
     throw error
   }
-  let statePersistence = Promise.resolve()
-  let statePersistenceError: unknown
+  const stateQueue = new ManagerStateWriteQueue(managerStatePath)
   state.onMutation(() => {
-    if (statePersistenceError !== undefined) return
-    const snapshot = state.durableSnapshot()
-    statePersistence = statePersistence.then(async () => {
-      await writePersistedManagerState(managerStatePath, snapshot)
-    }).catch((error) => {
-      statePersistenceError = error
-      console.error('[kun-manager] failed to persist manager lease state:', error)
-      throw error
-    })
-    void statePersistence.catch(() => undefined)
+    if (stateQueue.failed !== undefined) return
+    stateQueue.enqueue(state.durableSnapshot())
   })
+  let lastDurableFlushAt = Date.now()
   const flushState = async () => {
-    await statePersistence
-    if (statePersistenceError !== undefined) throw statePersistenceError
+    await stateQueue.flush()
+    lastDurableFlushAt = Date.now()
+  }
+  // Lease renewals (runtime heartbeat, thread lease, resource lease/commit)
+  // only extend a deadline inside its safe TTL window. They must not queue
+  // behind every full snapshot write, or a slow disk can starve renewal until
+  // the lease expires. The mutation is still durably persisted by the latest
+  // snapshot write; only the *response* stops waiting for it within the safe
+  // window.
+  const flushStateForRenewal = async (ttlMs: number) => {
+    if (Date.now() - lastDurableFlushAt >= Math.max(0, ttlMs - MANAGER_STATE_DEFERRED_FLUSH_SAFE_MS)) {
+      await flushState()
+      return
+    }
+    // Wait only for already-completed durability; an in-flight snapshot write
+    // must not block the renewal response inside the safe window.
+    await Promise.race([stateQueue.flush(), new Promise<void>((resolve) => {
+      setTimeout(resolve, 25).unref?.()
+    })])
+    lastDurableFlushAt = Date.now()
   }
   let sharedData: ManagerSharedDataStore
   try {
@@ -83,11 +95,11 @@ export async function startServiceManager(input: {
         record: forcedRecovery,
         state,
         sharedData,
-        flushState: () => statePersistence
+        flushState: () => stateQueue.flush()
       })
     } catch (error) {
       state.onMutation(undefined)
-      await statePersistence.catch(() => undefined)
+      await stateQueue.flush().catch(() => undefined)
       await sharedData.close().catch(() => undefined)
       await dataDirLease.release().catch(() => undefined)
       throw error
@@ -141,7 +153,8 @@ export async function startServiceManager(input: {
       sharedData,
       documents,
       requestShutdown: deferShutdown,
-      flushState
+      flushState,
+      flushStateForRenewal
     })
     server = await startNodeHttpServer({
       router,
@@ -165,7 +178,7 @@ export async function startServiceManager(input: {
   } catch (error) {
     if (reconciliationTimer) clearInterval(reconciliationTimer)
     await server?.close().catch(() => undefined)
-    await statePersistence.catch(() => undefined)
+    await stateQueue.flush().catch(() => undefined)
     state.onMutation(undefined)
     await sharedData.close().catch(() => undefined)
     await dataDirLease.release().catch(() => undefined)
@@ -192,7 +205,7 @@ export async function startServiceManager(input: {
       await settle(() => reconciliationWork)
       state.onMutation(undefined)
       await settle(() => server.close())
-      await settle(() => statePersistence)
+      await settle(() => stateQueue.flush())
       state.onMutation(undefined)
       await settle(() => sharedData.close())
       await settle(() => removeManagerDiscovery(input.controlDir, input.instanceId))

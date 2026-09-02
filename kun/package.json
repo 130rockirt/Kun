@@ -72,6 +72,7 @@
     "transcript:diff": "node ./scripts/transcript-diff.mjs",
     "benchmark:replay": "npm run build && node ./dist/cli/replay-entry.js",
     "benchmark:item-index-pagination": "npm run build && node ./dist/cli/item-index-pagination-entry.js",
+    "benchmark:manager-lease-renewal": "npm run build && node ./dist/cli/manager-lease-renewal-entry.js",
     "serve": "node ./dist/cli/serve-entry.js",
     "dev": "tsc -p tsconfig.build.json --watch"
   },

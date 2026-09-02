@@ -1,7 +1,15 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  ServiceManagerState,
+  THREAD_EXECUTION_LEASE_TTL_MS
+} from './service-manager-state.js'
+import {
+  MANAGER_STATE_DEFERRED_FLUSH_SAFE_MS,
+  startServiceManager
+} from './service-manager-startup.js'
 import { ServiceManagerStateSnapshotSchema } from './service-manager-state-snapshot.js'
 import {
   readPersistedManagerState,
@@ -19,6 +27,30 @@ async function fixture(): Promise<{ root: string; path: string }> {
   const root = await mkdtemp(join(tmpdir(), 'kun-manager-state-persistence-'))
   roots.push(root)
   return { root, path: join(root, 'manager-state.json') }
+}
+
+function registration(instanceId: string) {
+  return {
+    flavor: 'production' as const,
+    instanceId,
+    pid: process.pid,
+    startedAt: '2026-08-05T00:00:00.000Z',
+    host: '127.0.0.1',
+    port: 1,
+    baseUrl: 'http://127.0.0.1:1',
+    runtimeToken: 'runtime-token'
+  }
+}
+
+async function managerFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'kun-manager-renewal-flush-'))
+  roots.push(root)
+  return {
+    root,
+    controlDir: join(root, 'control'),
+    dataDir: join(root, 'data'),
+    settingsPath: join(root, 'settings.json')
+  }
 }
 
 describe('Service Manager state persistence', () => {
@@ -95,5 +127,121 @@ describe('Service Manager state persistence', () => {
 
     await expect(readPersistedManagerState(test.path)).rejects.toMatchObject({ code: 'EISDIR' })
     expect((await readdir(test.root)).filter((name) => name.includes('.corrupt-'))).toEqual([])
+  })
+})
+
+describe('Service Manager renewal flush coalescing', () => {
+  it('coalesces a burst of renewals into one trailing durable write', async () => {
+    const test = await managerFixture()
+    const state = new ServiceManagerState()
+    const manager = await startServiceManager({
+      controlDir: test.controlDir,
+      managerToken: 'manager-token',
+      instanceId: 'manager-instance',
+      startedAt: '2026-08-05T00:00:00.000Z',
+      dataDir: test.dataDir,
+      settingsPath: test.settingsPath,
+      state
+    })
+    const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+    try {
+      state.register(registration('runtime-1'))
+      const lease = state.acquireLease({
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        ownerFlavor: 'production',
+        ownerInstanceId: 'runtime-1'
+      })
+      await sleep(50)
+      const file = join(test.controlDir, 'manager-state.json')
+      const before = JSON.parse(await readFile(file, 'utf8')) as {
+        slots: { lastHeartbeatAt: string }[]
+        leases: { expiresAt: string }[]
+      }
+      await sleep(1)
+      state.heartbeat('production', 'runtime-1')
+      state.renewLease({
+        threadId: lease.threadId,
+        turnId: lease.turnId,
+        ownerFlavor: 'production',
+        ownerInstanceId: 'runtime-1',
+        fencingToken: lease.fencingToken
+      })
+      await sleep(1)
+      state.heartbeat('production', 'runtime-1')
+      state.renewLease({
+        threadId: lease.threadId,
+        turnId: lease.turnId,
+        ownerFlavor: 'production',
+        ownerInstanceId: 'runtime-1',
+        fencingToken: lease.fencingToken
+      })
+      await sleep(100)
+      const after = JSON.parse(await readFile(file, 'utf8')) as typeof before
+      expect(Date.parse(after.leases[0]!.expiresAt))
+        .toBeGreaterThan(Date.parse(before.leases[0]!.expiresAt))
+      expect(Date.parse(after.slots[0]!.lastHeartbeatAt))
+        .toBeGreaterThan(Date.parse(before.slots[0]!.lastHeartbeatAt))
+    } finally {
+      await manager.close().catch(() => undefined)
+    }
+  })
+
+  it('answers renewals inside the safe TTL window while a durable write is still running', async () => {
+    const test = await managerFixture()
+    const state = new ServiceManagerState()
+    const manager = await startServiceManager({
+      controlDir: test.controlDir,
+      managerToken: 'manager-token',
+      instanceId: 'manager-instance',
+      startedAt: '2026-08-05T00:00:00.000Z',
+      dataDir: test.dataDir,
+      settingsPath: test.settingsPath,
+      state
+    })
+    try {
+      const headers = {
+        'content-type': 'application/json',
+        authorization: `Bearer manager-token`
+      }
+      const base = manager.discovery.baseUrl
+      const registerResponse = await fetch(`${base}/v1/runtimes/production/register`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(registration('runtime-1'))
+      })
+      expect(registerResponse.status).toBe(200)
+      const acquireResponse = await fetch(`${base}/v1/leases/threads/thread-1/acquire`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          turnId: 'turn-1',
+          ownerFlavor: 'production',
+          ownerInstanceId: 'runtime-1'
+        })
+      })
+      expect(acquireResponse.status).toBe(200)
+      const { lease } = await acquireResponse.json() as { lease: {
+        turnId: string
+        ownerFlavor: string
+        ownerInstanceId: string
+        fencingToken: number
+      } }
+      const startedAt = performance.now()
+      const renewResponse = await fetch(`${base}/v1/leases/threads/thread-1/renew`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          turnId: lease.turnId,
+          ownerFlavor: lease.ownerFlavor,
+          ownerInstanceId: lease.ownerInstanceId,
+          fencingToken: lease.fencingToken
+        })
+      })
+      expect(renewResponse.status).toBe(200)
+      expect(performance.now() - startedAt).toBeLessThan(2_000)
+    } finally {
+      await manager.close().catch(() => undefined)
+    }
   })
 })
