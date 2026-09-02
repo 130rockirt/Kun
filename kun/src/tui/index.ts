@@ -9,7 +9,8 @@ import {
 } from '../cli/gui-settings-bridge.js'
 import { importGuiProviderCatalogForTui } from './gui-catalog-startup.js'
 import type { TerminalInput, TerminalOutput } from './pi-terminal.js'
-import { checkStandaloneTuiUpdateOnce } from '../cli/self-update.js'
+import { checkStandaloneTuiUpdateOnce, readStandaloneTuiRelease } from '../cli/self-update.js'
+import { reconcilePendingTuiUpdate } from '../cli/self-update-transaction.js'
 
 type WritableLike = { write(chunk: string): unknown }
 
@@ -168,6 +169,19 @@ export async function runTuiCommand(argv: readonly string[], io: TuiCommandIo): 
         controller?.notify(
           `Kun ${update.latest.version} is available with the matching GUI release. Run /update to review it.`
         )
+      }
+    }).catch(() => undefined)
+    void readStandaloneTuiRelease(io.env ?? process.env).then((standalone) => {
+      if (!standalone) return undefined
+      return reconcilePendingTuiUpdate(standalone.root)
+    }).then((pending) => {
+      if (!pending) return
+      if (pending.kind === 'activated') {
+        controller?.notify(
+          `Kun ${pending.targetVersion} is now active (updated from ${pending.previousVersion}).`
+        )
+      } else if (pending.kind === 'failed') {
+        controller?.notify(pending.message, 'error')
       }
     }).catch(() => undefined)
     if (parsed.options.graphPrompt) {

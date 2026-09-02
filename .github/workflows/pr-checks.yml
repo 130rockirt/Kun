@@ -324,6 +324,31 @@ jobs:
             dist/Kun-*-win-x64.exe.blockmap
             dist/latest.yml
 
+  test-windows-self-update:
+    name: Windows TUI self-update integration tests
+    runs-on: windows-latest
+    needs: quality
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            kun/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Run TUI self-update tests on real Windows
+        working-directory: kun
+        run: npx vitest run src/cli/self-update.test.ts src/cli/self-update-transaction.test.ts src/cli/self-update-windows.test.ts src/cli/self-update.win32.test.ts
+
   request-changes-on-failure:
     name: Request PR changes on failure
     runs-on: ubuntu-latest
@@ -333,6 +358,7 @@ jobs:
       - package-linux-arm64
       - package-macos
       - package-windows
+      - test-windows-self-update
     if: >-
       ${{
         always() &&

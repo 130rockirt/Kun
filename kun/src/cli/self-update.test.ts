@@ -11,7 +11,7 @@ import {
   writeFile
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   checkStandaloneTuiUpdate,
@@ -161,9 +161,91 @@ describe('standalone TUI self-update', () => {
         .toMatchObject({ version: '1.2.4', target })
       expect(JSON.parse(await readFile(`${currentRoot}.previous/release.json`, 'utf8')))
         .toMatchObject({ version: '1.2.3', target })
+      // The cross-process update lock is always released after a swap.
+      await expect(stat(join(parent, '.kun.kun-tui-update.lock')))
+        .rejects.toMatchObject({ code: 'ENOENT' })
     },
     30_000
   )
+
+  it('reports a recorded pending-update result before checking for updates', async () => {
+    const root = await standaloneRoot(release())
+    const transactionDir = join(dirname(root), '.kun.kun-tui-update')
+    await mkdir(transactionDir, { recursive: true })
+    await writeFile(join(transactionDir, 'transaction.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      previousVersion: '1.2.3',
+      targetVersion: '1.2.4',
+      buildId: BUILD_ID,
+      installRoot: root,
+      stagingRoot: join(dirname(root), '.kun-update-gone'),
+      backupRoot: `${root}.previous`,
+      pid: process.pid,
+      token: 'token',
+      startedAt: new Date().toISOString()
+    })}\n`, 'utf8')
+    await writeFile(join(transactionDir, 'update-result.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      status: 'succeeded',
+      previousVersion: '1.2.3',
+      targetVersion: '1.2.4',
+      finishedAt: new Date().toISOString()
+    })}\n`, 'utf8')
+    let stdout = ''
+    let fetches = 0
+    const code = await runSelfUpdateCommand([], {
+      stdout: { write: (chunk) => { stdout += chunk } },
+      stderr: { write: () => undefined },
+      env: { KUN_STANDALONE_ROOT: root },
+      fetch: async () => {
+        fetches += 1
+        return Response.json(latest())
+      }
+    })
+    expect(code).toBe(0)
+    expect(stdout).toContain('1.2.4 is now active')
+    // The recorded outcome short-circuits; no new manifest request is needed.
+    expect(fetches).toBe(0)
+  })
+
+  it('surfaces a failed pending update with a retry hint', async () => {
+    const root = await standaloneRoot(release())
+    const transactionDir = join(dirname(root), '.kun.kun-tui-update')
+    await mkdir(transactionDir, { recursive: true })
+    await writeFile(join(transactionDir, 'transaction.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      previousVersion: '1.2.3',
+      targetVersion: '1.2.4',
+      buildId: BUILD_ID,
+      installRoot: root,
+      stagingRoot: join(dirname(root), '.kun-update-gone'),
+      backupRoot: `${root}.previous`,
+      pid: process.pid,
+      token: 'token',
+      startedAt: new Date().toISOString()
+    })}\n`, 'utf8')
+    await writeFile(join(transactionDir, 'update-result.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      status: 'failed',
+      stage: 'swap',
+      error: 'IOException: <install> is locked',
+      previousVersion: '1.2.3',
+      targetVersion: '1.2.4',
+      finishedAt: new Date().toISOString()
+    })}\n`, 'utf8')
+    let stderr = ''
+    const code = await runSelfUpdateCommand([], {
+      stdout: { write: () => undefined },
+      stderr: { write: (chunk) => { stderr += chunk } },
+      env: { KUN_STANDALONE_ROOT: root },
+      fetch: async () => {
+        throw new Error('must not fetch while reporting a failed update')
+      }
+    })
+    expect(code).toBe(70)
+    expect(stderr).toContain('during swap')
+    expect(stderr).toContain('kun update --yes')
+  })
 
   it('throttles startup checks for 24 hours', async () => {
     const root = await standaloneRoot(release())
@@ -253,8 +335,9 @@ function artifact(target: string, os: string, arch: string, format: string) {
 }
 
 async function standaloneRoot(metadata: StandaloneTuiReleaseMetadata): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'kun-self-update-test-'))
-  roots.push(root)
+  const parent = await mkdtemp(join(tmpdir(), 'kun-self-update-test-'))
+  roots.push(parent)
+  const root = join(parent, 'kun')
   await mkdir(root, { recursive: true })
   await writeFile(join(root, 'release.json'), `${JSON.stringify(metadata)}\n`, 'utf8')
   return root

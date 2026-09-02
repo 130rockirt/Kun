@@ -1,4 +1,4 @@
-import { execFile, execFileSync, spawn } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import {
@@ -12,11 +12,20 @@ import {
   writeFile
 } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import semver from 'semver'
 import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-lease.js'
+import {
+  acquireTuiUpdateLock,
+  reconcilePendingTuiUpdate,
+  tuiUpdateLogPath,
+  tuiUpdateResultPath,
+  tuiUpdateLockPath,
+  tuiUpdateTransactionDir,
+  writeTuiUpdateTransaction
+} from './self-update-transaction.js'
+import { scheduleWindowsReplacement } from './self-update-windows.js'
 
 const RELEASE_METADATA_FILENAME = 'release.json'
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1_000
@@ -257,6 +266,17 @@ export async function runSelfUpdateCommand(
     io.stderr.write('kun update: Daily/frontier TUI builds do not support self-update.\n')
     return 69
   }
+  const pending = await reconcilePendingTuiUpdate(standalone.root)
+  if (pending?.kind === 'activated') {
+    io.stdout.write(
+      `Kun ${pending.targetVersion} is now active (updated from ${pending.previousVersion}).\n`
+    )
+    return 0
+  }
+  if (pending?.kind === 'failed') {
+    io.stderr.write(`kun update: ${pending.message}\n`)
+    return 70
+  }
   try {
     const check = await checkStandaloneTuiUpdate({
       env: io.env,
@@ -314,22 +334,58 @@ async function installStandaloneTuiUpdate(
       throw new Error('downloaded update metadata does not match latest-tui.json')
     }
     await smokeNewRelease(nextRoot, check.latest.version)
-    if (process.platform === 'win32') {
-      await scheduleWindowsReplacement(currentRoot, nextRoot, check.current.version)
-      retainStagingForWindows = true
-      io.stdout.write(`Kun ${check.latest.version} is staged and will activate after this process exits.\n`)
-      return
-    }
-    const backupRoot = `${currentRoot}.previous`
-    await rm(backupRoot, { recursive: true, force: true })
-    await rename(currentRoot, backupRoot)
+    const lock = await acquireTuiUpdateLock(currentRoot)
     try {
-      await rename(nextRoot, currentRoot)
-    } catch (error) {
-      await rename(backupRoot, currentRoot).catch(() => undefined)
-      throw error
+      // A concurrent updater may have finished while we downloaded; do not
+      // swap twice.
+      const installed = parseStandaloneRelease(
+        JSON.parse(await readFile(join(currentRoot, RELEASE_METADATA_FILENAME), 'utf8')) as unknown
+      )
+      if (semver.gte(installed.version, check.latest.version)) {
+        io.stdout.write(`Kun ${installed.version} is up to date.\n`)
+        return
+      }
+      const backupRoot = `${currentRoot}.previous`
+      if (process.platform === 'win32') {
+        await writeTuiUpdateTransaction(currentRoot, {
+          previousVersion: check.current.version,
+          targetVersion: check.latest.version,
+          buildId: check.latest.buildId,
+          stagingRoot,
+          backupRoot
+        })
+        const transactionDir = tuiUpdateTransactionDir(currentRoot)
+        await scheduleWindowsReplacement({
+          currentRoot,
+          nextRoot,
+          backupRoot,
+          stagingRoot,
+          transactionDir,
+          resultPath: tuiUpdateResultPath(currentRoot),
+          logPath: tuiUpdateLogPath(currentRoot),
+          lockPath: tuiUpdateLockPath(currentRoot),
+          previousVersion: check.current.version,
+          targetVersion: check.latest.version
+        })
+        retainStagingForWindows = true
+        io.stdout.write(
+          `Kun ${check.latest.version} is staged. It replaces the current install after ` +
+          'other Kun TUI processes exit; the result is reported on next launch.\n'
+        )
+        return
+      }
+      await rm(backupRoot, { recursive: true, force: true })
+      await rename(currentRoot, backupRoot)
+      try {
+        await rename(nextRoot, currentRoot)
+      } catch (error) {
+        await rename(backupRoot, currentRoot).catch(() => undefined)
+        throw error
+      }
+      io.stdout.write(`Kun ${check.latest.version} installed. Restart Kun to use the new release.\n`)
+    } finally {
+      await lock.release().catch(() => undefined)
     }
-    io.stdout.write(`Kun ${check.latest.version} installed. Restart Kun to use the new release.\n`)
   } finally {
     if (!retainStagingForWindows) {
       await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined)
@@ -460,43 +516,6 @@ async function smokeNewRelease(root: string, expectedVersion: string): Promise<v
   }
 }
 
-async function scheduleWindowsReplacement(
-  currentRoot: string,
-  nextRoot: string,
-  previousVersion: string
-): Promise<void> {
-  const scriptPath = join(tmpdir(), `kun-update-${process.pid}.ps1`)
-  const backupRoot = `${currentRoot}.previous`
-  const quote = (value: string) => value.replaceAll("'", "''")
-  await writeFile(scriptPath, [
-    '$ErrorActionPreference = "Stop"',
-    `Wait-Process -Id ${process.pid}`,
-    `$current = '${quote(currentRoot)}'`,
-    `$next = '${quote(nextRoot)}'`,
-    '$staging = Split-Path $next -Parent',
-    `$backup = '${quote(backupRoot)}'`,
-    'if (Test-Path $backup) { Remove-Item -Recurse -Force $backup }',
-    'Move-Item $current $backup',
-    'try {',
-    '  Move-Item $next $current',
-    '} catch {',
-    '  if (Test-Path $current) { Remove-Item -Recurse -Force $current }',
-    '  Move-Item $backup $current',
-    '  throw',
-    '}',
-    `Set-Content -Path ($current + '\\\\.updated-from') -Value '${quote(previousVersion)}'`,
-    'if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }',
-    'Remove-Item -Force $PSCommandPath',
-    ''
-  ].join('\r\n'), 'utf8')
-  const child = spawn(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-    { detached: true, stdio: 'ignore', windowsHide: true }
-  )
-  child.unref()
-}
-
 function isHttpsUrl(value: string): boolean {
   try {
     return new URL(value).protocol === 'https:'
@@ -509,12 +528,3 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-// Retained as an injectable seam for Windows updater tests.
-export function waitForProcessExit(pid: number): Promise<void> {
-  return new Promise((resolvePromise, reject) => {
-    execFile(process.execPath, ['-e', `process.kill(${pid}, 0)`], (error) => {
-      if (error) resolvePromise()
-      else reject(new Error(`process ${pid} is still running`))
-    })
-  })
-}
