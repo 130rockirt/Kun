@@ -188,6 +188,7 @@
   "runtimeErrorTechnicalDetails": "Technical details",
   "runtimeErrorLogPath": "Log path",
   "runtimeErrorOpenLogsFailed": "Failed to open logs folder.",
+  "runtimeErrorViewLogs": "View logs",
   "extensionViewAriaLabel": "{{title}} extension View",
   "extensionViewClose": "Close {{title}}",
   "extensionViewLoadFailed": "The extension View failed to load.",

@@ -188,6 +188,7 @@
   "runtimeErrorTechnicalDetails": "技术详情",
   "runtimeErrorLogPath": "日志路径",
   "runtimeErrorOpenLogsFailed": "打开日志目录失败。",
+  "runtimeErrorViewLogs": "查看日志",
   "extensionViewAriaLabel": "{{title}} 扩展视图",
   "extensionViewClose": "关闭 {{title}}",
   "extensionViewLoadFailed": "扩展视图加载失败。",

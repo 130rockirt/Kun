@@ -186,6 +186,7 @@
   "runtimeErrorTechnicalDetails": "技術的な詳細",
   "runtimeErrorLogPath": "ログパス",
   "runtimeErrorOpenLogsFailed": "ログフォルダーを開けませんでした。",
+  "runtimeErrorViewLogs": "ログを表示",
   "extensionViewAriaLabel": "{{title}} 拡張機能ビュー",
   "extensionViewClose": "{{title}}を閉じる",
   "extensionViewLoadFailed": "拡張機能 View の読み込みに失敗しました。",

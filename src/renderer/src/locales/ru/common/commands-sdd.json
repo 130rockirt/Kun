@@ -186,6 +186,7 @@
   "runtimeErrorTechnicalDetails": "Технические детали",
   "runtimeErrorLogPath": "Путь журнала",
   "runtimeErrorOpenLogsFailed": "Не удалось открыть папку журналов.",
+  "runtimeErrorViewLogs": "Просмотреть логи",
   "extensionViewAriaLabel": "Расширение {{title}} Посмотреть",
   "extensionViewClose": "Закрыть {{title}}",
   "extensionViewLoadFailed": "Не удалось загрузить расширение View.",

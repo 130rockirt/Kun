@@ -186,6 +186,7 @@
   "runtimeErrorTechnicalDetails": "तकनीकी विवरण",
   "runtimeErrorLogPath": "लॉग पथ",
   "runtimeErrorOpenLogsFailed": "लॉग फ़ोल्डर खोलने में विफल.",
+  "runtimeErrorViewLogs": "लॉग देखें",
   "extensionViewAriaLabel": "{{title}} extension View",
   "extensionViewClose": "Close {{title}}",
   "extensionViewLoadFailed": "एक्सटेंशन दृश्य लोड होने में विफल रहा.",

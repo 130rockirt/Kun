@@ -186,6 +186,7 @@
   "runtimeErrorTechnicalDetails": "รายละเอียดทางเทคนิค",
   "runtimeErrorLogPath": "เส้นทางบันทึก",
   "runtimeErrorOpenLogsFailed": "ไม่สามารถเปิดโฟลเดอร์บันทึกได้",
+  "runtimeErrorViewLogs": "ดูบันทึก",
   "extensionViewAriaLabel": "ดูส่วนขยาย {{title}}",
   "extensionViewClose": "ปิด {{title}}",
   "extensionViewLoadFailed": "โหลดมุมมองส่วนขยายไม่สำเร็จ",

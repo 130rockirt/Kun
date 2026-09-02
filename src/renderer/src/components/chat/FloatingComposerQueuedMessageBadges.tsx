@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { kunToolPermissionModeFromSettings } from '@shared/app-settings'
+import { writePromptQuotesFromComposerContexts } from '../../write/write-composer-context-quotes'
 import type { QueuedComposerMessage } from './FloatingComposerQueuedMessages'
 import css from './FloatingComposerQueuedMessages.module.css'
 
@@ -17,6 +18,15 @@ export function QueuedMessageSnapshotBadges({
 }): ReactElement | null {
   const { t } = useTranslation('common')
   const badges: ReactElement[] = []
+  const quoteCount = writePromptQuotesFromComposerContexts(message.composerContexts).length
+
+  if (quoteCount > 0) {
+    badges.push(
+      <span key="quote" className={css.badge} data-queued-message-badge="quote">
+        {t('writePromptReferencesCount', { count: quoteCount })}
+      </span>
+    )
+  }
 
   if (message.mode === 'plan') {
     badges.push(

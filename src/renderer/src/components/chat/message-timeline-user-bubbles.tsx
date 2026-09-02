@@ -4,11 +4,12 @@ import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, File, Layers3, Me
 import type { ChatBlock, RuntimeDisclosureMetadata } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { parseWritePromptForDisplay } from '../../write/quoted-selection'
+import { writePromptQuotesFromComposerContexts } from '../../write/write-composer-context-quotes'
 import { parseClawUserPromptForDisplay, type ClawUserPromptDisplay } from '@shared/app-settings'
 import { parseBackgroundShellCompletionNotice } from '@shared/background-shell-notice'
 import { parseBackgroundSubagentCompletionNotice } from '@shared/background-subagent-notice'
 import { AssistantMarkdown } from './AssistantMarkdown'
-import { ModelMetaTag, WritePromptMetaDisclosure } from './message-timeline-cards'
+import { ModelMetaTag, WritePromptMetaDisclosure, WritePromptQuoteCard } from './message-timeline-cards'
 import { UserAttachmentPreviews } from './message-timeline-media-views'
 import { CopyFeedbackButton, RuntimeMetaChips } from './message-timeline-bubble-support'
 import { metaUserFileReferences } from './message-timeline-bubble-meta'
@@ -256,6 +257,10 @@ export function UserMessageBubble({
     const parsed = parseWritePromptForDisplay(block.text)
     return parsed?.userInput.trim() ? parsed : null
   }, [block.text, route])
+  const composerQuotes = useMemo(
+    () => writePromptQuotesFromComposerContexts(block.meta?.composerContexts),
+    [block.meta?.composerContexts]
+  )
   const parsedClawPrompt = useMemo(() => {
     const parsed = parseClawUserPromptForDisplay(block.text)
     if (!parsed.managed && !parsed.inbound && block.managedBy !== 'claw' && route !== 'claw') return null
@@ -375,6 +380,17 @@ export function UserMessageBubble({
           <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-left">
             {displayText}
           </div>
+          {composerQuotes.length > 0 ? (
+            <div className="mt-2.5 flex flex-col gap-2">
+              <div className="flex items-center gap-1.5 text-[12px] font-medium text-ds-muted">
+                <MessageSquareQuote className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.85} />
+                <span>{t('writePromptReferencesCount', { count: composerQuotes.length })}</span>
+              </div>
+              {composerQuotes.map((quote, index) => (
+                <WritePromptQuoteCard key={`${quote.sourceTitle}-${index}`} quote={quote} />
+              ))}
+            </div>
+          ) : null}
           {parsedWritePrompt ? (
             <WritePromptMetaDisclosure
               display={parsedWritePrompt}

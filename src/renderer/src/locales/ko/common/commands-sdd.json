@@ -186,6 +186,7 @@
   "runtimeErrorTechnicalDetails": "기술적인 세부사항",
   "runtimeErrorLogPath": "로그 경로",
   "runtimeErrorOpenLogsFailed": "로그 폴더를 열지 못했습니다.",
+  "runtimeErrorViewLogs": "로그 보기",
   "extensionViewAriaLabel": "{{title}} 확장 프로그램 보기",
   "extensionViewClose": "Close {{title}}",
   "extensionViewLoadFailed": "확장 프로그램 보기를 로드하지 못했습니다.",
