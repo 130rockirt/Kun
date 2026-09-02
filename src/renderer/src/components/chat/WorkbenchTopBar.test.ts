@@ -54,21 +54,6 @@ describe('WorkbenchTopActions', () => {
     )
   })
 
-  it('renders the conversation trajectory toggle and live status before external actions', () => {
-    const html = renderToStaticMarkup(createElement(WorkbenchTopActions, {
-      trajectoryEnabled: true,
-      trajectoryOpen: true,
-      trajectoryRunning: true,
-      onToggleTrajectory: vi.fn(),
-      onToggleTerminal: vi.fn()
-    }))
-
-    expect(html).toContain('aria-label="View this conversation&#x27;s model and tool trajectory"')
-    expect(html).toContain('aria-pressed="true"')
-    expect(html).toContain('animate-pulse rounded-full bg-violet-500')
-    expect(html.indexOf('model and tool trajectory')).toBeLessThan(html.indexOf('aria-label="Terminal"'))
-  })
-
   it('shows the complete Chinese restart scope in the wrapped tooltip', async () => {
     await i18n.changeLanguage('zh')
     const html = renderToStaticMarkup(createElement(WorkbenchTopActions, {}))

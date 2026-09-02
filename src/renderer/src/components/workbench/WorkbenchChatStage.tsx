@@ -255,6 +255,21 @@ export function WorkbenchChatStage({
                 compact
                 className="min-w-0 flex-1"
                 onOpenRequirementDraft={onOpenRequirementDraft}
+                trajectoryEnabled={Boolean(activeThreadId)}
+                trajectoryOpen={trajectoryOpen}
+                trajectoryRunning={trajectoryData.summary.runningCount > 0}
+                trajectoryFailed={trajectoryData.summary.lastStatus === 'failed'}
+                onToggleTrajectory={() => {
+                  if (!activeThreadId) return
+                  updateTrajectoryUi(activeThreadId, trajectoryOpen
+                    ? { view: 'chat' }
+                    : {
+                        view: 'trajectory',
+                        selectedRecordId: null,
+                        selectedRequestId: null,
+                        timelineRange: null
+                      })
+                }}
               />
             </div>
             <div className="chat-topbar-actions flex min-w-0 flex-wrap items-center justify-end gap-2 self-center">
@@ -289,21 +304,6 @@ export function WorkbenchChatStage({
                 )
               ) : null}
               <WorkbenchTopActions
-                trajectoryEnabled={Boolean(activeThreadId)}
-                trajectoryOpen={trajectoryOpen}
-                trajectoryRunning={trajectoryData.summary.runningCount > 0}
-                trajectoryFailed={trajectoryData.summary.lastStatus === 'failed'}
-                onToggleTrajectory={() => {
-                  if (!activeThreadId) return
-                  updateTrajectoryUi(activeThreadId, trajectoryOpen
-                    ? { view: 'chat' }
-                    : {
-                        view: 'trajectory',
-                        selectedRecordId: null,
-                        selectedRequestId: null,
-                        timelineRange: null
-                      })
-                }}
                 terminalOpen={terminalOpen}
                 onToggleTerminal={onToggleTerminal}
                 rightWorkspaceExpanded={rightWorkspaceExpanded}

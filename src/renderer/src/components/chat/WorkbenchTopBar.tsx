@@ -4,7 +4,6 @@ import type { EditorInfo } from '@shared/editor'
 import type { GuiUpdateState } from '@shared/gui-update'
 import {
   ArrowUpCircle,
-  Activity,
   Blocks,
   Bot,
   Check,
@@ -66,11 +65,6 @@ type Props = {
 }
 
 type WorkbenchTopActionsProps = {
-  trajectoryEnabled?: boolean
-  trajectoryOpen?: boolean
-  trajectoryRunning?: boolean
-  trajectoryFailed?: boolean
-  onToggleTrajectory?: () => void
   terminalOpen?: boolean
   onToggleTerminal?: () => void
   rightWorkspaceExpanded?: boolean
@@ -96,11 +90,6 @@ function topbarActionButtonClass(active: boolean, extra?: string): string {
 }
 
 export function WorkbenchTopActions({
-  trajectoryEnabled = false,
-  trajectoryOpen = false,
-  trajectoryRunning = false,
-  trajectoryFailed = false,
-  onToggleTrajectory,
   terminalOpen = false,
   onToggleTerminal,
   rightWorkspaceExpanded = false,
@@ -337,24 +326,6 @@ export function WorkbenchTopActions({
 
   return (
     <div className="ds-workbench-top-actions ds-no-drag relative flex shrink-0 items-center gap-1.5">
-      {trajectoryEnabled && onToggleTrajectory ? (
-        <button
-          type="button"
-          onClick={onToggleTrajectory}
-          className={topbarActionButtonClass(trajectoryOpen, 'relative min-w-8 gap-1 px-2 2xl:min-w-[58px]')}
-          data-tooltip={t('trajectoryButtonTooltip')}
-          aria-label={t('trajectoryButtonTooltip')}
-          aria-pressed={trajectoryOpen}
-        >
-          <Activity className={TOPBAR_ICON_CLASS} strokeWidth={1.75} />
-          <span className="hidden text-[11px] 2xl:inline">{t('trajectoryButton')}</span>
-          {trajectoryRunning ? (
-            <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-violet-500" />
-          ) : trajectoryFailed ? (
-            <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-red-500" />
-          ) : null}
-        </button>
-      ) : null}
       {onOpenCommandPalette ? (
         <button
           type="button"
