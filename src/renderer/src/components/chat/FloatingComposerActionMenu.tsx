@@ -10,6 +10,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  Bot,
   Check,
   ChevronDown,
   ChevronUp,
@@ -23,8 +24,8 @@ import {
   Paperclip,
   Settings2,
   Share2,
-  Sparkles,
-  Target
+  Target,
+  UserRound
 } from 'lucide-react'
 import { LucideIconByName } from '../lucide-icon-by-name'
 import { currentComposerBodyZoom } from './floating-composer-popover-placement'
@@ -334,7 +335,7 @@ export function FloatingComposerActionMenu({
       ) : null}
       {showAutoPlanBuildMenuOption ? (
         <button role="menuitem" tabIndex={-1} type="button" data-composer-auto-plan-build-menu-item disabled={!canToggleAutoPlanBuildMode} onClick={handleAutoPlanBuildToolbarClick} className={rowClass}>
-          <Sparkles className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+          <Bot className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
           <span className="min-w-0 flex-1 truncate">{t('composerMenuAutoPlanBuild')}</span>
           <MenuSwitch checked={mode === 'auto'} />
         </button>
@@ -397,9 +398,7 @@ export function FloatingComposerActionMenu({
             }}
             className={rowClass}
           >
-            {activePersona
-              ? <LucideIconByName name={activePersona.icon} className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
-              : <Sparkles className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />}
+            <UserRound className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
             <span className="min-w-0 flex-1 truncate">{t('codeAgentPersonaLabel')}</span>
             <span className="max-w-24 truncate text-[12px] text-ds-faint">
               {activePersona?.name ?? t('codeAgentPersonaNone')}
