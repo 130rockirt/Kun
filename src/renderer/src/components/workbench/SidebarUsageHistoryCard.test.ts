@@ -6,7 +6,8 @@ import i18n from '../../i18n'
 import type { DailyUsageBucket } from '../../hooks/use-daily-usage'
 import {
   SidebarUsageHistoryCard,
-  buildContributionWeeks
+  buildContributionWeeks,
+  heatmapWeeksForWidth
 } from './SidebarUsageHistoryCard'
 
 function bucket(date: string, totalTokens: number): DailyUsageBucket {
@@ -61,6 +62,12 @@ describe('SidebarUsageHistoryCard', () => {
     expect(weeks[11].cells[6]?.date).toBe('2026-08-23')
   })
 
+  it('computes a responsive week count that fills the available width', () => {
+    expect(heatmapWeeksForWidth(280)).toBe(12)
+    expect(heatmapWeeksForWidth(760)).toBe(40)
+    expect(heatmapWeeksForWidth(1200)).toBe(52)
+  })
+
   it('renders a fixed-size GitHub style grid without stretching or scrolling', () => {
     const html = renderToStaticMarkup(createElement(SidebarUsageHistoryCard, {
       buckets: twelveWeeks(),
@@ -77,7 +84,12 @@ describe('SidebarUsageHistoryCard', () => {
     expect(html).toContain('Most active:')
     expect(html.match(/role="gridcell"/g)).toHaveLength(84)
     expect(html).toContain('repeat(12, 13px)')
-    expect(html).toContain('column-gap:3px')
+    expect(html).toContain('column-gap:4px')
+    expect(html).toContain('bg-[#eef2f7]')
+    expect(html).toContain('bg-[#cce9ff]')
+    expect(html).toContain('bg-[#80c9ff]')
+    expect(html).toContain('bg-[#2da9f7]')
+    expect(html).toContain('bg-[#0066cc]')
     expect(html).not.toContain('overflow-x-auto')
     expect(html).not.toContain('1fr')
   })

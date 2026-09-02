@@ -32,7 +32,7 @@ const RANGE_DAYS: Record<UsageRangeKey, number> = {
 
 const RANGE_KEYS: UsageRangeKey[] = ['7d', '30d', '90d', 'all']
 const EMPTY_DAILY_USAGE_BUCKETS: DailyUsageBucket[] = []
-const HISTORY_RANGE_DAYS = 84
+const HISTORY_RANGE_DAYS = 365
 const MODEL_USAGE_PAGE_SIZE = 5
 
 export type SidebarUsagePanelStatus = {
@@ -55,6 +55,7 @@ export function SidebarUsagePanel({
 }: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
   const [rangeKey, setRangeKey] = useState<UsageRangeKey>('7d')
+  const [historyVisibleWeeks, setHistoryVisibleWeeks] = useState(12)
   const [modelPage, setModelPage] = useState(0)
   const [autoRefreshKey, setAutoRefreshKey] = useState(0)
   const effectiveRefreshKey = `${String(refreshKey)}:${autoRefreshKey}`
@@ -85,7 +86,11 @@ export function SidebarUsagePanel({
   }, [loading, onStatusChange, refreshedAt])
 
   const buckets = dailyState.usage?.buckets ?? EMPTY_DAILY_USAGE_BUCKETS
-  const totals = useMemo(() => usageTotalsFromBuckets(buckets), [buckets])
+  const historyBuckets = useMemo(
+    () => buckets.slice(-(historyVisibleWeeks * 7)),
+    [buckets, historyVisibleWeeks]
+  )
+  const totals = useMemo(() => usageTotalsFromBuckets(historyBuckets), [historyBuckets])
   const hasAccumulatedUsage =
     totals.totalTokens > 0 ||
     totals.turns > 0 ||
@@ -212,6 +217,7 @@ export function SidebarUsagePanel({
           error={dailyState.error}
           hasUsage={hasAccumulatedUsage}
           loading={dailyState.loading}
+          onVisibleWeeksChange={setHistoryVisibleWeeks}
           metrics={[
             {
               label: t('usageQuotaMetricTokens'),

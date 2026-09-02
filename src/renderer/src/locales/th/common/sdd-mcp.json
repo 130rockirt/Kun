@@ -116,6 +116,7 @@
   "usageQuotaHistory": "ประวัติการใช้งาน",
   "usageQuotaHistoryRange": "{{range}} · Daily totals",
   "usageQuotaRange12Weeks": "Last 12 weeks",
+  "usageQuotaRangeWeeks": "Last {{count}} weeks",
   "usageQuotaDailyTokens": "Daily token usage",
   "usageQuotaDailyCost": "Daily cost",
   "usageQuotaCurrentStreak": "Current streak: {{count}} days",

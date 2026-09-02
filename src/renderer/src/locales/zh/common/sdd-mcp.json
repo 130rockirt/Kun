@@ -116,6 +116,7 @@
   "usageQuotaHistory": "用量历史",
   "usageQuotaHistoryRange": "{{range}} · 按日统计",
   "usageQuotaRange12Weeks": "近 12 周",
+  "usageQuotaRangeWeeks": "近 {{count}} 周",
   "usageQuotaDailyTokens": "每日 Token 用量",
   "usageQuotaDailyCost": "每日费用",
   "usageQuotaCurrentStreak": "连续使用 {{count}} 天",

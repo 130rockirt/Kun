@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import type { DailyUsageBucket } from '../../hooks/use-daily-usage'
@@ -16,21 +16,21 @@ export type UsageHistoryMetric = {
 type HeatmapMode = 'tokens' | 'cost'
 type ContributionWeek = { key: string; cells: Array<DailyUsageBucket | null> }
 
-const HEATMAP_WEEKS = 12
-const HEATMAP_CELLS = HEATMAP_WEEKS * 7
+const MIN_HEATMAP_WEEKS = 12
+const MAX_HEATMAP_WEEKS = 52
 const CELL_SIZE = 13
-const CELL_GAP = 3
+const CELL_GAP = 4
 const WEEKDAY_COLUMN_WIDTH = 30
 const WEEKDAY_LABEL_ROWS = new Set([0, 2, 4, 6])
 const TOOLTIP_WIDTH = 208
 // 2026-08-31 is a Monday; weekday labels come from Intl so they localize.
 const REFERENCE_MONDAY = '2026-08-31T00:00:00.000Z'
 const HEATMAP_CLASSES = [
-  'bg-ds-surface-subtle',
-  'bg-accent/20',
-  'bg-accent/40',
-  'bg-accent/70',
-  'bg-accent'
+  'bg-[#eef2f7] dark:bg-[#202020]',
+  'bg-[#cce9ff] dark:bg-[#173653]',
+  'bg-[#80c9ff] dark:bg-[#185987]',
+  'bg-[#2da9f7] dark:bg-[#147eb9]',
+  'bg-[#0066cc] dark:bg-[#339cff]'
 ]
 
 export function SidebarUsageHistoryCard({
@@ -38,19 +38,43 @@ export function SidebarUsageHistoryCard({
   error,
   hasUsage,
   loading,
-  metrics
+  metrics,
+  onVisibleWeeksChange
 }: {
   buckets: DailyUsageBucket[]
   error: string | null
   hasUsage: boolean
   loading: boolean
   metrics: UsageHistoryMetric[]
+  onVisibleWeeksChange?: (weeks: number) => void
 }): ReactElement {
   const { t } = useTranslation('common')
   const [mode, setMode] = useState<HeatmapMode>('tokens')
+  const cardRef = useRef<HTMLElement>(null)
+  const [visibleWeeks, setVisibleWeeks] = useState(MIN_HEATMAP_WEEKS)
+
+  useEffect(() => {
+    const card = cardRef.current
+    if (!card || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setVisibleWeeks(heatmapWeeksForWidth(entry.contentRect.width))
+    })
+    observer.observe(card)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    onVisibleWeeksChange?.(visibleWeeks)
+  }, [onVisibleWeeksChange, visibleWeeks])
+
+  const rangeLabel = t('usageQuotaRangeWeeks', {
+    count: visibleWeeks,
+    defaultValue: `Last ${visibleWeeks} weeks`
+  })
 
   return (
     <section
+      ref={cardRef}
       aria-label={t('usageQuotaHistory')}
       className="overflow-hidden rounded-[16px] border border-ds-border-muted bg-ds-card shadow-sm"
     >
@@ -60,7 +84,7 @@ export function SidebarUsageHistoryCard({
             {t('usageQuotaHistory')}
           </h3>
           <p className="mt-1 text-[10.5px] text-ds-faint">
-            {t('usageQuotaHistoryRange', { range: t('usageQuotaRange12Weeks') })}
+            {t('usageQuotaHistoryRange', { range: rangeLabel })}
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -82,7 +106,7 @@ export function SidebarUsageHistoryCard({
             ))}
           </div>
           <span className="inline-flex min-h-7 items-center rounded-lg border border-ds-border-muted px-2.5 text-[10.5px] font-medium text-ds-muted">
-            {t('usageQuotaRange12Weeks')}
+            {rangeLabel}
           </span>
         </div>
       </div>
@@ -106,7 +130,7 @@ export function SidebarUsageHistoryCard({
       ) : hasUsage ? (
         <>
           <HistoryMetricStrip metrics={metrics} />
-          <ContributionHeatmap buckets={buckets} mode={mode} />
+          <ContributionHeatmap buckets={buckets} mode={mode} visibleWeeks={visibleWeeks} />
         </>
       ) : (
         <p className="mx-4 mb-4 rounded-xl bg-ds-surface-subtle px-3 py-8 text-center text-[11px] leading-5 text-ds-faint">
@@ -152,10 +176,12 @@ function HistoryMetricStrip({ metrics }: { metrics: UsageHistoryMetric[] }): Rea
 
 function ContributionHeatmap({
   buckets,
-  mode
+  mode,
+  visibleWeeks
 }: {
   buckets: DailyUsageBucket[]
   mode: HeatmapMode
+  visibleWeeks: number
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const [selected, setSelected] = useState<DailyUsageBucket | null>(null)
@@ -166,13 +192,20 @@ function ContributionHeatmap({
     above: boolean
     arrowLeft: number
   } | null>(null)
-  const weeks = useMemo(() => buildContributionWeeks(buckets), [buckets])
+  const weeks = useMemo(() => buildContributionWeeks(buckets, visibleWeeks), [buckets, visibleWeeks])
+  const visibleBuckets = useMemo(
+    () => weeks.flatMap((week) => week.cells).filter((cell): cell is DailyUsageBucket => Boolean(cell)),
+    [weeks]
+  )
   const values = useMemo(
-    () => buckets.map((bucket) => heatmapValue(bucket, mode)).filter((value) => value > 0),
-    [buckets, mode]
+    () => visibleBuckets.map((bucket) => heatmapValue(bucket, mode)).filter((value) => value > 0),
+    [mode, visibleBuckets]
   )
   const monthMarkers = useMemo(() => buildMonthMarkers(weeks, i18n.language), [i18n.language, weeks])
-  const summary = useMemo(() => usageSummary(buckets, mode, i18n.language), [buckets, i18n.language, mode])
+  const summary = useMemo(
+    () => usageSummary(visibleBuckets, mode, i18n.language),
+    [i18n.language, mode, visibleBuckets]
+  )
 
   const showTooltip = (bucket: DailyUsageBucket, element: HTMLElement): void => {
     if (typeof window === 'undefined') return
@@ -228,7 +261,7 @@ function ContributionHeatmap({
             role="grid"
             aria-label={t('usageHeatmapGridLabel')}
             className="grid shrink-0"
-            style={{ gridTemplateColumns: `repeat(${HEATMAP_WEEKS}, ${CELL_SIZE}px)`, columnGap: CELL_GAP }}
+            style={{ gridTemplateColumns: `repeat(${visibleWeeks}, ${CELL_SIZE}px)`, columnGap: CELL_GAP }}
           >
             {weeks.map((week) => (
               <span key={week.key} role="row" className="grid grid-rows-7" style={{ rowGap: CELL_GAP }}>
@@ -308,9 +341,22 @@ function ContributionHeatmap({
   )
 }
 
-export function buildContributionWeeks(buckets: DailyUsageBucket[]): ContributionWeek[] {
-  const sorted = [...buckets].sort((left, right) => left.date.localeCompare(right.date)).slice(-HEATMAP_CELLS)
-  if (sorted.length === 0) return emptyWeeks()
+export function heatmapWeeksForWidth(width: number): number {
+  const horizontalPadding = 32
+  const labelAndGap = WEEKDAY_COLUMN_WIDTH + 8
+  const usableWidth = Math.max(0, width - horizontalPadding - labelAndGap)
+  const count = Math.floor((usableWidth + CELL_GAP) / (CELL_SIZE + CELL_GAP))
+  return Math.max(MIN_HEATMAP_WEEKS, Math.min(MAX_HEATMAP_WEEKS, count))
+}
+
+export function buildContributionWeeks(
+  buckets: DailyUsageBucket[],
+  weekCount = MIN_HEATMAP_WEEKS
+): ContributionWeek[] {
+  const safeWeekCount = Math.max(MIN_HEATMAP_WEEKS, Math.min(MAX_HEATMAP_WEEKS, Math.round(weekCount)))
+  const heatmapCells = safeWeekCount * 7
+  const sorted = [...buckets].sort((left, right) => left.date.localeCompare(right.date)).slice(-heatmapCells)
+  if (sorted.length === 0) return emptyWeeks(safeWeekCount)
   const first = new Date(`${sorted[0].date}T00:00:00.000Z`)
   const mondayOffset = Number.isNaN(first.getTime()) ? 0 : (first.getUTCDay() + 6) % 7
   const cells: Array<DailyUsageBucket | null> = [
@@ -323,15 +369,15 @@ export function buildContributionWeeks(buckets: DailyUsageBucket[]): Contributio
     const weekCells = cells.slice(index, index + 7)
     weeks.push({ key: weekCells.find(Boolean)?.date ?? `blank-${index}`, cells: weekCells })
   }
-  const visible = weeks.slice(-HEATMAP_WEEKS)
-  while (visible.length < HEATMAP_WEEKS) {
+  const visible = weeks.slice(-safeWeekCount)
+  while (visible.length < safeWeekCount) {
     visible.unshift({ key: `empty-${visible.length}`, cells: Array.from({ length: 7 }, () => null) })
   }
   return visible
 }
 
-function emptyWeeks(): ContributionWeek[] {
-  return Array.from({ length: HEATMAP_WEEKS }, (_, index) => ({
+function emptyWeeks(weekCount: number): ContributionWeek[] {
+  return Array.from({ length: weekCount }, (_, index) => ({
     key: `empty-${index}`,
     cells: Array.from({ length: 7 }, () => null)
   }))
@@ -349,9 +395,11 @@ function buildMonthMarkers(
   const markers: Array<{ index: number; label: string }> = []
   let previousMonth = -1
   weeks.forEach((week, index) => {
+    const monthStart = week.cells.find((cell) => cell?.date.endsWith('-01'))
     const firstCell = week.cells.find((cell): cell is DailyUsageBucket => Boolean(cell))
-    if (!firstCell) return
-    const date = new Date(`${firstCell.date}T00:00:00.000Z`)
+    const labelCell = monthStart ?? (index === 0 ? firstCell : undefined)
+    if (!labelCell) return
+    const date = new Date(`${labelCell.date}T00:00:00.000Z`)
     if (Number.isNaN(date.getTime())) return
     const month = date.getUTCMonth()
     if (month === previousMonth) return
