@@ -261,14 +261,20 @@ async function assertSingleAndEdit(page) {
   }
   const row = page.locator('[data-queued-message-id="queue-single"]')
   await row.locator('[data-queued-message-action="edit"]').click()
-  const editor = row.locator('[data-queued-message-editor]')
-  await editor.fill('Edited queued implementation review')
-  const editorHeight = (await editor.boundingBox())?.height ?? null
-  exact(editorHeight, 28, 'inline editor height')
-  await editor.press('Enter')
-  await page.getByText('Edited queued implementation review', { exact: true }).waitFor()
-  if (await page.locator('[data-queued-message-id="queue-single"]').count() !== 1) {
-    throw new Error('Inline edit did not preserve the queued row identity')
+  if (await page.locator('[data-queued-message-editor]').count() !== 0) {
+    throw new Error('Restore-to-composer edit rendered an inline editor')
+  }
+  await page.locator('[data-queue-dock]').waitFor({ state: 'detached' })
+  const textarea = page.locator('textarea.ds-composer-textarea')
+  await textarea.waitFor()
+  const restored = await textarea.inputValue()
+  if (restored !== 'Continue with the queued implementation review') {
+    throw new Error(`Restored composer text mismatch: ${JSON.stringify(restored)}`)
+  }
+  await textarea.fill('Edited queued implementation review')
+  const edited = await textarea.inputValue()
+  if (edited !== 'Edited queued implementation review') {
+    throw new Error(`Composer edit did not stick: ${JSON.stringify(edited)}`)
   }
 }
 

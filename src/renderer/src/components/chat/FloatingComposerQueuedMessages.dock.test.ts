@@ -101,20 +101,6 @@ describe('FloatingComposerQueuedMessages DSH queue dock interactions', () => {
     return button
   }
 
-  const setEditorValue = async (value: string): Promise<HTMLInputElement> => {
-    const editor = container.querySelector<HTMLInputElement>('[data-queued-message-editor]')
-    if (!editor) throw new Error('missing queued message editor')
-    const setter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      'value'
-    )?.set
-    await act(async () => {
-      setter?.call(editor, value)
-      editor.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    return editor
-  }
-
   beforeEach(() => {
     setReactActEnvironment(true)
     container = document.createElement('div')
@@ -125,7 +111,6 @@ describe('FloatingComposerQueuedMessages DSH queue dock interactions', () => {
       running: true,
       onRemove: vi.fn(),
       onGuide: vi.fn(),
-      onEdit: vi.fn(() => true),
       onReorder: vi.fn()
     }
   })
@@ -297,66 +282,40 @@ describe('FloatingComposerQueuedMessages DSH queue dock interactions', () => {
     expect(onReorder).not.toHaveBeenCalled()
   })
 
-  it('forces the list open while editing and saves the changed text under the same id', async () => {
-    const onEdit = vi.fn(() => true)
-    const onReorder = vi.fn()
-    await render({ messages: [message('q-edit', 'before')], onEdit, onReorder })
-    await act(async () => action('edit').click())
-    await setEditorValue('after')
-
+  it('restores a plain pending message to the composer without an inline editor', async () => {
+    const onRestoreToComposer = vi.fn(() => true)
     await render({
-      messages: [message('q-edit', 'before'), message('q-tail', 'tail')]
+      messages: [message('q-edit', 'before', { composerRestoreEligible: true })],
+      onRestoreToComposer
     })
-    const header = container.querySelector<HTMLButtonElement>('[data-queued-message-header]')
-    expect(header?.getAttribute('aria-expanded')).toBe('true')
-    expect(header?.disabled).toBe(true)
-    expect(container.querySelector<HTMLInputElement>('[data-queued-message-editor]')?.value)
-      .toBe('after')
-    expect(reorderControls(container)).toHaveLength(0)
-    expect(reorderControls(container).every((handle) => (
-      handle.disabled || handle.hidden || handle.getAttribute('aria-disabled') === 'true'
-    ))).toBe(true)
+    const editButton = action('edit')
+    expect(editButton.disabled).toBe(false)
+    expect(editButton.getAttribute('aria-label')).toBe('queuedMessageEditInComposer')
 
-    const editor = container.querySelector<HTMLInputElement>('[data-queued-message-editor]')!
-    await act(async () => {
-      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-      await Promise.resolve()
-    })
-    expect(onEdit).toHaveBeenCalledWith('q-edit', 'after')
-    expect(onReorder).not.toHaveBeenCalled()
-  })
-
-  it('cancels with Escape, ignores composing Enter, and disables blank saves', async () => {
-    const onEdit = vi.fn(() => true)
-    await render({ messages: [message('q-edit', 'before')], onEdit })
-    await act(async () => action('edit').click())
-    let editor = await setEditorValue('输入中')
-
-    await act(async () => {
-      editor.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter',
-        bubbles: true,
-        isComposing: true
-      }))
-    })
-    expect(onEdit).not.toHaveBeenCalled()
-    expect(container.querySelector('[data-queued-message-editor]')).not.toBeNull()
-
-    editor = await setEditorValue('   ')
-    expect(action('save').disabled).toBe(true)
-    await act(async () => {
-      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    })
+    await act(async () => editButton.click())
+    expect(onRestoreToComposer).toHaveBeenCalledWith('q-edit')
     expect(container.querySelector('[data-queued-message-editor]')).toBeNull()
-    expect(container.textContent).toContain('before')
-    expect(onEdit).not.toHaveBeenCalled()
   })
 
-  it('keeps structured rows visible but disables inline editing', async () => {
+  it('keeps the row when restore is rejected and never opens an editor', async () => {
+    const onRestoreToComposer = vi.fn(() => false)
+    await render({
+      messages: [message('q-reject', 'keep me', { composerRestoreEligible: true })],
+      onRestoreToComposer
+    })
+    const editButton = action('edit')
+    await act(async () => editButton.click())
+    expect(onRestoreToComposer).toHaveBeenCalledWith('q-reject')
+    expect(container.querySelector('[data-queued-message-editor]')).toBeNull()
+    expect(container.querySelector('[data-queued-message-id="q-reject"]')).not.toBeNull()
+  })
+
+  it('keeps structured rows visible but disables restore editing', async () => {
     await render({
       messages: [message('q-structured', 'inspect the file', {
         attachmentIds: ['attachment-1']
-      })]
+      })],
+      onRestoreToComposer: vi.fn(() => true)
     })
     const row = container.querySelector('[data-queued-message-id="q-structured"]')!
     expect(row.textContent).toContain('inspect the file')
@@ -366,14 +325,12 @@ describe('FloatingComposerQueuedMessages DSH queue dock interactions', () => {
 
   it('restores a composer-eligible image row through the edit action', async () => {
     const onRestoreToComposer = vi.fn(() => true)
-    const onEdit = vi.fn(() => true)
     await render({
       messages: [message('q-image', 'inspect the image', {
         attachmentIds: ['attachment-1'],
         attachments: [{ name: 'shot.png', kind: 'image' as const }],
         composerRestoreEligible: true
       })],
-      onEdit,
       onRestoreToComposer
     })
     const row = queueRow(container, 'q-image')
@@ -383,18 +340,17 @@ describe('FloatingComposerQueuedMessages DSH queue dock interactions', () => {
 
     await act(async () => editButton.click())
     expect(onRestoreToComposer).toHaveBeenCalledWith('q-image')
-    expect(onEdit).not.toHaveBeenCalled()
     expect(container.querySelector('[data-queued-message-editor]')).toBeNull()
   })
 
-  it('keeps the edit action disabled without a composer restore handler', async () => {
+  it('omits the edit action without a composer restore handler', async () => {
     await render({
       messages: [message('q-image', 'inspect the image', {
         attachmentIds: ['attachment-1'],
         composerRestoreEligible: true
       })]
     })
-    expect(action('edit').disabled).toBe(true)
+    expect(container.querySelector('[data-queued-message-action="edit"]')).toBeNull()
   })
 
   it('interlocks every row action and forces expansion while one operation is busy', async () => {

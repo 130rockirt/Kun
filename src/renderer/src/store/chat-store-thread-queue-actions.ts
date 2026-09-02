@@ -58,7 +58,7 @@ import {
   reconcileQueuedMessages,
   saveQueuedMessagesForThread
 } from './queued-message-persistence'
-import { editQueuedMessageInQueue, restoreQueuedMessageFromQueue } from './queued-message-edit'
+import { restoreQueuedMessageFromQueue } from './queued-message-edit'
 import {
   accountIdForComposerSelection,
   activeClawChannel,
@@ -150,7 +150,6 @@ import { mergeChatBlocks } from '../agent/kun-mapper'
 import {
   activeChatWorkspaceRoot,
   activeWriteMessageContextMatches,
-  createClientTurnRequestId,
   createWorkspaceCheckpointRequestId,
   hasRuntimeUserBlockForGuidance,
   localConversationErrorBlock,
@@ -171,7 +170,7 @@ import {
 export function createThreadQueueActions(
   context: StoreActionContext,
   runtime: ThreadActionRuntime
-): Pick<ChatState, 'drainQueuedMessages' | 'removeQueuedMessage' | 'editQueuedMessage' | 'restoreQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage'> {
+): Pick<ChatState, 'drainQueuedMessages' | 'removeQueuedMessage' | 'restoreQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage'> {
   const { set, get, sseAbortRef } = context
   return {
   drainQueuedMessages: async () => {
@@ -230,19 +229,6 @@ export function createThreadQueueActions(
     if (removed?.waitForRuntimeAdmission) {
       settleRuntimeTurnAdmission(removed.clientRequestId, false)
     }
-  },
-
-  editQueuedMessage: (id, text) => {
-    const edited = editQueuedMessageInQueue(
-      get().queuedMessages,
-      id,
-      text,
-      createClientTurnRequestId()
-    )
-    if (!edited.edited) return false
-    set({ queuedMessages: edited.messages })
-    runtime.persistActiveQueuedMessages()
-    return true
   },
 
   restoreQueuedMessage: (id) => {

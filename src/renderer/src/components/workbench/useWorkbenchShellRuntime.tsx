@@ -46,7 +46,7 @@ export function useWorkbenchShellRuntime(context: Context): {
     composerExecutionApplying, runtimeSkills, disabledSkillIds, handlePickAttachments,
     handlePasteClipboardImage, removeComposerAttachment, restoreComposerAttachments, addComposerFileReference,
     pickComposerFileReferences, openWorkspaceFileTreeTab, openDesignFileTreeTab,
-    removeComposerFileReference, queuedMessages, removeQueuedMessage, editQueuedMessage, guideQueuedMessage,
+    removeComposerFileReference, queuedMessages, removeQueuedMessage, guideQueuedMessage,
     interrupt, handleGuiPlanCommand, useWorktreePool, worktreeBranch, setWorktreeBranch,
     setUseWorktreePool, createThread, activeSkillWorkspace, reviewActiveThread,
     updateComposerExecutionSettings, spawnSideConversation, openSideConversationDraft,
@@ -121,7 +121,7 @@ export function useWorkbenchShellRuntime(context: Context): {
     pickComposerFileReferences, openFileTreeSidePanel: openWorkspaceFileTreeTab,
     openDesignFileTreeSidePanel: openDesignFileTreeTab,
     removeComposerFileReference, queuedMessages,
-    removeQueuedMessage, editQueuedMessage, guideQueuedMessage, interrupt, handleGuiPlanCommand, useWorktreePool, worktreeBranch, setWorktreeBranch,
+    removeQueuedMessage, guideQueuedMessage, interrupt, handleGuiPlanCommand, useWorktreePool, worktreeBranch, setWorktreeBranch,
     setUseWorktreePool, createThread, activeSkillWorkspace, reviewActiveThread, updateComposerExecutionSettings,
     spawnSideConversation, openSideConversationDraft, startNewSddRequirement
   })

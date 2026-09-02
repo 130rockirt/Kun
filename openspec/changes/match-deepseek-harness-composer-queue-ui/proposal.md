@@ -6,10 +6,10 @@ Kun's current busy-turn queue presentation shows only the first message plus a `
 
 - Replace the first-message QueueStrip and hover Portal with a composer-attached QueueDock matching DeepSeek Harness `master@0a53fb55bea101816fa226bb964ae2bed71c343b`.
 - Render one queued item directly; render two or more as a collapsed total-count header that expands the complete FIFO list in place.
-- Add same-ID inline text editing with Save/Cancel, Enter/Escape/IME handling, and blank-save prevention while preserving frozen routing/model fields.
+- Restore eligible queued messages (plain text or image) to the composer and focus the input for editing there, while preserving frozen routing/model fields.
 - Keep Remove and current-turn Guide explicit, serialize queue mutations while one action is pending, and retain rows on failure.
 - Surface failed and paused queue entries with retry/removal actions instead of filtering them out.
-- Match the reference 36px rows, 28px actions/editor, 12px attached top corners, 180px internal scroll budget, semantic light/dark colors, and narrow-layout containment.
+- Match the reference 36px rows, 28px actions, 12px attached top corners, 180px internal scroll budget, semantic light/dark colors, and narrow-layout containment.
 - Remove queue-specific hover opening, `+N` preview, fixed popover, and overflow Edit menu; add explicit multi-row drag/keyboard ordering inside the expanded QueueDock while keeping the existing persisted queue order authoritative.
 
 ## Capabilities

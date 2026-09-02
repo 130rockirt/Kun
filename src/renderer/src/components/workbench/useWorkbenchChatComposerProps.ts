@@ -5,7 +5,7 @@ import {
   queuedMessageMatchesRunningTurn
 } from '../../store/queued-message-guidance'
 import { useChatStore } from '../../store/chat-store'
-import { canInlineEditQueuedMessage, canRestoreQueuedMessageToComposer, queuedMessageComposerRestoreText } from '../../store/queued-message-edit'
+import { canRestoreQueuedMessageToComposer, queuedMessageComposerRestoreText } from '../../store/queued-message-edit'
 import type { WorkbenchChatStageProps } from './WorkbenchChatStage'
 
 type ComposerProps = WorkbenchChatStageProps['composerProps']
@@ -80,7 +80,6 @@ type UseWorkbenchChatComposerPropsInput = {
   restoreComposerAttachments: (attachments: readonly import('../../agent/types').AttachmentReference[]) => void | Promise<void>
   queuedMessages: QueuedUserMessage[]
   removeQueuedMessage: ComposerProps['onRemoveQueuedMessage']
-  editQueuedMessage: NonNullable<ComposerProps['onEditQueuedMessage']>
   guideQueuedMessage: NonNullable<ComposerProps['onGuideQueuedMessage']>
   interrupt: ComposerProps['onInterrupt']
   handleGuiPlanCommand: () => void | Promise<unknown>
@@ -171,7 +170,6 @@ export function useWorkbenchChatComposerProps({
   restoreComposerAttachments,
   queuedMessages,
   removeQueuedMessage,
-  editQueuedMessage,
   guideQueuedMessage,
   interrupt,
   handleGuiPlanCommand,
@@ -295,13 +293,11 @@ export function useWorkbenchChatComposerProps({
       ...(message.guiDesignMode ? { guiDesignMode: true } : {}),
       ...(message.guiDesignArtifact ? { guiDesignArtifact: message.guiDesignArtifact } : {}),
       ...(message.writeContext ? { writeContext: message.writeContext } : {}),
-      inlineEditEligible: canInlineEditQueuedMessage(message),
       composerRestoreEligible: canRestoreQueuedMessageToComposer(message),
       guidanceEligible: canGuideQueuedMessage(message) &&
         queuedMessageMatchesRunningTurn(message, runningTurnMeta)
     })),
     onRemoveQueuedMessage: removeQueuedMessage,
-    onEditQueuedMessage: editQueuedMessage,
     onRestoreQueuedMessageToComposer: (id) => {
       const restored = restoreQueuedMessage(id)
       if (!restored) return false
@@ -413,7 +409,6 @@ export function useWorkbenchChatComposerProps({
     handlePickAttachments,
     handleSend,
     guideQueuedMessage,
-    editQueuedMessage,
     restoreComposerAttachments,
     restoreQueuedMessage,
     graphEnabled,

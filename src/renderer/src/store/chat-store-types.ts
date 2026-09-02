@@ -612,7 +612,6 @@ export type ChatState = {
   reviewActiveThread: (target: ReviewTarget) => Promise<boolean>
   drainQueuedMessages: () => Promise<void>
   removeQueuedMessage: (id: string) => void
-  editQueuedMessage: (id: string, text: string) => boolean
   restoreQueuedMessage: (id: string) => QueuedUserMessage | null
   reorderQueuedMessage: (
     id: string,

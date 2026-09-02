@@ -10,7 +10,6 @@ import {
 } from 'react'
 import {
   ArrowUp,
-  Check,
   ChevronDown,
   ChevronUp,
   GripVertical,
@@ -18,12 +17,10 @@ import {
   Loader2,
   MessageCircle,
   Pencil,
-  Trash2,
-  X
+  Trash2
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ApprovalPolicy, ApprovalReviewer, SandboxMode } from '@shared/app-settings'
-import { canInlineEditQueuedMessage } from '../../store/queued-message-edit'
 import { queuedMessageGuidancePayload } from '../../store/queued-message-guidance'
 import { QueuedMessageSnapshotBadges } from './FloatingComposerQueuedMessageBadges'
 import { parseWritePromptForDisplay } from '../../write/quoted-selection'
@@ -54,7 +51,6 @@ export type QueuedComposerMessage = {
   errorCode?: string
   errorMessage?: string
   guidanceEligible?: boolean
-  inlineEditEligible?: boolean
   mode?: string
   agentSurface?: 'code' | 'write' | 'design'
   model?: string
@@ -94,7 +90,6 @@ type Props = {
   guidanceTarget?: 'turn' | 'graph'
   onRemove: (id: string) => void
   onGuide?: (id: string) => void | Promise<unknown>
-  onEdit?: (id: string, text: string) => boolean | void | Promise<boolean | void>
   onRestoreToComposer?: (id: string) => boolean | void | Promise<boolean | void>
   onReorder?: (id: string, targetId: string, position: QueueDropPosition) => void
 }
@@ -102,12 +97,6 @@ type Props = {
 /** True when the steer contract can preserve the whole queued payload. */
 export function canGuideQueuedComposerMessage(message: QueuedComposerMessage): boolean {
   return queuedMessageGuidancePayload(message) !== null
-}
-
-/** Compatibility export for callers that need to decide whether inline editing is lossless. */
-export function canEditQueuedComposerMessage(message: QueuedComposerMessage): boolean {
-  if (message.inlineEditEligible !== undefined) return message.inlineEditEligible
-  return canInlineEditQueuedMessage(message as Parameters<typeof canInlineEditQueuedMessage>[0])
 }
 
 const QUEUED_MESSAGE_LABEL_SUMMARY_LIMIT = 24
@@ -148,14 +137,12 @@ export function FloatingComposerQueuedMessages({
   guidanceTarget = 'turn',
   onRemove,
   onGuide,
-  onEdit,
   onRestoreToComposer,
   onReorder
 }: Props): ReactElement | null {
   const { t } = useTranslation('common')
   const queue = useMemo(() => visibleQueue(messages), [messages])
   const [collapsed, setCollapsed] = useState(true)
-  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [busy, setBusy] = useState<{ id: string; kind: QueueActionKind } | null>(null)
   const [dragState, setDragState] = useState<QueueDragState | null>(null)
   const [moveAnnouncement, setMoveAnnouncement] = useState('')
@@ -170,22 +157,19 @@ export function FloatingComposerQueuedMessages({
 
   useEffect(() => {
     if (queue.length === 0) setCollapsed(true)
-    if (editing && !queue.some((message) => (
-      message.id === editing.id && canEditQueuedComposerMessage(message)
-    ))) setEditing(null)
-  }, [editing, queue])
+  }, [queue])
 
   useEffect(() => {
     setDragState(null)
   }, [queueRevision])
 
   useEffect(() => {
-    if (editing || busy) setDragState(null)
-  }, [busy, editing])
+    if (busy) setDragState(null)
+  }, [busy])
 
   if (queue.length === 0) return null
 
-  const interactionActive = editing !== null || busy !== null
+  const interactionActive = busy !== null
   const expanded = queue.length === 1 || !collapsed || interactionActive
   const reorderEnabled = Boolean(onReorder && expanded && queue.length > 1 && !interactionActive)
 
@@ -274,13 +258,6 @@ export function FloatingComposerQueuedMessages({
     }
   }
 
-  const saveEdit = async (): Promise<void> => {
-    if (!editing || !onEdit || !editing.text.trim()) return
-    const { id, text } = editing
-    const saved = await applyAction(id, 'edit', () => onEdit(id, text.trim()))
-    if (saved) setEditing(null)
-  }
-
   return (
     <div
       className={css.dock}
@@ -333,15 +310,13 @@ export function FloatingComposerQueuedMessages({
           hidden={!expanded}
         >
           {expanded ? queue.map((message, index) => {
-            const isEditing = editing?.id === message.id
             const isBusy = busy?.id === message.id
             const paused = message.deliveryState === 'paused'
             const failed = message.deliveryState === 'failed'
             const recoverable = paused || failed
             const imageCount = attachmentImageCount(message)
             const imageNames = imageCount > 0 ? attachmentImageNames(message) : ''
-            const canEdit = Boolean(onEdit && canEditQueuedComposerMessage(message))
-            const canRestore = !canEdit && Boolean(onRestoreToComposer && message.composerRestoreEligible)
+            const canRestore = Boolean(onRestoreToComposer && message.composerRestoreEligible)
             const canGuide = Boolean(onGuide && (recoverable
               ? !running && !message.waitForRuntimeAdmission
               : (
@@ -421,36 +396,14 @@ export function FloatingComposerQueuedMessages({
                   </button>
                 ) : null}
 
-                {isEditing ? (
-                  <input
-                    autoFocus
-                    className={css.editor}
-                    data-queued-message-editor
-                    aria-label={t('queuedMessageEdit')}
-                    value={editing.text}
-                    disabled={busy !== null}
-                    onChange={(event) => setEditing({ id: message.id, text: event.currentTarget.value })}
-                    onKeyDown={(event: ReactKeyboardEvent<HTMLInputElement>) => {
-                      if (event.key === 'Escape') {
-                        setEditing(null)
-                        return
-                      }
-                      if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
-                        event.preventDefault()
-                        void saveEdit()
-                      }
-                    }}
-                  />
-                ) : (
-                  <span
-                    className={css.preview}
-                    title={queuedComposerMessageDisplayText(message)}
-                  >
-                    {queuedComposerMessageDisplayText(message)}
-                  </span>
-                )}
+                <span
+                  className={css.preview}
+                  title={queuedComposerMessageDisplayText(message)}
+                >
+                  {queuedComposerMessageDisplayText(message)}
+                </span>
 
-                {!isEditing && imageCount > 0 ? (
+                {imageCount > 0 ? (
                   <span
                     className={css.imageMeta}
                     data-queued-message-images={imageCount}
@@ -461,14 +414,14 @@ export function FloatingComposerQueuedMessages({
                   </span>
                 ) : null}
 
-                {!isEditing ? <QueuedMessageSnapshotBadges message={message} /> : null}
+                <QueuedMessageSnapshotBadges message={message} />
 
-                {!isEditing && paused ? (
+                {paused ? (
                   <span className={`${css.status} ${css.paused}`}>
                     {t('queuedMessagePaused')}
                   </span>
                 ) : null}
-                {!isEditing && failed ? (
+                {failed ? (
                   <span
                     className={`${css.status} ${css.failed}`}
                     title={message.errorMessage || message.errorCode}
@@ -478,87 +431,58 @@ export function FloatingComposerQueuedMessages({
                 ) : null}
 
                 <div className={css.actions}>
-                  {isEditing ? (
-                    <>
-                      <QueueActionButton
-                        action="save"
-                        label={t('queuedMessageSave')}
-                        disabled={busy !== null || !editing.text.trim()}
-                        onClick={() => void saveEdit()}
-                      >
-                        {isBusy && busy?.kind === 'edit'
-                          ? <Loader2 className={css.spinner} size={14} />
-                          : <Check size={14} strokeWidth={1.8} />}
-                      </QueueActionButton>
-                      <QueueActionButton
-                        action="cancel"
-                        label={t('queuedMessageCancelEdit')}
-                        disabled={busy !== null}
-                        onClick={() => setEditing(null)}
-                      >
-                        <X size={14} strokeWidth={1.8} />
-                      </QueueActionButton>
-                    </>
-                  ) : (
-                    <>
-                      {onEdit ? (
-                        <QueueActionButton
-                          action="edit"
-                          label={canEdit
-                            ? t('queuedMessageEdit')
-                            : canRestore
-                              ? t('queuedMessageEditInComposer')
-                              : t('queuedMessageEditUnsupported')}
-                          title={canEdit
-                            ? t('queuedMessageEdit')
-                            : canRestore
-                              ? t('queuedMessageEditInComposer')
-                              : t('queuedMessageEditUnsupported')}
-                          disabled={busy !== null || (!canEdit && !canRestore)}
-                          onClick={() => canEdit
-                            ? setEditing({ id: message.id, text: message.text })
-                            : void applyAction(
-                              message.id,
-                              'edit',
-                              () => onRestoreToComposer!(message.id)
-                            )}
-                        >
-                          <Pencil size={14} strokeWidth={1.8} />
-                        </QueueActionButton>
-                      ) : null}
-                      <QueueActionButton
-                        action="remove"
-                        label={t('queuedMessageRemove')}
-                        disabled={busy !== null}
-                        onClick={() => void applyAction(
-                          message.id,
-                          'remove',
-                          () => onRemove(message.id)
-                        )}
-                      >
-                        {isBusy && busy?.kind === 'remove'
-                          ? <Loader2 className={css.spinner} size={14} />
-                          : <Trash2 size={14} strokeWidth={1.8} />}
-                      </QueueActionButton>
-                      {onGuide ? (
-                        <QueueActionButton
-                          action="guide"
-                          label={canGuide ? guideLabel : guideTitle}
-                          title={guideTitle}
-                          disabled={busy !== null || !canGuide}
-                          onClick={() => void applyAction(
-                            message.id,
-                            'guide',
-                            () => onGuide(message.id)
-                          )}
-                        >
-                          {isBusy && busy?.kind === 'guide'
-                            ? <Loader2 className={css.spinner} size={14} />
-                            : <ArrowUp size={15} strokeWidth={1.8} />}
-                        </QueueActionButton>
-                      ) : null}
-                    </>
-                  )}
+                  {onRestoreToComposer ? (
+                    <QueueActionButton
+                      action="edit"
+                      label={canRestore
+                        ? t('queuedMessageEditInComposer')
+                        : t('queuedMessageEditUnsupported')}
+                      title={canRestore
+                        ? t('queuedMessageEditInComposer')
+                        : t('queuedMessageEditUnsupported')}
+                      disabled={busy !== null || !canRestore}
+                      onClick={() => void applyAction(
+                        message.id,
+                        'edit',
+                        () => onRestoreToComposer(message.id)
+                      )}
+                    >
+                      {isBusy && busy?.kind === 'edit'
+                        ? <Loader2 className={css.spinner} size={14} />
+                        : <Pencil size={14} strokeWidth={1.8} />}
+                    </QueueActionButton>
+                  ) : null}
+                  <QueueActionButton
+                    action="remove"
+                    label={t('queuedMessageRemove')}
+                    disabled={busy !== null}
+                    onClick={() => void applyAction(
+                      message.id,
+                      'remove',
+                      () => onRemove(message.id)
+                    )}
+                  >
+                    {isBusy && busy?.kind === 'remove'
+                      ? <Loader2 className={css.spinner} size={14} />
+                      : <Trash2 size={14} strokeWidth={1.8} />}
+                  </QueueActionButton>
+                  {onGuide ? (
+                    <QueueActionButton
+                      action="guide"
+                      label={canGuide ? guideLabel : guideTitle}
+                      title={guideTitle}
+                      disabled={busy !== null || !canGuide}
+                      onClick={() => void applyAction(
+                        message.id,
+                        'guide',
+                        () => onGuide(message.id)
+                      )}
+                    >
+                      {isBusy && busy?.kind === 'guide'
+                        ? <Loader2 className={css.spinner} size={14} />
+                        : <ArrowUp size={15} strokeWidth={1.8} />}
+                    </QueueActionButton>
+                  ) : null}
                 </div>
               </li>
             )
@@ -592,7 +516,7 @@ function QueueActionButton({
   onClick,
   children
 }: {
-  action: 'edit' | 'remove' | 'guide' | 'save' | 'cancel'
+  action: 'edit' | 'remove' | 'guide'
   label: string
   title?: string
   disabled: boolean

@@ -7,16 +7,10 @@ import type {
 } from './chat-store-thread-actions-support'
 
 describe('chat store queued message edit', () => {
-  it('persists an accepted same-id edit and leaves rejected rows untouched', () => {
+  it('restores a plain pending message, persists the queue, and rejects ineligible rows', () => {
     let state = {
       queuedMessages: [
-        {
-          id: 'q-edit',
-          text: 'before',
-          clientRequestId: 'request-stable',
-          model: 'gpt-5.6-sol',
-          backgroundRuntimeText: 'derived-before'
-        },
+        { id: 'q-plain', text: 'before', deliveryState: 'pending' as const },
         { id: 'q-plan', text: 'internal', displayText: 'visible', mode: 'plan' }
       ]
     } as ChatState
@@ -31,22 +25,16 @@ describe('chat store queued message edit', () => {
       { persistActiveQueuedMessages } as unknown as ThreadActionRuntime
     )
 
-    expect(actions.editQueuedMessage('q-edit', ' after ')).toBe(true)
+    expect(actions.restoreQueuedMessage('q-plain')).toEqual(
+      expect.objectContaining({ id: 'q-plain', text: 'before' })
+    )
     expect(state.queuedMessages).toEqual([
-      expect.objectContaining({
-        id: 'q-edit',
-        text: 'after',
-        clientRequestId: expect.stringMatching(/^turn_/),
-        model: 'gpt-5.6-sol'
-      }),
-      expect.objectContaining({ id: 'q-plan', text: 'internal', displayText: 'visible' })
+      { id: 'q-plan', text: 'internal', displayText: 'visible', mode: 'plan' }
     ])
-    expect(state.queuedMessages[0]).not.toHaveProperty('backgroundRuntimeText')
-    expect(state.queuedMessages[0]?.clientRequestId).not.toBe('request-stable')
     expect(persistActiveQueuedMessages).toHaveBeenCalledOnce()
 
-    expect(actions.editQueuedMessage('q-plan', 'changed')).toBe(false)
-    expect(actions.editQueuedMessage('missing', 'changed')).toBe(false)
+    expect(actions.restoreQueuedMessage('q-plan')).toBeNull()
+    expect(actions.restoreQueuedMessage('missing')).toBeNull()
     expect(persistActiveQueuedMessages).toHaveBeenCalledOnce()
   })
 

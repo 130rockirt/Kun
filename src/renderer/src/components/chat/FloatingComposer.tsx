@@ -189,7 +189,6 @@ export function FloatingComposer({
   modelControlVariant = 'combined',
   queuedMessages,
   onRemoveQueuedMessage,
-  onEditQueuedMessage,
   onRestoreQueuedMessageToComposer,
   onReorderQueuedMessage,
   onGuideQueuedMessage,
@@ -254,7 +253,6 @@ export function FloatingComposer({
   const activeClawChannelId = useChatStore((s) => s.activeClawChannelId)
   const blocks = useChatStore((s) => s.blocks)
   const resolveUserInput = useChatStore((s) => s.resolveUserInput)
-  const storeEditQueuedMessage = useChatStore((s) => s.editQueuedMessage)
   const storeReorderQueuedMessage = useChatStore((s) => s.reorderQueuedMessage)
   const openSettings = useChatStore((s) => s.openSettings)
   const compact = variant !== 'default'
@@ -653,7 +651,6 @@ export function FloatingComposer({
     goalPanelRef, graphEnabled, graphPlanningNeedsCorrection, hideModelPicker, highlightedSlashCommand, i18n, input, isComposerDirectoryReference,
     imageGenerationEnabled, imageGenerationAvailable, imageGenerationReason, mode, modelControlVariant, modelPickerMode, onComposerFastModeChange, onComposerModelChange, onComposerReasoningEffortChange, onConfigureImageGeneration, onConfigureProviders, onDesignTaskProfileChange, onExecutionSettingsChange,
     onComposerPersonaChange, codeAgentPresets, composerPersonaId, resolvedCodeAgentPresets,
-    onEditQueuedMessage: onEditQueuedMessage ?? storeEditQueuedMessage,
     onRestoreQueuedMessageToComposer,
     onReorderQueuedMessage: onReorderQueuedMessage ?? storeReorderQueuedMessage,
     onGuideQueuedMessage, onInterrupt, onOpenGraph, onOpenGraphChild, onPickAttachments, onRemoveAttachment, onRemoveContextChip, onRemoveFileReference,

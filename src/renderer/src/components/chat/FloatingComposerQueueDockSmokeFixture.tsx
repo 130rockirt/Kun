@@ -75,10 +75,11 @@ function ComposerQueueFixture({
         onRemoveQueuedMessage={(id) => {
           setMessages((current) => current.filter((message) => message.id !== id))
         }}
-        onEditQueuedMessage={(id, text) => {
-          setMessages((current) => current.map((message) => (
-            message.id === id ? { ...message, text, displayText: text } : message
-          )))
+        onRestoreQueuedMessageToComposer={(id) => {
+          const restored = messages.find((message) => message.id === id)
+          if (!restored) return false
+          setMessages((current) => current.filter((message) => message.id !== id))
+          setInput(restored.displayText ?? restored.text)
           return true
         }}
         onReorderQueuedMessage={(id, targetId, position) => {
@@ -148,7 +149,7 @@ function message(
     displayText: text,
     deliveryState: 'pending',
     guidanceEligible: true,
-    inlineEditEligible: true,
+    composerRestoreEligible: true,
     ...overrides
   }
 }

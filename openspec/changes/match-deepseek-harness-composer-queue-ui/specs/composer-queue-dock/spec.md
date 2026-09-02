@@ -12,27 +12,27 @@ Kun SHALL render pending composer messages in a QueueDock attached to the compos
 - **THEN** the dock initially shows only the total count and expands or collapses all rows from the header button
 
 #### Scenario: Interaction keeps rows visible
-- **WHEN** inline editing or a queue mutation is active and the queue contains multiple messages
+- **WHEN** a restore-to-composer edit or a queue mutation is active and the queue contains multiple messages
 - **THEN** the list remains expanded and the collapse header is disabled until the interaction settles
 
 #### Scenario: Queue resets disclosure
 - **WHEN** the visible queue becomes empty and later receives multiple messages
 - **THEN** the new queue starts collapsed again
 
-### Requirement: Inline editing preserves queued identity
-Kun SHALL edit eligible plain-text queued messages in place without dequeuing them or changing their delivery order, queue identity, or frozen routing/model settings; an edited payload SHALL receive a fresh client request identity.
+### Requirement: Editing restores the message to the composer
+Kun SHALL return eligible queued messages to the composer for editing instead of editing them in place; the restored payload SHALL preserve its frozen routing/model settings, and image attachments SHALL be restored to the composer attachments.
 
-#### Scenario: Save plain text
-- **WHEN** the user edits an eligible pending text row and saves non-blank text
-- **THEN** the same queued id remains in the same position with updated mirrored text, a fresh client request id, preserved routing fields, cleared stale derived background payloads, and persisted queue state
+#### Scenario: Restore plain text or image
+- **WHEN** the user edits an eligible pending text or image row
+- **THEN** the message is removed from the queue by stable id, its text is placed in the composer input, image attachments are restored, and the composer input is focused for further editing
 
-#### Scenario: Keyboard editing
-- **WHEN** an inline editor is active
-- **THEN** Enter saves outside IME composition, Escape cancels, and an IME-composing Enter does not save
+#### Scenario: Restore preserves submission settings
+- **WHEN** a restored message carried frozen mode/model/reasoning/permission settings
+- **THEN** the composer replays those settings so a resend reproduces the original turn instead of adopting current composer state
 
-#### Scenario: Invalid edit
-- **WHEN** the edit is blank, the row is no longer pending, or the payload contains structured or non-mirrored content
-- **THEN** Save is unavailable or rejected and the original queued record remains unchanged
+#### Scenario: Invalid restore
+- **WHEN** the row is no longer pending, or the payload contains structured content or document attachments that cannot be faithfully rebuilt
+- **THEN** the edit action is unavailable and the original queued record remains unchanged
 
 ### Requirement: Queue actions are lossless and serialized
 Kun SHALL expose Edit, Remove, and current-turn Guide in reference order for ordinary pending rows, and SHALL keep paused or failed rows visible with Remove plus Retry only when replay is safe.
@@ -58,7 +58,7 @@ Kun SHALL use the frozen Harness QueueDock dimensions and interaction semantics 
 
 #### Scenario: Desktop geometry
 - **WHEN** the QueueDock is rendered above the main composer
-- **THEN** headers and rows are 36px, editors and actions are 28px, action gaps are 10px, top corners are 12px, the bottom is square and attached to the composer, and the list scrolls internally above 180px
+- **THEN** headers and rows are 36px, actions are 28px, action gaps are 10px, top corners are 12px, the bottom is square and attached to the composer, and the list scrolls internally above 180px
 
 #### Scenario: Narrow composer
 - **WHEN** the composer is narrow
@@ -66,7 +66,7 @@ Kun SHALL use the frozen Harness QueueDock dimensions and interaction semantics 
 
 #### Scenario: Keyboard and screen reader
 - **WHEN** a user navigates the QueueDock without a pointer
-- **THEN** the disclosure exposes `aria-controls` and `aria-expanded`, every action has an accessible name and disabled explanation, focus remains in the inline workflow, and Escape cancels editing
+- **THEN** the disclosure exposes `aria-controls` and `aria-expanded`, every action has an accessible name and disabled explanation, and the restored composer input receives focus
 
 #### Scenario: Theme behavior
 - **WHEN** light, dark, custom-theme, or reduced-motion preferences are active
@@ -84,7 +84,7 @@ Kun SHALL let users reorder two or more visible queued rows inside an expanded Q
 - **THEN** the row moves one position before or after that neighbor and focus remains on its stable handle
 
 #### Scenario: Ordering is unavailable
-- **WHEN** the queue is collapsed, contains one visible row, is being edited, or has a pending mutation
+- **WHEN** the queue is collapsed, contains one visible row, is being restored, or has a pending mutation
 - **THEN** drag handles are hidden or disabled and no reorder operation is emitted
 
 #### Scenario: Queue changes during drag
