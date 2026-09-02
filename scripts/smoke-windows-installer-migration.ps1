@@ -116,7 +116,8 @@ function Invoke-Installer(
 function Invoke-Uninstaller(
   [string]$Scenario,
   [string]$InstallLocation,
-  [ValidateSet('/currentuser', '/allusers')][string]$Mode
+  [ValidateSet('/currentuser', '/allusers')][string]$Mode,
+  [int]$TimeoutSeconds = 600
 ) {
   $script:currentScenario = $Scenario
   $source = Join-Path $InstallLocation 'Uninstall Kun.exe'
@@ -125,10 +126,15 @@ function Invoke-Uninstaller(
   try {
     # NSIS uninstallers normally launch a temporary child and let the original
     # process exit early. Running our own copy with _?= as the final, unquoted
-    # argument makes -Wait observe the real uninstall lifecycle.
+    # argument makes the spawned process represent the real uninstall lifecycle,
+    # so a bounded WaitForExit can observe it without hanging the whole CI step.
     $arguments = @('/S', $Mode, ('_?={0}' -f $InstallLocation))
     Write-Host "[$Scenario] Starting copied uninstaller: $($arguments -join ' ')"
-    $process = Start-Process -FilePath $copy -ArgumentList $arguments -Wait -PassThru
+    $process = Start-Process -FilePath $copy -ArgumentList $arguments -PassThru
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+      & "$env:SystemRoot\System32\taskkill.exe" /PID $process.Id /T /F | Out-Null
+      throw "[$Scenario] Uninstaller PID $($process.Id) did not exit within $TimeoutSeconds seconds."
+    }
     Assert-True ($process.ExitCode -eq 0) "Uninstaller exited with $($process.ExitCode)."
   } finally {
     Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
@@ -477,6 +483,14 @@ try {
   Remove-Item -LiteralPath $conflictTarget -Recurse -Force
   Invoke-Installer 'conflict retry migration' @('/S', '/currentuser')
   Assert-RegisteredLocation $conflictTarget
+  $conflictManualUserRoot = Join-Path $conflictSource ($unicodeDirectoryName + '-user-files')
+  $conflictManualTextFile = Join-Path $conflictManualUserRoot 'notes.txt'
+  $conflictManualBinaryFile = Join-Path $conflictManualUserRoot 'nested\payload.bin'
+  Assert-True ((Get-FileSha256 $conflictManualTextFile) -eq $manualUserHashes[$manualTextFile]) `
+    'The conflict retry did not restore the Unicode user text to the old source.'
+  Assert-True ((Get-FileSha256 $conflictManualBinaryFile) -eq $manualUserHashes[$manualBinaryFile]) `
+    'The conflict retry did not restore the nested binary user file to the old source.'
+  Move-Item -LiteralPath $conflictManualUserRoot -Destination $conflictTarget
 
   $externalBacking = Join-Path $root 'external-drive'
   $script:substDrive = New-TemporarySubstDrive $externalBacking
@@ -523,15 +537,15 @@ try {
     'The all-users migration changed the preserved Unicode user text.'
   Assert-True ((Get-FileSha256 $externalManualBinaryFile) -eq $manualUserHashes[$manualBinaryFile]) `
     'The all-users migration changed the preserved nested binary user file.'
-  $allUsersPrepareDiagnostics = @(Get-Content -LiteralPath $diagnosticPath | Where-Object {
-    $_ -match 'START action=Prepare' -and
+  $allUsersMigrationDiagnostics = @(Get-Content -LiteralPath $diagnosticPath | Where-Object {
+    $_ -match 'START action=FallbackCleanup' -and
       $_ -match [regex]::Escape("source=$externalSource") -and
       $_ -match 'installMode=all' -and
       $_ -match 'uacInner=[01]'
   })
-  Assert-True ($allUsersPrepareDiagnostics.Count -gt 0) `
+  Assert-True ($allUsersMigrationDiagnostics.Count -gt 0) `
     'The all-users migration did not record its outer/inner installer evidence.'
-  $ranUacInner = [bool]($allUsersPrepareDiagnostics | Where-Object { $_ -match 'uacInner=1' })
+  $ranUacInner = [bool]($allUsersMigrationDiagnostics | Where-Object { $_ -match 'uacInner=1' })
   if ($env:KUN_INSTALLER_SMOKE_REQUIRE_UAC_INNER -eq '1') {
     Assert-True $ranUacInner 'This smoke environment required a real UAC inner installer instance.'
   } elseif (-not $ranUacInner) {

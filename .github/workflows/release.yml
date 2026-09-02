@@ -159,7 +159,8 @@ jobs:
   build-windows:
     name: Build Windows
     runs-on: windows-latest
-    timeout-minutes: 90
+    # Keep the same Windows validation budget as PR and daily packaging.
+    timeout-minutes: 180
     needs:
       - prepare
     env:
@@ -208,7 +209,7 @@ jobs:
         run: npm run dist:win
 
       - name: Smoke Windows installer migration
-        timeout-minutes: 60
+        timeout-minutes: 120
         env:
           KUN_INSTALLER_SMOKE_ARTIFACT_DIR: ${{ github.workspace }}\artifacts\windows-installer-smoke
         run: npm run smoke:windows-installer-migration -- -InstallerPath (Get-ChildItem dist/Kun-*-win-x64.exe | Select-Object -First 1 -ExpandProperty FullName)

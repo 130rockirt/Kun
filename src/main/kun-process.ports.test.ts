@@ -324,3 +324,21 @@ describe('terminateVerifiedPid', () => {
   })
 
 })
+
+describe('processIdentity', () => {
+  it.runIf(process.platform === 'win32')(
+    'reads a complete identity through Windows PowerShell 5.1',
+    async () => {
+      const { processIdentity } = await import('./kun-process-ports')
+
+      const identity = await processIdentity(process.pid)
+
+      expect(identity).toMatchObject({
+        pid: process.pid,
+        executablePath: expect.any(String),
+        commandLine: expect.any(String),
+        startedAtMs: expect.any(Number)
+      })
+    }
+  )
+})
