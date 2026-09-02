@@ -30,6 +30,7 @@ export const ThreadRuntimeStateSchema = z.object({
   status: ThreadStatus,
   updatedAt: z.string(),
   latestSeq: z.number().int().nonnegative(),
+  replayFloorSeq: z.number().int().nonnegative().optional(),
   /** Live request ids that still require a user response. */
   pendingUserInputIds: z.array(z.string().min(1)),
   latestTurn: z.object({
@@ -47,7 +48,8 @@ export type ThreadRuntimeState = z.infer<typeof ThreadRuntimeStateSchema>
  */
 export const CompatibleThreadRuntimeStateSchema = ThreadRuntimeStateSchema.extend({
   schemaVersion: z.literal(THREAD_RUNTIME_STATE_SCHEMA_VERSION).optional(),
-  pendingUserInputIds: z.array(z.string().min(1)).optional().default([])
+  pendingUserInputIds: z.array(z.string().min(1)).optional().default([]),
+  replayFloorSeq: z.number().int().nonnegative().optional()
 })
 
 export function normalizeThreadRuntimeStateWire(

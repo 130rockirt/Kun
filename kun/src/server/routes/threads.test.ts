@@ -153,6 +153,7 @@ describe('getThreadState', () => {
       status: 'running',
       updatedAt: record.updatedAt,
       latestSeq: 73,
+      replayFloorSeq: 0,
       pendingUserInputIds: [],
       latestTurn: { id: 'turn_state', status: 'running', orchestration: 'direct' }
     })

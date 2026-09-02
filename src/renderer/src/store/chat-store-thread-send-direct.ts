@@ -122,7 +122,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
     const previousQueuedMessages = get().queuedMessages
     resetBusyRecoveryAttempts()
     // Fence stale detail hydration before publishing the optimistic turn.
-    runtime.threadSelectionGeneration += 1
+    runtime.fenceThreadMutation(previousActiveThreadId ?? undefined)
     set((s) => ({
       busy: true,
       busyUnconfirmed: false,

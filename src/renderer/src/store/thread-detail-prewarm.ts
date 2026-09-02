@@ -10,9 +10,15 @@ import {
   threadSnapshotFingerprint,
   type ThreadSnapshotCacheToken
 } from './thread-snapshot-cache'
+import {
+  hasForegroundThreadRecovery,
+  onThreadRecoveryActivity
+} from './thread-recovery-coordinator'
 
 export const THREAD_DETAIL_PREWARM_CONCURRENCY = 2
 export const THREAD_DETAIL_PREWARM_FAILURE_BACKOFF_MS = 30_000
+export const THREAD_DETAIL_PREWARM_DWELL_MS = 250
+export const THREAD_DETAIL_PREWARM_MAX_QUEUE = 4
 
 type PrewarmJob = {
   thread: NormalizedThread
@@ -24,6 +30,8 @@ type InFlightPrewarm = {
   token: ThreadSnapshotCacheToken
   promise: Promise<ThreadDetail>
   managerGeneration: number
+  controller: AbortController
+  job: PrewarmJob
 }
 
 let queue: PrewarmJob[] = []
@@ -31,6 +39,19 @@ const inFlight = new Map<string, InFlightPrewarm>()
 const retryAfterByThread = new Map<string, number>()
 let activeBackgroundRequests = 0
 let managerGeneration = 0
+const dwellTimers = new Map<string, ReturnType<typeof setTimeout>>()
+let recoveryActivityUnsubscribe: (() => void) | undefined
+
+function ensureRecoveryObserver(): void {
+  if (recoveryActivityUnsubscribe) return
+  recoveryActivityUnsubscribe = onThreadRecoveryActivity(() => {
+    if (hasForegroundThreadRecovery()) {
+      for (const entry of inFlight.values()) entry.controller.abort()
+      return
+    }
+    pumpQueue()
+  })
+}
 
 function threadCanPrewarm(thread: NormalizedThread): boolean {
   return thread.archived !== true &&
@@ -80,13 +101,21 @@ export function threadPrewarmHandleIsCurrent(
 }
 
 function startBackgroundPrewarm(job: PrewarmJob): void {
+  if (hasForegroundThreadRecovery()) {
+    enqueueJob(job)
+    return
+  }
   const existing = matchingInFlight(job.thread)
   if (existing) return
   const token = captureThreadSnapshotCacheToken(job.thread.id)
   const generation = managerGeneration
+  const controller = new AbortController()
   let promise: Promise<ThreadDetail>
   try {
-    promise = Promise.resolve(getProvider().getThreadDetail(job.thread.id))
+    promise = Promise.resolve(getProvider().getThreadDetail(job.thread.id, {
+      signal: controller.signal,
+      priority: 'background'
+    }))
   } catch {
     retryAfterByThread.set(
       job.thread.id,
@@ -98,7 +127,9 @@ function startBackgroundPrewarm(job: PrewarmJob): void {
     fingerprint: job.fingerprint,
     token,
     promise,
-    managerGeneration: generation
+    managerGeneration: generation,
+    controller,
+    job
   }
   inFlight.set(job.thread.id, entry)
   activeBackgroundRequests += 1
@@ -124,7 +155,9 @@ function startBackgroundPrewarm(job: PrewarmJob): void {
         entry.managerGeneration !== managerGeneration ||
         inFlight.get(job.thread.id) !== entry
       ) return
-      retryAfterByThread.set(
+      if (controller.signal.aborted) {
+        if (hasForegroundThreadRecovery()) enqueueJob(job)
+      } else retryAfterByThread.set(
         job.thread.id,
         Date.now() + THREAD_DETAIL_PREWARM_FAILURE_BACKOFF_MS
       )
@@ -138,6 +171,7 @@ function startBackgroundPrewarm(job: PrewarmJob): void {
 }
 
 function pumpQueue(): void {
+  if (hasForegroundThreadRecovery()) return
   while (
     activeBackgroundRequests < THREAD_DETAIL_PREWARM_CONCURRENCY &&
     queue.length > 0
@@ -149,19 +183,46 @@ function pumpQueue(): void {
   }
 }
 
+function enqueueJob(job: PrewarmJob): void {
+  queue = queue.filter((candidate) => candidate.thread.id !== job.thread.id)
+  queue.unshift(job)
+  if (queue.length > THREAD_DETAIL_PREWARM_MAX_QUEUE) {
+    queue.length = THREAD_DETAIL_PREWARM_MAX_QUEUE
+  }
+}
+
 export function requestThreadPrewarm(
-  thread: NormalizedThread
+  thread: NormalizedThread,
+  options: { dwell?: boolean } = {}
 ): void {
+  ensureRecoveryObserver()
   if (
     !threadCanPrewarm(thread)
   ) return
   if ((retryAfterByThread.get(thread.id) ?? 0) > Date.now()) return
   const fingerprint = threadSnapshotFingerprint(thread)
-  if (getThreadSnapshot(thread.id, fingerprint) || matchingInFlight(thread)) return
-  queue = queue.filter((job) => job.thread.id !== thread.id)
+  if (getThreadSnapshot(thread.id, fingerprint) || matchingInFlight(thread) || dwellTimers.has(thread.id)) return
   const job = { thread, fingerprint }
-  queue.unshift(job)
-  pumpQueue()
+  if (options.dwell !== true) {
+    enqueueJob(job)
+    pumpQueue()
+    return
+  }
+  const timer = setTimeout(() => {
+    dwellTimers.delete(thread.id)
+    if (!threadCanPrewarm(thread)) return
+    enqueueJob(job)
+    pumpQueue()
+  }, THREAD_DETAIL_PREWARM_DWELL_MS)
+  dwellTimers.set(thread.id, timer)
+}
+
+export function cancelThreadPrewarm(threadId: string): void {
+  const timer = dwellTimers.get(threadId)
+  if (timer) clearTimeout(timer)
+  dwellTimers.delete(threadId)
+  queue = queue.filter((job) => job.thread.id !== threadId)
+  inFlight.get(threadId)?.controller.abort()
 }
 
 /** Test-only visibility into the bounded background coordinator. */
@@ -180,8 +241,13 @@ export function threadPrewarmStats(): {
 /** Test-only reset; product code relies on fingerprint/generation invalidation. */
 export function resetThreadPrewarmState(): void {
   managerGeneration += 1
+  for (const timer of dwellTimers.values()) clearTimeout(timer)
+  dwellTimers.clear()
+  for (const entry of inFlight.values()) entry.controller.abort()
   queue = []
   inFlight.clear()
   retryAfterByThread.clear()
   activeBackgroundRequests = 0
+  recoveryActivityUnsubscribe?.()
+  recoveryActivityUnsubscribe = undefined
 }

@@ -25,6 +25,7 @@ import {
   cursorSubscriptionDiscoveryPayloadSchema,
   modelProviderCredentialRevealPayloadSchema,
   runtimeRequestPayloadSchema,
+  runtimeRequestCancelPayloadSchema,
   runtimeImageAttachmentUploadPayloadSchema,
   kunProtectedApprovalPayloadSchema,
   settingsPatchSchema
@@ -107,6 +108,24 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
     logError,
     logInfo: logInfoHandler = () => undefined
   } = options
+  const runtimeRequestControllers = new Map<string, {
+    ownerId: number
+    controller: AbortController
+  }>()
+  const observedRuntimeRequestOwners = new Set<number>()
+  const runtimeRequestKey = (ownerId: number, requestId: string): string => `${ownerId}:${requestId}`
+  const observeRuntimeRequestOwner = (owner: IpcMainInvokeEvent['sender']): void => {
+    if (observedRuntimeRequestOwners.has(owner.id)) return
+    observedRuntimeRequestOwners.add(owner.id)
+    owner.once('destroyed', () => {
+      observedRuntimeRequestOwners.delete(owner.id)
+      for (const [key, pending] of runtimeRequestControllers) {
+        if (pending.ownerId !== owner.id) continue
+        pending.controller.abort()
+        runtimeRequestControllers.delete(key)
+      }
+    })
+  }
   const withRegistryCredentials = options.withRegistryCredentials ?? (async (settings) => settings)
   const nativeDialogs = options.nativeDialogs ?? new NativeDialogCoordinator()
   ipcMain.handle('settings:open-config-file', async () => {
@@ -382,7 +401,41 @@ export function registerAppSettingsIpcHandlers(options: RegisterAppIpcHandlersOp
     assertTrustedWorkbenchSender(event, getMainWindow)
     options.assertRendererRuntimeReady()
     const request = parseIpcPayload('runtime:request', runtimeRequestPayloadSchema, payload)
-    return runtimeRequest(request.path, request.method, request.body)
+    if (!request.requestId) {
+      return runtimeRequest(request.path, request.method, request.body, undefined, {
+        priority: request.priority
+      })
+    }
+    observeRuntimeRequestOwner(event.sender)
+    const key = runtimeRequestKey(event.sender.id, request.requestId)
+    runtimeRequestControllers.get(key)?.controller.abort()
+    const controller = new AbortController()
+    runtimeRequestControllers.set(key, { ownerId: event.sender.id, controller })
+    try {
+      return await runtimeRequest(request.path, request.method, request.body, undefined, {
+        signal: controller.signal,
+        priority: request.priority
+      })
+    } finally {
+      if (runtimeRequestControllers.get(key)?.controller === controller) {
+        runtimeRequestControllers.delete(key)
+      }
+    }
+  })
+
+  ipcMain.handle('runtime:request:cancel', async (event, payload: unknown) => {
+    assertTrustedWorkbenchSender(event, getMainWindow)
+    const request = parseIpcPayload(
+      'runtime:request:cancel',
+      runtimeRequestCancelPayloadSchema,
+      payload
+    )
+    const key = runtimeRequestKey(event.sender.id, request.requestId)
+    const pending = runtimeRequestControllers.get(key)
+    if (!pending) return false
+    pending.controller.abort()
+    runtimeRequestControllers.delete(key)
+    return true
   })
 
   ipcMain.handle('gateway:credential', async (event, action: unknown) => {

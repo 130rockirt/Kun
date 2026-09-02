@@ -2,8 +2,9 @@ export const ATTACHMENT_PRUNE_DELAY_MS = 30_000
 export const ATTACHMENT_PRUNE_INTERVAL_MS = 60 * 60 * 1_000
 export const THREAD_GUARDIAN_DELAY_MS = 45_000
 export const THREAD_GUARDIAN_INTERVAL_MS = 6 * 60 * 60 * 1_000
+export const MAINTENANCE_SLICE_RETRY_MS = 250
 
-type MaintenanceTask = () => Promise<void>
+type MaintenanceTask = () => Promise<boolean | void>
 
 export type RuntimeBackgroundMaintenance = {
   start(): void
@@ -18,51 +19,64 @@ export function createRuntimeBackgroundMaintenance(input: {
   attachmentIntervalMs?: number
   guardianDelayMs?: number
   guardianIntervalMs?: number
+  sliceRetryMs?: number
 }): RuntimeBackgroundMaintenance {
   let started = false
   let stopped = false
-  let attachmentTimer: ReturnType<typeof setTimeout> | undefined
-  let attachmentInterval: ReturnType<typeof setInterval> | undefined
-  let guardianTimer: ReturnType<typeof setTimeout> | undefined
-  let guardianInterval: ReturnType<typeof setInterval> | undefined
+  let running = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let attachmentAt = Number.POSITIVE_INFINITY
+  let guardianAt = Number.POSITIVE_INFINITY
 
-  const run = (task: 'attachment pruning' | 'thread guardian', action: MaintenanceTask) => {
-    void action().catch((error) => input.onError(task, error))
+  const schedule = (): void => {
+    if (stopped || !started || running) return
+    if (timer) clearTimeout(timer)
+    const delay = Math.max(0, Math.min(attachmentAt, guardianAt) - Date.now())
+    if (delay === 0) {
+      queueMicrotask(runNext)
+      return
+    }
+    timer = setTimeout(runNext, delay)
+    timer.unref?.()
+  }
+  const runNext = (): void => {
+    timer = undefined
+    if (stopped || running) return
+    const attachmentDue = attachmentAt <= guardianAt
+    const task = attachmentDue ? 'attachment pruning' : 'thread guardian'
+    const action = attachmentDue ? input.pruneAttachments : input.inspectThreads
+    running = true
+    void action().then((complete) => {
+      const retry = complete === false
+      const nextDelay = retry
+        ? input.sliceRetryMs ?? MAINTENANCE_SLICE_RETRY_MS
+        : attachmentDue
+          ? input.attachmentIntervalMs ?? ATTACHMENT_PRUNE_INTERVAL_MS
+          : input.guardianIntervalMs ?? THREAD_GUARDIAN_INTERVAL_MS
+      if (attachmentDue) attachmentAt = Date.now() + nextDelay
+      else guardianAt = Date.now() + nextDelay
+    }).catch((error) => {
+      input.onError(task, error)
+      if (attachmentDue) attachmentAt = Date.now() +
+        (input.attachmentIntervalMs ?? ATTACHMENT_PRUNE_INTERVAL_MS)
+      else guardianAt = Date.now() +
+        (input.guardianIntervalMs ?? THREAD_GUARDIAN_INTERVAL_MS)
+    }).finally(() => {
+      running = false
+      schedule()
+    })
   }
   const start = () => {
     if (started || stopped) return
     started = true
-    attachmentTimer = setTimeout(() => {
-      attachmentTimer = undefined
-      if (stopped) return
-      run('attachment pruning', input.pruneAttachments)
-      attachmentInterval = setInterval(() => {
-        if (!stopped) run('attachment pruning', input.pruneAttachments)
-      }, input.attachmentIntervalMs ?? ATTACHMENT_PRUNE_INTERVAL_MS)
-      attachmentInterval.unref?.()
-    }, input.attachmentDelayMs ?? ATTACHMENT_PRUNE_DELAY_MS)
-    attachmentTimer.unref?.()
-    guardianTimer = setTimeout(() => {
-      guardianTimer = undefined
-      if (stopped) return
-      run('thread guardian', input.inspectThreads)
-      guardianInterval = setInterval(() => {
-        if (!stopped) run('thread guardian', input.inspectThreads)
-      }, input.guardianIntervalMs ?? THREAD_GUARDIAN_INTERVAL_MS)
-      guardianInterval.unref?.()
-    }, input.guardianDelayMs ?? THREAD_GUARDIAN_DELAY_MS)
-    guardianTimer.unref?.()
+    attachmentAt = Date.now() + (input.attachmentDelayMs ?? ATTACHMENT_PRUNE_DELAY_MS)
+    guardianAt = Date.now() + (input.guardianDelayMs ?? THREAD_GUARDIAN_DELAY_MS)
+    schedule()
   }
   const stop = () => {
     stopped = true
-    if (attachmentTimer) clearTimeout(attachmentTimer)
-    if (attachmentInterval) clearInterval(attachmentInterval)
-    if (guardianTimer) clearTimeout(guardianTimer)
-    if (guardianInterval) clearInterval(guardianInterval)
-    attachmentTimer = undefined
-    attachmentInterval = undefined
-    guardianTimer = undefined
-    guardianInterval = undefined
+    if (timer) clearTimeout(timer)
+    timer = undefined
   }
   return { start, stop }
 }

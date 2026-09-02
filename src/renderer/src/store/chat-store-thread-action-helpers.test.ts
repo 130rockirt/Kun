@@ -6,6 +6,7 @@ import {
   subscribeThreadEventsWithRecovery
 } from './chat-store-thread-action-helpers'
 import { rememberThreadComposerSelection } from './chat-store-helpers'
+import { resetThreadRecoveryCoordinator } from './thread-recovery-coordinator'
 
 class MemoryStorage {
   private readonly values = new Map<string, string>()
@@ -67,6 +68,7 @@ describe('composerSelectionForThread', () => {
 describe('subscribeThreadEventsWithRecovery', () => {
   afterEach(() => {
     vi.useRealTimers()
+    resetThreadRecoveryCoordinator()
   })
 
   it('rehydrates a selected idle thread after SSE ends so late restart events are not lost', async () => {
@@ -98,7 +100,7 @@ describe('subscribeThreadEventsWithRecovery', () => {
       () => state
     )
     await Promise.resolve()
-    await vi.advanceTimersByTimeAsync(250)
+    await vi.advanceTimersByTimeAsync(500)
 
     expect(recoverActiveTurn).toHaveBeenCalledOnce()
     controller.abort()

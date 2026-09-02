@@ -53,6 +53,7 @@ import type {
 } from './browser-use'
 import type { StorageRelocationApi } from './storage-relocation'
 import type { UninstallApi } from './uninstall'
+import type { RuntimeRequestIpcApi } from './kun-gui-api-runtime-request'
 import type { RuntimeDataRecoveryApi } from './runtime-data-recovery'
 import type { ProviderAuthApi } from './kun-gui-api-provider-auth'
 import type { KunProtectedApprovalRequest, KunProtectedApprovalResult } from './kun-gui-api-protected-approval'
@@ -233,7 +234,6 @@ import {
   PromptOptimizationRequest,
   PromptOptimizationResult,
   GatewayCredentialResult,
-  RuntimeRequestResult,
   SdkDownloadState,
   SkillGithubImportResult,
   SkillListResult,
@@ -253,7 +253,7 @@ import {
   UpstreamModelsResult,
   WorkspacePickResult
 } from './kun-gui-api-contracts'
-export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & ProviderAuthApi & {
+export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & ProviderAuthApi & RuntimeRequestIpcApi & {
   platform: string
   /** Immutable mode selected before the BrowserWindow and renderer are created. */
   desktopTitleBarMode: DesktopTitleBarMode
@@ -366,7 +366,6 @@ export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & ProviderAuthApi & {
   }>
   setSettings: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   saveSettingsSilent: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
-  runtimeRequest: (path: string, method?: string, body?: string) => Promise<RuntimeRequestResult>
   gatewayCredential: (action: 'status' | 'ensure' | 'copy' | 'rotate' | 'revoke') => Promise<GatewayCredentialResult>
   getRuntimeSettingsSyncStatus: () => Promise<KunRuntimeSettingsSyncStatusPayload>
   uploadRuntimeImageAttachment: (

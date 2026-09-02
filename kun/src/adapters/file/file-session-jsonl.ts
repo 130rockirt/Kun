@@ -345,12 +345,14 @@ export function warnUsageCompaction(threadId: string, error: unknown): void {
 export async function* iterateRuntimeEventsJsonl(
   path: string,
   sinceSeq: number,
-  maxRecordBytes: number
+  maxRecordBytes: number,
+  startOffset = 0
 ): AsyncIterable<RuntimeEvent> {
   let remainder = ''
   try {
     const stream = createReadStream(path, {
       encoding: 'utf-8',
+      start: Math.max(0, startOffset),
       highWaterMark: Math.min(maxRecordBytes, 64 * 1024)
     })
     for await (const chunk of stream) {

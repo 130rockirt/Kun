@@ -6,6 +6,7 @@ import { createThreadQueueActions } from './chat-store-thread-queue-actions'
 import { createThreadSendActions } from './chat-store-thread-send-actions'
 import { createThreadReviewActions } from './chat-store-thread-review-actions'
 import type { StoreActionContext, ThreadActionRuntime } from './chat-store-thread-actions-support'
+import { cancelThreadRecovery } from './thread-recovery-coordinator'
 
 type SseAbortRef = { current: AbortController | null }
 
@@ -15,6 +16,11 @@ export function createThreadActions(
   const actionContext: StoreActionContext = context
   const runtime: ThreadActionRuntime = {
     threadSelectionGeneration: 0,
+    fenceThreadMutation: (threadId) => {
+      if (threadId) cancelThreadRecovery(threadId)
+      runtime.threadSelectionGeneration += 1
+      return runtime.threadSelectionGeneration
+    },
     persistActiveQueuedMessages: () => {
       const state = context.get()
       if (state.activeThreadId) {

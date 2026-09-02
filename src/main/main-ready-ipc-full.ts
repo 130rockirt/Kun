@@ -315,9 +315,17 @@ export function registerMainIpc(services: MainServices): void {
         credentialMigration?.invalidateRuntime(dataDir)
         return { reset: true as const, ...result }
       },
-      runtimeRequest: async (path, method, body, headers) => {
+      runtimeRequest: async (path, method, body, headers, requestOptions) => {
         const settings = await mainState.store.load()
-        const result = await runtimeRequest(settings, path, { method, body, headers })
+        const priorityHeaders = requestOptions?.priority
+          ? { ...headers, 'X-Kun-Request-Priority': requestOptions.priority }
+          : headers
+        const result = await runtimeRequest(settings, path, {
+          method,
+          body,
+          headers: priorityHeaders,
+          signal: requestOptions?.signal
+        })
         const cleanup = result.ok
           ? browserUseCleanupForRuntimeRequest({ path, method, body })
           : undefined

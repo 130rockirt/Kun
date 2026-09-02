@@ -153,13 +153,15 @@ export class FileSessionLiveItems {
     path: string,
     threadId: string,
     item: TurnItem,
-    representedSeq: number
+    representedSeq: number,
+    options: { force?: boolean } = {}
   ): Promise<boolean> {
     serializeItemRecord(item)
     const key = `${threadId}:${item.id}`
     const itemBytes = liveItemTextBytes(item)
     const previousBytes = this.checkpointBytes.get(key)
     if (
+      options.force !== true &&
       previousBytes !== undefined &&
       itemBytes - previousBytes < LIVE_ITEM_CHECKPOINT_STEP_BYTES
     ) return false

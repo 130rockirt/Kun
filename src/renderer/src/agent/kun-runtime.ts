@@ -360,13 +360,19 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
     ))
   }
 
-  async getThreadDetail(threadId: string, options: { before?: string } = {}): Promise<ThreadDetail> {
+  async getThreadDetail(threadId: string, options: {
+    before?: string
+    signal?: AbortSignal
+    priority?: 'foreground' | 'background'
+  } = {}): Promise<ThreadDetail> {
     let response = await rendererRuntimeClient.runtimeRequest(
       kunThreadTimelinePath(threadId, {
         ...(options.before ? { before: options.before } : {}),
         limit: 300
       }),
-      'GET'
+      'GET',
+      undefined,
+      { signal: options.signal, priority: options.priority }
     )
     // A renderer can briefly outlive an older bundled runtime during a local
     // restart. Preserve initial hydration compatibility until that runtime is
@@ -376,10 +382,17 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       !options.before &&
       (response.status === 404 || response.status === 405)
     ) {
-      response = await rendererRuntimeClient.runtimeRequest(kunThreadPath(threadId), 'GET')
+      response = await rendererRuntimeClient.runtimeRequest(
+        kunThreadPath(threadId),
+        'GET',
+        undefined,
+        { signal: options.signal, priority: options.priority }
+      )
     }
     if (!response.ok) {
-      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to load thread'))
+      const error = runtimeErrorToError(readRuntimeError(response.body, 'failed to load thread'))
+      if (response.status === 503) Object.assign(error, { status: 503, retryable: true })
+      throw error
     }
     const thread = readRuntimeJson<CoreThreadTimelineJson>(
       response.body,

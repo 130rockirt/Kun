@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NormalizedThread, ThreadDetail } from '../agent/types'
 import {
+  cancelThreadPrewarm,
   getThreadPrewarmHandle,
   requestThreadPrewarm,
   resetThreadPrewarmState,
@@ -14,6 +15,7 @@ import {
   invalidateThreadSnapshot,
   threadSnapshotFingerprint
 } from './thread-snapshot-cache'
+import { resetThreadRecoveryCoordinator } from './thread-recovery-coordinator'
 
 const registryMock = vi.hoisted(() => ({ getProvider: vi.fn() }))
 
@@ -68,12 +70,14 @@ describe('thread detail prewarm coordinator', () => {
   beforeEach(() => {
     clearThreadSnapshotCache()
     resetThreadPrewarmState()
+    resetThreadRecoveryCoordinator()
     registryMock.getProvider.mockReset()
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
     resetThreadPrewarmState()
+    resetThreadRecoveryCoordinator()
     clearThreadSnapshotCache()
   })
 
@@ -99,7 +103,9 @@ describe('thread detail prewarm coordinator', () => {
     await flushAsyncWork()
 
     expect(getThreadDetail).toHaveBeenCalledTimes(3)
-    expect(getThreadDetail).toHaveBeenLastCalledWith('three')
+    expect(getThreadDetail).toHaveBeenLastCalledWith('three', expect.objectContaining({
+      priority: 'background', signal: expect.any(AbortSignal)
+    }))
     expect(threadPrewarmStats().active).toBe(2)
 
     pending.get('two')!.resolve(detail('two'))
@@ -107,6 +113,21 @@ describe('thread detail prewarm coordinator', () => {
     await flushAsyncWork()
 
     expect(threadPrewarmStats()).toEqual({ queued: 0, inFlight: 0, active: 0 })
+  })
+
+  it('waits for dwell intent and cancels abandoned hover work', async () => {
+    vi.useFakeTimers()
+    const getThreadDetail = vi.fn(async (id: string) => detail(id))
+    registryMock.getProvider.mockReturnValue({ getThreadDetail })
+    const target = thread('dwell')
+
+    requestThreadPrewarm(target, { dwell: true })
+    await vi.advanceTimersByTimeAsync(249)
+    expect(getThreadDetail).not.toHaveBeenCalled()
+    cancelThreadPrewarm(target.id)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(getThreadDetail).not.toHaveBeenCalled()
+    vi.useRealTimers()
   })
 
   it('keeps a newer authoritative result when an older request lands last', async () => {

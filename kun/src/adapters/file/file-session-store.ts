@@ -34,6 +34,7 @@ import { listThreadDirs, loadLatestUsageSnapshotsFromIndex, loadUsageRecordsFrom
 import { JsonlFileAccessCoordinator } from './jsonl-file-access.js'
 import { loadIndexedLiveItemPageFromStore } from './file-session-page.js'
 import { FileSessionLiveItems, liveReplayAfterSeq, overlayLiveItems, readRecoveredLiveItems, readLiveItems, serializeItemRecord, serializeItemRecords } from './file-session-live-items.js'
+import { FileSessionLiveCheckpointCoordinator } from './file-session-live-checkpoint-coordinator.js'
 import { FileSessionItemIndex } from './file-session-item-index.js'
 import { compactFileSessionItems } from './file-session-item-compaction.js'
 import { loadFileSessionHighestSeq } from './file-session-highest-seq.js'
@@ -88,7 +89,8 @@ export class FileSessionStore implements SessionStore {
   private readonly compactionScheduler: SessionCompactionScheduler
   private readonly usageIndex: FileSessionUsageIndex
   private readonly fileAccess: JsonlFileAccessCoordinator
-  private readonly liveItems = new FileSessionLiveItems()
+  readonly liveItems = new FileSessionLiveItems()
+  private readonly liveCheckpoints: FileSessionLiveCheckpointCoordinator
   private readonly itemIndex = new FileSessionItemIndex()
   private readonly verifiedEventTails = new Set<string>()
   private readonly eventHistory: FileSessionEventHistory
@@ -111,6 +113,7 @@ export class FileSessionStore implements SessionStore {
   }) {
     this.dataDir = resolve(options.dataDir, 'threads')
     this.fileAccess = options.fileAccess ?? new JsonlFileAccessCoordinator()
+    this.liveCheckpoints = new FileSessionLiveCheckpointCoordinator(this)
     this.eventHistory = new FileSessionEventHistory({
       pathFor: (threadId) => this.eventsPath(threadId),
       maxRecordBytes: DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES,
@@ -210,6 +213,7 @@ export class FileSessionStore implements SessionStore {
       this.verifiedEventTails.add(threadId)
       this.bumpEventHistoryRevision(threadId)
       const info = await stat(path)
+      await this.eventHistory.recordAppend(threadId, event.seq, Buffer.byteLength(record), info).catch(() => undefined)
       this.cacheHighestSeq(threadId, event.seq, info, { preserveHigher: true })
       if (this.eventRetention.shouldSchedule(info.size)) this.compactionScheduler.schedule(threadId, 'events')
       if (event.kind === 'usage') {
@@ -245,17 +249,12 @@ export class FileSessionStore implements SessionStore {
 
   async checkpointLiveItem(threadId: string, item: TurnItem, representedSeq: number): Promise<void> {
     assertSafeThreadId(threadId)
-    await this.withThreadWrite(threadId, async () => {
-      await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
-      await this.liveItems.checkpoint(this.liveItemsPath(threadId), threadId, item, representedSeq)
-      this.bumpItemsVersion(threadId)
-      this.applyItemToCache(threadId, item)
-      this.bumpItemHistoryRevision(threadId)
-    })
+    await this.liveCheckpoints.checkpoint(threadId, item, representedSeq)
   }
 
   async finalizeLiveItem(threadId: string, item: TurnItem): Promise<void> {
     assertSafeThreadId(threadId)
+    await this.liveCheckpoints.remove(threadId, item.id)
     const path = this.messagesPath(threadId)
     const record = serializeItemRecord(item)
     await this.fileAccess.withRead(path, () => this.withThreadWrite(threadId, async () => {
@@ -279,6 +278,8 @@ export class FileSessionStore implements SessionStore {
 
   async rewriteItems(threadId: string, items: TurnItem[]): Promise<void> {
     assertSafeThreadId(threadId)
+    await this.liveCheckpoints.flushThread(threadId)
+    this.liveCheckpoints.clearThread(threadId)
     const path = this.messagesPath(threadId)
     await this.fileAccess.withReplacement(path, () => this.withThreadWrite(threadId, async () => {
       await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
@@ -311,6 +312,8 @@ export class FileSessionStore implements SessionStore {
     items: TurnItem[]
   ): Promise<ItemHistoryCommit> {
     assertSafeThreadId(threadId)
+    await this.liveCheckpoints.flushThread(threadId)
+    this.liveCheckpoints.clearThread(threadId)
     const path = this.messagesPath(threadId)
     return this.fileAccess.withReplacement(path, () => this.withThreadWrite(threadId, async () => {
       const revision = this.itemHistoryRevision(threadId)
@@ -329,6 +332,7 @@ export class FileSessionStore implements SessionStore {
 
   async updateItem(threadId: string, itemId: string, patch: Partial<TurnItem>): Promise<TurnItem | null> {
     assertSafeThreadId(threadId)
+    await this.liveCheckpoints.remove(threadId, itemId)
     return this.fileAccess.withRead(this.messagesPath(threadId), () => this.withThreadWrite(threadId, async () => {
       const items = await this.loadItemsUnlocked(threadId)
       const current = items.find((item) => item.id === itemId)
@@ -571,7 +575,7 @@ export class FileSessionStore implements SessionStore {
     return this.itemsCache.stats()
   }
 
-  private bumpItemsVersion(threadId: string): void {
+  bumpItemsVersion(threadId: string): void {
     this.itemsCache.bumpVersion(threadId)
   }
 
@@ -579,7 +583,7 @@ export class FileSessionStore implements SessionStore {
     return this.itemHistoryRevisions.read(threadId)
   }
 
-  private bumpItemHistoryRevision(threadId: string): number {
+  bumpItemHistoryRevision(threadId: string): number {
     return this.itemHistoryRevisions.bump(threadId)
   }
 
@@ -613,11 +617,11 @@ export class FileSessionStore implements SessionStore {
     return writeSessionArchive(this.threadDir(input.threadId), input)
   }
 
-  private applyItemToCache(threadId: string, item: TurnItem): void {
+  applyItemToCache(threadId: string, item: TurnItem): void {
     this.itemsCache.applyItem(threadId, item)
   }
 
-  private threadDir(threadId: string): string {
+  threadDir(threadId: string): string {
     assertSafeThreadId(threadId)
     const path = resolve(this.dataDir, threadId)
     if (!isPathBelowDirectory(this.dataDir, path)) {
@@ -626,7 +630,7 @@ export class FileSessionStore implements SessionStore {
     return path
   }
 
-  private async withThreadWrite<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
+  async withThreadWrite<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.writeQueues.get(threadId) ?? Promise.resolve()
     const run = previous.catch(() => undefined).then(operation)
     const guard = run.then(() => undefined, () => undefined)
@@ -646,7 +650,7 @@ export class FileSessionStore implements SessionStore {
     return join(this.threadDir(threadId), 'messages.jsonl')
   }
 
-  private liveItemsPath(threadId: string): string {
+  liveItemsPath(threadId: string): string {
     return join(this.threadDir(threadId), 'live-items.json')
   }
 
@@ -684,8 +688,9 @@ export class FileSessionStore implements SessionStore {
     if (!isSafeThreadId(threadId)) return 0
     return this.eventHistory.floor(threadId)
   }
-  close(): Promise<void> {
-    return this.compactionScheduler.close()
+  async close(): Promise<void> {
+    await this.liveCheckpoints.close()
+    await this.compactionScheduler.close()
   }
 
   /** Used by the loop during shutdown to verify the file actually exists. */

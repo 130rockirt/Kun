@@ -4,12 +4,15 @@ import { stat } from 'node:fs/promises'
 import { firstEventSeqFromJsonl, iterateRuntimeEventsJsonl, trimEventsWithGuards } from './file-session-jsonl.js'
 import { loadFileSessionEventPage } from './file-session-event-page.js'
 import type { JsonlFileAccessCoordinator } from './jsonl-file-access.js'
+import { FileSessionEventIndex } from './file-session-event-index.js'
 
 export async function collectFileSessionEvents(input: {
   path: string
   sinceSeq: number
   maxRecordBytes: number
   fileAccess: JsonlFileAccessCoordinator
+  eventIndex?: FileSessionEventIndex
+  threadId?: string
 }): Promise<RuntimeEvent[]> {
   const events: RuntimeEvent[] = []
   for await (const event of iterateFileSessionEvents(input)) events.push(event)
@@ -21,10 +24,15 @@ export async function* iterateFileSessionEvents(input: {
   sinceSeq: number
   maxRecordBytes: number
   fileAccess: JsonlFileAccessCoordinator
+  eventIndex?: FileSessionEventIndex
+  threadId?: string
 }): AsyncIterable<RuntimeEvent> {
   const release = await input.fileAccess.acquireRead(input.path)
   try {
-    yield* iterateRuntimeEventsJsonl(input.path, input.sinceSeq, input.maxRecordBytes)
+    const startOffset = input.eventIndex && input.threadId
+      ? await input.eventIndex.startOffset(input.threadId, input.path, input.sinceSeq)
+      : 0
+    yield* iterateRuntimeEventsJsonl(input.path, input.sinceSeq, input.maxRecordBytes, startOffset)
   } finally {
     release()
   }
@@ -42,6 +50,8 @@ export function readFileSessionReplayFloor(input: {
 }
 
 export class FileSessionEventHistory {
+  private readonly eventIndex = new FileSessionEventIndex()
+
   constructor(private readonly options: {
     pathFor: (threadId: string) => string
     maxRecordBytes: number
@@ -56,13 +66,16 @@ export class FileSessionEventHistory {
   load(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]> {
     return collectFileSessionEvents({
       path: this.options.pathFor(threadId), sinceSeq,
-      maxRecordBytes: this.options.maxRecordBytes, fileAccess: this.options.fileAccess
+      maxRecordBytes: this.options.maxRecordBytes, fileAccess: this.options.fileAccess,
+      eventIndex: this.eventIndex, threadId
     })
   }
 
-  page(threadId: string, options: EventHistoryPageOptions): Promise<EventHistoryPage> {
+  async page(threadId: string, options: EventHistoryPageOptions): Promise<EventHistoryPage> {
+    const path = this.options.pathFor(threadId)
     return loadFileSessionEventPage({
-      path: this.options.pathFor(threadId), options,
+      path, options,
+      resolveInitialOffset: () => this.eventIndex.startOffset(threadId, path, options.sinceSeq),
       defaultMaxRecordBytes: this.options.maxRecordBytes, fileAccess: this.options.fileAccess
     })
   }
@@ -70,7 +83,8 @@ export class FileSessionEventHistory {
   iterate(threadId: string, sinceSeq: number, maxRecordBytes: number): AsyncIterable<RuntimeEvent> {
     return iterateFileSessionEvents({
       path: this.options.pathFor(threadId), sinceSeq,
-      maxRecordBytes, fileAccess: this.options.fileAccess
+      maxRecordBytes, fileAccess: this.options.fileAccess,
+      eventIndex: this.eventIndex, threadId
     })
   }
 
@@ -86,7 +100,7 @@ export class FileSessionEventHistory {
     const path = this.options.pathFor(threadId)
     const info = await stat(path).catch(() => null)
     if (!info) return { afterBytes: 0 }
-    return trimEventsWithGuards({
+    const result = await trimEventsWithGuards({
       path, fromSeqInclusive, maxRecordBytes: this.options.maxRecordBytes, info,
       revisionBefore: this.options.readRevision(threadId),
       readRevision: () => this.options.readRevision(threadId),
@@ -96,6 +110,26 @@ export class FileSessionEventHistory {
       withRead: (operation) => this.options.fileAccess.withRead(path, operation),
       withReplacement: (operation) => this.options.fileAccess.withReplacement(path, operation),
       scheduleRetry: () => this.options.scheduleRetry(threadId)
+    })
+    await this.eventIndex.invalidate(threadId, path)
+    return result
+  }
+
+  async recordAppend(
+    threadId: string,
+    seq: number,
+    recordBytes: number,
+    info: { size: number; dev: number; ino: number }
+  ): Promise<void> {
+    const sourcePath = this.options.pathFor(threadId)
+    await this.eventIndex.recordAppend({
+      threadId,
+      sourcePath,
+      seq,
+      recordOffset: Math.max(0, info.size - recordBytes),
+      sourceSize: info.size,
+      dev: info.dev,
+      ino: info.ino
     })
   }
 }

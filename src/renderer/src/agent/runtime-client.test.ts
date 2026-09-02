@@ -226,4 +226,35 @@ describe('rendererRuntimeClient', () => {
     await expect(rendererRuntimeClient.restartRuntime()).resolves.toBeUndefined()
     expect(restartRuntime).toHaveBeenCalledTimes(1)
   })
+
+  it('cancels a request in Main when its renderer signal aborts', async () => {
+    const response = { ok: false, status: 0, body: '{}' }
+    let finish!: (value: typeof response) => void
+    const runtimeRequest = vi.fn(() => new Promise<typeof response>((resolve) => { finish = resolve }))
+    const cancelRuntimeRequest = vi.fn(async () => {
+      finish(response)
+      return true
+    })
+    vi.stubGlobal('window', {
+      kunGui: { runtimeRequest, cancelRuntimeRequest }
+    })
+    const controller = new AbortController()
+    const pending = rendererRuntimeClient.runtimeRequest('/v1/threads/thread/state', 'GET', undefined, {
+      signal: controller.signal,
+      priority: 'foreground'
+    })
+    controller.abort()
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(cancelRuntimeRequest).toHaveBeenCalledOnce()
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads/thread/state',
+      'GET',
+      undefined,
+      expect.objectContaining({
+        requestId: expect.stringMatching(/^renderer-/),
+        priority: 'foreground'
+      })
+    )
+  })
 })

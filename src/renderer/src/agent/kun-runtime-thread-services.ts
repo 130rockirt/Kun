@@ -119,8 +119,13 @@ export class KunRuntimeThreadServices extends KunRuntimeProviderServices {
     ))
   }
 
-  async getThreadState(threadId: string): Promise<ThreadRuntimeState> {
-    const response = await rendererRuntimeClient.runtimeRequest(kunThreadStatePath(threadId), 'GET')
+  async getThreadState(threadId: string, options: { signal?: AbortSignal } = {}): Promise<ThreadRuntimeState> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      kunThreadStatePath(threadId),
+      'GET',
+      undefined,
+      { signal: options.signal, priority: 'foreground' }
+    )
     if (!response.ok) {
       throw runtimeErrorToError(readRuntimeError(response.body, 'failed to load thread state'))
     }
@@ -604,6 +609,7 @@ function runtimeStateFromCore(state: CoreThreadRuntimeStateJson): ThreadRuntimeS
     status: state.status,
     updatedAt: state.updatedAt,
     latestSeq: state.latestSeq,
+    ...(typeof state.replayFloorSeq === 'number' ? { replayFloorSeq: state.replayFloorSeq } : {}),
     pendingUserInputIds: state.pendingUserInputIds,
     ...(state.latestTurn
       ? {

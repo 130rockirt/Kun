@@ -318,12 +318,18 @@ export const runtimeRequestPayloadSchema = z
       value.startsWith('/') ? value : `/${value}`
     ),
     method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).optional(),
-    body: z.string().max(MAX_BODY_BYTES).optional()
+    body: z.string().max(MAX_BODY_BYTES).optional(),
+    requestId: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/).optional(),
+    priority: z.enum(['foreground', 'background']).optional()
   })
   .refine((payload) => isAllowedRuntimeRequest(payload), {
     message: 'runtime request path is not allowed'
   })
   .strict()
+
+export const runtimeRequestCancelPayloadSchema = z.object({
+  requestId: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/)
+}).strict()
 
 export const kunProtectedApprovalPayloadSchema = z
   .object({

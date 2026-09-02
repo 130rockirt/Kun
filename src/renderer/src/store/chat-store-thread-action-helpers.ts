@@ -1,13 +1,17 @@
 import type { AgentProvider, ThreadEventSink } from '../agent/types'
 import type { ChatState, ChatStoreGet } from './chat-store-types'
+import {
+  noteThreadRecoveryEvidence,
+  markThreadRecoveryCatchingUp,
+  releaseThreadRecoveryCatchup,
+  requireThreadTimelineHydration,
+  threadRecoveryBackoffMs
+} from './thread-recovery-coordinator'
 export { composerSelectionForThread } from './chat-store-thread-composer-state'
 
-const SSE_RECOVERY_INITIAL_DELAY_MS = 250
 const SSE_RECOVERY_AUTH_DELAY_MS = 2_000
-const SSE_RECOVERY_MAX_DELAY_MS = 10_000
 
 type SseRecoveryState = {
-  attempts: number
   subscription: symbol
   timer?: ReturnType<typeof setTimeout>
 }
@@ -35,6 +39,7 @@ export function subscribeThreadEventsWithRecovery(
   signal: AbortSignal,
   get: ChatStoreGet
 ): void {
+  markThreadRecoveryCatchingUp(threadId)
   const subscription = Symbol(`sse:${threadId}`)
   const pendingRecovery = sseRecoveries.get(threadId)
   if (pendingRecovery?.timer) {
@@ -48,8 +53,19 @@ export function subscribeThreadEventsWithRecovery(
       resetSseRecovery(threadId, subscription)
       sink.onSeq(seq)
     },
+    onReplaySynchronized: (cursor) => {
+      noteThreadRecoveryEvidence(threadId)
+      resetSseRecovery(threadId, subscription)
+      sink.onReplaySynchronized?.(cursor)
+    },
+    onTurnComplete: (event) => {
+      noteThreadRecoveryEvidence(threadId)
+      sink.onTurnComplete(event)
+    },
     onError: (error, options) => {
       terminalError = error
+      releaseThreadRecoveryCatchup(threadId)
+      if (isReplayReset(error, threadId)) requireThreadTimelineHydration(threadId)
       if (!isReplayReset(error, threadId)) sink.onError(error, options)
     }
   }
@@ -59,6 +75,7 @@ export function subscribeThreadEventsWithRecovery(
     })
     .then(() => {
       if (signal.aborted) return
+      releaseThreadRecoveryCatchup(threadId)
       const state = get()
       // The selected thread must remain subscribed even after its parent turn
       // settles. Runtime restart reconciliation can publish child
@@ -83,16 +100,15 @@ function scheduleSseRecovery(
   get: ChatStoreGet
 ): void {
   const state = sseRecoveries.get(threadId)
-  const attempts = state?.subscription === subscription ? state.attempts : 0
   if (state?.subscription === subscription && state.timer) return
-  const next: SseRecoveryState = { attempts: Math.min(attempts + 1, 8), subscription }
+  const next: SseRecoveryState = { subscription }
   const status = sseStatus(error)
-  const baseDelay = status === 401 || status === 403
-    ? SSE_RECOVERY_AUTH_DELAY_MS
-    : SSE_RECOVERY_INITIAL_DELAY_MS
   const delay = isReplayReset(error, threadId)
     ? 0
-    : Math.min(baseDelay * (2 ** (next.attempts - 1)), SSE_RECOVERY_MAX_DELAY_MS)
+    : Math.max(
+        status === 401 || status === 403 ? SSE_RECOVERY_AUTH_DELAY_MS : 0,
+        threadRecoveryBackoffMs(threadId)
+      )
   next.timer = setTimeout(() => {
     const scheduled = sseRecoveries.get(threadId)
     if (scheduled?.subscription !== subscription || scheduled.timer !== next.timer) return
@@ -100,7 +116,11 @@ function scheduleSseRecovery(
     sseRecoveries.delete(threadId)
     const current = get()
     if (current.activeThreadId !== threadId) return
-    void current.recoverActiveTurn()
+    const reset = isReplayReset(error, threadId)
+    void current.recoverActiveTurn({
+      reason: reset ? 'replay_reset' : 'sse_disconnect',
+      forceTimeline: reset
+    })
   }, delay)
   sseRecoveries.set(threadId, next)
 }

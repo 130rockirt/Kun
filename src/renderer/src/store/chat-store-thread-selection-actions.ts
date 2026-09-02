@@ -135,6 +135,7 @@ import {
 } from './thread-snapshot-cache'
 import { copyLiveProjection, emptyLiveProjection, restoredLiveProjection } from './chat-store-live-projection'
 import { getThreadPrewarmHandle, threadPrewarmHandleIsCurrent } from './thread-detail-prewarm'
+import { beginThreadSelection, finishThreadHydration, loadForegroundThreadDetail, startThreadHydration } from './thread-selection-hydration'
 import {
   ensureRuntimeProviderForSend,
   fallbackComposerProviderIdForSend,
@@ -183,7 +184,7 @@ export function createThreadSelectionActions(
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
       return
     }
-    const selectionGeneration = ++runtime.threadSelectionGeneration
+    const selectionGeneration = beginThreadSelection(runtime, currentState.activeThreadId, id)
     const previousState = get()
     const prevId = previousState.activeThreadId
     const prevBusy = previousState.busy
@@ -339,9 +340,10 @@ export function createThreadSelectionActions(
         ...initialComposerState
       })
     }
+    const hydrationAbort = startThreadHydration(runtime)
     try {
       const prewarmHandle = targetThread ? getThreadPrewarmHandle(targetThread) : null
-      let detail = await (prewarmHandle?.promise ?? p.getThreadDetail(id))
+      let detail = await (prewarmHandle?.promise ?? loadForegroundThreadDetail(p, id, hydrationAbort.signal))
       if (!selectionStillCurrent()) return
       if (prewarmHandle) {
         const currentThread = get().threads.find((thread) => thread.id === id) ?? null
@@ -349,7 +351,7 @@ export function createThreadSelectionActions(
         // flight; a stale detail would both render outdated blocks and be
         // re-cached under the new fingerprint by snapshotThreadProjection.
         if (!threadPrewarmHandleIsCurrent(prewarmHandle, currentThread)) {
-          detail = await p.getThreadDetail(id)
+          detail = await loadForegroundThreadDetail(p, id, hydrationAbort.signal)
           if (!selectionStillCurrent()) return
         }
       }
@@ -495,6 +497,7 @@ export function createThreadSelectionActions(
         void get().drainQueuedMessages()
       }
     } catch (e) {
+      if (hydrationAbort.signal.aborted) return
       if (!selectionStillCurrent()) return
       set({
         threadLoadingId: null,
@@ -504,7 +507,7 @@ export function createThreadSelectionActions(
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
           : {})
       })
-    }
+    } finally { finishThreadHydration(runtime, hydrationAbort) }
   },
   loadEarlierThreadHistory: async () => {
     const state = get()

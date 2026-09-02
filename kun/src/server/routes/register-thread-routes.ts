@@ -65,6 +65,10 @@ import type { ServerRuntime } from './server-runtime.js'
 import type { ApprovalConsentVerifier } from '../approval-consent.js'
 import { authorize } from './route-auth.js'
 import {
+  ThreadReadCoordinator,
+  ThreadReadOverloadedError
+} from '../thread-read-coordinator.js'
+import {
   getThreadKnowledgeBases,
   reindexThreadKnowledgeBase
 } from './knowledge-bases.js'
@@ -76,6 +80,7 @@ export function registerThreadRoutes(
   runtime: ServerRuntime,
   approvalConsent: ApprovalConsentVerifier
 ): void {
+  const timelineReads = new ThreadReadCoordinator()
   router.add('GET', '/v1/thread-activity/events', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     if (!runtime.threadActivity) return ERRORS.unavailable('thread activity is unavailable')
@@ -126,15 +131,29 @@ export function registerThreadRoutes(
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
     if (forwarded) return forwarded
-    return getThreadTimeline(
-      runtime.threadService,
-      ctx.params.id,
-      request,
-      runtime.sessionStore,
-      runtime.userInputGate,
-      runtime.approvalGate,
-      runtime.delegationRuntime
-    )
+    const priority = request.headers.get('x-kun-request-priority') === 'background'
+      ? 'background' : 'foreground'
+    const key = `${priority}:${ctx.params.id}:${new URL(request.url).search}`
+    try {
+      return await timelineReads.run(key, priority, () => getThreadTimeline(
+        runtime.threadService,
+        ctx.params.id,
+        request,
+        runtime.sessionStore,
+        runtime.userInputGate,
+        runtime.approvalGate,
+        runtime.delegationRuntime
+      ))
+    } catch (error) {
+      if (!(error instanceof ThreadReadOverloadedError)) throw error
+      const response = jsonResponse({
+        code: 'thread_read_overloaded',
+        message: error.message,
+        retryAfterSeconds: error.retryAfterSeconds
+      }, 503)
+      response.headers['retry-after'] = String(error.retryAfterSeconds)
+      return response
+    }
   })
   router.add('GET', '/v1/threads/:id/knowledge-bases', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

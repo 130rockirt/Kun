@@ -95,6 +95,7 @@ export type CoreThreadRuntimeStateJson = {
   status: string
   updatedAt: string
   latestSeq: number
+  replayFloorSeq?: number
   /** Omitted by legacy owners; do not confuse omission with a live empty gate. */
   pendingUserInputIds?: string[]
   latestTurn: {

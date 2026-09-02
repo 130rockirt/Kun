@@ -480,5 +480,7 @@ export function activeWriteMessageContextMatches(context: WriteAssistantMessageC
 
 export type ThreadActionRuntime = {
   threadSelectionGeneration: number
+  threadHydrationAbort?: AbortController
+  fenceThreadMutation: (threadId?: string) => number
   persistActiveQueuedMessages: () => void
 }

@@ -13,6 +13,7 @@ export async function loadFileSessionEventPage(input: {
   options: EventHistoryPageOptions
   defaultMaxRecordBytes: number
   fileAccess: JsonlFileAccessCoordinator
+  resolveInitialOffset?: () => Promise<number>
 }): Promise<EventHistoryPage> {
   return input.fileAccess.withRead(input.path, async () => {
     const info = await stat(input.path).catch(() => null)
@@ -23,11 +24,12 @@ export async function loadFileSessionEventPage(input: {
       input.options.maxRecordBytes,
       input.defaultMaxRecordBytes
     )
+    const initialOffset = input.options.cursor ? 0 : await input.resolveInitialOffset?.() ?? 0
     const cursor = decodeCursor(input.options.cursor)
     const startOffset = cursor && cursor.dev === info.dev && cursor.ino === info.ino &&
       cursor.offset >= 0 && cursor.offset <= info.size
       ? cursor.offset
-      : 0
+      : Math.max(0, Math.min(initialOffset, info.size))
     const handle = await open(input.path, 'r')
     try {
       return await readPage({

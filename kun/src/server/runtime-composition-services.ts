@@ -60,6 +60,7 @@ import {
   seedUsageCarryover
 } from './runtime-factory-storage.js'
 import { createRuntimeBackgroundMaintenance } from './runtime-background-maintenance.js'
+import { createRuntimeMaintenanceSlices } from './runtime-maintenance-slices.js'
 import { ThreadStoreGuardian } from '../services/thread-store-guardian.js'
 import { ThreadSnapshotStore } from '../services/thread-snapshot-store.js'
 import { SessionGuardian } from '../services/session-guardian.js'
@@ -237,64 +238,40 @@ export async function createRuntimeServices(
 	  const reviewService = new ReviewService(reviewDeps)
 	  let webProviders = buildWebToolProviders(core.activeOptions.capabilities?.web)
 	  attachmentStore = createPersistentAttachmentStore(core.activeOptions, nowIso)
-	  const pruneUnsentAttachments = async (store: AttachmentStore | undefined): Promise<void> => {
-	    if (!store?.pruneExpiredLeases) return
-	    const now = Date.parse(nowIso())
-	    if (!Number.isFinite(now)) return
-	    const summaries = await threadService.list({ includeArchived: true, includeSide: true })
-	    const threads = []
-	    // Manager-backed stores serialize access to the physical data files.
-	    // Avoid enqueueing every historical thread at once: on large profiles
-	    // that made later requests hit their client timeout, disconnect, and
-	    // trigger a crash in older stable Managers while writing the response.
-	    for (let offset = 0; offset < summaries.length; offset += 8) {
-	      threads.push(...await Promise.all(
-	        summaries.slice(offset, offset + 8).map((thread) => threadService.get(thread.id))
-	      ))
-	    }
-	    const referencedIds = new Set(
-	      threads.flatMap((thread) =>
-	        thread?.turns.flatMap((turn) => turn.attachmentIds) ?? []
-	      )
-	    )
-	    await store.pruneExpiredLeases(
-	      referencedIds,
-	      new Date(now - 24 * 60 * 60 * 1_000).toISOString()
-	    )
-	  }
   const prepareUsageCarryover = () => seedUsageCarryover({
     threadStore, sessionStore, usageService
   })
-  const backgroundMaintenance = createRuntimeBackgroundMaintenance({
-    pruneAttachments: () => pruneUnsentAttachments(attachmentStore),
-    inspectThreads: async () => {
-      const result = await threadStoreGuardian.run()
-      if (result.remainingIssues.length > 0) {
-        console.warn('[kun] thread guardian found unresolved storage issues', {
-          issueCount: result.remainingIssues.length,
-          repairedThreads: result.repairedThreads
-        })
-      }
-      const reports = await sessionGuardian.scanAll()
-      if (sessionStore.scheduleItemHistoryCompaction) {
-        for (const report of reports) {
-          if (report.messagesBytes <= 32 * 1024 * 1024) continue
-          const thread = await threadService.getMetadata(report.threadId).catch(() => null)
-          if (!thread || thread.status === 'running' || thread.status === 'deleted') continue
-          sessionStore.scheduleItemHistoryCompaction(report.threadId)
-        }
-      }
-      const flagged = reports.filter((report) => report.warnings.length > 0)
-      if (flagged.length > 0) {
-        console.warn('[kun] session guardian warnings', {
-          threads: flagged.length,
-          details: flagged.map((report) => ({
-            threadId: report.threadId,
-            warnings: report.warnings
-          }))
-        })
+  let activeCheckAt = 0
+  let activeCheckValue = false
+  const hasActiveTurns = async (): Promise<boolean> => {
+    if (Date.now() - activeCheckAt < 1_000) return activeCheckValue
+    activeCheckValue = (await threadService.list({ includeSide: true }))
+      .some((thread) => thread.status === 'running')
+    activeCheckAt = Date.now()
+    return activeCheckValue
+  }
+  const maintenanceSlices = createRuntimeMaintenanceSlices({
+    dataDir: core.activeOptions.dataDir,
+    threads: threadService,
+    attachments: () => attachmentStore,
+    guardian: sessionGuardian,
+    nowIso,
+    hasActiveTurns,
+    onGuardianReport: async (report) => {
+      if (report.messagesBytes <= 32 * 1024 * 1024 || !sessionStore.scheduleItemHistoryCompaction) return
+      const thread = await threadService.getMetadata(report.threadId).catch(() => null)
+      if (thread && thread.status !== 'running' && thread.status !== 'deleted') {
+        sessionStore.scheduleItemHistoryCompaction(report.threadId)
       }
     },
+    log: (message) => console.warn(message)
+  })
+  const pruneUnsentAttachments = async (store: AttachmentStore | undefined): Promise<void> => {
+    if (store === attachmentStore) await maintenanceSlices.runAttachmentSlice()
+  }
+  const backgroundMaintenance = createRuntimeBackgroundMaintenance({
+    pruneAttachments: maintenanceSlices.runAttachmentSlice,
+    inspectThreads: maintenanceSlices.runGuardianSlice,
     onError: (task, error) => {
       console.warn(`[kun] background ${task} failed:`, error)
     }

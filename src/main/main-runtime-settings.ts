@@ -650,6 +650,7 @@ export async function runtimeRequest(
   try {
     return await runtimeRequestViaHost(settings, pathAndQuery, init, ensureRuntime)
   } catch (e) {
+    if (init.signal?.aborted) return runtimeFailure('aborted', 'Runtime request was cancelled.', 0)
     const message = e instanceof Error ? e.message : String(e)
     logError('runtime-request', `HTTP request to ${pathAndQuery} failed`, { message })
     const parsed = parseRuntimeErrorBody(message, message)

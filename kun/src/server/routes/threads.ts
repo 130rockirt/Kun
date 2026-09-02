@@ -229,8 +229,9 @@ export async function loadThreadRuntimeState(
   sessionStore?: SessionStore,
   userInputGate?: UserInputGate
 ): Promise<z.infer<typeof ThreadRuntimeStateSchema> | null> {
-  const [latestSeq, thread] = await Promise.all([
+  const [latestSeq, replayFloorSeq, thread] = await Promise.all([
     sessionStore ? sessionStore.highestSeq(threadId) : Promise.resolve(0),
+    sessionStore?.eventReplayFloorSeq?.(threadId) ?? Promise.resolve(0),
     loadThreadMetadata(service, threadId)
   ])
   if (!thread) {
@@ -243,6 +244,7 @@ export async function loadThreadRuntimeState(
     status: thread.status,
     updatedAt: thread.updatedAt,
     latestSeq,
+    replayFloorSeq,
     pendingUserInputIds: userInputGate?.pending(threadId).map((request) => request.id) ?? [],
     latestTurn: latestTurn
       ? {

@@ -7,6 +7,7 @@ import { parseAppEnvironment } from './app-environment'
 import { createDesktopStartupPreloadApi } from './startup-state'
 import { createStorageRelocationWorkbenchApi } from './storage-relocation-workbench'
 import { createGitHubMcpAuthorizationPreloadApi } from './github-mcp-authorization'
+import { runtimeRequestPreloadApi } from './runtime-request'
 registerExtensionContentScriptPreload({ contextBridge, ipcRenderer, webFrame })
 // The preload runs sandboxed (webPreferences.sandbox = true), so it cannot
 // require node built-ins like node:os. The home dir is passed in from the main
@@ -133,8 +134,7 @@ const api = {
     ipcRenderer.invoke('settings:set', partial),
   saveSettingsSilent: (partial) =>
     ipcRenderer.invoke('settings:save-silent', partial),
-  runtimeRequest: (path, method, body) =>
-    ipcRenderer.invoke('runtime:request', { path, method, body }),
+  ...runtimeRequestPreloadApi,
   gatewayCredential: (action) => ipcRenderer.invoke('gateway:credential', action),
   getRuntimeSettingsSyncStatus: () =>
     ipcRenderer.invoke('runtime:settings-sync-status:get'),

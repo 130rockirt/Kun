@@ -43,6 +43,7 @@ import type {
   DesignTaskProfile,
   DesignTaskProfileInput
 } from '../agent/design-task-profile'
+import type { ThreadRecoveryOptions } from './thread-recovery-coordinator'
 import type { RemovedCodeWorkspacesRegistry } from '../lib/removed-code-workspaces'
 
 export type QueuedUserMessage = {
@@ -607,7 +608,7 @@ export type ChatState = {
    * subscribeThreadEventsLive 直接开 SSE (sinceSeq=0),跳过 HTTP 抢在 SSE 之前。
    */
   subscribeThreadEventsLive: (threadId: string) => Promise<void>
-  recoverActiveTurn: () => Promise<boolean>
+  recoverActiveTurn: (options?: ThreadRecoveryOptions) => Promise<boolean>
   sendMessage: (text: string, mode?: string, overrides?: SendMessageOverrides) => Promise<boolean>
   reviewActiveThread: (target: ReviewTarget) => Promise<boolean>
   drainQueuedMessages: () => Promise<void>

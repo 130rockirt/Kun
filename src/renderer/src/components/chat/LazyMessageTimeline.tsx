@@ -48,9 +48,12 @@ export function LazyMessageTimeline({
   }, [activeThreadId])
 
   const preparingRenderer = Boolean(activeThreadId && preparedThreadId !== activeThreadId)
+  const trustedContentVisible = props.blocks.length > 0 || Boolean(props.live || props.liveReasoning)
   return (
     <ThreadHydrationGate
       loading={hydrating || preparingRenderer}
+      catchingUp={hydrating}
+      trustedContentVisible={trustedContentVisible}
       presentationKey={activeThreadId}
     >
       <LiveAssistantStreamingProvider streaming={!hydrating && !preparingRenderer}>
