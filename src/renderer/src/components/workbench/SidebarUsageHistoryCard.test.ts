@@ -61,7 +61,7 @@ describe('SidebarUsageHistoryCard', () => {
     expect(weeks[11].cells[6]?.date).toBe('2026-08-23')
   })
 
-  it('renders the compact contribution grid without a horizontal scroller', () => {
+  it('renders a fixed-size GitHub style grid without stretching or scrolling', () => {
     const html = renderToStaticMarkup(createElement(SidebarUsageHistoryCard, {
       buckets: twelveWeeks(),
       error: null,
@@ -76,7 +76,47 @@ describe('SidebarUsageHistoryCard', () => {
     expect(html).toContain('Current streak:')
     expect(html).toContain('Most active:')
     expect(html.match(/role="gridcell"/g)).toHaveLength(84)
+    expect(html).toContain('repeat(12, 13px)')
+    expect(html).toContain('column-gap:3px')
     expect(html).not.toContain('overflow-x-auto')
+    expect(html).not.toContain('1fr')
+  })
+
+  it('places one month label at the column where each month starts', () => {
+    const html = renderToStaticMarkup(createElement(SidebarUsageHistoryCard, {
+      buckets: twelveWeeks(),
+      error: null,
+      hasUsage: true,
+      loading: false,
+      metrics
+    }))
+
+    expect(html.match(/>Jun</g)).toHaveLength(1)
+    expect(html.match(/>Jul</g)).toHaveLength(1)
+    expect(html.match(/>Aug</g)).toHaveLength(1)
+  })
+
+  it('marks the selected day with a dark outline like the design mock', async () => {
+    let renderer!: ReturnType<typeof createRenderer>
+    await act(async () => {
+      renderer = createRenderer(createElement(SidebarUsageHistoryCard, {
+        buckets: twelveWeeks(),
+        error: null,
+        hasUsage: true,
+        loading: false,
+        metrics
+      }))
+    })
+
+    const cells = renderer.root.findAllByProps({ role: 'gridcell' })
+    expect(cells.length).toBeGreaterThan(0)
+    const fakeElement = {
+      getBoundingClientRect: () => ({ left: 100, top: 100, width: 13, height: 13, bottom: 113 })
+    } as unknown as HTMLElement
+    await act(async () => cells[0].props.onClick({ currentTarget: fakeElement }))
+
+    expect(JSON.stringify(renderer.toJSON())).toContain('ring-ds-ink')
+    renderer.unmount()
   })
 
   it('switches the heatmap between token and cost intensity', async () => {

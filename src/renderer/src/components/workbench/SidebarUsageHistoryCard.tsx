@@ -18,12 +18,19 @@ type ContributionWeek = { key: string; cells: Array<DailyUsageBucket | null> }
 
 const HEATMAP_WEEKS = 12
 const HEATMAP_CELLS = HEATMAP_WEEKS * 7
+const CELL_SIZE = 13
+const CELL_GAP = 3
+const WEEKDAY_COLUMN_WIDTH = 30
+const WEEKDAY_LABEL_ROWS = new Set([0, 2, 4, 6])
+const TOOLTIP_WIDTH = 208
+// 2026-08-31 is a Monday; weekday labels come from Intl so they localize.
+const REFERENCE_MONDAY = '2026-08-31T00:00:00.000Z'
 const HEATMAP_CLASSES = [
-  'border-ds-border-muted bg-ds-surface-subtle',
-  'border-accent/10 bg-accent/20 dark:border-accent/15 dark:bg-accent/25',
-  'border-accent/15 bg-accent/40 dark:border-accent/25 dark:bg-accent/45',
-  'border-accent/20 bg-accent/70 dark:border-accent/40 dark:bg-accent/70',
-  'border-accent bg-accent dark:border-accent dark:bg-accent'
+  'bg-ds-surface-subtle',
+  'bg-accent/20',
+  'bg-accent/40',
+  'bg-accent/70',
+  'bg-accent'
 ]
 
 export function SidebarUsageHistoryCard({
@@ -112,19 +119,24 @@ export function SidebarUsageHistoryCard({
 
 function HistoryMetricStrip({ metrics }: { metrics: UsageHistoryMetric[] }): ReactElement {
   return (
-    <dl className="mx-4 grid grid-cols-2 border-y border-ds-border-muted sm:grid-cols-4">
+    <dl className="grid grid-cols-2 border-b border-ds-border-muted sm:grid-cols-4">
       {metrics.map((metric, index) => (
         <div
           key={metric.label}
-          className={`relative min-w-0 py-3 ${index % 2 === 0 ? 'pr-3' : 'border-l border-ds-border-muted pl-3'} ${
-            index >= 2 ? 'border-t border-ds-border-muted sm:border-t-0' : ''
-          } ${index > 0 ? 'sm:border-l sm:border-ds-border-muted sm:px-3' : 'sm:pr-3'}`}
+          className={[
+            'min-w-0 px-4 py-3',
+            index % 2 === 1 ? 'border-l border-ds-border-muted' : '',
+            index >= 2 ? 'border-t border-ds-border-muted sm:border-t-0' : '',
+            index > 0 ? 'sm:border-l sm:border-ds-border-muted' : ''
+          ].join(' ')}
         >
-          {metric.accent ? <span className="absolute inset-x-0 top-0 h-px bg-accent" aria-hidden /> : null}
           <dt className="truncate text-[10.5px] leading-4 text-ds-faint" title={metric.label}>
             {metric.label}
           </dt>
-          <dd className="mt-1 truncate text-[18px] font-semibold leading-6 tabular-nums text-ds-ink" title={metric.value}>
+          <dd
+            className="mt-1 truncate text-[18px] font-semibold leading-6 tabular-nums text-ds-ink"
+            title={metric.value}
+          >
             {metric.value}
           </dd>
           {metric.detail ? (
@@ -146,107 +158,149 @@ function ContributionHeatmap({
   mode: HeatmapMode
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
-  const [tooltip, setTooltip] = useState<{ bucket: DailyUsageBucket; left: number; top: number } | null>(null)
+  const [selected, setSelected] = useState<DailyUsageBucket | null>(null)
+  const [tooltip, setTooltip] = useState<{
+    bucket: DailyUsageBucket
+    left: number
+    top: number
+    above: boolean
+    arrowLeft: number
+  } | null>(null)
   const weeks = useMemo(() => buildContributionWeeks(buckets), [buckets])
   const values = useMemo(
     () => buckets.map((bucket) => heatmapValue(bucket, mode)).filter((value) => value > 0),
     [buckets, mode]
   )
-  const months = useMemo(() => monthLabels(weeks, i18n.language), [i18n.language, weeks])
+  const monthMarkers = useMemo(() => buildMonthMarkers(weeks, i18n.language), [i18n.language, weeks])
   const summary = useMemo(() => usageSummary(buckets, mode, i18n.language), [buckets, i18n.language, mode])
 
   const showTooltip = (bucket: DailyUsageBucket, element: HTMLElement): void => {
+    if (typeof window === 'undefined') return
     const rect = element.getBoundingClientRect()
-    const width = 220
-    const top = rect.top > 52 ? rect.top - 42 : rect.bottom + 8
+    const centerX = rect.left + rect.width / 2
+    const left = Math.max(8, Math.min(centerX - TOOLTIP_WIDTH / 2, window.innerWidth - TOOLTIP_WIDTH - 8))
+    const above = rect.top > 56
     setTooltip({
       bucket,
-      left: Math.max(8, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 8)),
-      top
+      left,
+      top: above ? rect.top - 38 : rect.bottom + 10,
+      above,
+      arrowLeft: Math.max(12, Math.min(centerX - left, TOOLTIP_WIDTH - 12))
     })
+  }
+
+  const selectBucket = (bucket: DailyUsageBucket, element: HTMLElement): void => {
+    setSelected((current) => (current?.date === bucket.date ? null : bucket))
+    showTooltip(bucket, element)
   }
 
   return (
     <div className="px-4 pb-4 pt-4" data-usage-contribution-heatmap>
-      <div className="grid grid-cols-[32px_minmax(0,1fr)] gap-x-2">
-        <span aria-hidden />
+      <div className="mx-auto w-max">
         <div
-          className="mb-1.5 grid text-[9px] text-ds-faint"
-          style={{ gridTemplateColumns: `repeat(${HEATMAP_WEEKS}, minmax(0, 1fr))`, columnGap: '4px' }}
+          className="relative mb-1.5 h-3.5 text-[10px] leading-3.5 text-ds-faint"
+          style={{ marginLeft: WEEKDAY_COLUMN_WIDTH + 8 }}
           aria-hidden
         >
-          {months.map((label, index) => (
-            <span key={`${index}-${label}`} className="h-3 whitespace-nowrap">{label}</span>
-          ))}
-        </div>
-        <div className="grid grid-rows-7 text-[9px] leading-none text-ds-faint" style={{ rowGap: '4px' }} aria-hidden>
-          {[
-            t('usageHeatmapWeekdayMon'), '', t('usageHeatmapWeekdayWed'), '',
-            t('usageHeatmapWeekdayFri'), '', t('usageHeatmapWeekdaySun')
-          ].map((label, index) => (
-            <span key={`${label}-${index}`} className="flex h-[13px] items-center">{label}</span>
-          ))}
-        </div>
-        <div
-          role="grid"
-          aria-label={t('usageHeatmapGridLabel')}
-          className="grid min-w-0"
-          style={{ gridTemplateColumns: `repeat(${HEATMAP_WEEKS}, minmax(0, 1fr))`, columnGap: '4px' }}
-        >
-          {weeks.map((week) => (
-            <span key={week.key} role="row" className="grid min-w-0 grid-rows-7" style={{ rowGap: '4px' }}>
-              {week.cells.map((bucket, index) => bucket ? (
-                <button
-                  key={bucket.date}
-                  type="button"
-                  role="gridcell"
-                  title={tooltipText(bucket, mode, i18n.language)}
-                  aria-label={tooltipText(bucket, mode, i18n.language)}
-                  onMouseEnter={(event) => showTooltip(bucket, event.currentTarget)}
-                  onMouseLeave={() => setTooltip(null)}
-                  onFocus={(event) => showTooltip(bucket, event.currentTarget)}
-                  onBlur={() => setTooltip(null)}
-                  className={`h-[13px] w-full max-w-[13px] justify-self-center rounded-[3px] border transition-[box-shadow] hover:ring-1 hover:ring-accent focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-ds-bg ${
-                    HEATMAP_CLASSES[usageHeatmapIntensityLevel(
-                      { totalTokens: heatmapValue(bucket, mode), turns: bucket.turns },
-                      values
-                    )]
-                  }`}
-                />
-              ) : (
-                <span key={`${week.key}-${index}`} className="h-[13px] w-full max-w-[13px] justify-self-center" aria-hidden />
-              ))}
+          {monthMarkers.map((marker) => (
+            <span
+              key={`${marker.index}-${marker.label}`}
+              className="absolute whitespace-nowrap"
+              style={{ left: marker.index * (CELL_SIZE + CELL_GAP) }}
+            >
+              {marker.label}
             </span>
           ))}
         </div>
+        <div className="flex gap-2">
+          <div
+            className="grid shrink-0 grid-rows-7 text-[10px] leading-none text-ds-faint"
+            style={{ rowGap: CELL_GAP, width: WEEKDAY_COLUMN_WIDTH }}
+            aria-hidden
+          >
+            {[0, 1, 2, 3, 4, 5, 6].map((row) => (
+              <span key={row} className="flex items-center" style={{ height: CELL_SIZE }}>
+                {WEEKDAY_LABEL_ROWS.has(row) ? weekdayLabel(i18n.language, row) : ''}
+              </span>
+            ))}
+          </div>
+          <div
+            role="grid"
+            aria-label={t('usageHeatmapGridLabel')}
+            className="grid shrink-0"
+            style={{ gridTemplateColumns: `repeat(${HEATMAP_WEEKS}, ${CELL_SIZE}px)`, columnGap: CELL_GAP }}
+          >
+            {weeks.map((week) => (
+              <span key={week.key} role="row" className="grid grid-rows-7" style={{ rowGap: CELL_GAP }}>
+                {week.cells.map((bucket, index) => bucket ? (
+                  <button
+                    key={bucket.date}
+                    type="button"
+                    role="gridcell"
+                    title={tooltipText(bucket, mode, i18n.language)}
+                    aria-label={tooltipText(bucket, mode, i18n.language)}
+                    aria-pressed={selected?.date === bucket.date}
+                    onMouseEnter={(event) => showTooltip(bucket, event.currentTarget)}
+                    onMouseLeave={() => setTooltip(null)}
+                    onFocus={(event) => showTooltip(bucket, event.currentTarget)}
+                    onBlur={() => setTooltip(null)}
+                    onClick={(event) => selectBucket(bucket, event.currentTarget)}
+                    className={`rounded-[3px] transition-[box-shadow] hover:ring-2 hover:ring-ds-ink/30 focus:outline-none focus:ring-2 focus:ring-accent dark:hover:ring-white/40 ${HEATMAP_CLASSES[usageHeatmapIntensityLevel(
+                      { totalTokens: heatmapValue(bucket, mode), turns: bucket.turns },
+                      values
+                    )]} ${
+                      selected?.date === bucket.date
+                        ? 'ring-2 ring-ds-ink ring-offset-1 ring-offset-ds-card dark:ring-white dark:ring-offset-ds-bg'
+                        : ''
+                    }`}
+                    style={{ width: CELL_SIZE, height: CELL_SIZE }}
+                  />
+                ) : (
+                  <span key={`${week.key}-${index}`} style={{ width: CELL_SIZE, height: CELL_SIZE }} aria-hidden />
+                ))}
+              </span>
+            ))}
+          </div>
+        </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-[9.5px] text-ds-faint">
-        <span>{t(mode === 'tokens' ? 'usageQuotaDailyTokens' : 'usageQuotaDailyCost')}</span>
-        <span className="flex items-center gap-1.5">
+      <div className="mt-3 flex items-end justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-[10px] text-ds-faint">
+            {t(mode === 'tokens' ? 'usageQuotaDailyTokens' : 'usageQuotaDailyCost')}
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-ds-faint">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden />
+            <span>{t('usageQuotaCurrentStreak', { count: summary.currentStreak })}</span>
+            <span aria-hidden>·</span>
+            <span>{t('usageQuotaMostActiveWeekday', { weekday: summary.mostActiveWeekday })}</span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5 text-[10px] text-ds-faint">
           <span>{t('usageHeatmapLess')}</span>
           <span className="flex items-center gap-1" aria-hidden>
             {HEATMAP_CLASSES.map((className, index) => (
-              <span key={index} className={`h-2.5 w-2.5 rounded-[3px] border ${className}`} />
+              <span key={index} className={`h-3 w-3 rounded-[3px] ${className}`} />
             ))}
           </span>
           <span>{t('usageHeatmapMore')}</span>
-        </span>
-      </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-[9.5px] text-ds-faint">
-        <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />
-        <span>{t('usageQuotaCurrentStreak', { count: summary.currentStreak })}</span>
-        <span aria-hidden>·</span>
-        <span>{t('usageQuotaMostActiveWeekday', { weekday: summary.mostActiveWeekday })}</span>
+        </div>
       </div>
 
       {tooltip && typeof document !== 'undefined' ? createPortal(
         <div
           role="tooltip"
-          className="pointer-events-none fixed z-[12000] w-[220px] rounded-lg bg-[#222222] px-3 py-2 text-center text-[10.5px] font-medium text-white shadow-xl dark:bg-white dark:text-[#181818]"
-          style={{ left: tooltip.left, top: tooltip.top }}
+          className="pointer-events-none fixed z-[12000] whitespace-nowrap rounded-md bg-[#1f2328] px-2.5 py-1.5 text-[10.5px] font-medium text-white shadow-lg dark:bg-white dark:text-[#1f2328]"
+          style={{ left: tooltip.left, top: tooltip.top, minWidth: 120 }}
         >
           {tooltipText(tooltip.bucket, mode, i18n.language)}
+          <span
+            aria-hidden
+            className={`absolute h-2 w-2 rotate-45 bg-inherit ${
+              tooltip.above ? 'top-full -translate-y-1/2' : 'bottom-full translate-y-1/2'
+            }`}
+            style={{ left: tooltip.arrowLeft - 4 }}
+          />
         </div>,
         document.body
       ) : null}
@@ -288,16 +342,32 @@ function heatmapValue(bucket: DailyUsageBucket, mode: HeatmapMode): number {
   return bucket.costCny ?? bucket.costUsd
 }
 
-function monthLabels(weeks: ContributionWeek[], locale: string): string[] {
-  return weeks.map((week, index) => {
-    const bucket = week.cells.find((cell) => cell?.date.endsWith('-01'))
-      ?? (index === 0 ? week.cells.find((cell): cell is DailyUsageBucket => Boolean(cell)) : undefined)
-    if (!bucket) return ''
-    const date = new Date(`${bucket.date}T00:00:00.000Z`)
-    return Number.isNaN(date.getTime())
-      ? ''
-      : new Intl.DateTimeFormat(locale, { month: 'short', timeZone: 'UTC' }).format(date)
+function buildMonthMarkers(
+  weeks: ContributionWeek[],
+  locale: string
+): Array<{ index: number; label: string }> {
+  const markers: Array<{ index: number; label: string }> = []
+  let previousMonth = -1
+  weeks.forEach((week, index) => {
+    const firstCell = week.cells.find((cell): cell is DailyUsageBucket => Boolean(cell))
+    if (!firstCell) return
+    const date = new Date(`${firstCell.date}T00:00:00.000Z`)
+    if (Number.isNaN(date.getTime())) return
+    const month = date.getUTCMonth()
+    if (month === previousMonth) return
+    previousMonth = month
+    markers.push({
+      index,
+      label: new Intl.DateTimeFormat(locale, { month: 'short', timeZone: 'UTC' }).format(date)
+    })
   })
+  return markers
+}
+
+function weekdayLabel(locale: string, mondayIndex: number): string {
+  const date = new Date(REFERENCE_MONDAY)
+  date.setUTCDate(date.getUTCDate() + mondayIndex)
+  return new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }).format(date)
 }
 
 function tooltipText(bucket: DailyUsageBucket, mode: HeatmapMode, locale: string): string {
@@ -326,15 +396,11 @@ function usageSummary(
   for (const bucket of sorted) {
     const date = new Date(`${bucket.date}T00:00:00.000Z`)
     if (Number.isNaN(date.getTime())) continue
-    const mondayIndex = (date.getUTCDay() + 6) % 7
-    weekdayTotals[mondayIndex] += heatmapValue(bucket, mode)
+    weekdayTotals[(date.getUTCDay() + 6) % 7] += heatmapValue(bucket, mode)
   }
   const max = Math.max(...weekdayTotals)
-  const weekdayIndex = max > 0 ? weekdayTotals.indexOf(max) : 0
-  const monday = new Date('2026-08-31T00:00:00.000Z')
-  monday.setUTCDate(monday.getUTCDate() + weekdayIndex)
   return {
     currentStreak,
-    mostActiveWeekday: new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }).format(monday)
+    mostActiveWeekday: weekdayLabel(locale, max > 0 ? weekdayTotals.indexOf(max) : 0)
   }
 }
