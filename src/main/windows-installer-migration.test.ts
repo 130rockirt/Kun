@@ -248,7 +248,10 @@ describe('Windows installer migration ACL contract', () => {
     const script = readFileSync(smokePath, 'utf8')
 
     expect(script).toContain("$arguments = @('/S', $Mode, ('_?={0}' -f $InstallLocation))")
-    expect(script).toContain('Start-Process -FilePath $copy -ArgumentList $arguments -Wait -PassThru')
+    expect(script).toContain('[int]$TimeoutSeconds = 600')
+    expect(script).toContain('Start-Process -FilePath $copy -ArgumentList $arguments -PassThru')
+    expect(script).toContain('$process.WaitForExit($TimeoutSeconds * 1000)')
+    expect(script).toContain('Uninstaller PID $($process.Id) did not exit within $TimeoutSeconds seconds.')
     expect(script).not.toMatch(/Start-Process -FilePath \$(?:unicode|machine)Uninstaller/u)
   })
 

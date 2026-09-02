@@ -234,7 +234,9 @@ jobs:
     name: Build Windows NSIS installer (PR)
     runs-on: windows-latest
     needs: quality
-    timeout-minutes: 90
+    # The packaged migration matrix alone takes more than 60 minutes on hosted
+    # runners. Leave room for dependency install, packaging, and handoff smoke.
+    timeout-minutes: 180
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -293,7 +295,7 @@ jobs:
         run: npm run dist:win
 
       - name: Smoke Windows installer migration
-        timeout-minutes: 60
+        timeout-minutes: 120
         env:
           KUN_INSTALLER_SMOKE_ARTIFACT_DIR: ${{ github.workspace }}\artifacts\windows-installer-smoke
         run: npm run smoke:windows-installer-migration -- -InstallerPath (Get-ChildItem dist/Kun-*-win-x64.exe | Select-Object -First 1 -ExpandProperty FullName)

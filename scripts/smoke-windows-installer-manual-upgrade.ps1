@@ -67,9 +67,9 @@ $script:manualUpgradeFixturePath = Join-Path $root 'manual-upgrade-fixture.exe'
 New-ManualUpgradeFixtureExecutable $script:manualUpgradeFixturePath
 
 Invoke-OldUninstallerBypassSmoke `
-  'manual overwrite bypasses non-zero old uninstaller' $custom 'exit2' 180
+  'manual overwrite bypasses non-zero old uninstaller' $custom 'exit2' 600
 Invoke-OldUninstallerBypassSmoke `
-  'manual overwrite bypasses hanging old uninstaller' $custom 'hang' 180
+  'manual overwrite bypasses hanging old uninstaller' $custom 'hang' 600
 
 $manualUserRoot = Join-Path $custom ($unicodeDirectoryName + '-user-files')
 $manualNestedRoot = Join-Path $manualUserRoot 'nested'
@@ -86,7 +86,7 @@ $selfInstaller = Join-Path $custom 'Kun-manual-upgrade-smoke.exe'
 Copy-Item -LiteralPath $script:InstallerPath -Destination $selfInstaller
 $selfInstallerHash = Get-FileSha256 $selfInstaller
 Invoke-Installer -Scenario 'installer runs from the previous application directory' `
-  -Arguments @('/S', '/currentuser') -TimeoutSeconds 300 -ExecutablePath $selfInstaller
+  -Arguments @('/S', '/currentuser') -TimeoutSeconds 600 -ExecutablePath $selfInstaller
 Assert-True (Test-Path -LiteralPath $selfInstaller -PathType Leaf) `
   'The running installer was removed from the previous application directory.'
 Assert-True ((Get-FileSha256 $selfInstaller) -eq $selfInstallerHash) `
@@ -110,7 +110,7 @@ try {
   }
   Assert-True (Test-Path -LiteralPath $resourceMarker) 'The installed resource blocker did not start.'
   Invoke-Installer -Scenario 'manual overwrite stops an installed resource process' `
-    -Arguments @('/S', '/currentuser') -TimeoutSeconds 300
+    -Arguments @('/S', '/currentuser') -TimeoutSeconds 600
   Assert-True ($resourceProcess.WaitForExit(10000)) `
     'The verified installed resource process remained alive after manual overwrite.'
 } finally {
