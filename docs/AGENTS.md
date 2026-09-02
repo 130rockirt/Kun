@@ -70,9 +70,13 @@ uses the internal `claw` name, and Work retains the internal `write` name, for c
   `plan`, and a matching continuation is an ordinary Direct `agent` turn or an
   existing one-shot scheduled task.
 - Renderer intent records bind the exact workspace, thread, reserved plan path,
-  and stable request ids. Recovery must match the successful `create_plan`
-  result before dispatching and must reconcile idempotently without selecting
-  another task.
+  admitted plan turn, and stable request ids. Recovery must match the successful
+  `create_plan` result by canonical workspace/reserved path before dispatching;
+  terminal status from any other turn is stale and cannot fail the intent.
+- The legacy recovery-mismatch attention state is retryable when its reserved
+  plan appears later. Active tasks continue through the normal ChatStore send
+  path so the build turn streams in the current UI; background tasks use the
+  target-thread API with the same idempotency key.
 - Automatic worktree defaults are independent from manual plan execution. Both
   immediate and scheduled builds reuse `preparePlanBuild` and the prompt-managed
   worktree protocol; the scheduler must not create a second nested worktree.
@@ -83,6 +87,9 @@ uses the internal `claw` name, and Work retains the internal `write` name, for c
 - Graph is not an Automatic build target. All Automatic settings and dynamic
   intent facts remain renderer/app settings state and must not enter Kun config
   or the immutable system prefix.
+- Thread-activity event long polls must receive a Main-process timeout greater
+  than their server `wait_ms`; generic GET timeouts make background completion
+  state stale and can strand Automatic intents.
 
 ## Forbidden Paths
 

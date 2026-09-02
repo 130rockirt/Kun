@@ -7,7 +7,10 @@ import {
   listAutoPlanBuildIntents,
   saveAutoPlanBuildIntent
 } from './auto-plan-build-intents'
-import { autoPlanBuildControllerTestApi } from './use-auto-plan-build-controller'
+import {
+  AUTO_PLAN_RECOVERY_MISMATCH_ERROR,
+  autoPlanBuildControllerTestApi
+} from './use-auto-plan-build-controller'
 import type { GuiPlanToolMeta } from './plan-tool'
 
 const provider = vi.hoisted(() => ({
@@ -34,12 +37,13 @@ const meta: GuiPlanToolMeta = {
   title: 'Automatic mode'
 }
 
-function planBlock(planMeta: GuiPlanToolMeta = meta) {
+function planBlock(planMeta: GuiPlanToolMeta = meta, turnId = 'turn-plan') {
   return {
     kind: 'tool' as const,
     id: 'tool-plan',
     status: 'success' as const,
     summary: 'created',
+    turnId,
     meta: {
       toolName: 'create_plan',
       plan: {
@@ -93,6 +97,11 @@ describe('Automatic plan-build orchestration', () => {
   beforeEach(() => {
     provider.sendUserMessage.mockReset().mockResolvedValue({ threadId: 'thread-1', turnId: 'build-turn' })
     provider.getThreadDetail.mockReset()
+    useChatStore.setState({
+      activeThreadId: null,
+      error: null,
+      sendMessage: vi.fn(async () => false) as never
+    })
     rendererRuntimeClient.invalidateSettings()
   })
 
@@ -101,13 +110,38 @@ describe('Automatic plan-build orchestration', () => {
     vi.unstubAllGlobals()
   })
 
+  it('binds the admitted plan turn even when the user switches tasks', () => {
+    expect(autoPlanBuildControllerTestApi.admittedPlanIdentity('', {
+      activeThreadId: 'thread-new',
+      currentTurnId: 'turn-new',
+      threads: []
+    })).toEqual({ threadId: 'thread-new', planTurnId: 'turn-new' })
+    expect(autoPlanBuildControllerTestApi.admittedPlanIdentity('thread-source', {
+      activeThreadId: 'thread-other',
+      currentTurnId: 'turn-other',
+      threads: [{
+        id: 'thread-source', title: 'Source', model: 'model', mode: 'plan', updatedAt: '',
+        latestTurnId: 'turn-source', latestTurnStatus: 'running'
+      }]
+    })).toEqual({ threadId: 'thread-source', planTurnId: 'turn-source' })
+  })
+
   it('matches only the exact successful plan identity', () => {
     installWindow()
     const intent = directIntent()
-    expect(autoPlanBuildControllerTestApi.matchingSuccessfulPlan([planBlock()], intent)).toEqual(meta)
+    expect(autoPlanBuildControllerTestApi.matchingSuccessfulPlan([planBlock()], intent)?.meta).toEqual(meta)
     expect(autoPlanBuildControllerTestApi.matchingSuccessfulPlan([
       planBlock({ ...meta, relativePath: '.kunsdd/plan/old.md' })
     ], intent)).toBeNull()
+  })
+
+  it('accepts the reserved artifact when runtime plan-id casing differs', () => {
+    installWindow()
+    const intent = directIntent()
+    const runtimeMeta = { ...meta, planId: '/repo:.KUNSDD/PLAN/AUTOMATIC.MD' }
+    expect(autoPlanBuildControllerTestApi.matchingSuccessfulPlan([
+      planBlock(runtimeMeta)
+    ], intent)?.meta).toEqual(runtimeMeta)
   })
 
   it('dispatches one target-thread Direct build with a stable request id', async () => {
@@ -127,6 +161,53 @@ describe('Automatic plan-build orchestration', () => {
         agentSurface: 'code'
       })
     )
+    expect(listAutoPlanBuildIntents()).toEqual([])
+  })
+
+  it('uses the normal active-task send path so Automatic build progress stays visible', async () => {
+    installWindow()
+    const intent = directIntent()
+    saveAutoPlanBuildIntent(intent)
+    const sendMessage = vi.fn(async () => true)
+    useChatStore.setState({
+      activeThreadId: 'thread-1',
+      route: 'chat',
+      runtimeConnection: 'ready',
+      sendMessage: sendMessage as never
+    })
+    await autoPlanBuildControllerTestApi.dispatchIntent(intent, meta)
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.stringContaining('<plan_execution_context>'),
+      'agent',
+      expect.objectContaining({
+        clientRequestId: intent.buildClientRequestId,
+        waitForRuntimeAdmission: true,
+        expectedThreadId: 'thread-1',
+        orchestration: 'direct'
+      })
+    )
+    expect(provider.sendUserMessage).not.toHaveBeenCalled()
+    expect(listAutoPlanBuildIntents()).toEqual([])
+  })
+
+  it('retries a transient busy rejection instead of stopping Automatic mode', async () => {
+    installWindow()
+    const intent = directIntent()
+    saveAutoPlanBuildIntent(intent)
+    provider.sendUserMessage.mockRejectedValueOnce(new Error(JSON.stringify({
+      code: 'thread_busy',
+      message: 'The plan turn is still settling.'
+    })))
+    await autoPlanBuildControllerTestApi.dispatchIntent(intent, meta)
+    expect(listAutoPlanBuildIntents()[0]).toMatchObject({ status: 'planning', error: '' })
+
+    provider.sendUserMessage.mockResolvedValueOnce({ threadId: 'thread-1', turnId: 'build-turn' })
+    await autoPlanBuildControllerTestApi.dispatchIntent(
+      listAutoPlanBuildIntents()[0]!,
+      meta
+    )
+    expect(provider.sendUserMessage).toHaveBeenCalledTimes(2)
     expect(listAutoPlanBuildIntents()).toEqual([])
   })
 
@@ -228,6 +309,7 @@ describe('Automatic plan-build orchestration', () => {
       blocks: [planBlock()],
       latestSeq: 2,
       threadStatus: 'running',
+      latestTurnId: 'turn-plan',
       latestTurnStatus: 'running'
     })
     await autoPlanBuildControllerTestApi.reconcileIntent(intent)
@@ -237,18 +319,77 @@ describe('Automatic plan-build orchestration', () => {
 
   it('fails closed when a terminal plan turn has no matching plan result', async () => {
     installWindow()
-    const intent = directIntent()
+    const intent = { ...directIntent(), planTurnId: 'turn-plan' }
     saveAutoPlanBuildIntent(intent)
     useChatStore.setState({ activeThreadId: 'thread-1', error: null })
     provider.getThreadDetail.mockResolvedValue({
       blocks: [],
       latestSeq: 2,
       threadStatus: 'idle',
+      latestTurnId: 'turn-plan',
       latestTurnStatus: 'failed'
     })
     await autoPlanBuildControllerTestApi.reconcileIntent(intent)
     expect(provider.sendUserMessage).not.toHaveBeenCalled()
     expect(listAutoPlanBuildIntents()[0]?.status).toBe('needs_attention')
     expect(useChatStore.getState().error).toContain('matching successful plan')
+  })
+
+  it('ignores a stale terminal status from another turn while planning', async () => {
+    installWindow()
+    const intent = { ...directIntent(), planTurnId: 'turn-plan' }
+    saveAutoPlanBuildIntent(intent)
+    provider.getThreadDetail.mockResolvedValue({
+      blocks: [],
+      latestSeq: 2,
+      threadStatus: 'idle',
+      latestTurnId: 'turn-previous',
+      latestTurnStatus: 'completed'
+    })
+    await autoPlanBuildControllerTestApi.reconcileIntent(intent)
+    expect(provider.sendUserMessage).not.toHaveBeenCalled()
+    expect(listAutoPlanBuildIntents()[0]).toMatchObject({ status: 'planning', error: '' })
+  })
+
+  it('self-heals the legacy recovery mismatch when its plan result arrives', async () => {
+    installWindow()
+    const intent = {
+      ...directIntent(),
+      status: 'needs_attention' as const,
+      error: AUTO_PLAN_RECOVERY_MISMATCH_ERROR
+    }
+    saveAutoPlanBuildIntent(intent)
+    useChatStore.setState({ activeThreadId: 'thread-1', error: AUTO_PLAN_RECOVERY_MISMATCH_ERROR })
+    provider.getThreadDetail.mockResolvedValue({
+      blocks: [planBlock()],
+      latestSeq: 3,
+      threadStatus: 'completed',
+      latestTurnId: 'turn-plan',
+      latestTurnStatus: 'completed'
+    })
+    await autoPlanBuildControllerTestApi.reconcileIntent(intent)
+    expect(provider.sendUserMessage).toHaveBeenCalledOnce()
+    expect(listAutoPlanBuildIntents()).toEqual([])
+    expect(useChatStore.getState().error).toBeNull()
+  })
+
+  it('retires a legacy mismatch after the user has already moved to a later turn', async () => {
+    installWindow()
+    const intent = {
+      ...directIntent(),
+      status: 'needs_attention' as const,
+      error: AUTO_PLAN_RECOVERY_MISMATCH_ERROR
+    }
+    saveAutoPlanBuildIntent(intent)
+    provider.getThreadDetail.mockResolvedValue({
+      blocks: [planBlock()],
+      latestSeq: 4,
+      threadStatus: 'completed',
+      latestTurnId: 'turn-later',
+      latestTurnStatus: 'completed'
+    })
+    await autoPlanBuildControllerTestApi.reconcileIntent(intent)
+    expect(provider.sendUserMessage).not.toHaveBeenCalled()
+    expect(listAutoPlanBuildIntents()).toEqual([])
   })
 })

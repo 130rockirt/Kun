@@ -42,7 +42,7 @@ Submitting in Automatic mode SHALL resolve Direct or scheduled execution and cur
 - **THEN** no plan turn SHALL be sent and the draft, attachments, and file references SHALL remain available
 
 ### Requirement: A matching successful plan continues exactly once
-The system SHALL dispatch a build only after a successful `create_plan` result matches the recorded workspace, thread, and plan ID, and each thread SHALL have at most one nonterminal Automatic intent.
+The system SHALL dispatch a build only after a successful `create_plan` result matches the recorded thread plus canonical workspace and reserved relative path, and each thread SHALL have at most one nonterminal Automatic intent. Runtime-derived plan-id casing differences MUST NOT reject the reserved artifact.
 
 #### Scenario: Matching Direct plan succeeds
 - **WHEN** the recorded plan completes successfully with Direct execution
@@ -59,6 +59,10 @@ The system SHALL dispatch a build only after a successful `create_plan` result m
 #### Scenario: Plan identity does not match
 - **WHEN** an old or unrelated `create_plan` result is observed
 - **THEN** the Automatic intent SHALL remain unexecuted
+
+#### Scenario: Runtime plan id uses different path casing
+- **WHEN** `create_plan` returns the recorded workspace and reserved relative path but its derived plan id differs only by runtime normalization
+- **THEN** the result SHALL be treated as the matching plan
 
 ### Requirement: Automatic intent recovery is durable and fail closed
 The system SHALL persist a bounded, versioned Automatic intent registry, reconcile pending intents after task switches or app restarts without selecting another task, and SHALL fail closed when safe dispatch cannot be proven.
@@ -78,6 +82,18 @@ The system SHALL persist a bounded, versioned Automatic intent registry, reconci
 #### Scenario: Worktree preflight fails
 - **WHEN** the requested worktree cannot resolve a checked-out branch or prepare safely
 - **THEN** the intent SHALL require attention and SHALL NOT fall back to current-workspace execution
+
+#### Scenario: Previous turn status remains visible during plan admission
+- **WHEN** the admitted plan turn is running but thread detail still exposes a terminal status from another turn
+- **THEN** recovery SHALL keep the intent planning and SHALL NOT show a recovery mismatch error
+
+#### Scenario: Matching plan arrives after a stale recovery mismatch
+- **WHEN** an older renderer marked the intent as a recovery mismatch and the reserved successful plan result is now present
+- **THEN** recovery SHALL clear the stale attention state and continue the build exactly once
+
+#### Scenario: Thread activity long poll waits normally
+- **WHEN** the GUI observes thread activity with a bounded server wait
+- **THEN** Main SHALL keep the request alive beyond the wait window so normal idle waits do not degrade task recovery
 
 ### Requirement: Automatic builds remain Direct-only
 Automatic mode SHALL support immediate Direct and scheduled Direct builds only, while Graph remains available solely through existing manual controls.

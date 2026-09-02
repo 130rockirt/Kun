@@ -36,6 +36,8 @@ describe('Automatic plan-build intent registry', () => {
       now: 1
     })
     expect(normalizeAutoPlanBuildIntent(direct)).toEqual(direct)
+    const { planTurnId: _planTurnId, ...legacy } = direct
+    expect(normalizeAutoPlanBuildIntent(legacy)?.planTurnId).toBe('')
     expect(normalizeAutoPlanBuildIntent({ ...direct, buildMode: 'scheduled' })).toBeNull()
     expect(normalizeAutoPlanBuildIntent({ ...direct, status: 'complete' })).toBeNull()
   })
@@ -50,9 +52,14 @@ describe('Automatic plan-build intent registry', () => {
     })
     saveAutoPlanBuildIntent(intent)
     expect(activeAutoPlanBuildIntent('thread-1')).toBeNull()
-    patchAutoPlanBuildIntent(intent.id, { threadId: 'thread-1', status: 'dispatching' })
+    patchAutoPlanBuildIntent(intent.id, {
+      threadId: 'thread-1',
+      planTurnId: 'turn-plan',
+      status: 'dispatching'
+    })
     expect(activeAutoPlanBuildIntent('thread-1')).toMatchObject({
       id: intent.id,
+      planTurnId: 'turn-plan',
       status: 'dispatching',
       useWorktree: false
     })

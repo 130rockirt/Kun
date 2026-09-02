@@ -32,3 +32,10 @@
 - [x] 5.1 Commit the implementation on `codex/add-auto-plan-build-mode` with Angular-style messages.
 - [x] 5.2 Rebase onto the latest local `develop`, resolve conflicts semantically, and rerun affected validation.
 - [x] 5.3 Fast-forward merge into local `develop`, verify ancestry and smoke checks, then non-force remove the worktree and delete the feature branch.
+
+## 6. Recovery Reliability Fixes
+
+- [x] 6.1 Persist the admitted plan turn id and ignore terminal status from unrelated turns during reconciliation.
+- [x] 6.2 Match plan results by canonical workspace/reserved path and self-heal the legacy recovery-mismatch attention state.
+- [x] 6.3 Keep thread-activity long polls alive through their server wait window and add timeout regression coverage.
+- [x] 6.4 Add end-to-end recovery race tests and rerun focused validation, typecheck, build, lint, file-line gate, and diff check.

@@ -46,6 +46,16 @@ The coordinator listens to active projections and performs a bounded startup rec
 
 Both immediate and scheduled Automatic builds pass the captured choice into `preparePlanBuild`. Worktree-enabled Direct prompts retain branch discovery, source-dirty-file preservation, rebase, fast-forward integration, and safe cleanup rules. Scheduled tasks themselves keep `useWorktree: false` so there is no nested worktree lifecycle.
 
+### 7. Fence recovery to the admitted plan turn
+
+The intent snapshots the admitted plan turn id after `waitForRuntimeAdmission` resolves. Recovery treats `latestTurnStatus` as authoritative only when `latestTurnId` is that exact plan turn; a terminal status from an earlier or later turn is stale for the intent and cannot fail it. Existing version-1 intents without a turn id remain pending until their reserved plan result appears.
+
+Plan result identity uses the normalized workspace root and reserved relative path. The runtime-derived `plan_id` is diagnostic rather than authoritative because path casing normalization can make it differ from the renderer's pre-admission id while still referring to the same reserved artifact.
+
+The prior recovery-mismatch `needs_attention` state is retryable: if the matching plan result later appears, the coordinator clears that stale banner and continues exactly once. Other attention states such as expired schedules or Git preparation failures remain fail-closed.
+
+The sidebar thread-activity observer uses a 25-second server wait, so Main gives this long-poll route the same bounded wait-plus-margin timeout policy as model-connection events. This prevents expected long polls from being aborted by the generic GET timeout and keeps background completion state fresh.
+
 ## Risks / Trade-offs
 
 - [A schedule time can expire while planning] -> Revalidate after `create_plan` and require a new time; never create an overdue task from the pending intent.

@@ -323,8 +323,8 @@ const THREAD_TIMELINE_GET_TIMEOUT_MS = 120_000
 const THREAD_SUMMARIZE_POST_TIMEOUT_MS = 120_000
 const PROVIDER_QUOTA_GET_TIMEOUT_MS = 120_000
 const USAGE_HISTORY_GET_TIMEOUT_MS = 120_000
-const MODEL_CONNECTION_EVENTS_TIMEOUT_MARGIN_MS = 5_000
-const MAX_MODEL_CONNECTION_EVENTS_WAIT_MS = 120_000
+const RUNTIME_EVENTS_TIMEOUT_MARGIN_MS = 5_000
+const MAX_RUNTIME_EVENTS_WAIT_MS = 120_000
 
 function isThreadTimelinePath(pathNorm: string): boolean {
   const queryIndex = pathNorm.indexOf('?')
@@ -342,6 +342,16 @@ function isProviderQuotaPath(pathNorm: string): boolean {
   const queryIndex = pathNorm.indexOf('?')
   const pathname = queryIndex >= 0 ? pathNorm.slice(0, queryIndex) : pathNorm
   return pathname === '/v1/provider-quotas'
+}
+
+function runtimeEventsWaitMs(pathNorm: string): number | null {
+  if (
+    !pathNorm.startsWith('/v1/model-connections/events?') &&
+    !pathNorm.startsWith('/v1/thread-activity/events?')
+  ) return null
+  const query = pathNorm.slice(pathNorm.indexOf('?') + 1)
+  const waitMs = Number(new URLSearchParams(query).get('wait_ms'))
+  return Number.isSafeInteger(waitMs) && waitMs > 0 ? waitMs : null
 }
 
 /**
@@ -383,16 +393,13 @@ export function resolveRuntimeRequestTimeoutMs(
   if (method === 'POST' && isThreadSummarizePath(pathNorm)) {
     return THREAD_SUMMARIZE_POST_TIMEOUT_MS
   }
-  if (method !== 'GET' || !pathNorm.startsWith('/v1/model-connections/events?')) {
-    return fallback
-  }
-  const query = pathNorm.slice(pathNorm.indexOf('?') + 1)
-  const waitMs = Number(new URLSearchParams(query).get('wait_ms'))
-  if (!Number.isSafeInteger(waitMs) || waitMs <= 0) return fallback
+  if (method !== 'GET') return fallback
+  const waitMs = runtimeEventsWaitMs(pathNorm)
+  if (waitMs === null) return fallback
   return Math.max(
     fallback,
-    Math.min(waitMs, MAX_MODEL_CONNECTION_EVENTS_WAIT_MS) +
-      MODEL_CONNECTION_EVENTS_TIMEOUT_MARGIN_MS
+    Math.min(waitMs, MAX_RUNTIME_EVENTS_WAIT_MS) +
+      RUNTIME_EVENTS_TIMEOUT_MARGIN_MS
   )
 }
 

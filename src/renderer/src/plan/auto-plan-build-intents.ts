@@ -23,6 +23,8 @@ export type AutoPlanBuildIntentV1 = AutoPlanBuildSelection & {
   relativePath: string
   workspaceRoot: string
   threadId: string
+  /** Exact admitted plan turn. Empty only for intents persisted by older builds. */
+  planTurnId: string
   planClientRequestId: string
   buildClientRequestId: string
   status: AutoPlanBuildIntentStatus
@@ -94,6 +96,7 @@ export function normalizeAutoPlanBuildIntent(value: unknown): AutoPlanBuildInten
     relativePath,
     workspaceRoot,
     threadId: text(value.threadId),
+    planTurnId: text(value.planTurnId),
     planClientRequestId,
     buildClientRequestId,
     buildMode,
@@ -171,6 +174,7 @@ export function createAutoPlanBuildIntent(input: {
     relativePath: input.relativePath,
     workspaceRoot: input.workspaceRoot,
     threadId: input.threadId?.trim() ?? '',
+    planTurnId: '',
     planClientRequestId: requestId('auto-plan-turn'),
     buildClientRequestId: requestId('auto-build-turn'),
     buildMode: input.selection.buildMode,
@@ -191,7 +195,7 @@ export function saveAutoPlanBuildIntent(intent: AutoPlanBuildIntentV1): boolean 
 
 export function patchAutoPlanBuildIntent(
   id: string,
-  patch: Partial<Pick<AutoPlanBuildIntentV1, 'threadId' | 'status' | 'error'>>
+  patch: Partial<Pick<AutoPlanBuildIntentV1, 'threadId' | 'planTurnId' | 'status' | 'error'>>
 ): AutoPlanBuildIntentV1 | null {
   const registry = readRegistry()
   const current = registry.intents[id]
