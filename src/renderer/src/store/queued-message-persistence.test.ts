@@ -26,6 +26,44 @@ class MemoryStorage implements BrowserStorageLike {
 }
 
 describe('queued-message-persistence', () => {
+  it('keeps valid queued execution settings and drops unknown policy values', () => {
+    const storage = new MemoryStorage()
+    saveQueuedMessagesForThread('thread-c', [
+      {
+        id: 'q-snap',
+        text: 'run with frozen approval',
+        deliveryState: 'pending',
+        approvalPolicy: 'never',
+        sandboxMode: 'read-only',
+        approvalReviewer: 'agent'
+      }
+    ], storage)
+    saveQueuedMessagesForThread('thread-d', [
+      {
+        id: 'q-bad',
+        text: 'run with corrupted snapshot',
+        deliveryState: 'pending',
+        approvalPolicy: 'yolo',
+        sandboxMode: 'root',
+        approvalReviewer: 'skynet'
+      }
+    ] as unknown as Parameters<typeof saveQueuedMessagesForThread>[1], storage)
+
+    expect(queuedMessagesForThread('thread-c', storage)).toEqual([
+      expect.objectContaining({
+        id: 'q-snap',
+        approvalPolicy: 'never',
+        sandboxMode: 'read-only',
+        approvalReviewer: 'agent'
+      })
+    ])
+    const normalizedBad = queuedMessagesForThread('thread-d', storage)
+    expect(normalizedBad).toHaveLength(1)
+    expect(normalizedBad[0]).not.toHaveProperty('approvalPolicy')
+    expect(normalizedBad[0]).not.toHaveProperty('sandboxMode')
+    expect(normalizedBad[0]).not.toHaveProperty('approvalReviewer')
+  })
+
   it('restores pending messages independently for each thread', () => {
     const storage = new MemoryStorage()
     saveQueuedMessagesForThread('thread-a', [

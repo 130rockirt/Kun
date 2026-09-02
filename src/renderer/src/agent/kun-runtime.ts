@@ -10,6 +10,11 @@ import type {
 } from './types'
 import type { ThreadListOptions, ThreadListPage } from './provider-types'
 import { getKunRuntimeSettings } from '@shared/app-settings-kun-defaults'
+import type {
+  ApprovalPolicy as KunApprovalPolicy,
+  ApprovalReviewer as KunApprovalReviewer,
+  SandboxMode as KunSandboxMode
+} from '@shared/app-settings'
 import {
   KUN_ATTACHMENT_DIAGNOSTICS_PATH,
   KUN_ATTACHMENTS_PATH,
@@ -510,6 +515,9 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       guiDesignMode?: boolean
       persona?: string
       agentSurface?: 'code' | 'write' | 'design'
+      approvalPolicy?: KunApprovalPolicy
+      sandboxMode?: KunSandboxMode
+      approvalReviewer?: KunApprovalReviewer
       designProfile?: DesignTaskProfileInput
       designDocumentTarget?: DesignDocumentTarget
       designImagePlacementTarget?: DesignImagePlacementTarget
@@ -552,9 +560,9 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       ...(selectedModel ? { model: selectedModel } : {}),
       ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
       ...(selectedAccountId ? { accountId: selectedAccountId } : {}),
-      approvalPolicy: runtime.approvalPolicy,
-      sandboxMode: runtime.sandboxMode,
-      approvalReviewer: runtime.approvalReviewer
+      approvalPolicy: options?.approvalPolicy ?? runtime.approvalPolicy,
+      sandboxMode: options?.sandboxMode ?? runtime.sandboxMode,
+      approvalReviewer: options?.approvalReviewer ?? runtime.approvalReviewer
     }
     if (options?.subagentResume) {
       body.subagentResume = options.subagentResume

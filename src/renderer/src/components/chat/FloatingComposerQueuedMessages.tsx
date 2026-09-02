@@ -22,8 +22,10 @@ import {
   X
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import type { ApprovalPolicy, ApprovalReviewer, SandboxMode } from '@shared/app-settings'
 import { canInlineEditQueuedMessage } from '../../store/queued-message-edit'
 import { queuedMessageGuidancePayload } from '../../store/queued-message-guidance'
+import { QueuedMessageSnapshotBadges } from './FloatingComposerQueuedMessageBadges'
 import { parseWritePromptForDisplay } from '../../write/quoted-selection'
 import {
   calculateComposerPopoverPlacement,
@@ -55,6 +57,11 @@ export type QueuedComposerMessage = {
   inlineEditEligible?: boolean
   mode?: string
   agentSurface?: 'code' | 'write' | 'design'
+  model?: string
+  reasoningEffort?: string
+  approvalPolicy?: ApprovalPolicy
+  sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
   attachmentIds?: readonly string[]
   attachments?: readonly { name?: string; kind?: 'image' | 'document' }[]
   fileReferences?: readonly unknown[]
@@ -453,6 +460,8 @@ export function FloatingComposerQueuedMessages({
                     {imageCount}
                   </span>
                 ) : null}
+
+                {!isEditing ? <QueuedMessageSnapshotBadges message={message} /> : null}
 
                 {!isEditing && paused ? (
                   <span className={`${css.status} ${css.paused}`}>

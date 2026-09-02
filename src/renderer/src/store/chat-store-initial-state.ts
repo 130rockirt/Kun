@@ -69,6 +69,9 @@ export function createInitialChatStoreState(workingDirectoryLabel: string) {
     turnReasoningLastAtByUserId: {},
     inspectorSelectedId: null,
     composerMode: readStoredComposerMode(),
+    // The workbench execution-settings hook mirrors runtime settings here
+    // once loaded; null keeps sends on the runtime defaults until then.
+    composerExecutionSettings: null,
     composerOrchestration: 'direct' as const,
     graphEnabled: false,
     composerModel: '',

@@ -281,6 +281,11 @@ export function useWorkbenchChatComposerProps({
       ...(message.errorCode ? { errorCode: message.errorCode } : {}),
       ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
       ...(message.mode ? { mode: message.mode } : {}),
+      ...(message.model ? { model: message.model } : {}),
+      ...(message.reasoningEffort ? { reasoningEffort: message.reasoningEffort } : {}),
+      ...(message.approvalPolicy ? { approvalPolicy: message.approvalPolicy } : {}),
+      ...(message.sandboxMode ? { sandboxMode: message.sandboxMode } : {}),
+      ...(message.approvalReviewer ? { approvalReviewer: message.approvalReviewer } : {}),
       ...(message.guiPlan ? { guiPlan: message.guiPlan } : {}),
       ...(message.attachmentIds?.length ? { attachmentIds: message.attachmentIds } : {}),
       ...(message.attachments?.length ? { attachments: message.attachments } : {}),
@@ -305,6 +310,22 @@ export function useWorkbenchChatComposerProps({
         ? (input.trim() ? `${input.replace(/\s+$/, '')}\n${text}` : text)
         : input)
       if (restored.attachments?.length) void restoreComposerAttachments(restored.attachments)
+      // Replay the frozen submission settings so a re-send reproduces the
+      // original turn instead of silently adopting current composer state.
+      if (restored.mode === 'agent' || restored.mode === 'auto') setComposerMode(restored.mode)
+      if (restored.model?.trim()) setComposerModel(restored.model.trim())
+      if (restored.reasoningEffort && setComposerReasoningEffort) {
+        setComposerReasoningEffort(
+          restored.reasoningEffort as Parameters<NonNullable<typeof setComposerReasoningEffort>>[0]
+        )
+      }
+      if (restored.approvalPolicy || restored.sandboxMode || restored.approvalReviewer) {
+        updateComposerExecutionSettings({
+          ...(restored.approvalPolicy ? { approvalPolicy: restored.approvalPolicy } : {}),
+          ...(restored.sandboxMode ? { sandboxMode: restored.sandboxMode } : {}),
+          ...(restored.approvalReviewer ? { approvalReviewer: restored.approvalReviewer } : {})
+        })
+      }
       return true
     },
     onGuideQueuedMessage: guideQueuedMessage,

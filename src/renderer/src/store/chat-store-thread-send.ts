@@ -526,6 +526,16 @@ export async function sendThreadMessage(
         : 'direct')
     const userModelChip =
       queued?.modelLabel ?? overrides?.modelLabel ?? optimisticUserModelLabel(composerModel, threadSnap?.model)
+    // Freeze the composer execution settings at enqueue time so a queued
+    // message keeps the approval/sandbox policy selected when it was submitted,
+    // not whatever is global by the time the queue drains.
+    const composerExecutionSettings = get().composerExecutionSettings
+    const snapshotApprovalPolicy =
+      queued?.approvalPolicy ?? overrides?.approvalPolicy ?? composerExecutionSettings?.approvalPolicy
+    const snapshotSandboxMode =
+      queued?.sandboxMode ?? overrides?.sandboxMode ?? composerExecutionSettings?.sandboxMode
+    const snapshotApprovalReviewer =
+      queued?.approvalReviewer ?? overrides?.approvalReviewer ?? composerExecutionSettings?.approvalReviewer
     const submittedMessageForQueue = pendingQueuedMessage({
       ...queued,
       id: queued?.id ?? `q-${clientRequestId}`,
@@ -556,6 +566,9 @@ export async function sendThreadMessage(
         ? { guiDesignArtifact: queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact }
         : {}),
       ...(writeContext ? { writeContext } : {}),
+      ...(snapshotApprovalPolicy ? { approvalPolicy: snapshotApprovalPolicy } : {}),
+      ...(snapshotSandboxMode ? { sandboxMode: snapshotSandboxMode } : {}),
+      ...(snapshotApprovalReviewer ? { approvalReviewer: snapshotApprovalReviewer } : {}),
       ...(attachmentIds.length ? { attachmentIds } : {}),
       ...(attachments.length ? { attachments } : {}),
       ...(fileReferences.length ? { fileReferences } : {}),

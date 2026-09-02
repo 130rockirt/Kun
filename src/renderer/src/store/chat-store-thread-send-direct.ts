@@ -31,6 +31,7 @@ import { startWorkspaceCheckpointSnapshot } from './chat-store-thread-send-check
 import { readDesignThreadRegistry } from '../design/design-thread-registry'
 import { mergeThreadDesignProfile } from '../design/design-locked-profile'
 import {
+  executionSnapshotOverrides,
   failQueuedSubmission,
   localConversationErrorBlock,
   resetQueuedSubmission,
@@ -356,9 +357,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         ...(!channel && composerAccountId ? { accountId: composerAccountId } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(!channel && serviceTier ? { serviceTier } : {}),
-        ...((queued?.subagentResume ?? overrides?.subagentResume)
-          ? { subagentResume: queued?.subagentResume ?? overrides?.subagentResume }
-          : {}),
+        ...((queued?.subagentResume ?? overrides?.subagentResume) ? { subagentResume: queued?.subagentResume ?? overrides?.subagentResume } : {}),
         ...(messageSource ? { messageSource } : {}),
         ...(runtimeDisplayText ? { displayText: runtimeDisplayText } : {}),
         ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
@@ -368,6 +367,7 @@ export async function performPreparedThreadSend(input: PreparedThreadSend): Prom
         ...(designDocumentTarget ? { designDocumentTarget } : {}),
         ...(designImagePlacementTarget ? { designImagePlacementTarget } : {}),
         ...(persona ? { persona } : {}),
+        ...executionSnapshotOverrides(submittedMessageForQueue),
         ...((queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact)
           ? { guiDesignArtifact: queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact }
           : {}),

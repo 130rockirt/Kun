@@ -175,6 +175,30 @@
   line-height: 18px;
 }
 
+.badges {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--ds-border-muted);
+  border-radius: 999px;
+  background: var(--ds-surface-subtle);
+  color: var(--ds-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 18px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
 .paused {
   color: color-mix(in srgb, #d97706 78%, var(--ds-text));
 }

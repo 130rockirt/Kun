@@ -110,6 +110,9 @@ function queuedSendOptions(message: QueuedUserMessage, input: {
     ...(message.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(message.guiDesignMode ? { guiDesignMode: true } : {}),
     ...(message.persona ? { persona: message.persona } : {}),
+    ...(message.approvalPolicy ? { approvalPolicy: message.approvalPolicy } : {}),
+    ...(message.sandboxMode ? { sandboxMode: message.sandboxMode } : {}),
+    ...(message.approvalReviewer ? { approvalReviewer: message.approvalReviewer } : {}),
     ...(message.designProfile ? { designProfile: message.designProfile } : {}),
     ...(message.designDocumentTarget ? { designDocumentTarget: message.designDocumentTarget } : {}),
     ...(message.designImagePlacementTarget

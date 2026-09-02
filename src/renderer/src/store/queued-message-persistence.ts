@@ -1,5 +1,6 @@
 import { browserStorage, type BrowserStorageLike } from '../lib/browser-storage'
 import type { ChatBlock } from '../agent/types'
+import type { ApprovalPolicy, ApprovalReviewer, SandboxMode } from '@shared/app-settings'
 import type { QueuedUserMessage } from './chat-store-types'
 
 export type QueuedMessageDeliveryState = 'pending' | 'paused' | 'starting' | 'in_flight' | 'failed'
@@ -20,6 +21,26 @@ export function emptyQueuedMessageRegistry(): QueuedMessageRegistry {
 
 function normalizedString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+const APPROVAL_POLICY_VALUES: readonly string[] = [
+  'always', 'on-request', 'untrusted', 'never', 'auto', 'suggest'
+]
+const SANDBOX_MODE_VALUES: readonly string[] = [
+  'read-only', 'workspace-write', 'danger-full-access', 'external-sandbox'
+]
+const APPROVAL_REVIEWER_VALUES: readonly string[] = ['user', 'agent']
+
+function isApprovalPolicy(value: unknown): value is ApprovalPolicy {
+  return typeof value === 'string' && APPROVAL_POLICY_VALUES.includes(value)
+}
+
+function isSandboxMode(value: unknown): value is SandboxMode {
+  return typeof value === 'string' && SANDBOX_MODE_VALUES.includes(value)
+}
+
+function isApprovalReviewer(value: unknown): value is ApprovalReviewer {
+  return typeof value === 'string' && APPROVAL_REVIEWER_VALUES.includes(value)
 }
 
 function normalizeDesignImagePlacementTarget(
@@ -112,6 +133,12 @@ function normalizeQueuedMessage(value: unknown): QueuedUserMessage | null {
   else delete normalized.clientRequestId
   if (source.waitForRuntimeAdmission === true) normalized.waitForRuntimeAdmission = true
   else delete normalized.waitForRuntimeAdmission
+  if (isApprovalPolicy(source.approvalPolicy)) normalized.approvalPolicy = source.approvalPolicy
+  else delete normalized.approvalPolicy
+  if (isSandboxMode(source.sandboxMode)) normalized.sandboxMode = source.sandboxMode
+  else delete normalized.sandboxMode
+  if (isApprovalReviewer(source.approvalReviewer)) normalized.approvalReviewer = source.approvalReviewer
+  else delete normalized.approvalReviewer
   if (writeContext) normalized.writeContext = writeContext
   else delete normalized.writeContext
   const placementTarget = normalizeDesignImagePlacementTarget(source.designImagePlacementTarget)

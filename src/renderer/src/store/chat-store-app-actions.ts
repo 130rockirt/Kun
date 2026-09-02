@@ -62,6 +62,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
   ChatState,
   | 'setError'
   | 'setComposerMode'
+  | 'setComposerExecutionSettings'
   | 'setComposerOrchestration'
   | 'setComposerModel'
   | 'setComposerReasoningEffort'
@@ -130,6 +131,10 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
 
     setComposerOrchestration: (mode) => {
       set({ composerOrchestration: mode })
+    },
+
+    setComposerExecutionSettings: (settings) => {
+      set({ composerExecutionSettings: settings })
     },
 
     setComposerModel: (modelId, providerId) => {

@@ -256,6 +256,21 @@ export function createClientTurnRequestId(): string {
   return `turn_${random}`
 }
 
+/**
+ * Per-turn execution settings frozen at enqueue time. Empty fields stay unset
+ * so the runtime falls back to its configured defaults.
+ */
+export function executionSnapshotOverrides(message: Pick<
+  QueuedUserMessage,
+  'approvalPolicy' | 'sandboxMode' | 'approvalReviewer'
+>) {
+  return {
+    ...(message.approvalPolicy ? { approvalPolicy: message.approvalPolicy } : {}),
+    ...(message.sandboxMode ? { sandboxMode: message.sandboxMode } : {}),
+    ...(message.approvalReviewer ? { approvalReviewer: message.approvalReviewer } : {})
+  }
+}
+
 export function pendingQueuedMessage(message: QueuedUserMessage): QueuedUserMessage {
   const pending = {
     ...message,

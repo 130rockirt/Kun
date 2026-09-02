@@ -19,6 +19,8 @@ import type {
 import type { KunRuntimeStatusPayload } from '@shared/kun-gui-api'
 import type {
   AppLocale,
+  ApprovalPolicy,
+  ApprovalReviewer,
   ClawImAgentProfileV1,
   ClawImChannelV1,
   ClawImPlatformCredentialV1,
@@ -26,7 +28,8 @@ import type {
   ClawImSettingsV1,
   ClawModel,
   CodeAgentPresetV1,
-  ModelReasoningEffort
+  ModelReasoningEffort,
+  SandboxMode
 } from '@shared/app-settings'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import type { ComposerContextAttachment } from '@kun/extension-api'
@@ -105,6 +108,10 @@ export type QueuedUserMessage = {
   designImagePlacementTarget?: DesignImagePlacementTarget
   guiDesignArtifact?: GuiDesignArtifactMessageContext
   writeContext?: WriteAssistantMessageContext
+  /** Execution settings frozen at enqueue time; empty fields fall back to runtime defaults. */
+  approvalPolicy?: ApprovalPolicy
+  sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
 }
 
 /**
@@ -145,6 +152,10 @@ export type SendMessageOverrides = {
   queued?: QueuedUserMessage
   /** Optional stable idempotency key for callers that retry one logical submission. */
   clientRequestId?: string
+  /** Per-send execution settings that override the composer snapshot for this submission. */
+  approvalPolicy?: ApprovalPolicy
+  sandboxMode?: SandboxMode
+  approvalReviewer?: ApprovalReviewer
   /** Resolve the send only after Kun accepts it, including when it first enters the queue. */
   waitForRuntimeAdmission?: boolean
   model?: string
@@ -416,6 +427,12 @@ export type ChatState = {
   turnReasoningLastAtByUserId: Record<string, number>
   inspectorSelectedId: string | null
   composerMode: 'plan' | 'agent' | 'auto'
+  /** Composer execution settings mirrored from the runtime settings UI so sends can freeze them per message. */
+  composerExecutionSettings: {
+    approvalPolicy: ApprovalPolicy
+    sandboxMode: SandboxMode
+    approvalReviewer: ApprovalReviewer
+  } | null
   composerOrchestration: 'direct' | 'graph'
   graphEnabled: boolean
   composerModel: string
@@ -460,6 +477,11 @@ export type ChatState = {
   appendLocalClawTurn: (userText: string, replyText: string) => void
   setError: (message: string | null) => void
   setComposerMode: (mode: 'plan' | 'agent' | 'auto') => void
+  setComposerExecutionSettings: (settings: {
+    approvalPolicy: ApprovalPolicy
+    sandboxMode: SandboxMode
+    approvalReviewer: ApprovalReviewer
+  } | null) => void
   setComposerOrchestration: (mode: 'direct' | 'graph') => void
   setComposerModel: (modelId: string, providerId?: string) => void
   setComposerReasoningEffort: (effort: ModelReasoningEffort) => void

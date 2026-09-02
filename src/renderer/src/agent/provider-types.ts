@@ -229,6 +229,9 @@ export interface AgentProvider {
       guiDesignMode?: boolean
       persona?: string
       agentSurface?: 'code' | 'write' | 'design'
+      approvalPolicy?: ApprovalPolicy
+      sandboxMode?: SandboxMode
+      approvalReviewer?: ApprovalReviewer
       designProfile?: DesignTaskProfileInput
       designDocumentTarget?: DesignDocumentTarget
       designImagePlacementTarget?: DesignImagePlacementTarget

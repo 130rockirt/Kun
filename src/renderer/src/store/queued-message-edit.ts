@@ -23,6 +23,9 @@ type EditableQueuedMessage = Pick<QueuedUserMessage,
   | 'designDocumentTarget'
   | 'designImagePlacementTarget'
   | 'writeContext'
+  | 'approvalPolicy'
+  | 'sandboxMode'
+  | 'approvalReviewer'
 >
 
 /** True only when changing visible text cannot desynchronize a structured queued prompt. */
