@@ -58,39 +58,73 @@ export function useTrajectoryData(input: {
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const generation = useRef(0)
+  const currentThreadId = useRef(input.threadId)
+  const summaryInFlight = useRef(new Map<string, Promise<void>>())
+  const latestInFlight = useRef(new Map<string, Promise<void>>())
+  currentThreadId.current = input.threadId
+
+  const requestIsCurrent = useCallback((threadId: string, requestGeneration: number): boolean =>
+    currentThreadId.current === threadId && generation.current === requestGeneration, [])
 
   const loadSummary = useCallback(async (): Promise<void> => {
-    if (!input.threadId) return
+    const threadId = input.threadId
+    if (!threadId) return
+    const existing = summaryInFlight.current.get(threadId)
+    if (existing) return existing
     const current = generation.current
-    try {
-      const next = await fetchTrajectorySummary(input.threadId)
-      if (current === generation.current) setSummary(next)
-    } catch {
+    const task = fetchTrajectorySummary(threadId).then((next) => {
+      if (requestIsCurrent(threadId, current)) setSummary(next)
+    }).catch(() => {
       // The full page owns visible errors; the button summary degrades quietly.
+    })
+    summaryInFlight.current.set(threadId, task)
+    try {
+      await task
+    } finally {
+      if (summaryInFlight.current.get(threadId) === task) {
+        summaryInFlight.current.delete(threadId)
+      }
     }
-  }, [input.threadId])
+  }, [input.threadId, requestIsCurrent])
 
   const loadLatest = useCallback(async (showLoading: boolean): Promise<void> => {
-    if (!input.threadId || !input.visible) return
+    const threadId = input.threadId
+    if (!threadId || !input.visible) return
     const current = generation.current
+    const existing = latestInFlight.current.get(threadId)
+    if (existing) {
+      if (showLoading) setLoading(true)
+      try {
+        await existing
+      } finally {
+        if (showLoading && requestIsCurrent(threadId, current)) setLoading(false)
+      }
+      return
+    }
     if (showLoading) setLoading(true)
     setError(null)
-    try {
-      const page = await fetchTrajectoryPage(input.threadId, {
-        limit: 100
-      })
-      if (current !== generation.current) return
+    const task = fetchTrajectoryPage(threadId, {
+      limit: 100
+    }).then((page) => {
+      if (!requestIsCurrent(threadId, current)) return
       setRecords((existing) => mergeRecords(existing, page.records))
       setSummary(page.summary)
       setNextCursor(page.nextCursor)
       setWarnings(page.warnings)
       setHistoryIncomplete(page.historyIncomplete)
-    } catch (loadError) {
-      if (current === generation.current) setError(message(loadError))
+    }).catch((loadError) => {
+      if (requestIsCurrent(threadId, current)) setError(message(loadError))
+    })
+    latestInFlight.current.set(threadId, task)
+    try {
+      await task
     } finally {
-      if (showLoading && current === generation.current) setLoading(false)
+      if (latestInFlight.current.get(threadId) === task) {
+        latestInFlight.current.delete(threadId)
+      }
+      if (showLoading && requestIsCurrent(threadId, current)) setLoading(false)
     }
-  }, [input.threadId, input.visible])
+  }, [input.threadId, input.visible, requestIsCurrent])
 
   useEffect(() => {
     generation.current += 1
@@ -100,8 +134,10 @@ export function useTrajectoryData(input: {
     setHistoryIncomplete(false)
     setError(null)
     setSummary(EMPTY_SUMMARY)
-    void loadSummary()
-    if (!input.visible) return
+    if (!input.visible) {
+      void loadSummary()
+      return
+    }
     const timer = globalThis.setTimeout(() => void loadLatest(true), 0)
     return () => globalThis.clearTimeout(timer)
   }, [input.threadId, input.visible, loadLatest, loadSummary])

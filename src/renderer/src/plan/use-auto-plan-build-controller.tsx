@@ -82,12 +82,24 @@ function matchingSuccessfulPlan(
   blocks: readonly ChatBlock[],
   intent: AutoPlanBuildIntentV1
 ): { meta: GuiPlanToolMeta; turnId: string } | null {
+  const scopedToTurn = Boolean(intent.planTurnId)
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const block = blocks[index]
     if (block.kind !== 'tool' || block.status !== 'success') continue
-    if (intent.planTurnId && block.turnId !== intent.planTurnId) continue
+    if (scopedToTurn && block.turnId !== intent.planTurnId) continue
     const meta = extractPlanMetadataFromBlock(block)
-    if (meta && planMetaMatchesIntent(meta, intent)) {
+    if (!meta) continue
+    const sameWorkspace =
+      normalizeWorkspaceRoot(meta.workspaceRoot) === normalizeWorkspaceRoot(intent.workspaceRoot)
+    if (!sameWorkspace) continue
+    if (scopedToTurn) {
+      // The runtime re-derives the draft plan filename from the model's
+      // title, so the renderer-reserved relative path is only a hint. A plan
+      // turn produces exactly one plan, so workspace parity within the scoped
+      // turn is sufficient to identify the result.
+      return { meta, turnId: block.turnId ?? '' }
+    }
+    if (planMetaMatchesIntent(meta, intent)) {
       return { meta, turnId: block.turnId ?? '' }
     }
   }

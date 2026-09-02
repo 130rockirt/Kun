@@ -201,6 +201,19 @@ describe('Automatic plan-build orchestration', () => {
     ], intent)?.meta).toEqual(runtimeMeta)
   })
 
+  it('matches the re-derived draft path when scoped to the plan turn', () => {
+    installWindow()
+    const intent = { ...directIntent(), planTurnId: 'turn-plan' }
+    const runtimeMeta = {
+      ...meta,
+      planId: '/repo:.kunsdd/plan/titled.md',
+      relativePath: '.kunsdd/plan/titled.md'
+    }
+    expect(autoPlanBuildControllerTestApi.matchingSuccessfulPlan([
+      planBlock(runtimeMeta)
+    ], intent)?.meta).toEqual(runtimeMeta)
+  })
+
   it('dispatches one target-thread Direct build with a stable request id', async () => {
     installWindow()
     const intent = directIntent(true)

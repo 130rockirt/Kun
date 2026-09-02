@@ -116,7 +116,6 @@ import {
   stopTurnCompletionPoll
 } from './chat-store-schedulers'
 import { saveThreadListCache } from './thread-list-cache'
-import { scheduleRecentThreadPrewarm } from './thread-detail-prewarm'
 import {
   loadMoreThreads as loadMoreThreadsAction,
   mergeThreadPages,
@@ -631,7 +630,6 @@ export function createNavigationWorkspaceActions(
       // startup can paint the sidebar from local storage before the runtime
       // inventory arrives.
       saveThreadListCache(displayThreads)
-      scheduleRecentThreadPrewarm(get().threads, get().activeThreadId)
       if (activeThreadIsManagedInCodeRoute) {
         await get().openCode()
       }

@@ -2,10 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NormalizedThread, ThreadDetail } from '../agent/types'
 import {
   getThreadPrewarmHandle,
-  recentThreadPrewarmCandidates,
   requestThreadPrewarm,
   resetThreadPrewarmState,
-  scheduleRecentThreadPrewarm,
+  THREAD_DETAIL_PREWARM_FAILURE_BACKOFF_MS,
   threadPrewarmHandleIsCurrent,
   threadPrewarmStats
 } from './thread-detail-prewarm'
@@ -73,29 +72,9 @@ describe('thread detail prewarm coordinator', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     resetThreadPrewarmState()
     clearThreadSnapshotCache()
-  })
-
-  it('selects only the six newest settled main conversations', () => {
-    const candidates = [
-      thread('active', { updatedAt: '2026-08-23T00:20:00.000Z' }),
-      thread('archived', { updatedAt: '2026-08-23T00:19:00.000Z', archived: true }),
-      thread('side', { updatedAt: '2026-08-23T00:18:00.000Z', relation: 'side' }),
-      thread('running', { updatedAt: '2026-08-23T00:17:00.000Z', status: 'running' }),
-      ...Array.from({ length: 8 }, (_, index) => thread(`ready-${index}`, {
-        updatedAt: `2026-08-23T00:${String(16 - index).padStart(2, '0')}:00.000Z`
-      }))
-    ]
-
-    expect(recentThreadPrewarmCandidates(candidates, 'active').map((item) => item.id)).toEqual([
-      'ready-0',
-      'ready-1',
-      'ready-2',
-      'ready-3',
-      'ready-4',
-      'ready-5'
-    ])
   })
 
   it('deduplicates requests and never runs more than two background loads', async () => {
@@ -144,7 +123,7 @@ describe('thread detail prewarm coordinator', () => {
     })
 
     requestThreadPrewarm(oldThread)
-    scheduleRecentThreadPrewarm([freshThread], null)
+    requestThreadPrewarm(freshThread)
     expect(getThreadDetail).toHaveBeenCalledTimes(2)
 
     freshDetail.resolve(detail('fresh'))
@@ -181,6 +160,41 @@ describe('thread detail prewarm coordinator', () => {
     queued.resolve(detail('queued'))
     await flushAsyncWork()
     expect(getThreadSnapshot('queued')).not.toBeNull()
+  })
+
+  it('backs off repeated hover prewarms after a failed request', async () => {
+    let now = 10_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const getThreadDetail = vi.fn(async () => {
+      throw new Error('runtime overloaded')
+    })
+    registryMock.getProvider.mockReturnValue({ getThreadDetail })
+    const target = thread('failed-hover')
+
+    requestThreadPrewarm(target)
+    await flushAsyncWork()
+    requestThreadPrewarm(target)
+    expect(getThreadDetail).toHaveBeenCalledTimes(1)
+
+    now += THREAD_DETAIL_PREWARM_FAILURE_BACKOFF_MS
+    requestThreadPrewarm(target)
+    expect(getThreadDetail).toHaveBeenCalledTimes(2)
+  })
+
+  it('backs off when a successful detail response cannot be cached', async () => {
+    const getThreadDetail = vi.fn(async (): Promise<ThreadDetail> => ({
+      ...detail('became-running'),
+      threadStatus: 'running'
+    }))
+    registryMock.getProvider.mockReturnValue({ getThreadDetail })
+    const target = thread('became-running')
+
+    requestThreadPrewarm(target)
+    await flushAsyncWork()
+    requestThreadPrewarm(target)
+
+    expect(getThreadDetail).toHaveBeenCalledTimes(1)
+    expect(getThreadSnapshot(target.id)).toBeNull()
   })
 
   it('exposes an in-flight prewarm as a revalidatable handle', async () => {

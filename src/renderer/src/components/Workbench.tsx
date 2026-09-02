@@ -207,6 +207,7 @@ export function Workbench(): ReactElement {
     setInput
   })
   useDesignDrawingTitleBackfill({
+    enabled: route === 'design',
     workspaceRoot: designWorkspaceRoot,
     documents: designDocuments,
     threads,

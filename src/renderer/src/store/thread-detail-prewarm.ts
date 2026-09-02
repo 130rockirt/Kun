@@ -6,21 +6,17 @@ import {
   cacheThreadSnapshot,
   captureThreadSnapshotCacheToken,
   getThreadSnapshot,
-  invalidateThreadSnapshot,
   threadSnapshotCacheTokenIsCurrent,
   threadSnapshotFingerprint,
   type ThreadSnapshotCacheToken
 } from './thread-snapshot-cache'
 
-export const THREAD_DETAIL_PREWARM_LIMIT = 6
 export const THREAD_DETAIL_PREWARM_CONCURRENCY = 2
-
-type PrewarmPriority = 'recent' | 'intent'
+export const THREAD_DETAIL_PREWARM_FAILURE_BACKOFF_MS = 30_000
 
 type PrewarmJob = {
   thread: NormalizedThread
   fingerprint: string
-  priority: PrewarmPriority
 }
 
 type InFlightPrewarm = {
@@ -30,77 +26,16 @@ type InFlightPrewarm = {
   managerGeneration: number
 }
 
-type IdleHandle = {
-  kind: 'idle' | 'timeout'
-  id: number
-}
-
 let queue: PrewarmJob[] = []
 const inFlight = new Map<string, InFlightPrewarm>()
+const retryAfterByThread = new Map<string, number>()
 let activeBackgroundRequests = 0
-let scheduleGeneration = 0
 let managerGeneration = 0
-let idleHandle: IdleHandle | null = null
-
-function threadUpdatedTime(thread: NormalizedThread): number {
-  const parsed = Date.parse(thread.updatedAt)
-  return Number.isFinite(parsed) ? parsed : 0
-}
 
 function threadCanPrewarm(thread: NormalizedThread): boolean {
   return thread.archived !== true &&
     thread.relation !== 'side' &&
     !threadLooksRunning(thread)
-}
-
-export function recentThreadPrewarmCandidates(
-  threads: readonly NormalizedThread[],
-  activeThreadId: string | null,
-  limit = THREAD_DETAIL_PREWARM_LIMIT
-): NormalizedThread[] {
-  return threads
-    .filter((thread) =>
-      thread.id !== activeThreadId &&
-      threadCanPrewarm(thread)
-    )
-    .sort((left, right) =>
-      threadUpdatedTime(right) - threadUpdatedTime(left) || left.id.localeCompare(right.id)
-    )
-    .slice(0, Math.max(0, limit))
-}
-
-function cancelScheduledIdle(): void {
-  if (!idleHandle || typeof window === 'undefined') return
-  if (idleHandle.kind === 'idle') {
-    const candidate = window as typeof window & { cancelIdleCallback?: (id: number) => void }
-    candidate.cancelIdleCallback?.(idleHandle.id)
-  } else {
-    window.clearTimeout?.(idleHandle.id)
-  }
-  idleHandle = null
-}
-
-function scheduleIdle(callback: () => void): void {
-  cancelScheduledIdle()
-  if (typeof window === 'undefined') {
-    callback()
-    return
-  }
-  const candidate = window as typeof window & {
-    requestIdleCallback?: (cb: () => void, options?: { timeout: number }) => number
-  }
-  if (typeof candidate.requestIdleCallback === 'function') {
-    idleHandle = {
-      kind: 'idle',
-      id: candidate.requestIdleCallback(callback, { timeout: 1_000 })
-    }
-    return
-  }
-  if (typeof window.setTimeout !== 'function') {
-    callback()
-    return
-  }
-  idleHandle = { kind: 'timeout', id: window.setTimeout(callback, 0) }
 }
 
 function matchingInFlight(thread: NormalizedThread): InFlightPrewarm | null {
@@ -153,6 +88,10 @@ function startBackgroundPrewarm(job: PrewarmJob): void {
   try {
     promise = Promise.resolve(getProvider().getThreadDetail(job.thread.id))
   } catch {
+    retryAfterByThread.set(
+      job.thread.id,
+      Date.now() + THREAD_DETAIL_PREWARM_FAILURE_BACKOFF_MS
+    )
     return
   }
   const entry: InFlightPrewarm = {
@@ -170,9 +109,26 @@ function startBackgroundPrewarm(job: PrewarmJob): void {
         inFlight.get(job.thread.id) !== entry
       ) return
       const snapshot = buildPrefetchedThreadSnapshot(job.thread, detail)
-      if (snapshot) cacheThreadSnapshot(snapshot, token)
+      const cached = snapshot ? cacheThreadSnapshot(snapshot, token) : false
+      if (cached) {
+        retryAfterByThread.delete(job.thread.id)
+      } else {
+        retryAfterByThread.set(
+          job.thread.id,
+          Date.now() + THREAD_DETAIL_PREWARM_FAILURE_BACKOFF_MS
+        )
+      }
     })
-    .catch(() => undefined)
+    .catch(() => {
+      if (
+        entry.managerGeneration !== managerGeneration ||
+        inFlight.get(job.thread.id) !== entry
+      ) return
+      retryAfterByThread.set(
+        job.thread.id,
+        Date.now() + THREAD_DETAIL_PREWARM_FAILURE_BACKOFF_MS
+      )
+    })
     .finally(() => {
       if (inFlight.get(job.thread.id) === entry) inFlight.delete(job.thread.id)
       if (entry.managerGeneration !== managerGeneration) return
@@ -194,49 +150,18 @@ function pumpQueue(): void {
 }
 
 export function requestThreadPrewarm(
-  thread: NormalizedThread,
-  priority: PrewarmPriority = 'intent'
+  thread: NormalizedThread
 ): void {
   if (
     !threadCanPrewarm(thread)
   ) return
+  if ((retryAfterByThread.get(thread.id) ?? 0) > Date.now()) return
   const fingerprint = threadSnapshotFingerprint(thread)
   if (getThreadSnapshot(thread.id, fingerprint) || matchingInFlight(thread)) return
   queue = queue.filter((job) => job.thread.id !== thread.id)
-  const job = { thread, fingerprint, priority }
-  if (priority === 'intent') queue.unshift(job)
-  else queue.push(job)
+  const job = { thread, fingerprint }
+  queue.unshift(job)
   pumpQueue()
-}
-
-export function scheduleRecentThreadPrewarm(
-  threads: readonly NormalizedThread[],
-  activeThreadId: string | null
-): void {
-  scheduleGeneration += 1
-  const generation = scheduleGeneration
-  const currentThreads = new Map(threads.map((thread) => [thread.id, thread]))
-  for (const [threadId, entry] of inFlight) {
-    const current = currentThreads.get(threadId)
-    if (
-      !current ||
-      !threadCanPrewarm(current) ||
-      threadSnapshotFingerprint(current) !== entry.fingerprint
-    ) invalidateThreadSnapshot(threadId)
-  }
-  queue = queue.filter((job) => {
-    if (job.priority !== 'intent') return false
-    const current = currentThreads.get(job.thread.id)
-    return current != null &&
-      threadCanPrewarm(current) &&
-      threadSnapshotFingerprint(current) === job.fingerprint
-  })
-  const candidates = recentThreadPrewarmCandidates(threads, activeThreadId)
-  scheduleIdle(() => {
-    idleHandle = null
-    if (generation !== scheduleGeneration) return
-    for (const thread of candidates) requestThreadPrewarm(thread, 'recent')
-  })
 }
 
 /** Test-only visibility into the bounded background coordinator. */
@@ -254,10 +179,9 @@ export function threadPrewarmStats(): {
 
 /** Test-only reset; product code relies on fingerprint/generation invalidation. */
 export function resetThreadPrewarmState(): void {
-  cancelScheduledIdle()
-  scheduleGeneration += 1
   managerGeneration += 1
   queue = []
   inFlight.clear()
+  retryAfterByThread.clear()
   activeBackgroundRequests = 0
 }
