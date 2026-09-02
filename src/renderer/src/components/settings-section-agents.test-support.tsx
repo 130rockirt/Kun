@@ -79,7 +79,7 @@ const labels: Record<string, string> = {
   fastContextFast: 'Codex Fast mode',
   fastContextFastDesc: 'Fast description',
   fastContextFastUnsupportedHint: 'Fast unsupported hint',
-  labPptTitle: 'PPT agent',
+  labPptTitle: 'PPT agent', labProjectBoardTitle: 'Project board', labProjectBoardDescription: 'Project board description', labProjectBoardEnabled: 'Enable project board',
   labPptDescription: 'PPT tool description',
   labPptEnabled: 'Enable ppt_agent',
   labPptEnabledDesc: 'Enable description',

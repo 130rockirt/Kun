@@ -15,6 +15,7 @@ import type {
   ComputerUsePermissionState
 } from '@shared/kun-gui-api'
 import {
+  Columns3,
   Globe2,
   Monitor,
   Presentation,
@@ -38,6 +39,7 @@ import { GraphModeSettingsPanel } from './settings-section-graph-panel'
 import { ConversationVisualizationSettingsPanel } from './settings-section-lab-conversation-visualization'
 import { PptAgentSettingsPanel } from './settings-section-lab-ppt'
 import { AutoPlanBuildSettingsPanel } from './settings-section-lab-auto-plan-build'
+import { ProjectBoardSettingsPanel } from './settings-section-lab-project-board'
 
 type LaboratorySettingsPanel =
   | 'visualization'
@@ -46,6 +48,7 @@ type LaboratorySettingsPanel =
   | 'browser'
   | 'graph'
   | 'ppt'
+  | 'projectBoard'
 
 export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> }): ReactElement {
   const { t, form, kun, updateKun, selectControlClass, runtimeInfo } = ctx
@@ -92,7 +95,8 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
           { id: 'computer', label: t('computerUseTitle'), icon: Monitor },
           { id: 'browser', label: t('browserUseSettingsTitle'), icon: Globe2 },
           { id: 'graph', label: t('graphSettingsTitle'), icon: Workflow },
-          { id: 'ppt', label: t('labPptTitle'), icon: Presentation }
+          { id: 'ppt', label: t('labPptTitle'), icon: Presentation },
+          { id: 'projectBoard', label: t('labProjectBoardTitle'), icon: Columns3 }
         ]}
         value={activePanel}
         onChange={setActivePanel}
@@ -193,6 +197,18 @@ export function LaboratorySettingsSection({ ctx }: { ctx: Record<string, any> })
               }
             : undefined}
           selectControlClass={selectControlClass}
+          onChange={(patch) => updateKun({ lab: patch })}
+        />
+      </SettingsTabPanel>
+      <SettingsTabPanel<LaboratorySettingsPanel>
+        baseId="laboratory-settings"
+        tabId="projectBoard"
+        active={activePanel === 'projectBoard'}
+        className="[&>div]:mt-0"
+      >
+        <ProjectBoardSettingsPanel
+          t={t}
+          value={lab}
           onChange={(patch) => updateKun({ lab: patch })}
         />
       </SettingsTabPanel>

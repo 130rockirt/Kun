@@ -40,6 +40,7 @@ import { useWorkbenchLayout } from './workbench-layout'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
 import { useGuiPlanStore } from '../plan/plan-store'
 import { useAutoPlanBuildController } from '../plan/use-auto-plan-build-controller'
+import { useProjectBoardEnabled } from '../project-board/use-project-board-enabled'
 import { normalizeWorkspaceRoot, workspaceRootScopeKey } from '../lib/workspace-path'
 import { relativeWorkspacePath } from '../lib/composer-file-references'
 import { useDesignWorkspaceStore } from '../design/design-workspace-store'
@@ -221,13 +222,12 @@ export function Workbench(): ReactElement {
     busyRef.current = busy
   }, [busy])
 
+  const { enabled: projectBoardEnabled, loaded: projectBoardSettingsLoaded } = useProjectBoardEnabled()
   useEffect(() => {
     routeRef.current = route
-  }, [route])
-
-  useEffect(() => {
+    if (projectBoardSettingsLoaded && !projectBoardEnabled && route === 'board') setRoute('chat')
     runtimeConnectionRef.current = runtimeConnection
-  }, [runtimeConnection])
+  }, [projectBoardEnabled, projectBoardSettingsLoaded, route, runtimeConnection, setRoute])
 
   const stageInsetClass = 'ds-stage-inset'
   const prevThreadId = useRef<string | null>(null)
@@ -683,7 +683,8 @@ export function Workbench(): ReactElement {
         hasPlanCommand: route !== 'claw', hasBtwCommand: route !== 'claw', hideBtwCommand: false,
         hasReviewCommand: route !== 'claw', skillCommands: runtimeSkills, disabledSkillIds,
         extensionRightRailItems, composerModel, composerModelGroups,
-        activeThreadPinned: threads.find((item) => item.id === activeThreadId)?.pinned === true }}
+        activeThreadPinned: threads.find((item) => item.id === activeThreadId)?.pinned === true,
+        projectBoardEnabled }}
       shortcutContext={{ composerMode, setComposerMode, handleGuiPlanCommand, createThread,
         chooseWorkspace, toggleTerminal, openSettings, useWorktreePool, setUseWorktreePool,
         worktreeBranch, navigationLocked: designDrawingCreationSubmitting }}

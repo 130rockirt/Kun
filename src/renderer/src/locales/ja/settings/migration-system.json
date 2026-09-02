@@ -94,5 +94,9 @@
   "labAutoPlanBuildDefaultWorktree": "既定で Worktree を使用",
   "labAutoPlanBuildDefaultWorktreeDesc": "手動計画ビルドとは独立した設定です。",
   "labAutoPlanBuildScheduledModelDesc": "予約自動ビルドの既定モデルです。",
-  "labAutoPlanBuildTimeZoneDesc": "タイムゾーンを記憶し、日時は毎回指定します。"
+  "labAutoPlanBuildTimeZoneDesc": "タイムゾーンを記憶し、日時は毎回指定します。",
+  "labProjectBoardTitle": "Project board",
+  "labProjectBoardDescription": "Experimental project board that aggregates task cards per project in the sidebar and tracks plan and task progress.",
+  "labProjectBoardEnabled": "Enable project board",
+  "labProjectBoardEnabledDesc": "Shows the Board entry in the sidebar. Off by default."
 }

@@ -94,5 +94,9 @@
   "labAutoPlanBuildDefaultWorktree": "Использовать Worktree по умолчанию",
   "labAutoPlanBuildDefaultWorktreeDesc": "Не изменяет настройки ручной сборки плана.",
   "labAutoPlanBuildScheduledModelDesc": "Модель для автоматических запланированных сборок.",
-  "labAutoPlanBuildTimeZoneDesc": "Часовой пояс запоминается, дата и время выбираются заново."
+  "labAutoPlanBuildTimeZoneDesc": "Часовой пояс запоминается, дата и время выбираются заново.",
+  "labProjectBoardTitle": "Project board",
+  "labProjectBoardDescription": "Experimental project board that aggregates task cards per project in the sidebar and tracks plan and task progress.",
+  "labProjectBoardEnabled": "Enable project board",
+  "labProjectBoardEnabledDesc": "Shows the Board entry in the sidebar. Off by default."
 }

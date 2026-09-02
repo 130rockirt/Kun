@@ -335,6 +335,11 @@ export type LabConversationVisualizationConfig = z.infer<
   typeof LabConversationVisualizationConfigSchema
 >
 
+export const LabProjectBoardConfigSchema = z.object({
+  enabled: z.boolean().default(false)
+}).strict()
+export type LabProjectBoardConfig = z.infer<typeof LabProjectBoardConfigSchema>
+
 export const LabConfigSchema = z
   .object({
     pptAgent: LabPptAgentConfigSchema.default({
@@ -343,6 +348,9 @@ export const LabConfigSchema = z
       imageFirst: true
     }),
     conversationVisualization: LabConversationVisualizationConfigSchema.default({
+      enabled: false
+    }),
+    projectBoard: LabProjectBoardConfigSchema.default({
       enabled: false
     })
   })

@@ -85,6 +85,8 @@ export type PaletteSourcesInput = {
   /** Configured provider groups; the palette lists every model they expose. */
   composerModelGroups: readonly ModelProviderModelGroup[]
   activeThreadPinned: boolean
+  /** Laboratory project board gate; the board route entry is hidden while off. */
+  projectBoardEnabled?: boolean
 }
 
 /**
@@ -244,17 +246,19 @@ function shortcutCommandEntries(input: PaletteSourcesInput): PaletteEntry[] {
 
 function routeEntries(input: PaletteSourcesInput): PaletteEntry[] {
   const { t } = input
-  return (Object.keys(ROUTE_LABEL_KEYS) as AppRoute[]).map((route) => {
-    const title = t(ROUTE_LABEL_KEYS[route])
-    return {
-      id: 'route:' + route,
-      source: 'route' as const,
-      title,
-      keywords: [route, title],
-      icon: { kind: 'lucide' as const, icon: ROUTE_ICONS[route] },
-      activation: { kind: 'route' as const, route }
-    }
-  })
+  return (Object.keys(ROUTE_LABEL_KEYS) as AppRoute[])
+    .filter((route) => route !== 'board' || input.projectBoardEnabled === true)
+    .map((route) => {
+      const title = t(ROUTE_LABEL_KEYS[route])
+      return {
+        id: 'route:' + route,
+        source: 'route' as const,
+        title,
+        keywords: [route, title],
+        icon: { kind: 'lucide' as const, icon: ROUTE_ICONS[route] },
+        activation: { kind: 'route' as const, route }
+      }
+    })
 }
 
 function settingsEntries(input: PaletteSourcesInput): PaletteEntry[] {

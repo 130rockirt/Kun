@@ -5,7 +5,7 @@ import { useChatStore } from '../store/chat-store'
 import type { ChatState } from '../store/chat-store-types'
 import { buildRefinePlanPrompt } from '../plan/plan-prompts'
 import { preparePlanBuild } from '../plan/prepare-plan-build'
-import { normalizePlanBoardPath, planHasBoardTasks } from '../plan/plan-board-model'
+import { normalizePlanTaskPath, planHasTaskCheckboxes } from '../plan/plan-task-checkboxes'
 import { buildSddVerifyPrompt } from '../sdd/sdd-verify-prompt'
 import { sddDraftRelativePathForPlanPath, sddDraftTraceRelativePath } from '@shared/sdd'
 import { buildSddTraceSnapshot, parseSddRequirementBlocks } from '@shared/sdd-trace'
@@ -96,12 +96,12 @@ export function planTodosForBuild(
   plan: GuiPlanArtifact,
   todos: ThreadTodoList | null
 ): Array<{ id: string; content: string; status: 'pending' | 'in_progress' | 'completed' }> {
-  const planPath = normalizePlanBoardPath(plan.relativePath)
+  const planPath = normalizePlanTaskPath(plan.relativePath)
   return (todos?.items ?? [])
     .filter((item) =>
       item.source?.kind === 'plan' &&
       item.source.planId === plan.id &&
-      normalizePlanBoardPath(item.source.relativePath) === planPath
+      normalizePlanTaskPath(item.source.relativePath) === planPath
     )
     .map(({ id, content, status }) => ({ id, content, status }))
 }
@@ -244,7 +244,7 @@ export function useWorkbenchPlanController({
         threadId &&
         chatState.activeThreadId === threadId &&
         chatState.runtimeConnection === 'ready' &&
-        (hasLinkedTodos || planHasBoardTasks(contentToSave))
+        (hasLinkedTodos || planHasTaskCheckboxes(contentToSave))
       ) {
         const synced = await chatState.syncPlanTodosFromMarkdown(threadId, plan, contentToSave)
         if (!synced) {
@@ -252,7 +252,7 @@ export function useWorkbenchPlanController({
             planId,
             threadId,
             'error',
-            t('planBoardSyncFailed')
+            t('planTodoSyncFailed')
           )
           return false
         }

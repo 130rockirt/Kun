@@ -141,6 +141,12 @@ export type KunLabConversationVisualizationSettingsV1 = {
   enabled: boolean
 }
 
+/** Experimental Lab feature settings for the project board sidebar entry. */
+export type KunLabProjectBoardSettingsV1 = {
+  /** Master switch. Default false while the feature is experimental. */
+  enabled: boolean
+}
+
 export type KunLabAutoPlanBuildMode = 'direct' | 'scheduled'
 export type KunLabAutoPlanBuildConfirmation = 'always' | 'defaults'
 
@@ -167,6 +173,7 @@ export type KunLabSettingsV1 = {
   pptAgent: KunLabPptAgentSettingsV1
   conversationVisualization: KunLabConversationVisualizationSettingsV1
   autoPlanBuild: KunLabAutoPlanBuildSettingsV1
+  projectBoard: KunLabProjectBoardSettingsV1
 }
 
 /** Partial settings patch for the Lab section. Nested fields merge with current values. */
@@ -176,6 +183,7 @@ export type KunLabSettingsPatchV1 = {
   autoPlanBuild?: Partial<Omit<KunLabAutoPlanBuildSettingsV1, 'scheduledDefaults'>> & {
     scheduledDefaults?: Partial<KunLabAutoPlanBuildScheduledDefaultsV1>
   }
+  projectBoard?: Partial<KunLabProjectBoardSettingsV1>
 }
 
 export const KUN_GRAPH_ROLLOUT_STAGES = [

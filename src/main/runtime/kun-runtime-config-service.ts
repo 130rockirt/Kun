@@ -309,6 +309,9 @@ function labConfigForRuntime(lab: KunLabSettingsV1 | undefined): KunConfig['lab'
     },
     conversationVisualization: {
       enabled: lab?.conversationVisualization?.enabled === true
+    },
+    projectBoard: {
+      enabled: lab?.projectBoard?.enabled === true
     }
   }
 }

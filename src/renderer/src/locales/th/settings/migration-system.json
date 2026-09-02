@@ -94,5 +94,9 @@
   "labAutoPlanBuildDefaultWorktree": "ใช้ Worktree เป็นค่าเริ่มต้น",
   "labAutoPlanBuildDefaultWorktreeDesc": "เป็นอิสระจากการสร้างแผนด้วยตนเอง",
   "labAutoPlanBuildScheduledModelDesc": "โมเดลเริ่มต้นสำหรับการสร้างอัตโนมัติตามเวลา",
-  "labAutoPlanBuildTimeZoneDesc": "จำเขตเวลา แต่ถามวันและเวลาใหม่ทุกครั้ง"
+  "labAutoPlanBuildTimeZoneDesc": "จำเขตเวลา แต่ถามวันและเวลาใหม่ทุกครั้ง",
+  "labProjectBoardTitle": "Project board",
+  "labProjectBoardDescription": "Experimental project board that aggregates task cards per project in the sidebar and tracks plan and task progress.",
+  "labProjectBoardEnabled": "Enable project board",
+  "labProjectBoardEnabledDesc": "Shows the Board entry in the sidebar. Off by default."
 }

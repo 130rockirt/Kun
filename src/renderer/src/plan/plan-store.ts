@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import { browserStorage } from '../lib/browser-storage'
 import { planDisplayNameFromRelativePath } from './plan-path'
-import { planHasBoardTasks } from './plan-board-model'
 
 export type GuiPlanOperationStatus =
   | 'idle'
@@ -13,7 +12,6 @@ export type GuiPlanOperationStatus =
 
 export type GuiPlanSaveStatus = 'saved' | 'dirty' | 'saving' | 'error'
 export type GuiPlanPreviewMode = 'live' | 'source' | 'split' | 'preview'
-export type GuiPlanSurfaceMode = 'board' | 'document'
 
 export type GuiPlanArtifact = {
   id: string
@@ -42,7 +40,6 @@ export type GuiPlanState = {
   operationStatus: GuiPlanOperationStatus
   error: string | null
   previewMode: GuiPlanPreviewMode
-  surfaceMode: GuiPlanSurfaceMode
   setActivePlan: (plan: GuiPlanArtifact, content: string) => void
   setContent: (content: string) => void
   setGeneratedContent: (planId: string, content: string) => void
@@ -52,7 +49,6 @@ export type GuiPlanState = {
   markSavedForPlan: (planId: string, threadId: string | null, content: string) => void
   setOperationStatus: (status: GuiPlanOperationStatus, error?: string | null) => void
   setPreviewMode: (mode: GuiPlanPreviewMode) => void
-  setSurfaceMode: (mode: GuiPlanSurfaceMode) => void
   updateActivePlan: (planId: string, patch: Partial<Pick<GuiPlanArtifact, 'threadId' | 'absolutePath'>>) => void
   clearActivePlan: () => void
 }
@@ -290,7 +286,6 @@ export const useGuiPlanStore = create<GuiPlanState>((set) => ({
   operationStatus: 'idle',
   error: null,
   previewMode: readPreviewMode(),
-  surfaceMode: 'document',
 
   setActivePlan: (plan, content) => {
     rememberGuiPlan(plan)
@@ -300,7 +295,6 @@ export const useGuiPlanStore = create<GuiPlanState>((set) => ({
       lastSavedContent: content,
       saveStatus: 'saved',
       operationStatus: 'ready',
-      surfaceMode: planHasBoardTasks(content) ? 'board' : 'document',
       error: null
     })
   },
@@ -360,8 +354,6 @@ export const useGuiPlanStore = create<GuiPlanState>((set) => ({
     persistPreviewMode(mode)
     set({ previewMode: mode })
   },
-
-  setSurfaceMode: (mode) => set({ surfaceMode: mode }),
 
   updateActivePlan: (planId, patch) =>
     set((state) => {

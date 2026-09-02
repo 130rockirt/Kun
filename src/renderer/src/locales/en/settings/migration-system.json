@@ -242,5 +242,9 @@
   "labAutoPlanBuildDefaultWorktree": "Use worktree by default",
   "labAutoPlanBuildDefaultWorktreeDesc": "This Automatic-mode default is independent from manual plan builds.",
   "labAutoPlanBuildScheduledModelDesc": "Default model selection for scheduled Automatic builds.",
-  "labAutoPlanBuildTimeZoneDesc": "Remember the time zone, but ask for a fresh date and time for every scheduled build."
+  "labAutoPlanBuildTimeZoneDesc": "Remember the time zone, but ask for a fresh date and time for every scheduled build.",
+  "labProjectBoardTitle": "Project board",
+  "labProjectBoardDescription": "Experimental project board that aggregates task cards per project in the sidebar and tracks plan and task progress.",
+  "labProjectBoardEnabled": "Enable project board",
+  "labProjectBoardEnabledDesc": "Shows the Board entry in the sidebar. Off by default."
 }

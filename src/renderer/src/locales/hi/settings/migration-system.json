@@ -94,5 +94,9 @@
   "labAutoPlanBuildDefaultWorktree": "डिफ़ॉल्ट रूप से Worktree उपयोग करें",
   "labAutoPlanBuildDefaultWorktreeDesc": "यह मैनुअल योजना निर्माण से स्वतंत्र है।",
   "labAutoPlanBuildScheduledModelDesc": "निर्धारित स्वचालित निर्माण का डिफ़ॉल्ट मॉडल।",
-  "labAutoPlanBuildTimeZoneDesc": "समय क्षेत्र याद रखें, दिनांक और समय हर बार पूछें।"
+  "labAutoPlanBuildTimeZoneDesc": "समय क्षेत्र याद रखें, दिनांक और समय हर बार पूछें।",
+  "labProjectBoardTitle": "Project board",
+  "labProjectBoardDescription": "Experimental project board that aggregates task cards per project in the sidebar and tracks plan and task progress.",
+  "labProjectBoardEnabled": "Enable project board",
+  "labProjectBoardEnabledDesc": "Shows the Board entry in the sidebar. Off by default."
 }

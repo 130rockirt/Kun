@@ -28,7 +28,7 @@ import { sddDraftRelativePathForPlanPath } from '@shared/sdd'
 import { useSddTrace } from '../../sdd/use-sdd-trace'
 import type { PlanBuildOrchestration } from '../../plan/plan-build'
 import { PlanBuildActions } from './PlanBuildActions'
-import { PlanBoardSurface } from './PlanBoardSurface'
+import { useProjectBoardEnabled } from '../../project-board/use-project-board-enabled'
 
 type Props = {
   workspaceRoot: string
@@ -71,13 +71,13 @@ export function PlanPanel({
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const openBoard = useChatStore((state) => state.openBoard)
+  const { enabled: projectBoardEnabled } = useProjectBoardEnabled()
   const {
     activePlan,
     content,
     saveStatus,
     operationStatus,
     error,
-    surfaceMode,
     setActivePlan,
     setContent,
     setSaveStatus,
@@ -92,7 +92,6 @@ export function PlanPanel({
       saveStatus: s.saveStatus,
       operationStatus: s.operationStatus,
       error: s.error,
-      surfaceMode: s.surfaceMode,
       setActivePlan: s.setActivePlan,
       setContent: s.setContent,
       setSaveStatus: s.setSaveStatus,
@@ -207,7 +206,7 @@ export function PlanPanel({
             if (threadId && runtimeReady) {
               const synced = await useChatStore.getState().syncPlanTodosFromMarkdown(threadId, activePlan, contentToSave)
               if (!synced) {
-                setSaveStatusForPlan(planId, threadId, 'error', t('planBoardSyncFailed'))
+                setSaveStatusForPlan(planId, threadId, 'error', t('planTodoSyncFailed'))
                 return
               }
             }
@@ -309,16 +308,18 @@ export function PlanPanel({
     >
       <div className="ds-sidebar-surface-chrome shrink-0 border-b border-ds-border-muted">
         <div className="flex h-12 min-w-0 items-center gap-2 px-4">
-          <button
-            type="button"
-            onClick={() => openBoard(activePlan?.workspaceRoot || workspaceRoot)}
-            disabled={!activePlan}
-            className="ds-sidebar-toggle-button shrink-0 disabled:cursor-not-allowed disabled:opacity-45"
-            aria-label={t('projectBoardOpen')}
-            title={t('projectBoardOpen')}
-          >
-            <Columns3 className="h-4 w-4" strokeWidth={1.9} />
-          </button>
+          {projectBoardEnabled ? (
+            <button
+              type="button"
+              onClick={() => openBoard(activePlan?.workspaceRoot || workspaceRoot)}
+              disabled={!activePlan}
+              className="ds-sidebar-toggle-button shrink-0 disabled:cursor-not-allowed disabled:opacity-45"
+              aria-label={t('projectBoardOpen')}
+              title={t('projectBoardOpen')}
+            >
+              <Columns3 className="h-4 w-4" strokeWidth={1.9} />
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onCollapse}
@@ -445,8 +446,6 @@ export function PlanPanel({
           </div>
         ) : (
           <div className="flex h-full min-h-0 min-w-0 flex-col">
-            <PlanBoardSurface disabled={readOnly || saveStatus === 'saving' || !runtimeReady} />
-            {surfaceMode === 'document' ? (
             <div className="ds-sidebar-surface-body min-h-0 min-w-0 flex-1">
               <WriteRichEditor
                 value={content}
@@ -507,7 +506,6 @@ export function PlanPanel({
                 }
               />
             </div>
-            ) : null}
           </div>
         )}
       </div>

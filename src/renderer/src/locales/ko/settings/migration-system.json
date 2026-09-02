@@ -94,5 +94,9 @@
   "labAutoPlanBuildDefaultWorktree": "기본적으로 Worktree 사용",
   "labAutoPlanBuildDefaultWorktreeDesc": "수동 계획 빌드와 독립된 설정입니다.",
   "labAutoPlanBuildScheduledModelDesc": "예약 자동 빌드의 기본 모델입니다.",
-  "labAutoPlanBuildTimeZoneDesc": "시간대를 기억하고 날짜와 시간은 매번 묻습니다."
+  "labAutoPlanBuildTimeZoneDesc": "시간대를 기억하고 날짜와 시간은 매번 묻습니다.",
+  "labProjectBoardTitle": "Project board",
+  "labProjectBoardDescription": "Experimental project board that aggregates task cards per project in the sidebar and tracks plan and task progress.",
+  "labProjectBoardEnabled": "Enable project board",
+  "labProjectBoardEnabledDesc": "Shows the Board entry in the sidebar. Off by default."
 }

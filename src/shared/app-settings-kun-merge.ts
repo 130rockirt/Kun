@@ -476,6 +476,9 @@ export function defaultKunLabSettings(): KunLabSettingsV1 {
         reasoningEffort: 'auto',
         timeZone: ''
       }
+    },
+    projectBoard: {
+      enabled: false
     }
   }
 }
@@ -512,6 +515,9 @@ export function mergeKunLabSettings(
           : defaults.autoPlanBuild.scheduledDefaults.reasoningEffort,
         timeZone: stringOrFallback(legacyScheduled?.timeZone, '').trim()
       }
+    },
+    projectBoard: {
+      enabled: legacyCurrent?.projectBoard?.enabled ?? defaults.projectBoard.enabled
     }
   }
   if (!patch) return base
@@ -555,6 +561,9 @@ export function mergeKunLabSettings(
           base.autoPlanBuild.scheduledDefaults.timeZone
         ).trim()
       }
+    },
+    projectBoard: {
+      enabled: patch.projectBoard?.enabled ?? base.projectBoard.enabled
     }
   }
 }

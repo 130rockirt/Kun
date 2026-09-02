@@ -27,6 +27,7 @@ import { ConnectPhoneSidebarPanel } from './ConnectPhoneView'
 import { SidebarProjectsSection } from './SidebarProjectsSection'
 import { SidebarConversationsSection } from './SidebarConversationsSection'
 import { SidebarProjectBoardsSection } from './SidebarProjectBoardsSection'
+import { useProjectBoardEnabled } from '../../project-board/use-project-board-enabled'
 import { WorkspaceModeTabs } from './WorkspaceModeTabs'
 import {
   SidebarCommandRow,
@@ -143,6 +144,7 @@ export function Sidebar({
   const deleteClawChannel = useChatStore((s) => s.deleteClawChannel)
   const resetClawChannelSession = useChatStore((s) => s.resetClawChannelSession)
   const [imDialogMode, setImDialogMode] = useState<ClawImDialogMode | null>(null)
+  const { enabled: projectBoardEnabled } = useProjectBoardEnabled()
 
   const activeClawChannel = useMemo(
     () => clawChannels.find((channel) => channel.id === activeClawChannelId) ?? clawChannels[0] ?? null,
@@ -220,12 +222,14 @@ export function Sidebar({
           onClick={onOpenExtensions}
           active={extensionsActive}
         />
-        <SidebarCommandRow
-          icon={<Columns3 className="h-4 w-4" strokeWidth={1.75} />}
-          label={t('projectBoardNav')}
-          onClick={onBoardOpen}
-          active={activeView === 'board'}
-        />
+        {projectBoardEnabled ? (
+          <SidebarCommandRow
+            icon={<Columns3 className="h-4 w-4" strokeWidth={1.75} />}
+            label={t('projectBoardNav')}
+            onClick={onBoardOpen}
+            active={activeView === 'board'}
+          />
+        ) : null}
         <SidebarCommandRow
           icon={<Clock3 className="h-4 w-4" strokeWidth={1.75} />}
           label={t('schedule')}
@@ -265,7 +269,7 @@ export function Sidebar({
           onOpenSettings={() => setImDialogMode('edit')}
           t={t}
         />
-      ) : activeView === 'board' ? (
+      ) : projectBoardEnabled && activeView === 'board' ? (
         <SidebarProjectBoardsSection
           threads={threads}
           workspaceRoot={workspaceRoot}

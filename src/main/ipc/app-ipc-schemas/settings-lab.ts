@@ -27,5 +27,8 @@ export const kunLabPatchSchema = z.object({
       reasoningEffort: z.enum(['auto', 'off', 'low', 'medium', 'high', 'max']).optional(),
       timeZone: z.string().trim().max(128).optional()
     }).strict().optional()
+  }).strict().optional(),
+  projectBoard: z.object({
+    enabled: z.boolean().optional()
   }).strict().optional()
 }).strict()
