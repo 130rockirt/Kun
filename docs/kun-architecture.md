@@ -1,11 +1,12 @@
-# Kun GUI 单运行时方案
+# Kun 客户端持有单运行时方案
 
-本文记录 Kun 桌面应用和独立 TUI 如何共同使用同一个 Kun 运行时。
-结论先说清楚：GUI 只保留一个 agent，唯一 ID 是 `kun`；GUI、TUI、
-脚本、扩展和连接手机都通过同一条 `kun serve` HTTP/SSE 边界工作；
-GUI 与 TUI 可以独立启动并同时使用，任何一个客户端退出都不应关闭或
-重置共享运行时。历史运行时、旧绘画/设计 starter、运行时诊断面板、
-agent 切换都不再是产品表面。
+本文记录 Kun 桌面应用和独立 TUI 如何使用同一套 Kun 协议与持久化数据，
+但各自持有自己的运行时进程。结论先说清楚：GUI 只保留一个 agent，唯一
+ID 是 `kun`；GUI、TUI、脚本、扩展和连接手机都通过同一条 `kun serve`
+HTTP/SSE 边界工作。正常 GUI/TUI 在同一 `(规范化 dataDir, runtime flavor)`
+槽位内互斥：谁启动 Runtime，谁负责在真实退出时关闭它。对话、设置、记忆
+和用量继续由 Service Manager 持久化并可被后续客户端顺序复用。历史运行时、
+旧绘画/设计 starter、运行时诊断面板、agent 切换都不再是产品表面。
 
 Graph 编排、自进化项目 Agent、恢复与治理仍运行在同一个 Kun 边界内，完整设计与
 运维说明见 [`docs/graph-mode.md`](./graph-mode.md)。
@@ -44,10 +45,10 @@ Preload IPC bridge
         v
 Main process
   RuntimeHost -> kunRuntimeAdapter
-  process/config/port/token management only
+  exact GUI child/config/port/token management only
         |
         v
-kun serve (TypeScript package)
+GUI-owned kun serve (TypeScript package)
   /health
   /v1/threads
   /v1/threads/{id}/turns
@@ -58,12 +59,52 @@ kun serve (TypeScript package)
   /v1/user-inputs/{id}
   /v1/usage
   /v1/workspace/status
+
+Default TUI process
+        |
+        | starts/stops its exact owned Runtime
+        v
+TUI-owned kun serve
+
+GUI/TUI-owned Runtime
+        |
+        v
+Service Manager
+  election / fencing / canonical persisted data
 ```
 
 这个边界采用本地 HTTP 服务架构：GUI 不直接嵌 agent loop，不通过
 stdio/RPC 混跑多个状态机，只把 `kun serve` 当成稳定协议。Kun 内部使用
 cache-first loop：immutable prefix、append-only log、bounded LRU/TTL cache、
 inflight cleanup、steering queue、context compaction、usage/cache telemetry。
+
+## 客户端持有的生命周期
+
+- GUI 在 `autoStart` 开启且目标槽位空闲时启动一个受监督的非 detached
+  Runtime 子进程，只把请求路由到这个精确子进程。关闭自动启动时，GUI
+  不启动也不接管已有 Runtime。
+- 真正的应用 Quit、平台退出快捷键、保存的 `closeAction: quit`、更新退出和
+  非 macOS 最后窗口退出都进入同一 quit barrier：停止恢复调度、优雅关闭
+  精确 GUI 子进程并等待退出。隐藏窗口、最小化到托盘以及 Electron 仍存活的
+  macOS 无窗口状态不算退出，Runtime 继续运行。
+- 默认 TUI 启动自己的 Runtime，并在 `/quit`、信号退出、初始化失败或其他
+  command 退出路径的 `finally` 中关闭精确实例。`--url` 和 `--no-start` 是
+  显式外部连接例外：它们不拥有、不启动，也不停止目标 Runtime；目标 owner
+  退出时，这类连接可以随之断开。
+- 同一 `(Service Manager profile, runtime flavor)` 已有 live/starting GUI 或
+  TUI owner 时，另一个正常客户端必须返回可操作的 ownership conflict，不能
+  attach、steal、replace 或 silent kill。默认 Manager profile 绑定一个 canonical
+  dataDir，production/development flavor 仍是独立槽位；若确实需要并行的第二套
+  profile，必须显式隔离 Manager control directory，不能只换 `dataDir` 参数。
+- GUI 顶部重启只优雅停止并重拉当前 Electron 持有的 Runtime；不再扫描当前
+  用户的所有 `kun serve`，不触碰 TUI、其他 dataDir/flavor 或 Service Manager。
+- Service Manager 是独立、轻量的选举与数据面进程。普通 GUI/TUI 退出和 Runtime
+  restart 都不停止 Manager；Manager 可以在没有 Runtime slot 时继续保留持久化
+  状态，但它自身不执行 Agent turn。
+- 首次升级到 client-owned 生命周期时，可以只对同一 canonical dataDir 中、
+  已认证且身份精确、`launchMode: shared` 且无 client-owner 元数据的旧 daemon
+  做一次优雅退休并等待 PID 退出。任何 discovery、PID、endpoint、dataDir、
+  Manager registration 或认证歧义都必须 fail closed，禁止扩大为全用户进程扫描。
 
 ## 缓存命中优化
 
@@ -248,8 +289,8 @@ Renderer 只应展示 Kun。需要删除或保持删除的 UI 面包括：
 
 主进程现在只需要：
 
-- `kunRuntimeAdapter`：启动/停止 `kun serve`、同步 config、
-  计算 base URL、附加 auth header。
+- `kunRuntimeAdapter`：启动/停止精确 GUI-owned `kun serve`、拒绝同槽位外部
+  owner、同步 config、计算 base URL、附加 auth header。
 - `runtimeRequestViaHost`：确保 Kun running 后转发 `/v1/*`。
 - `startSse/stopSse`：按 `threadId + sinceSeq` 转发 Kun SSE。
 
@@ -438,3 +479,11 @@ npm run build
    “暂无用量”，而显示 token、回合、缓存命中等指标。
 8. 线程搜索、归档视图、fork、resume session、request_user_input 回答/取消
    都能通过 Kun HTTP 路径完成。
+9. 最小化到托盘后 GUI Runtime PID 不变；真正退出应用后该精确 PID 退出，
+   Service Manager 仍可用且 Runtime slot 已释放。
+10. 默认 TUI 退出后没有遗留 owned Runtime；`--url` / `--no-start` 退出不停止
+    外部 Runtime。
+11. 同一 `(dataDir, flavor)` 的第二个正常 GUI/TUI 启动明确报 ownership conflict，
+    首个 owner 退出后另一个客户端能启动并读取原有会话。
+12. GUI 顶部重启只更换自己的 Runtime PID/instance，不停止 TUI、其他 dataDir /
+    flavor 或 Service Manager。

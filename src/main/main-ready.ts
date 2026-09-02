@@ -144,13 +144,7 @@ export function startMainApp(): Promise<void> {
       windowAvailable: () => activation.windowAvailable(),
       syncTray,
       startBackground: async (shell) => {
-        mainState.startupState.transition('services_starting', 'Checking for an existing Kun runtime...')
-        const attached = await kunRuntimeAdapter.resolveConnection(shell.shellSettings).catch(() => false)
-        if (attached) {
-          mainState.startupState.noteDetail(
-            'Connected to the existing Kun runtime; keeping active work available during startup.'
-          )
-        }
+        mainState.startupState.transition('services_starting', 'Preparing the desktop-owned Kun Runtime...')
         return initializeMainServices({
           productionSettingsPath: shell.productionSettingsPath,
           onPhase: (phase, detail) => {

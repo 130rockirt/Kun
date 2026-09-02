@@ -8,6 +8,7 @@ import {
 const harness = vi.hoisted(() => {
   let latest: unknown
   let childRunning = false
+  const stopAndWait = vi.fn(async () => undefined)
   const stopSharedAndWait = vi.fn(async () => undefined)
   const stopSharedForReplacementAndWait = vi.fn(async () => undefined)
   const ensureRunning = vi.fn(async () => undefined)
@@ -16,6 +17,7 @@ const harness = vi.hoisted(() => {
   const probeBundledBuildReplacement = vi.fn<() => Promise<
     | { state: 'matched'; ownership: 'none' | 'current' }
     | { state: 'mismatched' }
+    | { state: 'foreign-owned'; ownerKind: 'gui' | 'tui'; buildMatches: boolean }
     | { state: 'unknown'; error: Error }
   >>(async () => ({ state: 'matched', ownership: 'none' }))
   const waitForHealthy = vi.fn(async () => true)
@@ -60,6 +62,7 @@ const harness = vi.hoisted(() => {
     runtimeSupervisor,
     setLatest: (settings: unknown): void => { latest = settings },
     setChildRunning: (running: boolean): void => { childRunning = running },
+    stopAndWait,
     stopSharedAndWait,
     stopSharedForReplacementAndWait,
     waitForHealthy,
@@ -75,6 +78,7 @@ vi.mock('./runtime/kun-adapter', () => ({
     isChildRunning: harness.childRunning,
     probeBundledBuildReplacement: harness.probeBundledBuildReplacement,
     resolveConnection: harness.resolveConnection,
+    stopAndWait: harness.stopAndWait,
     stopSharedAndWait: harness.stopSharedAndWait,
     stopSharedForReplacementAndWait: harness.stopSharedForReplacementAndWait
   }
@@ -110,6 +114,7 @@ import {
   ensureKunServeFreshOnStartup,
   reconcileBundledRuntimeAfterInstall,
   replaceKunServe,
+  restartGuiRuntime,
   restartRuntime,
   restartAllKunServeProcesses
 } from './main-runtime-startup'
@@ -130,6 +135,7 @@ function settings(): AppSettingsV1 {
 beforeEach(() => {
   harness.setLatest(undefined)
   harness.setChildRunning(false)
+  harness.stopAndWait.mockClear()
   harness.stopSharedAndWait.mockClear()
   harness.stopSharedForReplacementAndWait.mockClear()
   harness.ensureRunning.mockClear()
@@ -160,6 +166,19 @@ beforeEach(() => {
 })
 
 describe('explicit Kun serve replacement', () => {
+  it('restarts only the GUI-owned child without scanning or replacing foreign serves', async () => {
+    const current = settings()
+
+    await expect(restartGuiRuntime(current)).resolves.toBeUndefined()
+
+    expect(harness.runtimeSupervisor.replace).toHaveBeenCalledOnce()
+    expect(harness.stopAndWait).toHaveBeenCalledOnce()
+    expect(harness.ensureRunning).toHaveBeenCalledWith(current)
+    expect(harness.stopSharedAndWait).not.toHaveBeenCalled()
+    expect(harness.stopSharedForReplacementAndWait).not.toHaveBeenCalled()
+    expect(harness.clearHistoricalKunServeProcesses).not.toHaveBeenCalled()
+  })
+
   it('uses the verified replacement stop and launch path instead of ordinary restart', async () => {
     const current = settings()
 
@@ -175,18 +194,43 @@ describe('explicit Kun serve replacement', () => {
     expect(harness.probeRuntimeApi).toHaveBeenCalledWith(current)
   })
 
-  it('hands a packaged build mismatch to the same explicit replacement path before startup attach', async () => {
+  it('leaves an ownerless build mismatch for the exact client-owned election path', async () => {
     const current = settings()
     harness.probeBundledBuildReplacement.mockResolvedValue({ state: 'mismatched' })
 
     await expect(reconcileBundledRuntimeAfterInstall(current)).resolves.toBeUndefined()
 
     expect(harness.probeBundledBuildReplacement).toHaveBeenCalledWith(current)
-    expect(harness.runtimeSupervisor.replace).toHaveBeenCalledOnce()
-    expect(harness.stopSharedForReplacementAndWait).toHaveBeenCalledWith(current)
-    expect(harness.ensureReplacementRunning).toHaveBeenCalledWith(current)
+    expect(harness.runtimeSupervisor.replace).not.toHaveBeenCalled()
+    expect(harness.stopSharedForReplacementAndWait).not.toHaveBeenCalled()
+    expect(harness.ensureReplacementRunning).not.toHaveBeenCalled()
     expect(harness.ensureRunning).not.toHaveBeenCalled()
   })
+
+  it.each(['gui', 'tui'] as const)(
+    'preserves a mismatched %s-owned Runtime and lets normal ensure report the owner conflict',
+    async (ownerKind) => {
+      const current = settings()
+      const conflict = Object.assign(
+        new Error(`Kun Runtime is already owned by ${ownerKind}`),
+        { code: 'client_runtime_owner_busy' }
+      )
+      harness.probeBundledBuildReplacement.mockResolvedValue({
+        state: 'foreign-owned',
+        ownerKind,
+        buildMatches: false
+      })
+
+      await expect(reconcileBundledRuntimeAfterInstall(current)).resolves.toBeUndefined()
+
+      expect(harness.runtimeSupervisor.replace).not.toHaveBeenCalled()
+      expect(harness.stopSharedForReplacementAndWait).not.toHaveBeenCalled()
+      expect(harness.ensureReplacementRunning).not.toHaveBeenCalled()
+      harness.ensureRunning.mockRejectedValueOnce(conflict)
+      await expect(ensureKunServeFreshOnStartup(current)).rejects.toBe(conflict)
+      expect(harness.ensureRunning).toHaveBeenCalledWith(current)
+    }
+  )
 
   it('fails closed when the bundled replacement probe is unknown', async () => {
     const current = settings()

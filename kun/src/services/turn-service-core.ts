@@ -135,6 +135,13 @@ export type TurnServiceDeps = {
 
 export class TurnConflictError extends Error {}
 
+export class TurnInProgressError extends TurnConflictError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'TurnInProgressError'
+  }
+}
+
 export class ThreadClosingError extends TurnConflictError {
   constructor(readonly threadId: string) {
     super(`thread is closing: ${threadId}`)

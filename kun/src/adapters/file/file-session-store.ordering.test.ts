@@ -62,6 +62,84 @@ describe('FileSessionStore item ordering', () => {
     await expect(stat(checkpointPath)).rejects.toThrow()
   })
 
+  it('removes omitted live checkpoints during a full rewrite and cold reload', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-session-live-rewrite-remove-'))
+    roots.push(root)
+    const threadId = 'thread_live_rewrite_remove'
+    const store = new FileSessionStore({ dataDir: root })
+    await store.checkpointLiveItem(threadId, makeAssistantReasoningItem({
+      id: 'reasoning_removed',
+      threadId,
+      turnId: 'turn_removed',
+      text: 'stale reasoning',
+      status: 'running'
+    }), 4)
+
+    await store.rewriteItems(threadId, [])
+    const checkpointPath = join(root, 'threads', threadId, 'live-items.json')
+    await expect(stat(checkpointPath)).rejects.toThrow()
+    await store.close()
+
+    const recovered = new FileSessionStore({ dataDir: root })
+    const snapshot = await recovered.loadItemSnapshot(threadId)
+    expect(snapshot.items).toEqual([])
+    expect(snapshot).not.toHaveProperty('replayAfterSeq')
+    await expect(recovered.loadItemPage(threadId, {
+      maxItems: 10,
+      maxBytes: 64 * 1024
+    })).resolves.toMatchObject({ items: [], hasMore: false })
+    await recovered.close()
+  })
+
+  it('reconciles terminal and retained live checkpoints in a revisioned rewrite', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-session-live-rewrite-terminal-'))
+    roots.push(root)
+    const threadId = 'thread_live_rewrite_terminal'
+    const store = new FileSessionStore({ dataDir: root })
+    const terminalLive = makeAssistantTextItem({
+      id: 'assistant_terminal',
+      threadId,
+      turnId: 'turn_terminal',
+      text: 'partial terminal answer',
+      status: 'running'
+    })
+    const retainedLive = makeAssistantReasoningItem({
+      id: 'reasoning_retained',
+      threadId,
+      turnId: 'turn_active',
+      text: 'active reasoning',
+      status: 'running'
+    })
+    await store.checkpointLiveItem(threadId, terminalLive, 6)
+    await store.checkpointLiveItem(threadId, retainedLive, 9)
+    const before = await store.loadItemSnapshot(threadId)
+    const terminal = makeAssistantTextItem({
+      ...terminalLive,
+      text: 'settled terminal answer',
+      status: 'failed'
+    })
+
+    await expect(store.rewriteItemsIfRevision(
+      threadId,
+      before.revision,
+      [terminal, retainedLive]
+    )).resolves.toMatchObject({ applied: true })
+    const checkpointPath = join(root, 'threads', threadId, 'live-items.json')
+    expect(JSON.parse(await readFile(checkpointPath, 'utf8'))).toMatchObject({
+      entries: [{ item: { id: retainedLive.id, status: 'running' }, representedSeq: 9 }]
+    })
+    await store.close()
+
+    const recovered = new FileSessionStore({ dataDir: root })
+    const snapshot = await recovered.loadItemSnapshot(threadId)
+    expect(snapshot.items).toMatchObject([
+      { id: terminal.id, text: 'settled terminal answer', status: 'failed' },
+      { id: retainedLive.id, text: 'active reasoning', status: 'running' }
+    ])
+    expect(snapshot.replayAfterSeq).toBe(9)
+    await recovered.close()
+  })
+
   it('replays durable deltas after the last checkpoint during cold recovery', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-session-live-recovery-'))
     roots.push(root)

@@ -29,6 +29,7 @@ import {
   ThreadClosingError,
   TurnCapacityError,
   TurnConflictError,
+  TurnInProgressError,
   type TurnService
 } from '../../services/turn-service.js'
 import { ThreadExecutionBusyError } from '../../ports/thread-execution-lease.js'
@@ -336,6 +337,7 @@ export async function rewindThread(
     })
     return jsonResponse(response)
   } catch (error) {
+    if (error instanceof TurnInProgressError) return ERRORS.turnInProgress(error.message)
     if (error instanceof TurnConflictError) return ERRORS.conflict(error.message)
     if (error instanceof Error && /not found/i.test(error.message)) {
       return ERRORS.notFound(error.message)

@@ -56,7 +56,7 @@ import {
   goalContextInstruction,
   goalContextKey
 } from '../loop/continuation-instructions.js'
-import { type TurnService, type TurnServiceDeps, TurnConflictError, ThreadClosingError, TurnCapacityError, type TerminalTurnStatus, type TurnSettlement, type GraphLeadSuspensionResult, type GraphLeadResumeResult, HOST_SHUTDOWN_TURN_SUSPENSION_CODE, hostShutdownTurnSuspensionReason, isHostShutdownTurnSuspension, DEFAULT_MAX_CONCURRENT_TURNS, fingerprintStartTurnRequest, canonicalizeFingerprintValue, isActiveTurn, terminalStatus, threadStatusFromTurns, threadStatusAfterTurnTransition, normalizeMaxConcurrentTurns, firstNonBlank, modelForManualCompaction } from './turn-service-core.js'
+import { type TurnService, type TurnServiceDeps, TurnConflictError, TurnInProgressError, ThreadClosingError, TurnCapacityError, type TerminalTurnStatus, type TurnSettlement, type GraphLeadSuspensionResult, type GraphLeadResumeResult, HOST_SHUTDOWN_TURN_SUSPENSION_CODE, hostShutdownTurnSuspensionReason, isHostShutdownTurnSuspension, DEFAULT_MAX_CONCURRENT_TURNS, fingerprintStartTurnRequest, canonicalizeFingerprintValue, isActiveTurn, terminalStatus, threadStatusFromTurns, threadStatusAfterTurnTransition, normalizeMaxConcurrentTurns, firstNonBlank, modelForManualCompaction } from './turn-service-core.js'
 import { resolveDesignTurnAdmission } from './turn-service-design-admission.js'
 import {
   InternalTurnRuntimeContext,
@@ -519,7 +519,7 @@ async rewindThread(this: TurnService, input: {
       // caller rewrite history while a turn is still queued/running. The turn
       // records are the source of truth for execution state.
       if (thread.turns.some(isActiveTurn)) {
-        throw new TurnConflictError(`cannot rewind while a turn is active: ${input.threadId}`)
+        throw new TurnInProgressError(`cannot rewind while a turn is active: ${input.threadId}`)
       }
       const targetIndex = thread.turns.findIndex((turn) => turn.id === input.turnId)
       if (targetIndex < 0) throw new Error(`turn not found: ${input.turnId}`)

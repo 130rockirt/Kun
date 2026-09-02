@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { RuntimeBuildIdSchema } from './runtime-info.js'
+import { RuntimeClientOwnerKindSchema } from './runtime-owner.js'
 
 export const RuntimeFlavorSchema = z.enum(['production', 'development'])
 export type RuntimeFlavor = z.infer<typeof RuntimeFlavorSchema>
@@ -13,6 +14,7 @@ export const RuntimeRegistrationSchema = z.object({
   port: z.number().int().min(1).max(65_535),
   baseUrl: z.string().url().max(2_048),
   runtimeToken: z.string().max(16_384),
+  clientOwnerKind: RuntimeClientOwnerKindSchema.optional(),
   buildId: RuntimeBuildIdSchema.optional(),
   logPath: z.string().min(1).max(4_096).optional()
 })

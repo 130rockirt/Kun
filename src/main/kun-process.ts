@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -106,10 +106,12 @@ import {
   resolveSharedRuntime,
   type SharedRuntimeConnection
 } from '../../kun/src/cli/shared-runtime.js'
+import { withClientOwnedRuntimeElection } from '../../kun/src/cli/client-owned-runtime.js'
 import {
   allowsDevelopmentManagerBootstrap,
   resolveCliRuntimeFlavor
 } from '../../kun/src/cli/runtime-flavor.js'
+import { KUN_RUNTIME_CLIENT_OWNER_KIND_ENV } from '../../kun/src/contracts/runtime-owner.js'
 import {
   ensureServiceManager,
   ensureServiceManagerWithStartLockHeld,
@@ -139,7 +141,8 @@ import {
   KUN_STOP_FORCE_MS,
   KUN_STOP_GRACE_MS,
   normalizeCapturedChunk,
-  processController
+  processController,
+  waitForKunChildExit
 } from './kun-process-state'
 
 export {
@@ -340,15 +343,24 @@ export function startKunChild(settings: AppSettingsV1): Promise<void> {
   return processController.start(async () => {
     const runtime = resolveKunRuntimeSettings(settings)
     if (isKunChildRunning() || !runtime.autoStart) return
-    await startKunChildOnce(settings, runtime)
+    const dataDir = resolveKunDataDir(runtime)
+    const runtimeFlavor = resolveCliRuntimeFlavor({ env: process.env })
+    await withClientOwnedRuntimeElection({
+      dataDir,
+      runtimeFlavor,
+      ownerKind: 'gui',
+      ...(mainManagerBinding ? { manager: mainManagerBinding } : {})
+    }, async (scope) => {
+      if (scope.manager) configureKunManagerDataPlaneForCurrentProcess(scope.manager)
+      await startKunChildOnce(settings, runtime)
+    })
   })
 }
 
 /**
- * Start (or attach to) the data-dir scoped runtime used by both the GUI and
- * terminal clients. Unlike the legacy child controller, this process is
- * detached and writes directly to its own log, so closing Electron does not
- * terminate active turns or disconnect other clients.
+ * Legacy detached-launch compatibility helper. Normal GUI and TUI lifecycle
+ * paths must use their client-owned launchers and must not attach through this
+ * function.
  */
 export async function startKunSharedRuntime(
   settings: AppSettingsV1,
@@ -565,12 +577,14 @@ async function startKunChildOnce(
     env: {
       ...launch.env,
       KUN_RUNTIME_TOKEN: runtime.runtimeToken,
-      KUN_RUNTIME_LAUNCH_MODE: 'gui'
+      KUN_RUNTIME_LAUNCH_MODE: 'gui',
+      [KUN_RUNTIME_CLIENT_OWNER_KIND_ENV]: 'gui'
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     detached: false
   })
   const startedChild = processController.child
+  startedChild.channel?.unref()
   processController.childPort = runtime.port
   const startedLogCapture = createKunChildLogCapture(startedChild.pid)
   processController.logCapture = startedLogCapture
@@ -639,38 +653,24 @@ export async function stopKunChildAndWait(): Promise<void> {
       /* already gone */
     }
   }
-  const exited = await waitForChildExit(stoppingChild, KUN_STOP_GRACE_MS)
+  const exited = await waitForKunChildExit(stoppingChild, KUN_STOP_GRACE_MS)
   if (!exited) {
     try {
       if (pid) process.kill(pid, 'SIGKILL')
     } catch {
       /* already gone */
     }
-    await waitForChildExit(stoppingChild, KUN_STOP_FORCE_MS)
+    const forcedExit = await waitForKunChildExit(stoppingChild, KUN_STOP_FORCE_MS)
+    if (!forcedExit) {
+      throw new Error(
+        `Kun runtime process ${pid ?? 'unknown'} remained alive after SIGKILL; ` +
+        'the exact child remains supervised and no replacement was started'
+      )
+    }
   }
   processController.clearChild(stoppingChild)
   if (capture) {
     processController.logCapture = null
     await capture.close()
   }
-}
-
-function waitForChildExit(process: ChildProcess, timeoutMs: number): Promise<boolean> {
-  if (process.exitCode !== null || process.signalCode !== null) return Promise.resolve(true)
-  return new Promise((resolve) => {
-    let settled = false
-    const timer = setTimeout(() => settle(false), timeoutMs)
-    const settle = (exited: boolean): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      process.removeListener('exit', onExit)
-      process.removeListener('error', onError)
-      resolve(exited)
-    }
-    const onExit = (): void => settle(true)
-    const onError = (): void => settle(true)
-    process.once('exit', onExit)
-    process.once('error', onError)
-  })
 }

@@ -226,6 +226,7 @@ export {
 export type { LocalTool } from '../adapters/tool/local-tool-host.js'
 export type { FaultInjectionController } from '../services/fault-injection-controller.js'
 export type { RuntimeFlavor } from '../contracts/runtime-flavor.js'
+export type { RuntimeClientOwnerKind } from '../contracts/runtime-owner.js'
 export { InMemoryPublisherTrustStore } from '../supplychain/publisher-trust-store.js'
 export {
   CURRENT_MANIFEST_VERSION,

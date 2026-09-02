@@ -5,7 +5,10 @@ import {
   startupFailurePresentation,
   startupFailureHtml
 } from './startup-failure-content'
-import { KunHandoffError } from './runtime/kun-installed-build-handoff'
+import {
+  ClientRuntimeOwnerBusyError,
+  KunHandoffError
+} from './runtime/kun-installed-build-handoff'
 
 const electron = vi.hoisted(() => {
   const webHandlers = new Map<string, (...args: unknown[]) => void>()
@@ -219,6 +222,30 @@ describe('showStartupFailureWindow', () => {
     expect(electron.app.quit).not.toHaveBeenCalled()
 
     navigate?.({ preventDefault }, 'kun-startup-action:retry')
+    expect(electron.app.relaunch).toHaveBeenCalledOnce()
+    expect(electron.app.quit).toHaveBeenCalledOnce()
+  })
+
+  it('relaunches without authorizing handoff cleanup for a client-owned Runtime conflict', () => {
+    const recoverHandoff = vi.fn().mockResolvedValue(undefined)
+    const error = new ClientRuntimeOwnerBusyError('tui', {
+      kind: 'runtime',
+      flavor: 'production',
+      instanceId: 'tui-runtime',
+      pid: 4313,
+      port: 18899
+    })
+
+    showStartupFailureWindow(error, '/tmp/kun-logs', { recoverHandoff })
+    expect(lastRenderedHtml()).toContain('Retry Kun')
+    expect(lastRenderedHtml()).not.toContain('Safely stop old Kun')
+
+    electron.webHandlers.get('will-navigate')?.(
+      { preventDefault: vi.fn() },
+      'kun-startup-action:retry'
+    )
+
+    expect(recoverHandoff).not.toHaveBeenCalled()
     expect(electron.app.relaunch).toHaveBeenCalledOnce()
     expect(electron.app.quit).toHaveBeenCalledOnce()
   })

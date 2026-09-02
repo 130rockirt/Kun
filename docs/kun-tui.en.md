@@ -38,12 +38,14 @@ or `kun update --yes`. A GUI-bundled TUI must be updated with the desktop app
 and directs the user there. Daily/frontier archives are downloadable but
 self-update is disabled.
 
-The GUI and TUI are clients of one persistent local HTTP/SSE runtime. They
-share threads, turns, approvals, structured input, event sequence numbers,
-usage, and model connections. Closing one GUI or TUI does not stop other
-clients or background turns.
+The GUI and TUI use the same local HTTP/SSE protocol and persisted data, but
+they no longer share one long-lived background Runtime by default. A normal
+GUI or TUI owns the Runtime it starts, and only one owner may occupy a
+`(canonical data directory, runtime flavor)` slot. When that owner exits, its
+Runtime stops; the next client still reads the same threads, settings, memory,
+usage, and model connections through Service Manager.
 
-## Startup and the shared runtime
+## Startup and the client-owned runtime
 
 ```bash
 # Use the GUI-configured data dir, falling back to ~/.kun/data without GUI settings
@@ -57,10 +59,31 @@ kun tui --thread <thread-id>
 kun --no-start
 ```
 
-Startup is elected under a data-directory lock. One process creates the token,
-chooses the port, and launches a detached service; concurrent GUI/TUI clients
-attach to that same instance. `{dataDir}/runtime.json` records its instance ID,
-PID, version, start time, loopback URL, and log path.
+Default TUI startup elects under the data-directory/flavor lock and Manager
+fence, creates the token, chooses the port, and starts a Runtime owned by that
+TUI session. Discovery records its instance ID, PID, owner, version, start time,
+loopback URL, and log path. If the same slot already has a live or starting GUI,
+another TUI, or a foreground `kun serve` owner, startup reports an actionable
+conflict; it does not attach to, replace, or stop that owner. The default
+Manager profile binds one canonical data directory, while production and
+development flavors retain independent slots.
+
+On `/quit`, terminal or signal exit, initialization failure, and every other
+command exit, the TUI stops and waits for only its exact owned Runtime. Service
+Manager stays alive across ordinary TUI exits as the lightweight election and
+canonical data plane, but does not execute Agent turns itself. The GUI follows
+the same ownership rule: real Quit stops its Runtime, while hiding, close to
+tray, or macOS residency without a window does not. A default TUI therefore
+still conflicts while the GUI is in the tray. The GUI restart control restarts
+only that GUI's Runtime.
+
+`--url` and `--no-start` are explicit non-owning modes: the TUI neither starts
+nor stops the target, and the connection may disappear when its real owner
+exits. On the first upgraded launch, an authenticated, exact legacy
+`launchMode: shared` daemon without client-owner metadata in the same canonical
+data directory may be retired gracefully before the owned Runtime starts.
+Ambiguous identity fails closed and never authorizes a broad process scan or
+termination in another data directory.
 
 Without `--data-dir` or `KUN_DATA_DIR`, the CLI reads `agents.kun.dataDir`
 from the installed GUI settings. Existing users whose authoritative data is
@@ -76,17 +99,18 @@ kun runtime restart
 kun runtime stop
 ```
 
-A command running inside an agent tool cannot stop or restart the exact Runtime
-that hosts that tool. Kun rejects it with `runtime_self_control_forbidden` so the
-current conversation is not interrupted before ownership is handed off. Use the
-confirmed GUI restart action or run the command from an independent terminal
-outside that Runtime when explicit lifecycle control is required.
+`kun runtime status` remains read-only. `kun runtime stop` and `restart` do not
+stop a GUI/TUI-owned Runtime or leave an ownerless detached replacement after a
+one-shot command exits. They direct the user to the owning GUI, or to exit and
+reopen the owning TUI. A lifecycle command executed by an agent tool against
+its own Runtime remains rejected with `runtime_self_control_forbidden`.
 
-`kun serve` is the explicit foreground/debug mode. It also publishes discovery
-and reports a conflict when a valid service already owns the data directory.
-Use `--url` for an explicit loopback endpoint and `--no-start` to prevent any
-service startup. Non-TTY use prints a usage error without starting a service;
-automation should use `kun run`, `kun chat`, or `kun exec`.
+`kun serve` is the explicit foreground/debug mode and is owned by the terminal
+that starts it; normal signals stop its Runtime. It publishes discovery and
+reports a conflict when a valid owner already occupies that data-directory /
+flavor slot. Use `--url` for an explicit endpoint and `--no-start` to prevent
+the TUI from changing service state. Non-TTY use prints a usage error without
+starting a service; automation should use `kun run`, `kun chat`, or `kun exec`.
 
 ### Trying the development TUI
 
@@ -100,11 +124,14 @@ npm run dev:tui
 npm run dev:tui -- --workspace "$PWD" --continue
 ```
 
-The command builds `kun/` and starts the terminal client. The TUI starts the
-shared background runtime itself when needed. Its welcome surface focuses the
-composer: type a task and press Enter to create the first conversation, use
-`/connect` to configure a model, `Ctrl+X L` to browse sessions, and `Ctrl+P`
-to search every command. The GUI and TUI remain independently usable clients.
+The command builds `kun/`, starts the terminal client, and starts a Runtime
+owned by that TUI session. If another GUI/TUI owner occupies the same data-dir /
+flavor slot, it reports an ownership conflict; really quit that owner (hiding
+to tray is not a quit), or use an explicit non-owning connection. The welcome
+surface focuses the composer: type a task and press Enter to create the first
+conversation, use `/connect` to configure a model, `Ctrl+X L` to browse
+sessions, and `Ctrl+P` to search every command. Exiting the TUI stops its exact
+Runtime but leaves Service Manager and all saved data intact.
 
 The welcome surface contains only the text identity `KUN`, one concise value
 statement, Workspace/Model/Mode/Version metadata, and three starts: type a task,
@@ -198,11 +225,13 @@ Connection pages show one current step, while read-only inspection pages group
 fields and statuses instead of reusing a heavy generic modal.
 
 If `/model` shows only DeepSeek, run `kun runtime status` and verify that its
-data directory matches the GUI. Kun never attaches to an older GUI-private
-runtime that lacks shared discovery, and it never starts a second writer for
-that data directory. Close or update that old GUI once; after that, whichever
-current GUI or TUI starts first elects the same UI-independent background
-service. `/connect` uses the protected credential/registry files in that data
+data directory matches the GUI. An exact authenticated ownerless legacy shared
+daemon may be retired narrowly on the first client-owned launch. Kun neither
+attaches to nor terminates an older GUI-private or otherwise ambiguous process,
+and it never starts a second writer for the same data-directory/flavor slot.
+Really close or update the old owner first. Current GUI and TUI sessions then
+start their own Runtimes sequentially while reusing the same persisted data.
+`/connect` uses the protected credential/registry files in that data
 directory, writes only a secret-free GUI compatibility projection, and
 `/model` refreshes from the registry.
 
@@ -281,7 +310,7 @@ conversation text never requires holding Shift.
 | `/attach <path>`, `/attach list`, `/attach remove <n>`, `/attach clear` | Add a file, inspect queued attachments, remove one item, or clear them all |
 | `/mouse [on\|off]` | Toggle clickable Pointer mode; when off, the terminal owns selection and copy |
 | `/variants` | Select reasoning effort using the same state as `Ctrl+T` and the turn request |
-| `/compact` | Ask the shared runtime to compact long context |
+| `/compact` | Ask the current Runtime to compact long context |
 
 ### Runtime and project
 
@@ -360,12 +389,16 @@ reports a sanitized warning in the welcome surface and stderr. Recent/favorite
 models and per-model effort are stored without credentials in
 `<data-dir>/tui/state.json` (mode `0600` on POSIX).
 
-## Concurrency, reconnects, and security
+## External connections, reconnects, and security
 
 Clients hydrate an authoritative thread snapshot and `latestSeq`, then
 subscribe to SSE at that cursor. Reconnects revalidate discovery and replay
-missing events; duplicate and out-of-order events are ignored. When another
-client resolves an approval or input first, stale controls are retired.
+missing events; duplicate and out-of-order events are ignored. Default GUI/TUI
+owners do not coexist in one data-directory/flavor slot; only explicit
+non-owning modes such as `--url` and `--no-start` may coexist with an owner.
+When another explicit client resolves an approval or input first, stale
+controls are retired. Once the owner exits, its Runtime stops and external
+clients must wait for a new explicit target.
 
 `item.text` in `assistant_text_delta` and `assistant_reasoning_delta` is a
 fragment. The TUI appends it by stable item ID and lets
@@ -377,6 +410,9 @@ text appears before turn completion without duplication after reconnect.
   time, and service version.
 - Runtime shutdown requires loopback, bearer authentication, and the current
   instance ID, so an old client cannot stop a replacement instance.
+- A GUI/TUI-owned Runtime uses an OS IPC ownership channel to detect abnormal
+  parent exit and enter bounded graceful shutdown. Normal exit still performs
+  explicit exact-instance shutdown and wait.
 - API keys, OAuth tokens, and subscription credentials are kept out of argv,
   shell history, logs, and ordinary settings.
 

@@ -91,6 +91,17 @@ export function overlayLiveItems(
   return result
 }
 
+export function liveItemsAfterCanonicalRewrite(
+  live: readonly LiveItemCheckpoint[],
+  canonical: readonly TurnItem[]
+): LiveItemCheckpoint[] {
+  const latestById = new Map(canonical.map((item) => [item.id, item]))
+  return live.filter((entry) => {
+    const item = latestById.get(entry.item.id)
+    return item !== undefined && !isTerminalStatus(item.status)
+  })
+}
+
 export function liveReplayAfterSeq(entries: readonly LiveItemCheckpoint[]): number | undefined {
   if (entries.length === 0) return undefined
   return entries.reduce(
@@ -166,6 +177,32 @@ export class FileSessionLiveItems {
     const current = await readLiveItems(path)
     const entries = current.filter((entry) => entry.item.id !== itemId)
     if (entries.length === current.length) return
+    if (entries.length === 0) {
+      await rm(path, { force: true })
+      return
+    }
+    await atomicWriteFile(path, serializeLiveItems(entries))
+  }
+
+  async reconcileAfterRewrite(
+    path: string,
+    threadId: string,
+    canonical: readonly TurnItem[]
+  ): Promise<void> {
+    const current = await readLiveItems(path)
+    if (current.length === 0) {
+      this.clearThread(threadId)
+      await rm(path, { force: true })
+      return
+    }
+    const entries = liveItemsAfterCanonicalRewrite(current, canonical)
+    if (entries.length === current.length) return
+    const retainedIds = new Set(entries.map((entry) => entry.item.id))
+    for (const entry of current) {
+      if (!retainedIds.has(entry.item.id)) {
+        this.checkpointBytes.delete(`${threadId}:${entry.item.id}`)
+      }
+    }
     if (entries.length === 0) {
       await rm(path, { force: true })
       return

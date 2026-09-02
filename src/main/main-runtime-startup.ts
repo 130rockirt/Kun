@@ -53,9 +53,8 @@ export async function resolveManagedKunLaunchSettings(
   settings: AppSettingsV1,
   _source: string
 ): Promise<AppSettingsV1> {
-  // Shared runtimes bind an ephemeral loopback port while holding the
-  // data-directory election lock. The configured port is a legacy preference,
-  // not the address or bearer token of the currently resolved daemon.
+  // The GUI owns one supervised child on its configured loopback port. The
+  // data-directory/Manager election still prevents a foreign GUI/TUI owner.
   return settings
 }
 
@@ -86,9 +85,8 @@ export async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSett
     )
   }
 
-  // A process that is alive but failed the probe may only be busy or waking
-  // from system sleep. Give it a real recovery window before deciding what to
-  // do; replacing a shared runtime here would orphan its in-flight turn.
+  // A GUI-owned child that failed the probe may only be busy or waking from
+  // system sleep. Give it a real recovery window before replacing it.
   if (kunRuntimeAdapter.isChildRunning()) {
     // Never tear down a child still inside its (deliberately generous) startup
     // window — interrupting a slow-but-healthy boot is the #544 restart storm.
@@ -111,8 +109,7 @@ export async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSett
           'Kun is still running but temporarily unresponsive. Its active runtime was preserved; retry after it recovers.'
         )
       }
-      // The legacy GUI-private child can be replaced safely in place. Shared
-      // daemons are never stopped by an ordinary ensure request.
+      // The controller-held GUI child can be replaced safely in place.
       logWarn(
         'runtime-start',
         `GUI-private Kun child stopped responding on port ${runtime.port}; restarting it in place`
@@ -146,10 +143,8 @@ export async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSett
 }
 
 /**
- * Startup attach policy: a GUI is one client of the data-directory scoped
- * Runtime, so a normal launch must reuse a healthy shared owner. The retained
- * function name keeps the existing startup wiring stable; replacement remains
- * reserved for explicit restart and bundled-build update paths.
+ * Startup policy: the GUI starts its own supervised child and never adopts a
+ * TUI/foreign owner. The retained name keeps startup wiring stable.
  *
  * Automatic-startup disabled: attach-only, exactly like a plain ensure.
  */
@@ -227,6 +222,24 @@ export async function restartAllKunServeProcesses(
   )
 }
 
+/**
+ * Explicit desktop control: restart only the child owned by this Electron
+ * process. Unlike the conservative automatic restart, this confirmed action
+ * may interrupt active work. It never scans for or stops foreign Kun serves.
+ */
+export async function restartGuiRuntime(settings: AppSettingsV1): Promise<void> {
+  const requested = runtimeSupervisor.latestOr(settings)
+  if (!managedKunHostCanAutoStart(requested)) {
+    runtimeSupervisor.setManagedRuntimeExpected(false)
+  }
+  return runtimeSupervisor.replace(
+    () => restartRuntimeAfterStopping(
+      requested,
+      () => kunRuntimeAdapter.stopAndWait()
+    )
+  )
+}
+
 async function restartAllKunServeProcessesOnce(settings: AppSettingsV1): Promise<void> {
   await restartRuntimeAfterStopping(
     settings,
@@ -259,14 +272,10 @@ export async function reconcileBundledRuntimeAfterInstall(
   const probe = await kunRuntimeAdapter.probeBundledBuildReplacement(requested)
   if (probe.state === 'matched') return
   if (probe.state === 'unknown') throw probe.error
-  if (getKunRuntimeSettings(requested).autoStart) {
-    await replaceKunServe(requested)
-    return
-  }
-  await runtimeSupervisor.replace(async () => {
-    await waitForKunStartupSettled()
-    await kunRuntimeAdapter.stopSharedForReplacementAndWait(requested)
-  })
+  // Ordinary packaged startup never replaces an already registered client
+  // owner. A GUI/TUI-owned Runtime must survive until its owner exits, while an
+  // exact legacy shared daemon is retired narrowly by the client-owned election
+  // immediately before spawn. Ambiguous ownerless evidence also fails there.
 }
 
 async function restartRuntimeAfterStopping(

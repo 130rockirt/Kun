@@ -1,10 +1,18 @@
 # Agent Runtime Notes
 
-The Kun desktop app has one live agent runtime: the bundled **Kun** runtime.
-The same runtime also serves the standalone Kun TUI and non-interactive
-clients. GUI and TUI are independent clients that may be active at the same
-time; neither client owns the runtime lifecycle or the canonical model
-configuration.
+Kun has one agent implementation: the bundled **Kun** runtime. Runtime process
+lifecycle is client-owned. For one `(canonical data directory, runtime flavor)`
+slot, a normal GUI or TUI session owns at most one live `kun serve` process;
+another normal client must report an ownership conflict instead of attaching,
+replacing, or stopping it.
+
+The GUI starts a supervised child when automatic startup is enabled and stops
+that exact child on real application quit. Hiding the window, closing to the
+tray, or leaving macOS resident without a window is not a quit. A default TUI
+starts its own Runtime and stops that exact instance when the command exits.
+`--url` and `--no-start` are explicit non-owning TUI modes and never stop the
+target Runtime. Service Manager remains the independent election and canonical
+data-plane authority across ordinary GUI/TUI exits and Runtime restarts.
 
 Do not add a second live provider, provider switcher, runtime diagnostics panel,
 or legacy CodeWhale/Reasonix process path. Code (including Design tasks), Work,
@@ -23,7 +31,34 @@ uses the internal `claw` name, and Work retains the internal `write` name, for c
 - Keep the immutable Kun system prompt client-neutral. Put interface-specific
   guidance in the dynamic per-turn context after the stable prefix.
 - Never switch a process-global tool registry or prompt based on whichever
-  client connected most recently; GUI and TUI can run concurrently.
+  client connected most recently. Explicit non-owning clients may coexist with
+  an owner, and every accepted turn must retain its own surface.
+
+## Client-Owned Runtime Lifecycle
+
+- Normal GUI/TUI startup is mutually exclusive within the same Service Manager
+  profile and runtime flavor. The default Manager profile binds one canonical
+  data directory; production and development flavor slots remain independent.
+  Additional concurrently owned profiles require an explicitly isolated
+  Manager control directory, not merely a different `dataDir` argument.
+- A live or starting foreign owner fails closed with actionable guidance. Do
+  not reuse it merely because its build matches, and do not replace it merely
+  because its build differs.
+- Normal GUI quit and every default TUI exit path must request graceful shutdown
+  of the exact owned instance, wait for process exit, and conditionally clear
+  only matching discovery/Manager registration state. An ownership IPC channel
+  is the abnormal-parent-exit fallback.
+- Close-to-tray, window hide, and normal macOS no-window residency keep the GUI
+  Runtime alive. A saved `closeAction: quit`, platform Quit command, updater
+  quit, or real application exit must enter the quit barrier.
+- The GUI restart button restarts only the current Electron process's Runtime.
+  It must not scan for all user processes, stop a TUI owner, touch another data
+  directory/flavor, or restart Service Manager.
+- An exact authenticated legacy `launchMode: shared` daemon with no client-owner
+  metadata may be retired once before the first client-owned launch. Ambiguous
+  legacy identity fails closed and never authorizes a broad process scan.
+- Service Manager may have zero live Runtime slots. It remains the sole physical
+  owner of canonical business data and does not execute agent turns itself.
 
 ## Allowed Extension Path
 
@@ -146,6 +181,14 @@ Manual smoke:
   assistant actions.
 - Connect phone can save settings and run a manual task through a Kun thread.
 - Settings -> Agents shows only Kun.
+- Real GUI quit removes its exact Runtime process; close-to-tray keeps it alive.
+- A default TUI exits with no owned Runtime left behind, while `--url` and
+  `--no-start` leave the external Runtime untouched.
+- A second normal GUI/TUI for the same data-directory/flavor slot receives an
+  ownership conflict; after the first owner exits, the next owner reads the
+  same persisted threads and settings.
+- GUI restart changes only the GUI Runtime PID/instance and leaves Service
+  Manager and unrelated Runtime processes unchanged.
 
 The full plan is in
 [`docs/kun-architecture.md`](./kun-architecture.md).

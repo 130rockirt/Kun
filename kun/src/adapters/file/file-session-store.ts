@@ -283,6 +283,7 @@ export class FileSessionStore implements SessionStore {
     await this.fileAccess.withReplacement(path, () => this.withThreadWrite(threadId, async () => {
       await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
       await atomicWriteFile(path, serializeItemRecords(items))
+      await this.liveItems.reconcileAfterRewrite(this.liveItemsPath(threadId), threadId, items)
       await this.refreshItemIndex(threadId, items)
       this.bumpItemsVersion(threadId)
       this.cacheItems(threadId, [...items])
@@ -318,6 +319,7 @@ export class FileSessionStore implements SessionStore {
       }
       await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
       await atomicWriteFile(path, serializeItemRecords(items))
+      await this.liveItems.reconcileAfterRewrite(this.liveItemsPath(threadId), threadId, items)
       await this.refreshItemIndex(threadId, items)
       this.bumpItemsVersion(threadId)
       this.cacheItems(threadId, [...items])

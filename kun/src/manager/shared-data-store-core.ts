@@ -195,7 +195,13 @@ export abstract class ManagerSharedDataStoreCore {
       // manufacture a new failure.
       if (!terminalStatus) return false
       const now = new Date().toISOString()
-      const sessionItems = await this.sessionStore.loadItems(lease.threadId)
+      const currentTurnIds = new Set(thread.turns.map((turn) => turn.id))
+      // A pre-fix rewind could leave a live-only running checkpoint whose turn
+      // no longer exists. Do not canonize that ghost while settling a different
+      // lease; the authoritative rewrite below retires its live checkpoint.
+      const sessionItems = (await this.sessionStore.loadItems(lease.threadId)).filter((item) =>
+        (item.status !== 'pending' && item.status !== 'running') || currentTurnIds.has(item.turnId)
+      )
       let nextItems = finalizeTurnItems(sessionItems, {
         turnId: lease.turnId,
         status: terminalStatus,

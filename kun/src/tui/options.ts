@@ -12,15 +12,15 @@ export const DEFAULT_TUI_DATA_DIR = join(homedir(), '.kun', 'data')
 
 export const KUN_TUI_USAGE = `kun [tui options]
 
-Open Kun's inline terminal client. By default Kun discovers or starts the
-shared local runtime; \`kun tui\` is an equivalent explicit alias.
-The GUI and TUI can be open at the same time and share the same threads.
+Open Kun's inline terminal client. By default Kun starts one Runtime owned by
+this TUI session and stops it when the TUI exits; \`kun tui\` is an alias.
+The GUI and default TUI cannot own the same data directory/flavor concurrently.
 
 Options:
   --url <url>               Explicit runtime URL (default: discover from data dir)
   --runtime-token <token>   Bearer token (prefer KUN_RUNTIME_TOKEN to shell history)
   --data-dir <path>         Discovery directory (default GUI setting, then ~/.kun/data)
-  --no-start                Only connect; do not start a shared runtime
+  --no-start                Attach to discovery only; never start or stop Runtime
   --workspace <path>        Workspace for new terminal threads (default cwd)
   --thread <id>             Open a specific thread
   --continue, -c            Open the most recently updated thread

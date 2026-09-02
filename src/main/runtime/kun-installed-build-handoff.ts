@@ -102,6 +102,22 @@ export class KunHandoffError extends Error {
   }
 }
 
+export class ClientRuntimeOwnerBusyError extends Error {
+  readonly name = 'ClientRuntimeOwnerBusyError'
+  readonly code = 'client_runtime_owner_busy'
+  readonly reason = 'installed-build-change'
+
+  constructor(
+    readonly ownerKind: 'gui' | 'tui',
+    readonly owner: Omit<KunHandoffOwnerReport, 'result'>
+  ) {
+    super(
+      `client_runtime_owner_busy: Kun Runtime is owned by ${ownerKind} process ${owner.pid}; ` +
+      `close the owning ${ownerKind === 'gui' ? 'GUI' : 'TUI'} before starting this installed GUI build`
+    )
+  }
+}
+
 export type KunInstalledBuildHandoffInput = {
   reason: KunHandoffReason
   dataDirs: readonly string[]
@@ -130,9 +146,10 @@ export async function probeInstalledBuildHandoff(
   input: KunInstalledBuildHandoffInput,
   overrides: Partial<HandoffDependencies> = {}
 ): Promise<KunInstalledBuildProbe> {
-  if (!input.targetBuildId) return 'unknown'
   const deps = { ...defaultDependencies, ...overrides }
   const discovered = await discoverHandoffOwnersSafely(input, deps)
+  assertInstalledBuildChangeHasNoClientOwner(input, discovered)
+  if (!input.targetBuildId) return 'unknown'
   if (discovered.staleManager || discovered.staleRuntimes.length > 0) return 'mismatched'
   const targetBuildId = input.targetBuildId
   const identities: Array<{ actual: string | undefined; expected: string }> = [
@@ -217,6 +234,7 @@ export async function drainKunOwnersForHandoffWithLock(
     throw error
   }
   discovered = await settleAndRediscoverStaleOwners(input, discovered, deps)
+  assertInstalledBuildChangeHasNoClientOwner(input, discovered)
   for (const probeClassification of discovered.probeClassifications) {
     emit(input, startedAt, deps, { phase: 'discover', probeClassification })
   }
@@ -277,8 +295,15 @@ export async function drainKunOwnersForHandoffWithLock(
     }
     discovered = await discoverHandoffOwnersSafely(input, deps)
     discovered = await settleAndRediscoverStaleOwners(input, discovered, deps)
+    assertInstalledBuildChangeHasNoClientOwner(input, discovered)
   }
 
+  // Recheck immediately before stopping the independent Manager. A client may
+  // have elected a Runtime after the preceding drain pass; ordinary installed
+  // startup has no authority to take either that Runtime or its Manager down.
+  discovered = await discoverHandoffOwnersSafely(input, deps)
+  discovered = await settleAndRediscoverStaleOwners(input, discovered, deps)
+  assertInstalledBuildChangeHasNoClientOwner(input, discovered)
   if (discovered.manager) {
     const managerOwner = managerOwnerReport(discovered.manager)
     try {
@@ -319,6 +344,7 @@ export async function drainKunOwnersForHandoffWithLock(
   // with the first pass, then prove the scope is stable.
   discovered = await discoverHandoffOwnersSafely(input, deps)
   discovered = await settleAndRediscoverStaleOwners(input, discovered, deps)
+  assertInstalledBuildChangeHasNoClientOwner(input, discovered)
   for (const runtime of discovered.runtimes) {
     const owner = runtimeOwnerReport(runtime)
     try {
@@ -400,6 +426,20 @@ export async function drainKunOwnersForHandoffWithLock(
     owners,
     elapsedMs: deps.now() - startedAt
   }
+}
+
+function assertInstalledBuildChangeHasNoClientOwner(
+  input: KunInstalledBuildHandoffInput,
+  discovered: DiscoveredHandoffOwners
+): void {
+  if (input.reason !== 'installed-build-change') return
+  const runtime = discovered.runtimes.find(
+    (candidate) => candidate.inspection.discovery.clientOwnerKind !== undefined
+  )
+  if (!runtime) return
+  const ownerKind = runtime.inspection.discovery.clientOwnerKind!
+  const owner = runtimeOwnerReport(runtime)
+  throw new ClientRuntimeOwnerBusyError(ownerKind, owner)
 }
 
 async function settleAndRediscoverStaleOwners(

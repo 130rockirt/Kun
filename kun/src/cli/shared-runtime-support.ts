@@ -54,6 +54,7 @@ export function discoveryFromManagerRegistration(
     port: registration.port,
     baseUrl: registration.baseUrl,
     runtimeToken: registration.runtimeToken,
+    ...(registration.clientOwnerKind ? { clientOwnerKind: registration.clientOwnerKind } : {}),
     insecure: info?.insecure ?? false,
     ...(info ? { serviceVersion: info.serviceVersion } : {}),
     flavor: registration.flavor,

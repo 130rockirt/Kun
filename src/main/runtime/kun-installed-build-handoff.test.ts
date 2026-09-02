@@ -9,6 +9,7 @@ import {
   recordVerifiedForcedRuntimeOwner
 } from '../../../kun/src/manager/forced-runtime-recovery.js'
 import {
+  ClientRuntimeOwnerBusyError,
   drainKunOwnersForHandoff,
   KunHandoffError,
   probeInstalledBuildHandoff,
@@ -79,6 +80,88 @@ function input(overrides: { dataDirs?: string[] } = {}) {
 }
 
 describe('installed build handoff coordinator', () => {
+  it.each([
+    ['gui', undefined],
+    ['tui', 'b'.repeat(64)]
+  ] as const)(
+    'preserves a live %s-owned Runtime during ordinary installed-build handoff (target build %s)',
+    async (clientOwnerKind, targetBuildId) => {
+      const currentManager = manager({ buildId: 'a'.repeat(64) })
+      const clientOwnedRuntime = runtime('production', {
+        buildId: 'a'.repeat(64),
+        clientOwnerKind
+      })
+      const stopRuntime = vi.fn()
+      const stopManager = vi.fn()
+      const fetchMock = vi.fn(async () => Response.json({
+        instanceId: currentManager.instanceId,
+        pid: currentManager.pid,
+        startedAt: currentManager.startedAt,
+        slots: []
+      }))
+      const handoffInput = {
+        ...input(),
+        targetBuildId,
+        fetch: fetchMock as unknown as typeof fetch
+      }
+      const overrides = {
+        withManagerLock: async <T>(_dir: string, action: () => Promise<T>) => action(),
+        readManager: async () => currentManager,
+        readRuntime: async (_dir: string, flavor?: 'production' | 'development') =>
+          flavor === 'production' ? clientOwnedRuntime : null,
+        processAlive: (pid: number) =>
+          pid === currentManager.pid || pid === clientOwnedRuntime.pid,
+        processIdentity: processIdentityFor,
+        stopRuntime: stopRuntime as never,
+        stopManager: stopManager as never
+      }
+
+      for (const operation of [probeInstalledBuildHandoff, drainKunOwnersForHandoff]) {
+        const failure = await operation(handoffInput, overrides).catch((error: unknown) => error)
+        expect(failure).toBeInstanceOf(ClientRuntimeOwnerBusyError)
+        expect(failure).not.toBeInstanceOf(KunHandoffError)
+        expect(failure).toMatchObject({
+          code: 'client_runtime_owner_busy',
+          reason: 'installed-build-change',
+          owner: {
+            kind: 'runtime',
+            flavor: 'production',
+            pid: clientOwnedRuntime.pid
+          }
+        })
+        expect(String((failure as Error).message)).toContain(`owned by ${clientOwnerKind}`)
+      }
+      expect(stopRuntime).not.toHaveBeenCalled()
+      expect(stopManager).not.toHaveBeenCalled()
+    }
+  )
+
+  it('retains strong Runtime draining for an explicitly authorized in-app update', async () => {
+    let current: RuntimeHandoffDiscoveryRecord | null = runtime('production', {
+      buildId: 'a'.repeat(64),
+      clientOwnerKind: 'tui'
+    })
+    const stopRuntime = vi.fn(async () => {
+      current = null
+      return { stopped: true, forced: false }
+    })
+
+    await expect(drainKunOwnersForHandoff({
+      ...input(),
+      reason: 'in-app-update'
+    }, {
+      withManagerLock: async <T>(_dir: string, action: () => Promise<T>) => action(),
+      readManager: async () => null,
+      readRuntime: async (_dir, flavor) => flavor === 'production' ? current : null,
+      processAlive: (pid) => current?.pid === pid,
+      processIdentity: processIdentityFor,
+      stopRuntime: stopRuntime as never,
+      stopManager: vi.fn() as never
+    })).resolves.toMatchObject({ reason: 'in-app-update' })
+
+    expect(stopRuntime).toHaveBeenCalledOnce()
+  })
+
   it.each(['production', 'development'] as const)(
     'clears a recycled %s Runtime PID under the Manager lock without stopping the process',
     async (flavor) => {

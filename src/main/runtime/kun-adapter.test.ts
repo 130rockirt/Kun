@@ -19,14 +19,14 @@ import {
 import {
   acquireRuntimeRequestLease,
   bundledRuntimeBuildReplacementRequired,
+  classifyBundledBuildReplacement,
   expectedKunRuntimeBuildId,
   getRuntimeAuthToken,
   kunRuntimeAdapter,
   resolveRuntimeRequestTimeoutMs,
   runtimeAuthHeaders,
   runtimeRequestViaHost,
-  runtimeRequestViaLease,
-  setResolvedKunRuntimeConnectionForTests
+  runtimeRequestViaLease
 } from './kun-adapter'
 import { buildRuntimeCapabilityManifest } from '../../../kun/src/contracts/capabilities.js'
 import { modelCapabilitiesForModel } from '../../../kun/src/loop/model-context-profile.js'
@@ -438,6 +438,30 @@ describe('runtimeRequestViaHost', () => {
 })
 
 describe('kunRuntimeAdapter.resolveConnection', () => {
+  it.each(['gui', 'tui'] as const)(
+    'classifies a %s-owned Runtime as foreign even when its build differs',
+    (ownerKind) => {
+      const expectedBuildId = 'b'.repeat(64)
+
+      expect(classifyBundledBuildReplacement({
+        buildId: 'a'.repeat(64),
+        clientOwnerKind: ownerKind
+      }, expectedBuildId)).toEqual({
+        state: 'foreign-owned',
+        ownerKind,
+        buildMatches: false
+      })
+      expect(classifyBundledBuildReplacement({
+        buildId: expectedBuildId,
+        clientOwnerKind: ownerKind
+      }, expectedBuildId)).toEqual({
+        state: 'foreign-owned',
+        ownerKind,
+        buildMatches: true
+      })
+    }
+  )
+
   it('requires a packaged production build handoff only for a bundled build mismatch', () => {
     const expectedBuildId = 'b'.repeat(64)
 
@@ -544,12 +568,12 @@ describe('kunRuntimeAdapter.resolveConnection', () => {
 
       liveBuildId = expectedBuildId
       await publish()
-      await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(true)
+      await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(false)
 
       liveBuildId = 'a'.repeat(64)
       activeTurnCount = 1
       await publish()
-      await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(true)
+      await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(false)
 
       activeTurnCount = 0
       await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(false)
@@ -559,7 +583,7 @@ describe('kunRuntimeAdapter.resolveConnection', () => {
     }
   })
 
-  it('retains the discovered endpoint when its live process misses a probe', async () => {
+  it('keeps configured GUI endpoint and credentials when a foreign discovery is unresponsive', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-adapter-live-unresponsive-'))
     const dataDir = join(root, 'data')
     const expectedBuildId = 'c'.repeat(64)
@@ -590,40 +614,13 @@ describe('kunRuntimeAdapter.resolveConnection', () => {
         launchMode: 'shared'
       })
 
-      await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(true)
-      expect(kunRuntimeAdapter.getBaseUrl(settings)).toBe('http://127.0.0.1:1')
-      expect(getRuntimeAuthToken(settings)).toBe('secret')
-      expect(runtimeAuthHeaders(settings).get('Authorization')).toBe('Bearer secret')
+      await expect(kunRuntimeAdapter.resolveConnection(settings)).resolves.toBe(false)
+      expect(kunRuntimeAdapter.getBaseUrl(settings)).toBe('http://127.0.0.1:18900')
+      expect(getRuntimeAuthToken(settings)).toBe('')
+      expect(runtimeAuthHeaders(settings).get('Authorization')).toBeNull()
     } finally {
       await kunRuntimeAdapter.stopAndWait()
       await rm(root, { recursive: true, force: true })
     }
   })
-})
-
-describe('kunRuntimeAdapter.isChildRunning dead-PID recovery', () => {
-  afterEach(async () => {
-    setResolvedKunRuntimeConnectionForTests(null)
-    await kunRuntimeAdapter.stopAndWait()
-  })
-
-  it('clears a cached discovery record whose PID is no longer alive (#1116)', () => {
-    setResolvedKunRuntimeConnectionForTests({
-      version: 2,
-      instanceId: 'dead-shared-runtime',
-      pid: 2_147_483_647,
-      startedAt: '2026-08-07T00:00:00.000Z',
-      host: '127.0.0.1',
-      port: 44793,
-      baseUrl: 'http://127.0.0.1:44793',
-      runtimeToken: 'stale-token',
-      insecure: false,
-      serviceVersion: '0.0.0-test',
-      launchMode: 'shared'
-    })
-
-    expect(kunRuntimeAdapter.isChildRunning()).toBe(false)
-    expect(kunRuntimeAdapter.getBaseUrl(settingsForPort(18788))).toBe('http://127.0.0.1:18788')
-  })
-
 })

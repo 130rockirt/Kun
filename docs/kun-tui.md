@@ -32,11 +32,13 @@ Stable 独立 TUI 启动时最多每 24 小时检查一次更新，只显示提�
 `kun update --check` 或 `kun update --yes`。GUI 内置的 TUI 必须随 GUI 更新，
 执行更新命令时会提示更新桌面应用。Daily/frontier 包可以下载和试用，但禁用自更新。
 
-TUI 和 GUI 都只是客户端。它们通过本机 HTTP/SSE 访问同一个持久化 Kun 运行时，
-共享线程、turn、审批、结构化问答、事件序号、用量和模型连接。关闭任一 GUI/TUI
-不会终止其他客户端或后台 turn。
+TUI 和 GUI 使用相同的本机 HTTP/SSE 协议和持久化数据，但默认不再共用一个
+长期后台 Runtime。正常 GUI/TUI 各自持有自己启动的 Runtime；同一
+`(canonical dataDir, runtime flavor)` 槽位一次只允许一个 owner。owner 退出会
+停止对应 Runtime，后续客户端仍可通过 Service Manager 读取相同线程、设置、记忆、
+事件序号、用量和模型连接。
 
-## 启动与后台运行时
+## 启动与客户端持有的运行时
 
 ```bash
 # 自动使用 GUI 配置的 data-dir；没有 GUI 设置时回退到 ~/.kun/data
@@ -50,16 +52,32 @@ kun tui --thread <thread-id>
 kun --no-start
 ```
 
-首次启动会在 data-dir 级启动锁下选主。只有一个进程会生成运行时 token、选择端口
-并拉起 detached 服务，其他同时打开的 GUI/TUI 会连接同一个实例。发现文件
-`{dataDir}/runtime.json` 记录实例 ID、PID、版本、启动时间、loopback URL 和日志路径。
+默认 TUI 会在 data-dir/flavor 启动锁与 Manager fence 下选主，生成运行时 token、
+选择端口并拉起该 TUI 会话持有的 Runtime。发现文件记录实例 ID、PID、owner、版本、
+启动时间、loopback URL 和日志路径。若同一 Manager profile/flavor 槽位已有
+live/starting GUI、另一 TUI 或前台 `kun serve` owner，默认启动会明确报冲突并
+提示关闭 owner；它不会附加、替换或停止外部 owner。默认 Manager profile 只绑定
+一个 canonical data-dir，production 与 development flavor 仍是独立槽位。
+
+TUI 在 `/quit`、终端/信号退出、初始化失败或其他命令退出路径中，只关闭并等待自己
+持有的精确 Runtime。Service Manager 不随普通 TUI 退出而停止；它继续作为轻量的
+选举和持久化数据面存在，但不会自己执行 Agent turn。GUI 也遵循相同归属规则：真实
+Quit 会停止 GUI Runtime，隐藏窗口、最小化到托盘或 macOS 应用仍驻留时不会停止，
+所以此时默认 TUI 仍会收到同槽位冲突。GUI 顶部重启只重启 GUI 自己的 Runtime。
+
+`--url` 和 `--no-start` 是显式非拥有连接：TUI 不启动也不停止目标 Runtime，目标
+owner 退出后连接可以随之断开。首次升级时，如果同一 canonical data-dir 中只剩一个
+已认证、身份精确、无 client-owner 元数据的旧 `launchMode: shared` daemon，当前
+launcher 可以优雅退休该精确实例后再启动；身份有歧义时 fail closed，不扫描或终止
+其他 data-dir/用户进程。
+
 没有显式 `--data-dir` 或 `KUN_DATA_DIR` 时，CLI 会读取当前平台 Kun GUI 设置中的
 `agents.kun.dataDir`，因此仍使用旧 `~/.deepseekgui/kun` 的升级用户不会被错误分流到
 一套新的 `~/.kun/data`。CLI 只投影供应商端点和模型列表；API Key、OAuth token 和
 headers 不会写入普通配置，而是继续通过该 data-dir 的受保护凭据绑定解析。显式目录
 始终优先，也不会导入另一目录的 GUI 模型配置。
 
-管理后台服务：
+查看或请求 Runtime 生命周期：
 
 ```bash
 kun runtime status
@@ -67,16 +85,17 @@ kun runtime restart
 kun runtime stop
 ```
 
-Agent 工具中执行的命令不能停止或重启承载该工具的同一个 Runtime；此时命令会以
-`runtime_self_control_forbidden` 拒绝，避免当前会话在租约交接前中断。需要显式管理
-共享 Runtime 时，请使用 GUI 中已确认的重启操作，或从 Runtime 外部的独立终端运行
-上述命令。
+`kun runtime status` 保持只读。`kun runtime stop` / `restart` 不会停止 GUI/TUI
+持有的 Runtime，也不会在一次性命令退出后留下无 owner 的 detached replacement；
+它们会提示通过持有它的 GUI 操作，或退出并重新打开对应 TUI。Agent 工具中针对承载
+自身的 Runtime 执行生命周期命令仍以 `runtime_self_control_forbidden` 拒绝。
 
-`kun serve` 仅用于需要前台日志的调试场景。它也会发布 discovery；同一 data-dir
-已有有效实例时会报冲突，不会杀死未知进程。`--url` 可显式连接一个 loopback
-服务；`--no-start` 可确保命令不会改变服务状态。
+`kun serve` 仅用于需要前台日志的调试场景，由启动它的终端前台持有，正常信号退出
+会停止其 Runtime。它也会发布 discovery；同一 data-dir/flavor 已有有效 owner 时
+会报冲突，不会杀死未知进程。`--url` 可显式连接一个服务；`--no-start` 可确保
+TUI 不改变服务状态。
 
-非 TTY stdin/stdout 不会进入交互界面，也不会悄悄启动后台服务。脚本应使用
+非 TTY stdin/stdout 不会进入交互界面，也不会悄悄启动 client-owned Runtime。脚本应使用
 `kun run`、`kun chat` 或 `kun exec`。
 
 ### 本地开发试用
@@ -91,10 +110,12 @@ npm run dev:tui
 npm run dev:tui -- --workspace "$PWD" --continue
 ```
 
-该命令会先构建 `kun/`，再启动 TUI；如果共享后台运行时尚未存在，TUI 会自行拉起。
+该命令会先构建 `kun/`，再启动 TUI，并为这个 TUI 会话拉起一个 client-owned Runtime。
+如果同一 Manager profile/flavor 的 GUI 或 TUI owner 已在运行，命令会报 ownership
+conflict；请真实退出该 owner（仅最小化到托盘不算退出），或使用显式非拥有连接。
 首次进入会显示欢迎页，composer 已经获得焦点：直接输入任务并按 Enter 会自动创建
-会话；`/connect` 配置模型，`Ctrl+X L` 打开已有会话，`Ctrl+P` 搜索全部命令。关闭 TUI
-不会关闭 GUI，关闭 GUI 也不会关闭 TUI 或共享后台 turn。
+会话；`/connect` 配置模型，`Ctrl+X L` 打开已有会话，`Ctrl+P` 搜索全部命令。退出
+TUI 会停止该会话持有的精确 Runtime，但不会停止 Service Manager 或删除已保存数据。
 
 欢迎页只显示文字 `KUN`、一句用途说明、Workspace/Model/Mode/Version 元数据，以及
 “直接输入任务”、`/connect`、`/sessions` 三个起点；不再放大 Logo、运行时诊断、
@@ -166,9 +187,10 @@ Timeline、Skills、Help、Status、Context、Queue、MCP、Permissions、Approv
 连接流程每次只展示当前步骤；只读检查页按字段与状态组织，不复用笨重的通用弹窗。
 
 如果 `/model` 只显示 DeepSeek，先运行 `kun runtime status` 检查输出的 data-dir 是否
-与 GUI 设置一致。升级前的 GUI 私有 runtime 没有共享 discovery 或模型连接接口时，
-Kun 不会附加到该旧进程，也不会在同一 data-dir 启动第二个写入者；请先关闭或更新
-一次旧 GUI。之后无论先启动 GUI 还是 TUI，都会选举同一个 UI 无关后台服务。
+与 GUI 设置一致。升级前遗留的、身份精确且已认证的无 owner shared daemon 可以在
+首次 client-owned 启动时被窄范围优雅退休；旧 GUI 私有 runtime 或其他身份无法证明
+的进程不会被附加或终止，也不会允许同 data-dir/flavor 的第二个 writer。请先真实
+关闭或更新旧 owner。之后 GUI 与 TUI 按顺序各自启动 Runtime，并复用同一持久化数据。
 `/connect` 复用 data-dir 中的受保护凭据库和模型 registry，只向 GUI 设置写入无密钥
 兼容投影；`/model` 随 registry 刷新。
 
@@ -239,7 +261,7 @@ Kun 不会附加到该旧进程，也不会在同一 data-dir 启动第二个写
 | `/attach <path>`、`/attach list`、`/attach remove <n>`、`/attach clear` | 添加文件、查看待发送附件、删除指定附件或清空附件 |
 | `/mouse [on\|off]` | 切换可点击 Pointer 模式；关闭后由终端负责框选和复制 |
 | `/variants` | 选择推理强度；与 `Ctrl+T` 使用同一状态，并随 turn 请求发送 |
-| `/compact` | 请求共享运行时压缩长上下文 |
+| `/compact` | 请求当前 Runtime 压缩长上下文 |
 
 ### 运行与项目
 
@@ -249,7 +271,7 @@ Kun 不会附加到该旧进程，也不会在同一 data-dir 启动第二个写
 | `/permission` | 在线程级选择 approval policy 与 sandbox mode，并同步给其他客户端 |
 | `/plan [plan\|agent]`、`/goal [objective\|pause\|resume\|clear]` | 查看/切换计划模式并管理持久化目标 |
 | `/tasks` | 汇总 plan todos、持久 goal、子代理、后台 shell 和扩展任务 |
-| `/mcp` | 查看共享运行时中的 MCP server、连接状态、工具数量及工具名 |
+| `/mcp` | 查看当前 Runtime 中的 MCP server、连接状态、工具数量及工具名 |
 | `/skills [search]`、`/skill:<name> [prompt]` | 浏览当前 workspace 可见 skills，或显式激活一个 skill |
 | `/init [guidance]` | 让 Kun 检查仓库并创建或更新根目录 `AGENTS.md` |
 | `/add-dir <path>` | 给当前线程添加持久化 workspace root；工具和 sandbox 会识别该根目录 |
@@ -308,11 +330,13 @@ TUI 会读取 `~/.kun/tui.json`。格式兼容 OpenCode，支持单键、逗号�
 无效配置不会阻止启动；Kun 使用默认值并在欢迎页与 stderr 中提示。最近模型、收藏
 模型和每模型推理强度写入 `<data-dir>/tui/state.json`（POSIX 权限 `0600`），不保存凭据。
 
-## 并发、重连与安全
+## 外部连接、重连与安全
 
 客户端先读取权威 thread snapshot 和 `latestSeq`，再从该游标订阅 SSE。断线后重新
-验证 discovery、退避重连并补拉事件；重复或倒序事件不会再次应用。如果另一个
-客户端先处理审批或问答，当前决策页面会刷新并禁止重复提交。
+验证 discovery、退避重连并补拉事件；重复或倒序事件不会再次应用。默认 GUI/TUI
+owner 在同一 data-dir/flavor 不并发；只有显式 `--url` / `--no-start` 等非拥有连接
+可以与 owner 共存。如果另一个显式连接先处理审批或问答，当前决策页面会刷新并
+禁止重复提交。owner 退出后，其 Runtime 会停止，外部连接需要等待新的显式目标。
 
 `assistant_text_delta` 与 `assistant_reasoning_delta` 的 `item.text` 是增量片段；TUI
 按稳定 item ID 追加，并以 `item_created/updated/completed` 完整快照校正。因此回复会
@@ -322,6 +346,8 @@ TUI 会读取 `~/.kun/tui.json`。格式兼容 OpenCode，支持单键、逗号�
 - discovery 只接受 loopback HTTP，并校验 instanceId、PID、startedAt 和服务版本。
 - `POST /v1/runtime/shutdown` 仅接受带 bearer token 的 loopback 请求，且必须携带
   当前 instanceId，旧客户端不能关闭新实例。
+- GUI/TUI-owned Runtime 通过 OS IPC ownership channel 感知异常父进程退出，并进入
+  有界优雅关闭；普通退出仍显式关闭并等待精确实例。
 - API Key、OAuth token 和订阅凭据不会进入 argv、shell history、日志或普通 settings。
 
 ## 安装终端命令

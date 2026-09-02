@@ -19,6 +19,7 @@ import type {
   QualityConfig,
   RolesConfig,
   RuntimeFlavor,
+  RuntimeClientOwnerKind,
   RuntimeTuningConfig,
   SandboxMode,
   ServerRuntime,
@@ -74,6 +75,7 @@ export type KunServeRuntimeOptions = {
   instanceId?: string
   buildId?: string
   launchMode?: 'foreground' | 'shared' | 'gui'
+  clientOwnerKind?: RuntimeClientOwnerKind
   runtimeFlavor?: RuntimeFlavor
   discoveryDir?: string
   serviceManager?: ServiceManagerConnection

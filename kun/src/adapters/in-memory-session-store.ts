@@ -12,6 +12,7 @@ import type { AgentSession } from '../domain/session.js'
 import { buildPublicItemHistoryPage } from '../services/item-history-page.js'
 import {
   overlayLiveItems,
+  liveItemsAfterCanonicalRewrite,
   replayLiveItemDeltas,
   serializeItemRecord,
   serializeItemRecords
@@ -91,6 +92,7 @@ export class InMemorySessionStore implements SessionStore {
     serializeItemRecords(items)
     const nextItems = [...items]
     this.items.set(threadId, nextItems)
+    this.reconcileLiveItems(threadId, nextItems)
     this.bumpItemHistoryRevision(threadId)
     const session = this.sessions.get(threadId)
     if (session) {
@@ -125,6 +127,7 @@ export class InMemorySessionStore implements SessionStore {
     serializeItemRecords(items)
     const nextItems = [...items]
     this.items.set(threadId, nextItems)
+    this.reconcileLiveItems(threadId, nextItems)
     const nextRevision = this.bumpItemHistoryRevision(threadId)
     const session = this.sessions.get(threadId)
     if (session) {
@@ -251,6 +254,15 @@ export class InMemorySessionStore implements SessionStore {
 
   private liveEntries(threadId: string): LiveItemCheckpoint[] {
     return [...(this.liveItems.get(threadId)?.values() ?? [])]
+  }
+
+  private reconcileLiveItems(threadId: string, items: readonly TurnItem[]): void {
+    const retained = liveItemsAfterCanonicalRewrite(this.liveEntries(threadId), items)
+    if (retained.length === 0) {
+      this.liveItems.delete(threadId)
+      return
+    }
+    this.liveItems.set(threadId, new Map(retained.map((entry) => [entry.item.id, entry])))
   }
 
   private recoverLive(threadId: string, live: LiveItemCheckpoint[]): LiveItemCheckpoint[] {

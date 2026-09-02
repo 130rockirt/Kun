@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { app } from 'electron'
 
 const state = vi.hoisted(() => {
   class FakeTray {
@@ -73,7 +74,9 @@ vi.mock('./main-app-context', () => ({
 }))
 
 import { mainState } from './main-app-context'
-import { syncTray } from './main-tray'
+import { runtimeShutdown } from './main-lifecycle'
+import { handleMainWindowClose, syncTray } from './main-tray'
+import { resolveMainWindowCloseDecision } from './window-close-behavior'
 
 function settings(closeAction: 'ask' | 'tray' | 'quit') {
   return { locale: 'en', appBehavior: { closeAction } } as never
@@ -88,6 +91,22 @@ describe('syncTray', () => {
     mainState.trayQuotaWindow = null
     mainState.trayQuotaWindowReady = null
     mainState.trayQuotaToggleGeneration = 0
+    vi.mocked(app.quit).mockClear()
+    vi.mocked(runtimeShutdown.requestQuit).mockClear()
+    vi.mocked(resolveMainWindowCloseDecision).mockReset()
+  })
+
+  it('enters the real quit barrier for a saved quit close action', () => {
+    vi.mocked(resolveMainWindowCloseDecision).mockReturnValue('quit-app')
+    const event = { preventDefault: vi.fn() }
+    const window = { isDestroyed: () => false, hide: vi.fn() }
+
+    handleMainWindowClose(window as never, event as never)
+
+    expect(event.preventDefault).toHaveBeenCalledOnce()
+    expect(runtimeShutdown.requestQuit).toHaveBeenCalledOnce()
+    expect(app.quit).toHaveBeenCalledOnce()
+    expect(window.hide).not.toHaveBeenCalled()
   })
 
   it('creates a quota tray entry when closing the window quits the app', () => {

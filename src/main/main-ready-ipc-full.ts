@@ -97,7 +97,7 @@ import {
 } from './main-runtime-settings'
 import {
   ensureRuntime,
-  restartAllKunServeProcesses,
+  restartGuiRuntime,
   restartRuntime
 } from './main-runtime-startup'
 import {
@@ -340,7 +340,7 @@ export function registerMainIpc(services: MainServices): void {
       },
       restartKunServe: async () => {
         const settings = await mainState.store.load()
-        await restartAllKunServeProcesses(settings)
+        await restartGuiRuntime(settings)
       },
       fetchUpstreamModels: fetchModels,
       getClawRuntime: () => mainState.clawRuntime,
