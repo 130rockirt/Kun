@@ -56,6 +56,12 @@ The prior recovery-mismatch `needs_attention` state is retryable: if the matchin
 
 The sidebar thread-activity observer uses a 25-second server wait, so Main gives this long-poll route the same bounded wait-plus-margin timeout policy as model-connection events. This prevents expected long polls from being aborted by the generic GET timeout and keeps background completion state fresh.
 
+### 8. Treat duplicate starts and follow-ups as normal composer input
+
+Starting an Automatic request is serialized by thread/workspace scope before asynchronous plan-path discovery. Repeated activation of the same draft while admission is pending is idempotent and consumes the duplicate UI action without creating another intent or banner.
+
+Each intent stores a bounded deterministic request fingerprint. Once an Automatic intent exists, the same fingerprint is treated as a duplicate submission; a different prompt is sent through the ordinary Agent send path so current-turn queue/guidance behavior remains available. It does not create a second plan pipeline, and the Automatic intent continues to its build after queued work settles.
+
 ## Risks / Trade-offs
 
 - [A schedule time can expire while planning] -> Revalidate after `create_plan` and require a new time; never create an overdue task from the pending intent.

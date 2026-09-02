@@ -9,7 +9,9 @@ import {
 } from './auto-plan-build-intents'
 import {
   AUTO_PLAN_RECOVERY_MISMATCH_ERROR,
-  autoPlanBuildControllerTestApi
+  LEGACY_AUTO_PLAN_DUPLICATE_ERROR,
+  autoPlanBuildControllerTestApi,
+  resetAutoPlanBuildControllerForTests
 } from './use-auto-plan-build-controller'
 import type { GuiPlanToolMeta } from './plan-tool'
 
@@ -59,12 +61,13 @@ function planBlock(planMeta: GuiPlanToolMeta = meta, turnId = 'turn-plan') {
   }
 }
 
-function directIntent(useWorktree = false) {
+function directIntent(useWorktree = false, requestText = '') {
   return createAutoPlanBuildIntent({
     planId: meta.planId,
     relativePath: meta.relativePath,
     workspaceRoot: meta.workspaceRoot,
     threadId: 'thread-1',
+    requestText,
     selection: { buildMode: 'direct', useWorktree }
   })
 }
@@ -95,6 +98,7 @@ function installWindow(settings = normalizeAppSettings({} as never)): void {
 
 describe('Automatic plan-build orchestration', () => {
   beforeEach(() => {
+    resetAutoPlanBuildControllerForTests()
     provider.sendUserMessage.mockReset().mockResolvedValue({ threadId: 'thread-1', turnId: 'build-turn' })
     provider.getThreadDetail.mockReset()
     useChatStore.setState({
@@ -106,6 +110,7 @@ describe('Automatic plan-build orchestration', () => {
   })
 
   afterEach(() => {
+    resetAutoPlanBuildControllerForTests()
     rendererRuntimeClient.invalidateSettings()
     vi.unstubAllGlobals()
   })
@@ -124,6 +129,58 @@ describe('Automatic plan-build orchestration', () => {
         latestTurnId: 'turn-source', latestTurnStatus: 'running'
       }]
     })).toEqual({ threadId: 'thread-source', planTurnId: 'turn-source' })
+  })
+
+  it('serializes Automatic admission by task scope', () => {
+    const release = autoPlanBuildControllerTestApi.acquireAutomaticStartScope('thread:thread-1')
+    expect(release).toBeTypeOf('function')
+    expect(autoPlanBuildControllerTestApi.acquireAutomaticStartScope('thread:thread-1')).toBeNull()
+    release?.()
+    expect(autoPlanBuildControllerTestApi.acquireAutomaticStartScope('thread:thread-1')).toBeTypeOf('function')
+  })
+
+  it('consumes a duplicate Automatic draft without another send or error', async () => {
+    const existing = directIntent(false, 'same request')
+    const sendMessage = vi.fn(async () => true)
+    const onStarted = vi.fn()
+    const routed = await autoPlanBuildControllerTestApi.routeExistingAutomaticIntent(
+      existing,
+      { text: 'same request', onStarted },
+      sendMessage as never
+    )
+    expect(routed).toBe(true)
+    expect(onStarted).toHaveBeenCalledOnce()
+    expect(sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('clears the obsolete duplicate-intent banner for a healthy running intent', () => {
+    const existing = directIntent(false, 'same request')
+    useChatStore.setState({ error: LEGACY_AUTO_PLAN_DUPLICATE_ERROR })
+    autoPlanBuildControllerTestApi.clearLegacyDuplicateError(existing)
+    expect(useChatStore.getState().error).toBeNull()
+  })
+
+  it('routes distinct input through ordinary Agent queue behavior', async () => {
+    const existing = directIntent(false, 'original request')
+    const sendMessage = vi.fn(async () => true)
+    const onStarted = vi.fn()
+    const routed = await autoPlanBuildControllerTestApi.routeExistingAutomaticIntent(
+      existing,
+      {
+        text: 'add this guidance',
+        overrides: { attachmentIds: ['attachment-1'] },
+        onStarted
+      },
+      sendMessage as never
+    )
+    expect(routed).toBe(true)
+    expect(sendMessage).toHaveBeenCalledWith('add this guidance', 'agent', {
+      attachmentIds: ['attachment-1'],
+      expectedThreadId: 'thread-1',
+      orchestration: 'direct',
+      agentSurface: 'code'
+    })
+    expect(onStarted).toHaveBeenCalledOnce()
   })
 
   it('matches only the exact successful plan identity', () => {

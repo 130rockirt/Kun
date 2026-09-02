@@ -27,6 +27,8 @@ export type AutoPlanBuildIntentV1 = AutoPlanBuildSelection & {
   planTurnId: string
   planClientRequestId: string
   buildClientRequestId: string
+  /** Bounded identity for duplicate composer submissions; never stores prompt text. */
+  requestFingerprint: string
   status: AutoPlanBuildIntentStatus
   error: string
   createdAt: string
@@ -99,6 +101,7 @@ export function normalizeAutoPlanBuildIntent(value: unknown): AutoPlanBuildInten
     planTurnId: text(value.planTurnId),
     planClientRequestId,
     buildClientRequestId,
+    requestFingerprint: text(value.requestFingerprint),
     buildMode,
     useWorktree: value.useWorktree === true,
     ...(scheduled ? { scheduled } : {}),
@@ -162,6 +165,7 @@ export function createAutoPlanBuildIntent(input: {
   relativePath: string
   workspaceRoot: string
   threadId?: string | null
+  requestText?: string
   selection: AutoPlanBuildSelection
   now?: number
 }): AutoPlanBuildIntentV1 {
@@ -177,6 +181,7 @@ export function createAutoPlanBuildIntent(input: {
     planTurnId: '',
     planClientRequestId: requestId('auto-plan-turn'),
     buildClientRequestId: requestId('auto-build-turn'),
+    requestFingerprint: autoPlanBuildRequestFingerprint(input.requestText ?? ''),
     buildMode: input.selection.buildMode,
     useWorktree: input.selection.useWorktree,
     ...(input.selection.scheduled ? { scheduled: input.selection.scheduled } : {}),
@@ -185,6 +190,15 @@ export function createAutoPlanBuildIntent(input: {
     createdAt: timestamp,
     updatedAt: timestamp
   }
+}
+
+export function autoPlanBuildRequestFingerprint(value: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return `v1:${value.length}:${(hash >>> 0).toString(16).padStart(8, '0')}`
 }
 
 export function saveAutoPlanBuildIntent(intent: AutoPlanBuildIntentV1): boolean {

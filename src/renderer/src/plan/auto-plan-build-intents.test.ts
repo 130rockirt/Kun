@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   MAX_AUTO_PLAN_BUILD_INTENTS,
   activeAutoPlanBuildIntent,
+  autoPlanBuildRequestFingerprint,
   clearAutoPlanBuildIntents,
   createAutoPlanBuildIntent,
   listAutoPlanBuildIntents,
@@ -40,6 +41,13 @@ describe('Automatic plan-build intent registry', () => {
     expect(normalizeAutoPlanBuildIntent(legacy)?.planTurnId).toBe('')
     expect(normalizeAutoPlanBuildIntent({ ...direct, buildMode: 'scheduled' })).toBeNull()
     expect(normalizeAutoPlanBuildIntent({ ...direct, status: 'complete' })).toBeNull()
+  })
+
+  it('creates a deterministic bounded request identity without storing prompt text', () => {
+    const first = autoPlanBuildRequestFingerprint('same request')
+    expect(first).toBe(autoPlanBuildRequestFingerprint('same request'))
+    expect(first).not.toBe(autoPlanBuildRequestFingerprint('different request'))
+    expect(first).not.toContain('same request')
   })
 
   it('binds, patches, and discovers a per-thread intent', () => {

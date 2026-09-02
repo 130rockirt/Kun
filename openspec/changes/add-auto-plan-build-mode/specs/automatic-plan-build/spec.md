@@ -41,6 +41,14 @@ Submitting in Automatic mode SHALL resolve Direct or scheduled execution and cur
 - **WHEN** the user cancels or saving defaults fails
 - **THEN** no plan turn SHALL be sent and the draft, attachments, and file references SHALL remain available
 
+#### Scenario: Automatic start is activated twice
+- **WHEN** the same draft is submitted again while its first Automatic admission is still pending or already recorded
+- **THEN** the duplicate SHALL be consumed without a second intent, plan turn, or error banner
+
+#### Scenario: User sends new text while Automatic planning is active
+- **WHEN** the task already owns a healthy Automatic intent and the submitted content differs from its initiating request
+- **THEN** the content SHALL follow the ordinary Agent guidance/queue path and SHALL NOT start another plan pipeline
+
 ### Requirement: A matching successful plan continues exactly once
 The system SHALL dispatch a build only after a successful `create_plan` result matches the recorded thread plus canonical workspace and reserved relative path, and each thread SHALL have at most one nonterminal Automatic intent. Runtime-derived plan-id casing differences MUST NOT reject the reserved artifact.
 

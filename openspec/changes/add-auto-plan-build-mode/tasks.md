@@ -39,3 +39,9 @@
 - [x] 6.2 Match plan results by canonical workspace/reserved path and self-heal the legacy recovery-mismatch attention state.
 - [x] 6.3 Keep thread-activity long polls alive through their server wait window and add timeout regression coverage.
 - [x] 6.4 Add end-to-end recovery race tests and rerun focused validation, typecheck, build, lint, file-line gate, and diff check.
+
+## 7. Duplicate Submission And Follow-up Routing
+
+- [x] 7.1 Serialize Automatic starts by thread/workspace scope and persist a bounded request fingerprint.
+- [x] 7.2 Consume duplicate activation idempotently and route distinct in-flight follow-ups through ordinary Agent send/queue behavior.
+- [x] 7.3 Add duplicate-click and follow-up regression tests, then rerun focused validation and builds.

@@ -23,6 +23,7 @@ import { usePlanWorktreePreferenceStore } from './plan-worktree-preference-store
 import { useAutoPlanBuildSettingsState } from './use-auto-plan-build-settings'
 import {
   activeAutoPlanBuildIntent,
+  autoPlanBuildRequestFingerprint,
   clearAutoPlanBuildIntents,
   createAutoPlanBuildIntent,
   listAutoPlanBuildIntents,
@@ -61,8 +62,11 @@ export type RequestAutoPlanBuild = (input: {
 }) => Promise<AutoPlanBuildRequestResult>
 
 const dispatchingIntentIds = new Set<string>()
+const startingScopes = new Set<string>()
 export const AUTO_PLAN_RECOVERY_MISMATCH_ERROR =
   'Automatic build recovery could not prove a matching successful plan result.'
+export const LEGACY_AUTO_PLAN_DUPLICATE_ERROR =
+  'This task already has an Automatic plan build waiting to finish.'
 
 function normalizedPath(value: string): string {
   return value.trim().replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/+/g, '/').toLowerCase()
@@ -101,6 +105,15 @@ function clearRecoveryMismatch(intent: AutoPlanBuildIntentV1): void {
   }
 }
 
+function clearLegacyDuplicateError(intent: AutoPlanBuildIntentV1 | null): void {
+  const state = useChatStore.getState()
+  if (
+    intent &&
+    intent.status !== 'needs_attention' &&
+    state.error === LEGACY_AUTO_PLAN_DUPLICATE_ERROR
+  ) state.setError(null)
+}
+
 function pendingUserInput(blocks: readonly ChatBlock[]): boolean {
   return blocks.some((block) => block.kind === 'user_input' && block.status === 'pending')
 }
@@ -116,6 +129,33 @@ function admittedPlanIdentity(
     state.activeThreadId === threadId ? state.currentTurnId : null
   )?.trim() || threadSummary?.latestTurnId?.trim() || ''
   return { threadId, planTurnId }
+}
+
+function acquireAutomaticStartScope(scope: string): (() => void) | null {
+  if (startingScopes.has(scope)) return null
+  startingScopes.add(scope)
+  return () => startingScopes.delete(scope)
+}
+
+async function routeExistingAutomaticIntent(
+  existing: AutoPlanBuildIntentV1,
+  pending: Omit<PendingDialog, 'settings'>,
+  sendMessage: ReturnType<typeof useChatStore.getState>['sendMessage']
+): Promise<boolean | null> {
+  if (existing.status === 'needs_attention') return null
+  const requestFingerprint = autoPlanBuildRequestFingerprint(pending.text)
+  if (existing.requestFingerprint && existing.requestFingerprint === requestFingerprint) {
+    pending.onStarted()
+    return true
+  }
+  const sent = await sendMessage(pending.text, 'agent', {
+    ...pending.overrides,
+    expectedThreadId: existing.threadId,
+    orchestration: 'direct',
+    agentSurface: 'code'
+  })
+  if (sent) pending.onStarted()
+  return sent
 }
 
 async function existingPlanPaths(workspaceRoot: string): Promise<string[]> {
@@ -387,6 +427,7 @@ export function useAutoPlanBuildController({
   useEffect(() => {
     if (!activeThreadId) return
     const attention = activeAutoPlanBuildIntent(activeThreadId)
+    clearLegacyDuplicateError(attention)
     if (attention?.status === 'needs_attention' && attention.error && !recoverableMismatch(attention)) {
       setError(attention.error)
     }
@@ -408,59 +449,70 @@ export function useAutoPlanBuildController({
       setError('A workspace is required to start Automatic plan build.')
       return false
     }
-    if (state.activeThreadId) {
-      const existing = activeAutoPlanBuildIntent(state.activeThreadId)
-      if (existing?.status === 'needs_attention') removeAutoPlanBuildIntent(existing.id)
-      else if (existing) {
-        setError('This task already has an Automatic plan build waiting to finish.')
+    const startScope = sourceThreadId
+      ? `thread:${sourceThreadId}`
+      : `workspace:${targetWorkspace}`
+    const releaseStartScope = acquireAutomaticStartScope(startScope)
+    if (!releaseStartScope) return true
+    try {
+      if (sourceThreadId) {
+        const existing = activeAutoPlanBuildIntent(sourceThreadId)
+        if (existing?.status === 'needs_attention') removeAutoPlanBuildIntent(existing.id)
+        else if (existing) {
+          clearLegacyDuplicateError(existing)
+          const routed = await routeExistingAutomaticIntent(existing, pending, state.sendMessage)
+          if (routed !== null) return routed
+        }
+      }
+      const draft = buildDraftGuiPlanTurnOverrides({
+        request: pending.text,
+        workspaceRoot: targetWorkspace,
+        activeThreadId: sourceThreadId || null,
+        existingRelativePaths: await existingPlanPaths(targetWorkspace)
+      })
+      const intent = createAutoPlanBuildIntent({
+        planId: draft.guiPlan.planId,
+        relativePath: draft.guiPlan.relativePath,
+        workspaceRoot: targetWorkspace,
+        threadId: sourceThreadId,
+        requestText: pending.text,
+        selection
+      })
+      if (!saveAutoPlanBuildIntent(intent)) {
+        setError('Automatic plan build could not persist its recovery intent.')
         return false
       }
-    }
-    const draft = buildDraftGuiPlanTurnOverrides({
-      request: pending.text,
-      workspaceRoot: targetWorkspace,
-      activeThreadId: sourceThreadId || null,
-      existingRelativePaths: await existingPlanPaths(targetWorkspace)
-    })
-    const intent = createAutoPlanBuildIntent({
-      planId: draft.guiPlan.planId,
-      relativePath: draft.guiPlan.relativePath,
-      workspaceRoot: targetWorkspace,
-      threadId: sourceThreadId,
-      selection
-    })
-    if (!saveAutoPlanBuildIntent(intent)) {
-      setError('Automatic plan build could not persist its recovery intent.')
-      return false
-    }
-    const sent = await sendPlanTurn(pending.text, {
-      ...pending.overrides,
-      workspaceRoot: targetWorkspace,
-      guiPlan: draft.guiPlan,
-      clientRequestId: intent.planClientRequestId,
-      waitForRuntimeAdmission: true
-    })
-    if (!sent) {
-      removeAutoPlanBuildIntent(intent.id)
-      return false
-    }
-    const admittedState = useChatStore.getState()
-    const { threadId, planTurnId } = admittedPlanIdentity(sourceThreadId, admittedState)
-    if (!threadId) {
-      patchAutoPlanBuildIntent(intent.id, {
-        status: 'needs_attention',
-        error: 'Automatic plan turn was accepted without a task identity.'
+      const sent = await sendPlanTurn(pending.text, {
+        ...pending.overrides,
+        workspaceRoot: targetWorkspace,
+        guiPlan: draft.guiPlan,
+        clientRequestId: intent.planClientRequestId,
+        waitForRuntimeAdmission: true
       })
-      return false
+      if (!sent) {
+        removeAutoPlanBuildIntent(intent.id)
+        return false
+      }
+      const admittedState = useChatStore.getState()
+      const { threadId, planTurnId } = admittedPlanIdentity(sourceThreadId, admittedState)
+      if (!threadId) {
+        patchAutoPlanBuildIntent(intent.id, {
+          status: 'needs_attention',
+          error: 'Automatic plan turn was accepted without a task identity.'
+        })
+        return false
+      }
+      patchAutoPlanBuildIntent(intent.id, {
+        threadId,
+        planTurnId,
+        status: 'planning',
+        error: ''
+      })
+      pending.onStarted()
+      return true
+    } finally {
+      releaseStartScope()
     }
-    patchAutoPlanBuildIntent(intent.id, {
-      threadId,
-      planTurnId,
-      status: 'planning',
-      error: ''
-    })
-    pending.onStarted()
-    return true
   }, [sendPlanTurn, setError, workspaceRoot])
 
   const requestAutoPlanBuild = useCallback(async (input: {
@@ -547,10 +599,18 @@ export function useAutoPlanBuildController({
 }
 
 export const autoPlanBuildControllerTestApi = {
+  acquireAutomaticStartScope,
   admittedPlanIdentity,
+  clearLegacyDuplicateError,
   dispatchIntent,
   matchingSuccessfulPlan,
   planMetaMatchesIntent,
   reconcileIntent,
+  routeExistingAutomaticIntent,
   scheduledTaskMatches
+}
+
+export function resetAutoPlanBuildControllerForTests(): void {
+  dispatchingIntentIds.clear()
+  startingScopes.clear()
 }
