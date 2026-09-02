@@ -551,6 +551,8 @@
   "queuedMessageRetryUnavailable": "इस अस्थायी संदेश को सुरक्षित रूप से दोबारा नहीं भेजा जा सकता; इसे हटाकर फिर जमा करें",
   "queuedMessageFailed": "भेजना विफल",
   "queuedMessageReorder": "कतार का क्रम बदलने के लिए खींचें या ऊपर/नीचे तीर कुंजी दबाएँ",
+  "queuedMessageReorderHandle": "संदेश {{index}} / {{count}} ले जाएँ: {{summary}}",
+  "queuedMessageMovedToPosition": "स्थान {{position}} पर ले जाया गया",
   "guideQueuedMessage": "मार्गदर्शक",
   "queuedMessagePaused": "Paused",
   "sendPausedQueuedMessage": "Send",

@@ -241,6 +241,16 @@
   animation: queue-spin 0.8s linear infinite;
 }
 
+.assistiveText {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 @keyframes queue-spin {
   to { transform: rotate(360deg); }
 }

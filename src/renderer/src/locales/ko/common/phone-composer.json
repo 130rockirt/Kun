@@ -551,6 +551,8 @@
   "queuedMessageRetryUnavailable": "이 임시 메시지는 안전하게 다시 시도할 수 없습니다. 삭제한 뒤 다시 제출하세요",
   "queuedMessageFailed": "전송 실패",
   "queuedMessageReorder": "드래그하거나 위/아래 방향키로 대기 순서 변경",
+  "queuedMessageReorderHandle": "메시지 {{index}}/{{count}} 이동: {{summary}}",
+  "queuedMessageMovedToPosition": "{{position}}번째 위치로 이동했습니다",
   "guideQueuedMessage": "가이드",
   "queuedMessagePaused": "일시 중지됨",
   "sendPausedQueuedMessage": "보내기",

@@ -551,6 +551,8 @@
   "queuedMessageRetryUnavailable": "ไม่สามารถลองข้อความชั่วคราวนี้อีกครั้งได้อย่างปลอดภัย โปรดลบแล้วส่งใหม่",
   "queuedMessageFailed": "ส่งไม่สำเร็จ",
   "queuedMessageReorder": "ลากหรือใช้ปุ่มลูกศรขึ้น/ลงเพื่อจัดลำดับข้อความในคิว",
+  "queuedMessageReorderHandle": "ย้ายข้อความ {{index}} จาก {{count}}: {{summary}}",
+  "queuedMessageMovedToPosition": "ย้ายไปยังตำแหน่งที่ {{position}}",
   "guideQueuedMessage": "คู่มือ",
   "queuedMessagePaused": "Paused",
   "sendPausedQueuedMessage": "Send",

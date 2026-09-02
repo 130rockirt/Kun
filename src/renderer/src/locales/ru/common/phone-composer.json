@@ -551,6 +551,8 @@
   "queuedMessageRetryUnavailable": "Это временное сообщение нельзя безопасно повторить; удалите его и отправьте снова",
   "queuedMessageFailed": "Ошибка отправки",
   "queuedMessageReorder": "Перетащите или используйте стрелки вверх/вниз, чтобы изменить порядок",
+  "queuedMessageReorderHandle": "Переместить сообщение {{index}} из {{count}}: {{summary}}",
+  "queuedMessageMovedToPosition": "Перемещено на позицию {{position}}",
   "guideQueuedMessage": "Руководство",
   "queuedMessagePaused": "Приостановлено",
   "sendPausedQueuedMessage": "Отправить",

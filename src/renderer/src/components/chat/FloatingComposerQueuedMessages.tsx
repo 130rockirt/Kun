@@ -101,6 +101,8 @@ export function canEditQueuedComposerMessage(message: QueuedComposerMessage): bo
   return canInlineEditQueuedMessage(message as Parameters<typeof canInlineEditQueuedMessage>[0])
 }
 
+const QUEUED_MESSAGE_LABEL_SUMMARY_LIMIT = 24
+
 function queuedComposerMessageDisplayText(message: QueuedComposerMessage): string {
   const displayText = message.displayText?.trim()
   if (displayText) return displayText
@@ -109,6 +111,13 @@ function queuedComposerMessageDisplayText(message: QueuedComposerMessage): strin
     if (userInput) return userInput
   }
   return message.text
+}
+
+function queuedMessageSummary(message: QueuedComposerMessage): string {
+  const text = queuedComposerMessageDisplayText(message).replace(/\s+/g, ' ').trim()
+  return text.length > QUEUED_MESSAGE_LABEL_SUMMARY_LIMIT
+    ? `${text.slice(0, QUEUED_MESSAGE_LABEL_SUMMARY_LIMIT)}...`
+    : text
 }
 
 function visibleQueue(messages: QueuedComposerMessage[]): QueuedComposerMessage[] {
@@ -139,8 +148,10 @@ export function FloatingComposerQueuedMessages({
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [busy, setBusy] = useState<{ id: string; kind: QueueActionKind } | null>(null)
   const [dragState, setDragState] = useState<QueueDragState | null>(null)
+  const [moveAnnouncement, setMoveAnnouncement] = useState('')
   const reorderHandleRefs = useRef(new Map<string, HTMLButtonElement>())
   const listId = useId()
+  const reorderHintId = useId()
   const queueRevision = useMemo(() => JSON.stringify(queue.map((message) => [
     message.id,
     message.deliveryState,
@@ -186,6 +197,7 @@ export function FloatingComposerQueuedMessages({
     event.preventDefault()
     event.stopPropagation()
     onReorder(id, target.id, event.key === 'ArrowUp' ? 'before' : 'after')
+    setMoveAnnouncement(t('queuedMessageMovedToPosition', { position: targetIndex + 1 }))
     focusReorderHandle(id)
   }
 
@@ -286,11 +298,23 @@ export function FloatingComposerQueuedMessages({
             <span className={css.count}>{t('queuedMessagesTitle', { count: queue.length })}</span>
             <span className={css.chevron} aria-hidden="true">
               {expanded
-                ? <ChevronDown size={14} strokeWidth={1.7} />
-                : <ChevronUp size={14} strokeWidth={1.7} />}
+                ? <ChevronUp size={14} strokeWidth={1.7} />
+                : <ChevronDown size={14} strokeWidth={1.7} />}
             </span>
           </button>
         ) : null}
+
+        <span id={reorderHintId} className={css.assistiveText}>
+          {t('queuedMessageReorder')}
+        </span>
+        <span
+          className={css.assistiveText}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {moveAnnouncement}
+        </span>
 
         <ul
           id={listId}
@@ -298,7 +322,7 @@ export function FloatingComposerQueuedMessages({
           aria-label={t('queuedMessagesTitle', { count: queue.length })}
           hidden={!expanded}
         >
-          {expanded ? queue.map((message) => {
+          {expanded ? queue.map((message, index) => {
             const isEditing = editing?.id === message.id
             const isBusy = busy?.id === message.id
             const paused = message.deliveryState === 'paused'
@@ -317,6 +341,11 @@ export function FloatingComposerQueuedMessages({
             const guideLabel = recoverable
               ? t('queuedMessageRetry')
               : t('queuedMessageSteer')
+            const reorderLabel = t('queuedMessageReorderHandle', {
+              index: index + 1,
+              count: queue.length,
+              summary: queuedMessageSummary(message)
+            })
             const guideTitle = failed
               ? message.waitForRuntimeAdmission
                 ? t('queuedMessageRetryUnavailable')
@@ -366,8 +395,9 @@ export function FloatingComposerQueuedMessages({
                     data-queued-message-drag-handle
                     data-queued-message-drag-id={message.id}
                     draggable={reorderEnabled}
-                    aria-label={t('queuedMessageReorder')}
-                    title={t('queuedMessageReorder')}
+                    aria-label={reorderLabel}
+                    aria-describedby={reorderHintId}
+                    title={reorderLabel}
                     ref={(node) => {
                       if (node) reorderHandleRefs.current.set(message.id, node)
                       else reorderHandleRefs.current.delete(message.id)

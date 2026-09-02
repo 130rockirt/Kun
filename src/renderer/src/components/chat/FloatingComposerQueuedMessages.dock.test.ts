@@ -9,9 +9,11 @@ import {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, values?: { count?: number }) => values?.count == null
-      ? key
-      : `${key}:${values.count}`
+    t: (key: string, values?: Record<string, string | number>) => {
+      const parts = Object.entries(values ?? {})
+        .map(([name, value]) => `${name}=${String(value)}`)
+      return parts.length > 0 ? `${key} ${parts.join(' ')}` : key
+    }
   })
 }))
 
@@ -161,7 +163,7 @@ describe('FloatingComposerQueuedMessages DSH queue dock interactions', () => {
     const listId = header?.getAttribute('aria-controls')
     expect(listId).toBeTruthy()
     expect(document.getElementById(listId!)?.getAttribute('aria-label'))
-      .toBe('queuedMessagesTitle:2')
+      .toBe('queuedMessagesTitle count=2')
     expect(container.querySelector('[data-queued-message-id="q-1"]')).toBeNull()
     expect(reorderControls(container)).toHaveLength(0)
 
@@ -470,6 +472,78 @@ describe('FloatingComposerQueuedMessages DSH queue dock interactions', () => {
     expect(retry.getAttribute('aria-label')).toBe('queuedMessageRetry')
     await act(async () => retry.click())
     expect(onGuide).toHaveBeenCalledWith('q-failed')
+  })
+
+  it('labels each drag handle with its position and summary plus the keyboard hint', async () => {
+    const longText = 'a queued message summary that is much longer than the limit'
+    await render({
+      messages: [
+        message('q-1', 'first'),
+        message('q-2', 'second'),
+        message('q-3', longText)
+      ]
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-queued-message-header]')?.click()
+    })
+
+    const firstHandle = dragHandle(queueRow(container, 'q-1'))
+    expect(firstHandle.getAttribute('aria-label'))
+      .toBe('queuedMessageReorderHandle index=1 count=3 summary=first')
+    const describedBy = firstHandle.getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    expect(document.getElementById(describedBy!)?.textContent)
+      .toBe('queuedMessageReorder')
+
+    const longHandle = dragHandle(queueRow(container, 'q-3'))
+    expect(longHandle.getAttribute('aria-label'))
+      .toBe(`queuedMessageReorderHandle index=3 count=3 summary=${longText.slice(0, 24)}...`)
+    expect(longHandle.getAttribute('title'))
+      .toBe(longHandle.getAttribute('aria-label'))
+  })
+
+  it('announces the new position in a polite live region after keyboard moves', async () => {
+    await render({
+      messages: [message('q-1', 'one'), message('q-2', 'two'), message('q-3', 'three')]
+    })
+    const liveRegion = container.querySelector<HTMLElement>('[role="status"]')
+    expect(liveRegion?.getAttribute('aria-live')).toBe('polite')
+    expect(liveRegion?.textContent).toBe('')
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-queued-message-header]')?.click()
+    })
+
+    const middleHandle = dragHandle(queueRow(container, 'q-2'))
+    await act(async () => {
+      middleHandle.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowUp',
+        bubbles: true
+      }))
+    })
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toBe('queuedMessageMovedToPosition position=1')
+
+    await act(async () => {
+      middleHandle.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowDown',
+        bubbles: true
+      }))
+    })
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toBe('queuedMessageMovedToPosition position=3')
+  })
+
+  it('shows a down chevron when collapsed and an up chevron when expanded', async () => {
+    await render({
+      messages: [message('q-1', 'one'), message('q-2', 'two')]
+    })
+    const header = container.querySelector<HTMLButtonElement>('[data-queued-message-header]')!
+    expect(header.querySelector('.lucide-chevron-down')).not.toBeNull()
+    expect(header.querySelector('.lucide-chevron-up')).toBeNull()
+
+    await act(async () => header.click())
+    expect(header.querySelector('.lucide-chevron-up')).not.toBeNull()
+    expect(header.querySelector('.lucide-chevron-down')).toBeNull()
   })
 
   it('retires live rows and resets expansion before a later queue arrives', async () => {

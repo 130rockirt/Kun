@@ -551,6 +551,8 @@
   "queuedMessageRetryUnavailable": "この仮メッセージは安全に再試行できません。削除して再送信してください",
   "queuedMessageFailed": "送信に失敗しました",
   "queuedMessageReorder": "ドラッグまたは上下キーでキューの順序を変更",
+  "queuedMessageReorderHandle": "メッセージ {{index}} / {{count}} を移動：{{summary}}",
+  "queuedMessageMovedToPosition": "{{position}} 番目に移動しました",
   "guideQueuedMessage": "ガイド",
   "queuedMessagePaused": "一時停止中",
   "sendPausedQueuedMessage": "送信",
