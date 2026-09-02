@@ -8,6 +8,7 @@ import type {
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import type { QueuedUserMessage } from '../../store/chat-store-types'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
+import { interruptDesignPagesRun } from '../../design/design-pages-run'
 import { FloatingComposer, type DesignComposerContext } from '../chat/FloatingComposer'
 import type { ComposerReasoningEffort } from '../chat/FloatingComposerModelPicker'
 import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
@@ -181,7 +182,7 @@ export function DesignDrawingStart({
               onRemoveAttachment={onRemoveAttachment}
               onRemoveContextChip={onRemoveContextChip}
               onSend={onSend}
-              onInterrupt={onInterrupt}
+              onInterrupt={(options) => interruptDesignPagesRun(onInterrupt, options)}
               onConfigureProviders={onConfigureProviders}
             />
           </div>

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import type { AttachmentReference, RuntimeConnectionStatus, ChatBlock } from '../../agent/types'
 import type { QueuedUserMessage } from '../../store/chat-store-types'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
+import { interruptDesignPagesRun } from '../../design/design-pages-run'
 import { LazyMessageTimeline } from '../chat/LazyMessageTimeline'
 import { FloatingComposer } from '../chat/FloatingComposer'
 import type { ComposerReasoningEffort } from '../chat/FloatingComposerModelPicker'
@@ -181,7 +182,7 @@ export function DesignImplementPanel({
           onPasteClipboardImage={onPasteClipboardImage}
           onRemoveAttachment={onRemoveAttachment}
           onSend={onSend}
-          onInterrupt={onInterrupt}
+          onInterrupt={(options) => interruptDesignPagesRun(onInterrupt, options)}
           onConfigureProviders={onConfigureProviders}
         />
       </div>
