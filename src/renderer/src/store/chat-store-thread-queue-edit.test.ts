@@ -50,6 +50,37 @@ describe('chat store queued message edit', () => {
     expect(persistActiveQueuedMessages).toHaveBeenCalledOnce()
   })
 
+  it('restores an image-bearing queued message, persists the queue, and rejects ineligible rows', () => {
+    const imageMessage = {
+      id: 'q-image',
+      text: 'inspect the screenshot',
+      deliveryState: 'pending' as const,
+      attachmentIds: ['attachment-1'],
+      attachments: [{ id: 'attachment-1', kind: 'image' as const, name: 'shot.png' }]
+    }
+    let state = {
+      queuedMessages: [imageMessage, { id: 'q-plan', text: 'internal', mode: 'plan' }]
+    } as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      state = { ...state, ...update }
+    }
+    const get: ChatStoreGet = () => state
+    const persistActiveQueuedMessages = vi.fn()
+    const actions = createThreadQueueActions(
+      { set, get, sseAbortRef: { current: null } } as StoreActionContext,
+      { persistActiveQueuedMessages } as unknown as ThreadActionRuntime
+    )
+
+    expect(actions.restoreQueuedMessage('q-image')).toEqual(imageMessage)
+    expect(state.queuedMessages).toEqual([{ id: 'q-plan', text: 'internal', mode: 'plan' }])
+    expect(persistActiveQueuedMessages).toHaveBeenCalledOnce()
+
+    expect(actions.restoreQueuedMessage('q-plan')).toBeNull()
+    expect(actions.restoreQueuedMessage('missing')).toBeNull()
+    expect(persistActiveQueuedMessages).toHaveBeenCalledOnce()
+  })
+
   it('retains a failed provisional admission instead of retrying it into deletion', async () => {
     let state = {
       busy: false,

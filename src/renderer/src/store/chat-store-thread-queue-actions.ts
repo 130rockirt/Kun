@@ -58,7 +58,7 @@ import {
   reconcileQueuedMessages,
   saveQueuedMessagesForThread
 } from './queued-message-persistence'
-import { editQueuedMessageInQueue } from './queued-message-edit'
+import { editQueuedMessageInQueue, restoreQueuedMessageFromQueue } from './queued-message-edit'
 import {
   accountIdForComposerSelection,
   activeClawChannel,
@@ -171,7 +171,7 @@ import {
 export function createThreadQueueActions(
   context: StoreActionContext,
   runtime: ThreadActionRuntime
-): Pick<ChatState, 'drainQueuedMessages' | 'removeQueuedMessage' | 'editQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage'> {
+): Pick<ChatState, 'drainQueuedMessages' | 'removeQueuedMessage' | 'editQueuedMessage' | 'restoreQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage'> {
   const { set, get, sseAbortRef } = context
   return {
   drainQueuedMessages: async () => {
@@ -243,6 +243,14 @@ export function createThreadQueueActions(
     set({ queuedMessages: edited.messages })
     runtime.persistActiveQueuedMessages()
     return true
+  },
+
+  restoreQueuedMessage: (id) => {
+    const restored = restoreQueuedMessageFromQueue(get().queuedMessages, id)
+    if (!restored.restored) return null
+    set({ queuedMessages: restored.messages })
+    runtime.persistActiveQueuedMessages()
+    return restored.restored
   },
 
   reorderQueuedMessage: (id, targetId, position) => {

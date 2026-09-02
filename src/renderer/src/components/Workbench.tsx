@@ -422,7 +422,7 @@ export function Workbench(): ReactElement {
     handlePickAttachments,
     handlePasteClipboardImage,
     removeComposerAttachments,
-    removeComposerAttachment,
+    removeComposerAttachment, restoreComposerAttachments,
     setAttachmentUploadError,
     webAccessAvailable
   } = useWorkbenchAttachmentRuntime({
@@ -601,7 +601,7 @@ export function Workbench(): ReactElement {
     attachmentUploadBusy, attachmentUploadError, activeSddDraft, composerFileReferences,
     designDocumentFileMentionCandidates, webAccessAvailable, composerExecutionSettings,
     composerExecutionApplying, runtimeSkills, disabledSkillIds, handlePickAttachments,
-    handlePasteClipboardImage, removeComposerAttachment, addComposerFileReference,
+    handlePasteClipboardImage, removeComposerAttachment, restoreComposerAttachments, addComposerFileReference,
     pickComposerFileReferences, openWorkspaceFileTreeTab, openDesignFileTreeTab,
     removeComposerFileReference, queuedMessages, removeQueuedMessage, guideQueuedMessage,
     interrupt, handleGuiPlanCommand, useWorktreePool, worktreeBranch, setWorktreeBranch,

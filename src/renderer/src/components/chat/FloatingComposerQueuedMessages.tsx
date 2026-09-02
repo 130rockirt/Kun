@@ -69,6 +69,7 @@ export type QueuedComposerMessage = {
   designDocumentTarget?: unknown
   designImagePlacementTarget?: unknown
   writeContext?: unknown
+  composerRestoreEligible?: boolean
 }
 
 type QueueActionKind = 'edit' | 'remove' | 'guide'
@@ -87,6 +88,7 @@ type Props = {
   onRemove: (id: string) => void
   onGuide?: (id: string) => void | Promise<unknown>
   onEdit?: (id: string, text: string) => boolean | void | Promise<boolean | void>
+  onRestoreToComposer?: (id: string) => boolean | void | Promise<boolean | void>
   onReorder?: (id: string, targetId: string, position: QueueDropPosition) => void
 }
 
@@ -140,6 +142,7 @@ export function FloatingComposerQueuedMessages({
   onRemove,
   onGuide,
   onEdit,
+  onRestoreToComposer,
   onReorder
 }: Props): ReactElement | null {
   const { t } = useTranslation('common')
@@ -331,6 +334,7 @@ export function FloatingComposerQueuedMessages({
             const imageCount = attachmentImageCount(message)
             const imageNames = imageCount > 0 ? attachmentImageNames(message) : ''
             const canEdit = Boolean(onEdit && canEditQueuedComposerMessage(message))
+            const canRestore = !canEdit && Boolean(onRestoreToComposer && message.composerRestoreEligible)
             const canGuide = Boolean(onGuide && (recoverable
               ? !running && !message.waitForRuntimeAdmission
               : (
@@ -491,10 +495,24 @@ export function FloatingComposerQueuedMessages({
                       {onEdit ? (
                         <QueueActionButton
                           action="edit"
-                          label={canEdit ? t('queuedMessageEdit') : t('queuedMessageEditUnsupported')}
-                          title={canEdit ? t('queuedMessageEdit') : t('queuedMessageEditUnsupported')}
-                          disabled={busy !== null || !canEdit}
-                          onClick={() => setEditing({ id: message.id, text: message.text })}
+                          label={canEdit
+                            ? t('queuedMessageEdit')
+                            : canRestore
+                              ? t('queuedMessageEditInComposer')
+                              : t('queuedMessageEditUnsupported')}
+                          title={canEdit
+                            ? t('queuedMessageEdit')
+                            : canRestore
+                              ? t('queuedMessageEditInComposer')
+                              : t('queuedMessageEditUnsupported')}
+                          disabled={busy !== null || (!canEdit && !canRestore)}
+                          onClick={() => canEdit
+                            ? setEditing({ id: message.id, text: message.text })
+                            : void applyAction(
+                              message.id,
+                              'edit',
+                              () => onRestoreToComposer!(message.id)
+                            )}
                         >
                           <Pencil size={14} strokeWidth={1.8} />
                         </QueueActionButton>

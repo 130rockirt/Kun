@@ -543,6 +543,7 @@
   "queuedMessageRemove": "ลบข้อความที่อยู่ในคิว",
   "queuedMessageMoreActions": "การดำเนินการเพิ่มเติมสำหรับข้อความ",
   "queuedMessageEdit": "แก้ไขข้อความ",
+  "queuedMessageEditInComposer": "แก้ไขในช่องป้อนข้อความ",
   "queuedMessageSave": "บันทึกข้อความที่รอ",
   "queuedMessageCancelEdit": "ยกเลิกการแก้ไข",
   "queuedMessageEditUnsupported": "แก้ไขในบรรทัดได้เฉพาะข้อความธรรมดาที่ยังไม่ส่ง",

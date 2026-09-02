@@ -5,7 +5,7 @@ import {
   queuedMessageMatchesRunningTurn
 } from '../../store/queued-message-guidance'
 import { useChatStore } from '../../store/chat-store'
-import { canInlineEditQueuedMessage } from '../../store/queued-message-edit'
+import { canInlineEditQueuedMessage, canRestoreQueuedMessageToComposer, queuedMessageComposerRestoreText } from '../../store/queued-message-edit'
 import type { WorkbenchChatStageProps } from './WorkbenchChatStage'
 
 type ComposerProps = WorkbenchChatStageProps['composerProps']
@@ -77,6 +77,7 @@ type UseWorkbenchChatComposerPropsInput = {
   openFileTreeSidePanel: () => void
   openDesignFileTreeSidePanel: () => void
   removeComposerFileReference: NonNullable<ComposerProps['onRemoveFileReference']>
+  restoreComposerAttachments: (attachments: readonly import('../../agent/types').AttachmentReference[]) => void | Promise<void>
   queuedMessages: QueuedUserMessage[]
   removeQueuedMessage: ComposerProps['onRemoveQueuedMessage']
   editQueuedMessage: NonNullable<ComposerProps['onEditQueuedMessage']>
@@ -167,6 +168,7 @@ export function useWorkbenchChatComposerProps({
   openFileTreeSidePanel,
   openDesignFileTreeSidePanel,
   removeComposerFileReference,
+  restoreComposerAttachments,
   queuedMessages,
   removeQueuedMessage,
   editQueuedMessage,
@@ -191,6 +193,7 @@ export function useWorkbenchChatComposerProps({
     ))
     return runningUser?.kind === 'user' ? runningUser.meta : undefined
   })
+  const restoreQueuedMessage = useChatStore((s) => s.restoreQueuedMessage)
   return useMemo(() => {
     const designTaskActive = route === 'chat' && !activeSddDraft && taskSurface === 'design'
     return ({
@@ -288,11 +291,22 @@ export function useWorkbenchChatComposerProps({
       ...(message.guiDesignArtifact ? { guiDesignArtifact: message.guiDesignArtifact } : {}),
       ...(message.writeContext ? { writeContext: message.writeContext } : {}),
       inlineEditEligible: canInlineEditQueuedMessage(message),
+      composerRestoreEligible: canRestoreQueuedMessageToComposer(message),
       guidanceEligible: canGuideQueuedMessage(message) &&
         queuedMessageMatchesRunningTurn(message, runningTurnMeta)
     })),
     onRemoveQueuedMessage: removeQueuedMessage,
     onEditQueuedMessage: editQueuedMessage,
+    onRestoreQueuedMessageToComposer: (id) => {
+      const restored = restoreQueuedMessage(id)
+      if (!restored) return false
+      const text = queuedMessageComposerRestoreText(restored)
+      setInput(text
+        ? (input.trim() ? `${input.replace(/\s+$/, '')}\n${text}` : text)
+        : input)
+      if (restored.attachments?.length) void restoreComposerAttachments(restored.attachments)
+      return true
+    },
     onGuideQueuedMessage: guideQueuedMessage,
     onInterrupt: (options) => void interrupt(options),
     onPlanCommand: designTaskActive ? undefined : () => void handleGuiPlanCommand(),
@@ -379,6 +393,8 @@ export function useWorkbenchChatComposerProps({
     handleSend,
     guideQueuedMessage,
     editQueuedMessage,
+    restoreComposerAttachments,
+    restoreQueuedMessage,
     graphEnabled,
     input,
     interrupt,

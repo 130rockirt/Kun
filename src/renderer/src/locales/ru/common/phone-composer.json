@@ -543,6 +543,7 @@
   "queuedMessageRemove": "Удалить сообщение из очереди",
   "queuedMessageMoreActions": "Другие действия с сообщением",
   "queuedMessageEdit": "Редактировать сообщение",
+  "queuedMessageEditInComposer": "Изменить в поле ввода",
   "queuedMessageSave": "Сохранить сообщение в очереди",
   "queuedMessageCancelEdit": "Отменить редактирование",
   "queuedMessageEditUnsupported": "Встроенное редактирование доступно только для неотправленного простого текста",

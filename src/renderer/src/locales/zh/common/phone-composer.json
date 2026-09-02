@@ -578,6 +578,7 @@
   "queuedMessageRemove": "移除排队消息",
   "queuedMessageMoreActions": "更多排队消息操作",
   "queuedMessageEdit": "编辑消息",
+  "queuedMessageEditInComposer": "退回到输入框编辑",
   "queuedMessageSave": "保存排队消息",
   "queuedMessageCancelEdit": "取消编辑",
   "queuedMessageEditUnsupported": "只有尚未发送的纯文本消息可原位编辑",

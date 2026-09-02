@@ -543,6 +543,7 @@
   "queuedMessageRemove": "キューに入れられたメッセージを削除する",
   "queuedMessageMoreActions": "キューのメッセージのその他の操作",
   "queuedMessageEdit": "メッセージを編集",
+  "queuedMessageEditInComposer": "入力欄で編集",
   "queuedMessageSave": "待機メッセージを保存",
   "queuedMessageCancelEdit": "編集をキャンセル",
   "queuedMessageEditUnsupported": "未送信のプレーンテキストのみインライン編集できます",

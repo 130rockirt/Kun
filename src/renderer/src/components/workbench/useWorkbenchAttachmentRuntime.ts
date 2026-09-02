@@ -3,6 +3,8 @@ import type { CoreRuntimeInfoJson } from '../../agent/kun-contract'
 import type { AttachmentReference, NormalizedThread, RuntimeConnectionStatus } from '../../agent/types'
 import type { CanvasDocument } from '../../design/canvas/canvas-types'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
+import { getProvider } from '../../agent/registry'
+import { attachmentPreviewLoader } from '../chat/attachment-preview-loader'
 import { isChatAttachmentUploadEnabled } from '../../lib/attachment-upload-availability'
 import { useSddDraftStore } from '../../sdd/sdd-draft-store'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
@@ -212,6 +214,52 @@ export function useWorkbenchAttachmentRuntime({
     onFallbackToFileReference
   })
 
+  // Returns an image-bearing queued message to the composer: merge references
+  // by id, then lazily fetch missing thumbnails from the attachment store.
+  // Preview failures stay silent; the composer already renders a file-name
+  // chip for attachments without a previewUrl.
+  const restoreComposerAttachments = useCallback(async (
+    attachments: readonly AttachmentReference[]
+  ): Promise<void> => {
+    const images = attachments.filter((attachment) => attachment.kind !== 'document')
+    if (images.length === 0) return
+    const scope = composerAttachmentScopeRef.current
+    const workspace = activeComposerWorkspace()
+    setComposerAttachmentsForScope(scope, (current) => {
+      const byId = new Map(current.map((item) => [item.id, item]))
+      for (const attachment of images) byId.set(attachment.id, attachment)
+      return [...byId.values()]
+    })
+    const provider = getProvider()
+    await Promise.all(images.map(async (attachment) => {
+      if (attachment.previewUrl) return
+      if (typeof provider.getAttachmentContent !== 'function') return
+      try {
+        const preview = await attachmentPreviewLoader.load(
+          JSON.stringify(['attachment', attachment.id, activeThreadId ?? '', workspace ?? '']),
+          async () => {
+            const content = await provider.getAttachmentContent!(attachment.id, {
+              ...(activeThreadId ? { threadId: activeThreadId } : {}),
+              ...(workspace ? { workspace } : {})
+            })
+            return {
+              previewUrl: `data:${content.attachment.mimeType};base64,${content.dataBase64}`
+            }
+          }
+        )
+        setComposerAttachmentsForScope(scope, (current) => current.map((item) =>
+          item.id === attachment.id ? { ...item, previewUrl: preview.previewUrl } : item
+        ))
+      } catch {
+        // Keep the name chip; the queued send already holds the attachment id.
+      }
+    }))
+  }, [
+    activeThreadId,
+    activeComposerWorkspace,
+    setComposerAttachmentsForScope
+  ])
+
   return {
     attachmentUploadBusy,
     attachmentUploadEnabled,
@@ -224,6 +272,7 @@ export function useWorkbenchAttachmentRuntime({
     handlePickAttachments,
     removeComposerAttachments,
     removeComposerAttachment,
+    restoreComposerAttachments,
     setAttachmentUploadError,
     webAccessAvailable
   }

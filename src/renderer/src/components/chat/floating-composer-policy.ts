@@ -161,6 +161,7 @@ export type FloatingComposerProps = {
   queuedMessages: QueuedComposerMessage[]
   onRemoveQueuedMessage: (id: string) => void
   onEditQueuedMessage?: (id: string, text: string) => boolean | void | Promise<boolean | void>
+  onRestoreQueuedMessageToComposer?: (id: string) => boolean | void | Promise<boolean | void>
   onReorderQueuedMessage?: (
     id: string,
     targetId: string,

@@ -14,7 +14,7 @@ export function FloatingComposerStackView({
     busy, canOpenGoalPanel, canSetGoalPanelDraft, clearActiveThreadGoal, compact, composerMenuOpen,
     currentTurnOrchestration, draft, fileMentions, filteredSlashCommands, goalBannerLabel,
     goalElapsedLabel, goalPanelOpen, goalPanelRef, graphEnabled, highlightedSlashCommand,
-    onEditQueuedMessage, onReorderQueuedMessage, onGuideQueuedMessage, onOpenGraph, onOpenGraphChild, onRemoveQueuedMessage, pendingUserInputBlock,
+    onEditQueuedMessage, onReorderQueuedMessage, onGuideQueuedMessage, onOpenGraph, onOpenGraphChild, onRemoveQueuedMessage, onRestoreQueuedMessageToComposer, pendingUserInputBlock,
     queuedMessages, runtimeReady,
     setActiveThreadGoalStatus, setGoalFromComposerInput, setGoalPanelOpen,
     showGoalFloater, showGoalMenuOption, showGraphProgress, showTodoProgress, slashCommandMenu,
@@ -31,6 +31,13 @@ export function FloatingComposerStackView({
             onRemove={onRemoveQueuedMessage}
             onGuide={onGuideQueuedMessage}
             onEdit={onEditQueuedMessage}
+            onRestoreToComposer={onRestoreQueuedMessageToComposer
+              ? (id: string) => {
+                  const restored = onRestoreQueuedMessageToComposer(id)
+                  if (restored !== false) draft.focusComposer()
+                  return restored
+                }
+              : undefined}
             onReorder={onReorderQueuedMessage}
           />
         )}

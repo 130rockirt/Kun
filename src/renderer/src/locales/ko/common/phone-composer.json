@@ -543,6 +543,7 @@
   "queuedMessageRemove": "대기 중인 메시지 제거",
   "queuedMessageMoreActions": "대기 메시지 추가 작업",
   "queuedMessageEdit": "메시지 편집",
+  "queuedMessageEditInComposer": "입력 창에서 편집",
   "queuedMessageSave": "대기 메시지 저장",
   "queuedMessageCancelEdit": "편집 취소",
   "queuedMessageEditUnsupported": "아직 전송되지 않은 일반 텍스트만 인라인 편집할 수 있습니다",

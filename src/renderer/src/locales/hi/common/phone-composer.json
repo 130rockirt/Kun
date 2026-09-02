@@ -543,6 +543,7 @@
   "queuedMessageRemove": "पंक्तिबद्ध संदेश हटाएँ",
   "queuedMessageMoreActions": "पंक्तिबद्ध संदेश की और कार्रवाइयाँ",
   "queuedMessageEdit": "संदेश संपादित करें",
+  "queuedMessageEditInComposer": "इनपुट बॉक्स में संपादित करें",
   "queuedMessageSave": "कतारबद्ध संदेश सहेजें",
   "queuedMessageCancelEdit": "संपादन रद्द करें",
   "queuedMessageEditUnsupported": "केवल लंबित सादा-पाठ संदेशों को यहीं संपादित किया जा सकता है",

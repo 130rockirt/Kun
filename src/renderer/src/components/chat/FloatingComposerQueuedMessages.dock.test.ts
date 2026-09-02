@@ -364,6 +364,39 @@ describe('FloatingComposerQueuedMessages DSH queue dock interactions', () => {
     expect(action('guide', row).disabled).toBe(false)
   })
 
+  it('restores a composer-eligible image row through the edit action', async () => {
+    const onRestoreToComposer = vi.fn(() => true)
+    const onEdit = vi.fn(() => true)
+    await render({
+      messages: [message('q-image', 'inspect the image', {
+        attachmentIds: ['attachment-1'],
+        attachments: [{ name: 'shot.png', kind: 'image' as const }],
+        composerRestoreEligible: true
+      })],
+      onEdit,
+      onRestoreToComposer
+    })
+    const row = queueRow(container, 'q-image')
+    const editButton = action('edit', row)
+    expect(editButton.disabled).toBe(false)
+    expect(editButton.getAttribute('aria-label')).toBe('queuedMessageEditInComposer')
+
+    await act(async () => editButton.click())
+    expect(onRestoreToComposer).toHaveBeenCalledWith('q-image')
+    expect(onEdit).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-queued-message-editor]')).toBeNull()
+  })
+
+  it('keeps the edit action disabled without a composer restore handler', async () => {
+    await render({
+      messages: [message('q-image', 'inspect the image', {
+        attachmentIds: ['attachment-1'],
+        composerRestoreEligible: true
+      })]
+    })
+    expect(action('edit').disabled).toBe(true)
+  })
+
   it('interlocks every row action and forces expansion while one operation is busy', async () => {
     const pending = deferred<void>()
     const onGuide = vi.fn(() => pending.promise)

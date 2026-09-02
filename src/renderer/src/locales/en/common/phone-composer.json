@@ -580,6 +580,7 @@
   "queuedMessageRemove": "Remove queued message",
   "queuedMessageMoreActions": "More queued message actions",
   "queuedMessageEdit": "Edit message",
+  "queuedMessageEditInComposer": "Edit in input box",
   "queuedMessageSave": "Save queued message",
   "queuedMessageCancelEdit": "Cancel editing",
   "queuedMessageEditUnsupported": "Only pending plain-text messages can be edited inline",
