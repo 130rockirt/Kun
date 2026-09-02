@@ -460,6 +460,7 @@ export async function createRuntimeServices(
   const childToolHost = new LocalToolHost({
     registry: childRegistry,
     readTracker: true,
+    ...(executionLeases ? { leaseAuthority: executionLeases } : {}),
     ...(resolvedHooks.length ? { hooks: resolvedHooks } : {})
   })
   const defaultIsAgentSdk = process.env.KUN_RUNTIME_PROVIDER_KIND === 'agent-sdk'

@@ -30,6 +30,18 @@ const HOST_RESUME_RENEWAL_GRACE_MS = 20_000
 const LEASE_RELEASE_ATTEMPTS = 3
 type LeaseClientState = 'open' | 'closing' | 'closed'
 
+/**
+ * Per-thread authority as seen by this runtime. `grace` means the local
+ * deadline fired and this runtime unilaterally extended its own deadline to
+ * renew; Manager may already have re-issued the lease to another runtime, so
+ * side-effecting tool dispatch must pause until renewal resolves.
+ */
+export type ThreadLeaseAuthorityState = 'holder' | 'grace' | 'lost'
+
+type AuthorityWaiter = {
+  resolve: (state: 'holder' | 'lost') => void
+}
+
 export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePort {
   private readonly renewals = new Map<string, ActiveRenewal>()
   // Keep the last acquired fence even after renewal is authoritatively lost.
@@ -43,6 +55,8 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
   private onLeaseLost: ((lease: ThreadExecutionLease) => void) | undefined
   private state: LeaseClientState = 'open'
   private shutdownPromise: Promise<void> | undefined
+  private readonly authorityByThread = new Map<string, ThreadLeaseAuthorityState>()
+  private readonly authorityWaiters = new Map<string, AuthorityWaiter[]>()
 
   constructor(
     private readonly manager: ServiceManagerConnection,
@@ -52,6 +66,29 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
 
   setLeaseLostHandler(handler: (lease: ThreadExecutionLease) => void): void {
     this.onLeaseLost = handler
+  }
+
+  authorityState(threadId: string): ThreadLeaseAuthorityState {
+    return this.authorityByThread.get(threadId) ?? 'holder'
+  }
+
+  waitAuthorityResolution(threadId: string): Promise<'holder' | 'lost'> {
+    const current = this.authorityState(threadId)
+    if (current !== 'grace') return Promise.resolve(current)
+    return new Promise<'holder' | 'lost'>((resolve) => {
+      const waiters = this.authorityWaiters.get(threadId) ?? []
+      waiters.push({ resolve })
+      this.authorityWaiters.set(threadId, waiters)
+    })
+  }
+
+  private setAuthority(threadId: string, state: ThreadLeaseAuthorityState): void {
+    this.authorityByThread.set(threadId, state)
+    if (state === 'grace') return
+    const waiters = this.authorityWaiters.get(threadId)
+    if (!waiters || waiters.length === 0) return
+    this.authorityWaiters.delete(threadId)
+    for (const waiter of waiters) waiter.resolve(state)
   }
 
   async acquire(threadId: string, turnId: string): Promise<ThreadExecutionLease> {
@@ -87,6 +124,7 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
     )
     this.leasesByTurn.set(parsed.lease.turnId, parsed.lease)
     rememberTurnLease(parsed.lease)
+    this.setAuthority(parsed.lease.threadId, 'holder')
     if (this.state !== 'open') {
       await this.release(parsed.lease.threadId, parsed.lease.turnId)
       throw new Error('thread execution lease client is shutting down')
@@ -146,6 +184,9 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
       this.leasesByTurn.delete(turnId)
     }
     forgetTurnLease(lease)
+    if (!this.renewals.has(threadId)) {
+      this.setAuthority(threadId, 'lost')
+    }
   }
 
   async owner(threadId: string): Promise<ThreadExecutionLease | null> {
@@ -263,6 +304,7 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
     latest.lease = lease
     this.leasesByTurn.set(lease.turnId, lease)
     rememberTurnLease(lease)
+    this.setAuthority(lease.threadId, 'holder')
     latest.transientFailures = 0
     latest.deadlineGraceUsed = false
     this.armDeadline(latest)
@@ -285,6 +327,7 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
 
   private loseRenewal(lease: ThreadExecutionLease): void {
     this.stopRenewal(lease.threadId, lease.turnId, lease.fencingToken)
+    this.setAuthority(lease.threadId, 'lost')
     this.onLeaseLost?.(lease)
   }
 
@@ -312,6 +355,10 @@ export class ManagerThreadExecutionLeaseClient implements ThreadExecutionLeasePo
     ) return
     if (!current.deadlineGraceUsed) {
       current.deadlineGraceUsed = true
+      // The local deadline fired before renewal completed. This runtime is no
+      // longer provably the Manager-recognized owner: pause new side-effecting
+      // tool dispatch until the renewal resolves (or fails).
+      this.setAuthority(threadId, 'grace')
       current.lease = {
         ...current.lease,
         expiresAt: new Date(Date.now() + HOST_RESUME_RENEWAL_GRACE_MS).toISOString()

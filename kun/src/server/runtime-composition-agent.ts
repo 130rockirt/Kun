@@ -86,6 +86,7 @@ export async function createRuntimeAgentComposition(
     registry: registryComposition.registry,
     readTracker: true,
     prepare: (context) => prepareExtensionContributions?.(context),
+    ...(services.executionLeases ? { leaseAuthority: services.executionLeases } : {}),
     ...(services.resolvedHooks.length ? { hooks: services.resolvedHooks } : {})
   })
   const extensionTools = new ExtensionToolRegistry({ registry: registryComposition.registry })
