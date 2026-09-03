@@ -44,7 +44,8 @@ const SweepStateSchema = z.object({
   version: z.literal(1),
   generation: z.number().int().nonnegative(),
   cursor: z.string().optional(),
-  inProgress: z.string().optional()
+  inProgress: z.string().optional(),
+  inProgressSource: z.enum(['priority', 'sequential']).optional()
 }).strict()
 
 type SweepState = z.infer<typeof SweepStateSchema>
@@ -114,22 +115,40 @@ export class FileSessionEventIndexRebuild {
           await this.saveSweep(sweep)
           return false
         }
-        const target = sweep.inProgress ?? this.takePriority(threads) ?? nextAfter(threads, sweep.cursor)
+        let target: string | undefined
+        let source: 'priority' | 'sequential'
+        if (sweep.inProgress) {
+          target = sweep.inProgress
+          source = sweep.inProgressSource ?? 'priority'
+        } else {
+          target = this.takePriority(threads)
+          if (target) {
+            source = 'priority'
+          } else {
+            target = nextAfter(threads, sweep.cursor)
+            source = 'sequential'
+          }
+        }
         if (!target) {
           sweep.generation += 1
           sweep.cursor = undefined
           sweep.inProgress = undefined
+          sweep.inProgressSource = undefined
           await this.saveSweep(sweep)
           return true
         }
         const outcome = await this.processThread(target, startedAt)
         if (outcome === 'pending') {
           sweep.inProgress = target
+          sweep.inProgressSource = source
           await this.saveSweep(sweep)
           return false
         }
         sweep.inProgress = undefined
-        if (!sweep.cursor || target > sweep.cursor) sweep.cursor = target
+        sweep.inProgressSource = undefined
+        if (source === 'sequential' && (!sweep.cursor || target > sweep.cursor)) {
+          sweep.cursor = target
+        }
         await this.saveSweep(sweep)
       }
     } catch (error) {

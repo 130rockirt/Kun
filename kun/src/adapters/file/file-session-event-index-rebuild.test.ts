@@ -219,4 +219,82 @@ describe('FileSessionEventIndexRebuild', () => {
     await expect(stat(paths.rebuildBin)).rejects.toThrow()
     await expect(stat(paths.rebuildState)).rejects.toThrow()
   })
+
+  it('priority rebuild does not advance the sequential sweep cursor or skip threads', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-event-rebuild-priority-'))
+    roots.push(root)
+    const threadsDir = join(root, 'threads')
+    const ids = ['thread-a', 'thread-b', 'thread-c', 'thread-d']
+    const paths = new Map<string, string>()
+    for (const id of ids) {
+      paths.set(id, await writeEvents(join(threadsDir, id), id, 300))
+    }
+
+    const index = new FileSessionEventIndex()
+    const rebuild = await newRebuild(threadsDir, index, {})
+    rebuild.request('thread-d')
+    await runToCompletion(rebuild)
+
+    // Priority thread `thread-d` must not move the cursor past b/c.
+    for (const id of ids) {
+      expect(await index.startOffset(id, paths.get(id)!, 290)).toBeGreaterThan(0)
+    }
+    expect(rebuild.stats()).toMatchObject({ published: 4, skippedValid: 1 })
+  }, 30000)
+
+  it('persists the priority source across slices and restarts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-event-rebuild-source-'))
+    roots.push(root)
+    const threadsDir = join(root, 'threads')
+    const threadId = 'thread-d'
+    const threadDir = join(threadsDir, threadId)
+    const eventsPath = await writeEvents(threadDir, threadId, 600)
+
+    const index = new FileSessionEventIndex()
+    const rebuild = await newRebuild(threadsDir, index, { maxEvents: 100 })
+    rebuild.request(threadId)
+    await rebuild.runSlice()
+    await rebuild.runSlice()
+
+    const sweep = JSON.parse(await readFile(join(threadsDir, 'event-index-rebuild.sweep.json'), 'utf8'))
+    expect(sweep.inProgress).toBe(threadId)
+    expect(sweep.inProgressSource).toBe('priority')
+    expect(sweep.cursor).toBeUndefined()
+
+    await runToCompletion(rebuild)
+    expect(await index.startOffset(threadId, eventsPath, 590)).toBeGreaterThan(0)
+
+    // A fresh instance over the same files must resume without losing source.
+    const resumed = await newRebuild(threadsDir, index, { maxEvents: 100 })
+    await runToCompletion(resumed)
+    expect(await index.startOffset(threadId, eventsPath, 590)).toBeGreaterThan(0)
+  })
+
+  it('recovers a legacy sweep file without inProgressSource', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-event-rebuild-legacy-'))
+    roots.push(root)
+    const threadsDir = join(root, 'threads')
+    const threadB = 'thread-b'
+    const threadC = 'thread-c'
+    const pathB = await writeEvents(join(threadsDir, threadB), threadB, 300)
+    const pathC = await writeEvents(join(threadsDir, threadC), threadC, 300)
+
+    // Old schema: no inProgressSource field.
+    await writeFile(join(threadsDir, 'event-index-rebuild.sweep.json'), JSON.stringify({
+      version: 1,
+      generation: 0,
+      cursor: 'thread-a',
+      inProgress: threadC
+    }))
+
+    const index = new FileSessionEventIndex()
+    const rebuild = await newRebuild(threadsDir, index, {})
+    await runToCompletion(rebuild)
+
+    // Defaulting the missing source to 'priority' keeps the cursor at
+    // 'thread-a', so thread-b is still visited by the sequential sweep.
+    expect(await index.startOffset(threadB, pathB, 290)).toBeGreaterThan(0)
+    expect(await index.startOffset(threadC, pathC, 290)).toBeGreaterThan(0)
+    expect(rebuild.stats()).toMatchObject({ published: 2, skippedValid: 1 })
+  }, 30000)
 })
