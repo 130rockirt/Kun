@@ -21,7 +21,7 @@ import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 import { drawingHistoryMutationMatches } from '../../design/design-drawing-history'
 import { defaultFrameSizeForDesignTarget } from '../../design/design-context'
-import { cancelDesignPagesRun } from '../../design/design-pages-run'
+import { cancelDesignPagesRun, interruptDesignPagesRun } from '../../design/design-pages-run'
 import { LazyMessageTimeline } from '../chat/LazyMessageTimeline'
 import { FloatingComposer } from '../chat/FloatingComposer'
 import type { DesignComposerContext } from '../chat/FloatingComposer'
@@ -484,7 +484,7 @@ export function DesignConversationContent({
             onRemoveAttachment={onRemoveAttachment}
             onRemoveContextChip={onRemoveContextChip}
             onSend={onSend}
-            onInterrupt={onInterrupt}
+            onInterrupt={(options) => interruptDesignPagesRun(onInterrupt, options)}
             onConfigureProviders={onConfigureProviders}
           />
         )}
