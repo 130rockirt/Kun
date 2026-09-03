@@ -173,6 +173,21 @@ describe('pending TUI update reconciliation', () => {
     await expect(stat(transaction.stagingRoot)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('recognizes an already-activated install when the result write was lost', async () => {
+    const root = await installRoot()
+    const transaction = await writeTuiUpdateTransaction(root, transactionInput(root))
+    // Simulate a successful swap whose result record was never written: the
+    // installed release already matches the transaction target + buildId.
+    await writeFile(
+      join(root, 'release.json'),
+      JSON.stringify({ version: '1.2.4', buildId: BUILD_ID }),
+      'utf8'
+    )
+    const report = await reconcilePendingTuiUpdate(root, { processIsAlive: () => false })
+    expect(report).toEqual({ kind: 'activated', previousVersion: '1.2.3', targetVersion: '1.2.4' })
+    await expect(stat(tuiUpdateTransactionPath(root))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('restores the backup when the install root vanished and staging is unusable', async () => {
     const root = await installRoot()
     const transaction = await writeTuiUpdateTransaction(root, transactionInput(root))

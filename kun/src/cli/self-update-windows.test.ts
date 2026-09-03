@@ -28,6 +28,9 @@ function input(overrides: Partial<Parameters<typeof buildWindowsReplacementScrip
     scriptPath: 'C:\\Users\\me\\AppData\\Local\\KunTui\\.kun.kun-tui-update\\apply-update.ps1',
     previousVersion: '1.2.3',
     targetVersion: '1.2.4',
+    buildId: 'a'.repeat(64),
+    target: 'win32-x64',
+    channel: 'stable',
     lockToken: 'test-lock-token',
     ackPath: 'C:\\Users\\me\\AppData\\Local\\KunTui\\.kun.kun-tui-update\\updater.json',
     updaterStartedAt: '2026-09-03T00:00:00.000Z',
@@ -62,7 +65,7 @@ describe('Windows replacement script', () => {
     expect(script).toContain('Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction Stop')
     expect(script).toContain('install root is missing; restoring the backup before retrying')
     expect(script).toContain('the staged release is missing')
-    expect(script).toContain('activated release.json does not match the target version')
+    expect(script).toContain('activated release.json does not match the staged release')
   })
 
   it('marks each swap phase as a diagnostic stage', () => {
@@ -91,7 +94,20 @@ describe('Windows replacement script', () => {
     expect(script).toContain("Write-UpdateResult 'succeeded' $stage ''")
     expect(script).toContain("Write-UpdateResult 'failed' $stage $reason")
     expect(script).toContain('Add-Content -LiteralPath $log')
-    expect(script).toContain('ConvertTo-Json -Compress | Set-Content -LiteralPath $result')
+    expect(script).toContain('$resultJson = $payload | ConvertTo-Json -Compress')
+    expect(script).toContain('$fs.Flush($true)')
+    expect(script).toContain('Move-Item -LiteralPath $resultTmp -Destination $result -Force -ErrorAction Stop')
+  })
+
+  it('embeds and verifies the staged buildId, target, and channel', () => {
+    const script = buildWindowsReplacementScript(input())
+    const buildId = 'a'.repeat(64)
+    expect(script).toContain(`$expectedBuildId = '${buildId}'`)
+    expect(script).toContain("$expectedTarget = 'win32-x64'")
+    expect(script).toContain("$expectedChannel = 'stable'")
+    expect(script).toContain(
+      '$release.version -ne $targetVersion -or $release.buildId -ne $expectedBuildId -or $release.target -ne $expectedTarget -or $release.channel -ne $expectedChannel'
+    )
   })
 
   it('records wait and swap stages for diagnostics', () => {
@@ -145,7 +161,8 @@ describe('Windows replacement script', () => {
     expect(script).toContain("$lockToken = 'test-lock-token'")
     expect(script).toContain("$updaterStartedAt = '2026-09-03T00:00:00.000Z'")
     expect(script).toContain('Move-Item -LiteralPath $lockTmp -Destination $lock -Force -ErrorAction Stop')
-    expect(script).toContain('Set-Content -LiteralPath $ack -Encoding utf8')
+    expect(script).toContain('Set-Content -LiteralPath $lockTmp -Encoding utf8 -ErrorAction Stop')
+    expect(script).toContain('Set-Content -LiteralPath $ack -Encoding utf8 -ErrorAction Stop')
     expect(script).toContain('root = $current')
     expect(script).toContain('processIdentity = $processIdentity')
     expect(script).toContain('if (-not $takeoverOk) { exit 1 }')
@@ -196,6 +213,9 @@ describe('Windows replacement scheduling', () => {
         lockPath: join(dir, 'kun.lock'),
         previousVersion: '1.2.3',
         targetVersion: '1.2.4',
+        buildId: 'a'.repeat(64),
+        target: 'win32-x64',
+        channel: 'stable',
         lockToken: 'token',
         ackPath,
         updaterStartedAt: new Date().toISOString(),
@@ -234,6 +254,9 @@ describe('Windows replacement scheduling', () => {
         lockPath: join(dir, 'kun.lock'),
         previousVersion: '1.2.3',
         targetVersion: '1.2.4',
+        buildId: 'a'.repeat(64),
+        target: 'win32-x64',
+        channel: 'stable',
         lockToken: 'token',
         ackPath,
         updaterStartedAt: new Date().toISOString(),

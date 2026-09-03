@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { WorkspaceCreationTimeEntry } from '@shared/kun-gui-api'
 import { normalizeWorkspaceRoot, workspaceRootIdentityKey } from '../../lib/workspace-path'
 import type { SidebarWorkspaceCreationTimes } from './sidebar-project-selectors'
+import { firstSeenTimesFor } from './sidebar-project-first-seen'
 
 /**
  * Dedupes workspace paths by identity key while keeping the first seen real
@@ -57,7 +58,9 @@ export function useSidebarWorkspaceCreationTimes(
     }
     let cancelled = false
     void read([...uniquePaths.values()]).then((entries) => {
-      if (!cancelled) setCreationTimes(sidebarWorkspaceCreationTimesFromEntries(entries))
+      if (cancelled) return
+      const seedTimes = sidebarWorkspaceCreationTimesFromEntries(entries)
+      setCreationTimes(firstSeenTimesFor(Object.keys(seedTimes), seedTimes))
     }).catch(() => {
       // Ordering falls back to the legacy active-first/name comparator.
     })

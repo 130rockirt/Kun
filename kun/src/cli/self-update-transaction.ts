@@ -372,18 +372,27 @@ export async function clearTuiUpdateTransaction(installRoot: string): Promise<vo
   }
 }
 
-type StagedRelease = { version: string; buildId: string }
+type ReleaseMetadata = { version: string; buildId: string }
 
-async function readStagedRelease(stagingRoot: string): Promise<StagedRelease | null> {
+async function readReleaseFile(path: string): Promise<ReleaseMetadata | null> {
   try {
-    const parsed = JSON.parse(
-      await readFile(join(stagingRoot, 'kun', 'release.json'), 'utf8')
-    ) as { version?: unknown; buildId?: unknown }
+    const parsed = JSON.parse(await readFile(path, 'utf8')) as {
+      version?: unknown
+      buildId?: unknown
+    }
     if (typeof parsed.version !== 'string' || typeof parsed.buildId !== 'string') return null
     return { version: parsed.version, buildId: parsed.buildId }
   } catch {
     return null
   }
+}
+
+async function readStagedRelease(stagingRoot: string): Promise<ReleaseMetadata | null> {
+  return readReleaseFile(join(stagingRoot, 'kun', 'release.json'))
+}
+
+async function readInstalledRelease(installRoot: string): Promise<ReleaseMetadata | null> {
+  return readReleaseFile(join(installRoot, 'release.json'))
 }
 
 /**
@@ -543,6 +552,24 @@ export async function reconcilePendingTuiUpdate(
   )
   if (updater && processIsAlive(updater.pid, updater)) {
     return { kind: 'busy', pid: updater.pid }
+  }
+  // The detached swap may have completed but lost its result write (for
+  // example a torn write after a successful activation). If the installed
+  // release already matches the transaction, report the activation instead of
+  // an interruption.
+  const installed = await readInstalledRelease(canonical)
+  if (
+    installed &&
+    installed.version === transaction.targetVersion &&
+    installed.buildId === transaction.buildId
+  ) {
+    await clearTuiUpdateTransaction(canonical)
+    await rm(transaction.stagingRoot, { recursive: true, force: true }).catch(() => undefined)
+    return {
+      kind: 'activated',
+      previousVersion: transaction.previousVersion,
+      targetVersion: transaction.targetVersion
+    }
   }
   const staged = await readStagedRelease(transaction.stagingRoot)
   if (

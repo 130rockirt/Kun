@@ -15,6 +15,9 @@ export type WindowsReplacementInput = {
   scriptPath: string
   previousVersion: string
   targetVersion: string
+  buildId: string
+  target: string
+  channel: string
   lockToken: string
   ackPath: string
   updaterStartedAt: string
@@ -48,9 +51,12 @@ function quote(value: string): string {
  * - The backup is only removed inside the branch where the current install
  *   root exists and is about to be moved into the backup slot, so a missing
  *   install root never causes the last healthy backup to be deleted.
- * - Activation verifies the staged release.json version before the success
- *   state is written; the backup is never cleaned before that verification.
- * - The terminal state is written to update-result.json in every outcome.
+ * - Activation verifies the staged release.json version, buildId, target, and
+ *   channel before the success state is written; the backup is never cleaned
+ *   before that verification.
+ * - The terminal state is written atomically to update-result.json (temp file
+ *   + FlushFileBuffers + rename) in every outcome; a write failure is a
+ *   terminating error that never funnels into the failure branch.
  */
 export function buildWindowsReplacementScript(input: WindowsReplacementInput): string {
   const waitTimeoutSeconds = Math.max(
@@ -70,6 +76,9 @@ export function buildWindowsReplacementScript(input: WindowsReplacementInput): s
   const script = quote(input.scriptPath)
   const previousVersion = quote(input.previousVersion)
   const targetVersion = quote(input.targetVersion)
+  const expectedBuildId = quote(input.buildId)
+  const expectedTarget = quote(input.target)
+  const expectedChannel = quote(input.channel)
   return [
     '$ErrorActionPreference = "Continue"',
     `$current = '${current}'`,
@@ -83,6 +92,9 @@ export function buildWindowsReplacementScript(input: WindowsReplacementInput): s
     `$lockToken = '${lockToken}'`,
     `$updaterStartedAt = '${updaterStartedAt}'`,
     `$targetVersion = '${targetVersion}'`,
+    `$expectedBuildId = '${expectedBuildId}'`,
+    `$expectedTarget = '${expectedTarget}'`,
+    `$expectedChannel = '${expectedChannel}'`,
     '$stage = "init"',
     'function Write-UpdateLog([string]$Message) {',
     '  $stamp = (Get-Date).ToUniversalTime().ToString("o")',
@@ -98,7 +110,22 @@ export function buildWindowsReplacementScript(input: WindowsReplacementInput): s
     '    error = $Reason',
     '    finishedAt = (Get-Date).ToUniversalTime().ToString("o")',
     '  }',
-    '  $payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $result -Encoding utf8',
+    '  try {',
+    '    $resultTmp = $result + ".tmp-" + $PID',
+    '    $resultJson = $payload | ConvertTo-Json -Compress',
+    '    $resultBytes = [System.Text.Encoding]::UTF8.GetBytes($resultJson)',
+    '    $fs = [System.IO.File]::Open($resultTmp, "Create", "Write", "None")',
+    '    try {',
+    '      $fs.Write($resultBytes, 0, $resultBytes.Length)',
+    '      $fs.Flush($true)',
+    '    } finally {',
+    '      $fs.Dispose()',
+    '    }',
+    '    Move-Item -LiteralPath $resultTmp -Destination $result -Force -ErrorAction Stop',
+    '  } catch {',
+    "    Write-UpdateLog ('result write failed: ' + $_.Exception.GetType().Name + ': ' + $_.Exception.Message)",
+    '    exit 1',
+    '  }',
     '}',
     "  $stage = 'handoff'",
     '  $takeoverOk = $false',
@@ -113,7 +140,7 @@ export function buildWindowsReplacementScript(input: WindowsReplacementInput): s
     '      root = $current',
     '    }',
     '    $lockTmp = $lock + ".tmp-" + $PID',
-    '    $lockPayload | ConvertTo-Json -Compress | Set-Content -LiteralPath $lockTmp -Encoding utf8',
+    '    $lockPayload | ConvertTo-Json -Compress | Set-Content -LiteralPath $lockTmp -Encoding utf8 -ErrorAction Stop',
     '    Move-Item -LiteralPath $lockTmp -Destination $lock -Force -ErrorAction Stop',
     '    $ackPayload = [ordered]@{',
     '      schemaVersion = 1',
@@ -122,7 +149,7 @@ export function buildWindowsReplacementScript(input: WindowsReplacementInput): s
     '      processIdentity = $processIdentity',
     '      startedAt = $updaterStartedAt',
     '    }',
-    '    $ackPayload | ConvertTo-Json -Compress | Set-Content -LiteralPath $ack -Encoding utf8',
+    '    $ackPayload | ConvertTo-Json -Compress | Set-Content -LiteralPath $ack -Encoding utf8 -ErrorAction Stop',
     '    $takeoverOk = $true',
     '  } catch {',
     "    Write-UpdateLog ('lock handoff failed: ' + $_.Exception.GetType().Name + ': ' + $_.Exception.Message)",
@@ -173,8 +200,8 @@ export function buildWindowsReplacementScript(input: WindowsReplacementInput): s
     '        Move-Item -LiteralPath $next -Destination $current -ErrorAction Stop',
     "        $stage = 'swap-verify'",
     "        $release = Get-Content -LiteralPath (Join-Path $current 'release.json') -Raw | ConvertFrom-Json",
-    '        if ($release.version -ne $targetVersion) {',
-    "          throw 'activated release.json does not match the target version'",
+    '        if ($release.version -ne $targetVersion -or $release.buildId -ne $expectedBuildId -or $release.target -ne $expectedTarget -or $release.channel -ne $expectedChannel) {',
+    "          throw 'activated release.json does not match the staged release'",
     '        }',
     '      } catch {',
     '        if (Test-Path -LiteralPath $backup) {',

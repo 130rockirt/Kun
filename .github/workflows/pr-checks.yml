@@ -347,7 +347,7 @@ jobs:
 
       - name: Run TUI self-update tests on real Windows
         working-directory: kun
-        run: npx vitest run src/cli/self-update.test.ts src/cli/self-update-transaction.test.ts src/cli/self-update-windows.test.ts src/cli/self-update.win32.test.ts
+        run: npx vitest run src/cli/self-update.test.ts src/cli/self-update-transaction.test.ts src/cli/self-update-windows.test.ts src/cli/self-update.win32.test.ts src/cli/self-update.win32-handoff.test.ts
 
   request-changes-on-failure:
     name: Request PR changes on failure
@@ -365,11 +365,12 @@ jobs:
         github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         (
-          needs.quality.result == 'failure' ||
-          needs.package.result == 'failure' ||
-          needs['package-linux-arm64'].result == 'failure' ||
-          needs['package-macos'].result == 'failure' ||
-          needs['package-windows'].result == 'failure'
+          needs.quality.result != 'success' ||
+          needs.package.result != 'success' ||
+          needs['package-linux-arm64'].result != 'success' ||
+          needs['package-macos'].result != 'success' ||
+          needs['package-windows'].result != 'success' ||
+          needs['test-windows-self-update'].result != 'success'
         )
       }}
     permissions:
@@ -385,10 +386,11 @@ jobs:
               ['Build Linux package', '${{ needs.package.result }}'],
               ['Build Linux package and TUI (ARM64)', '${{ needs['package-linux-arm64'].result }}'],
               ['Build ad-hoc macOS packages (PR)', '${{ needs['package-macos'].result }}'],
-              ['Build Windows NSIS installer (PR)', '${{ needs['package-windows'].result }}']
+              ['Build Windows NSIS installer (PR)', '${{ needs['package-windows'].result }}'],
+              ['Windows TUI self-update integration tests', '${{ needs['test-windows-self-update'].result }}']
             ]
-              .filter(([, result]) => result === 'failure')
-              .map(([name]) => `- ${name}`)
+              .filter(([, result]) => result !== 'success')
+              .map(([name, result]) => `- ${name} (${result})`)
               .join('\n')
 
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`

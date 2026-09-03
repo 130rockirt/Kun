@@ -191,6 +191,10 @@ jobs:
           KUN_INSTALLER_TEST_ARTIFACT_ROOT: ${{ github.workspace }}\artifacts\windows-installer-transaction
         run: npx vitest run src/main/windows-installer-migration.transaction.test.ts
 
+      - name: Run TUI self-update tests on real Windows
+        working-directory: kun
+        run: npx vitest run src/cli/self-update.test.ts src/cli/self-update-transaction.test.ts src/cli/self-update-windows.test.ts src/cli/self-update.win32.test.ts src/cli/self-update.win32-handoff.test.ts
+
       - name: Upload Windows transaction diagnostics
         if: always()
         uses: actions/upload-artifact@v4

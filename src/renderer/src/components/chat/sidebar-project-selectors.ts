@@ -145,7 +145,7 @@ function sortWorkspacePathsByActive(workspacePaths: string[], selectedWorkspace:
   return [...workspacePaths].sort((a, b) => compareWorkspacePathsByActive(a, b, selectedWorkspace))
 }
 
-/** Filesystem creation time in ms keyed by workspaceRootIdentityKey. */
+/** First-seen time in ms keyed by workspaceRootIdentityKey. */
 export type SidebarWorkspaceCreationTimes = Record<string, number>
 
 /**

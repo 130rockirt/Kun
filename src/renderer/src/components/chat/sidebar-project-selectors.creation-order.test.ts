@@ -1,10 +1,29 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildSidebarWorkspaceGroups } from './sidebar-project-selectors'
 import { workspaceRootIdentityKey } from '../../lib/workspace-path'
 import {
   sidebarWorkspaceCreationTimesFromEntries,
   sidebarWorkspaceCreationTimesKey
 } from './sidebar-project-creation-times'
+import { firstSeenTimesFor } from './sidebar-project-first-seen'
+
+function createMemoryStorage(): Storage {
+  const items = new Map<string, string>()
+  return {
+    get length() {
+      return items.size
+    },
+    clear: () => items.clear(),
+    getItem: (key) => items.get(key) ?? null,
+    key: (index) => [...items.keys()][index] ?? null,
+    removeItem: (key) => items.delete(key),
+    setItem: (key, value) => items.set(key, value)
+  }
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 function groupPaths(
   workspaceRoots: string[],
@@ -60,6 +79,23 @@ describe('buildSidebarWorkspaceGroups creation-time ordering', () => {
   it('falls back to legacy active-first ordering without creation times', () => {
     const roots = ['D:/alpha', 'D:/beta']
     expect(groupPaths(roots, undefined, 'D:/beta')).toEqual(['D:/beta', 'D:/alpha'])
+  })
+
+  it('keeps order stable when filesystem times advance after first-seen is recorded', () => {
+    const storage = createMemoryStorage()
+    vi.stubGlobal('localStorage', storage)
+    const roots = ['D:/kun', 'D:/skill']
+    const keys = roots.map((root) => workspaceRootIdentityKey(root))
+    const firstTimes = firstSeenTimesFor(keys, {
+      [workspaceRootIdentityKey('D:/kun')]: 1000,
+      [workspaceRootIdentityKey('D:/skill')]: 2000
+    })
+    expect(groupPaths(roots, firstTimes)).toEqual(['D:/skill', 'D:/kun'])
+    const secondTimes = firstSeenTimesFor(keys, {
+      [workspaceRootIdentityKey('D:/kun')]: 999999,
+      [workspaceRootIdentityKey('D:/skill')]: 2000
+    })
+    expect(groupPaths(roots, secondTimes)).toEqual(['D:/skill', 'D:/kun'])
   })
 })
 

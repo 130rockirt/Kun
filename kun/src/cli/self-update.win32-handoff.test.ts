@@ -238,5 +238,13 @@ describe('Windows updater lock handoff', () => {
     expect(Number.isNaN(Date.parse(updaterRecord.startedAt))).toBe(false)
     expect(typeof updaterRecord.token).toBe('string')
     expect(updaterRecord.token.length).toBeGreaterThan(0)
+
+    expect(mocks.scheduleWindowsReplacement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buildId: BUILD_ID,
+        target: 'win32-x64',
+        channel: 'stable'
+      })
+    )
   }, 120_000)
 })

@@ -383,6 +383,9 @@ async function installStandaloneTuiUpdate(
             lockPath: tuiUpdateLockPath(currentRoot),
             previousVersion: check.current.version,
             targetVersion: check.latest.version,
+            buildId: check.latest.buildId,
+            target: check.current.target,
+            channel: 'stable',
             lockToken: lock.token,
             ackPath: tuiUpdateUpdaterPath(currentRoot),
             updaterStartedAt
