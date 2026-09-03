@@ -18,6 +18,7 @@ type PendingCheckpoint = {
   lastFlushedSeq: number
   lastFlushedAt: number
   dirtyEvents: number
+  generation: number
   timer?: ReturnType<typeof setTimeout>
   flush?: Promise<void>
 }
@@ -42,6 +43,7 @@ export type FileSessionLiveCheckpointHost = {
 
 export class FileSessionLiveCheckpointCoordinator {
   private readonly pending = new Map<string, PendingCheckpoint>()
+  private readonly threadGenerations = new Map<string, number>()
   private flushes = 0
   private skipped = 0
   private maxObservedSeqLag = 0
@@ -66,7 +68,8 @@ export class FileSessionLiveCheckpointCoordinator {
         lastFlushedBytes: itemBytes(item),
         lastFlushedSeq: representedSeq,
         lastFlushedAt: now,
-        dirtyEvents: 1
+        dirtyEvents: 1,
+        generation: this.threadGenerations.get(threadId) ?? 0
       }
       this.pending.set(key, state)
       await this.flushState(state)
@@ -77,6 +80,7 @@ export class FileSessionLiveCheckpointCoordinator {
     state.latestItem = item
     state.latestSeq = Math.max(state.latestSeq, representedSeq)
     state.dirtyEvents += 1
+    state.generation = this.threadGenerations.get(threadId) ?? 0
     const age = Math.max(0, this.now() - state.lastFlushedAt)
     const seqLag = Math.max(0, state.latestSeq - state.lastFlushedSeq)
     this.maxObservedAgeMs = Math.max(this.maxObservedAgeMs, age)
@@ -95,10 +99,18 @@ export class FileSessionLiveCheckpointCoordinator {
     if (state) await this.flushState(state)
   }
 
-  async flushThread(threadId: string): Promise<void> {
-    await Promise.all([...this.pending.values()]
-      .filter((state) => state.threadId === threadId)
-      .map((state) => this.flushState(state)))
+  async flushThread(threadId: string): Promise<number> {
+    const generation = (this.threadGenerations.get(threadId) ?? 0) + 1
+    this.threadGenerations.set(threadId, generation)
+    for (;;) {
+      const dirty = [...this.pending.values()].filter(
+        (state) => state.threadId === threadId &&
+          (state.flush !== undefined || state.dirtyEvents > 0)
+      )
+      if (dirty.length === 0) break
+      await Promise.all(dirty.map((state) => this.flushState(state)))
+    }
+    return generation
   }
 
   async remove(threadId: string, itemId: string): Promise<void> {
@@ -114,9 +126,14 @@ export class FileSessionLiveCheckpointCoordinator {
     for (const [key, state] of this.pending) this.clearState(key, state)
   }
 
-  clearThread(threadId: string): void {
+  clearThread(threadId: string, expectedGeneration: number): void {
     for (const [key, state] of this.pending) {
-      if (state.threadId === threadId) this.clearState(key, state)
+      if (state.threadId !== threadId) continue
+      if (state.generation >= expectedGeneration) continue
+      this.clearState(key, state)
+    }
+    if (![...this.pending.values()].some((state) => state.threadId === threadId)) {
+      this.threadGenerations.delete(threadId)
     }
   }
 

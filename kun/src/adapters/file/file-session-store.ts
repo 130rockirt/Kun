@@ -278,8 +278,8 @@ export class FileSessionStore implements SessionStore {
 
   async rewriteItems(threadId: string, items: TurnItem[]): Promise<void> {
     assertSafeThreadId(threadId)
-    await this.liveCheckpoints.flushThread(threadId)
-    this.liveCheckpoints.clearThread(threadId)
+    const checkpointGeneration = await this.liveCheckpoints.flushThread(threadId)
+    this.liveCheckpoints.clearThread(threadId, checkpointGeneration)
     const path = this.messagesPath(threadId)
     await this.fileAccess.withReplacement(path, () => this.withThreadWrite(threadId, async () => {
       await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
@@ -312,8 +312,8 @@ export class FileSessionStore implements SessionStore {
     items: TurnItem[]
   ): Promise<ItemHistoryCommit> {
     assertSafeThreadId(threadId)
-    await this.liveCheckpoints.flushThread(threadId)
-    this.liveCheckpoints.clearThread(threadId)
+    const checkpointGeneration = await this.liveCheckpoints.flushThread(threadId)
+    this.liveCheckpoints.clearThread(threadId, checkpointGeneration)
     const path = this.messagesPath(threadId)
     return this.fileAccess.withReplacement(path, () => this.withThreadWrite(threadId, async () => {
       const revision = this.itemHistoryRevision(threadId)
