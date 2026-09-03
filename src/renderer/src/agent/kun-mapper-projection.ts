@@ -184,7 +184,7 @@ export function usageFromCore(usage: CoreUsageSnapshotJson, turnId?: string): Th
   return {
     inputTokens,
     outputTokens,
-    reasoningTokens: 0,
+    reasoningTokens: usage.reasoningTokens ?? 0,
     cachedTokens,
     cacheMissTokens,
     cacheHitRate,
@@ -197,6 +197,11 @@ export function usageFromCore(usage: CoreUsageSnapshotJson, turnId?: string): Th
     avgTokensPerSecond: nullableFinite(usage.avgTokensPerSecond),
     turnAvgTtftMs: nullableFinite(usage.turnAvgTtftMs),
     turnAvgTokensPerSecond: nullableFinite(usage.turnAvgTokensPerSecond),
+    ...(usage.cacheableTokenHitRate != null ? { cacheableTokenHitRate: usage.cacheableTokenHitRate } : {}),
+    ...(usage.totalInputTokenHitRate != null ? { totalInputTokenHitRate: usage.totalInputTokenHitRate } : {}),
+    ...(usage.cacheMissReasons ? { cacheMissReasons: usage.cacheMissReasons } : {}),
+    ...(usage.cacheSuggestions ? { cacheSuggestions: usage.cacheSuggestions } : {}),
+    ...(usage.lastRequestCacheHitRate != null ? { lastRequestCacheHitRate: usage.lastRequestCacheHitRate } : {}),
     ...(turnId ? { turnId } : {})
   }
 }

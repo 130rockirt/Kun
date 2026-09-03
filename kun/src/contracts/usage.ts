@@ -31,6 +31,13 @@ export const UsageSnapshotSchema = z.object({
   /** Tokens written into a provider-managed prompt cache. */
   cacheWriteTokens: z.number().int().nonnegative().optional(),
   cacheHitRate: z.number().min(0).max(1).nullable(),
+  /**
+   * Cache hit rate of the single request that produced this live snapshot.
+   * Semantically equivalent to REST `last_turn_cache_hit_rate`. Only present
+   * on the real-time snapshot returned by `UsageService.record()`; never
+   * persisted into the thread's cumulative counters.
+   */
+  lastRequestCacheHitRate: z.number().min(0).max(1).nullable().optional(),
   cacheableTokenHitRate: z.number().min(0).max(1).nullable().optional(),
   totalInputTokenHitRate: z.number().min(0).max(1).nullable().optional(),
   cacheMissReasons: z.array(z.string()).optional(),

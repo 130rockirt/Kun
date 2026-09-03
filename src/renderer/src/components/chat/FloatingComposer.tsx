@@ -68,6 +68,7 @@ import {
   primaryCacheHitRate,
   formatTtftSeconds,
   formatTps,
+  mergeLiveThreadUsage,
   useThreadUsageState
 } from '../../hooks/use-thread-usage'
 import { FloatingComposerContextCapacity } from './FloatingComposerContextCapacity'
@@ -337,6 +338,7 @@ export function FloatingComposer({
       : null
   )
   const timingThreadUsage = liveThreadUsage ?? threadUsage
+  const displayThreadUsage = mergeLiveThreadUsage(threadUsage, liveThreadUsage)
   const effectiveWorkspaceRoot = normalizeWorkspaceRoot(activeThreadWorkspace || workspaceRootOverride || workspaceRoot)
   const clawAgentName =
     activeClawChannel?.agentProfile.name.trim()
@@ -659,7 +661,7 @@ export function FloatingComposer({
     primaryActionLabel, primaryActionLoading, promptOptimizationBusy, promptOptimizationError, onDismissPromptOptimizationError, promptOptimizationSettings, queuedMessages,
     route, runningGraphTurn, runtimeReady, setActiveThreadGoalStatus, setGoalInputMode, setGoalPanelOpen, setInput, showComposerMenuButton,
     showAutoPlanBuildMenuOption, showCodeExecutionControls, showExecutionSettingsPicker, showGoalFloater, showGoalMenuOption, showGraphMenuOption, showGraphProgress, showPlanMenuOption, showProviderInModelLabel, showTodoProgress, showToolbarStartControls, showUsageHistoryFooter,
-    showVoiceDictation, showWorkspaceControls, side, slashCommandMenu, slashQuery, stretchModelPicker, t, threadUsage, primaryActionKind,
+    showVoiceDictation, showWorkspaceControls, side, slashCommandMenu, slashQuery, stretchModelPicker, t, displayThreadUsage, primaryActionKind,
     taskSurface, taskSurfaceLocked, emptyTaskLayout, onTaskSurfaceChange, onNewRequirement, threadUsageState, timingThreadUsage, useWorktreePool, userInput, worktreeBranch
   }
 

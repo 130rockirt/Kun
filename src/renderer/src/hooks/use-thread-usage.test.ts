@@ -5,6 +5,7 @@ import {
   cumulativeCacheHitRate,
   formatCost,
   loadThreadUsage,
+  mergeLiveThreadUsage,
   primaryCacheHitRate,
   retainPendingThreadUsage,
   summarizeThreadMoney,
@@ -12,6 +13,7 @@ import {
   type ThreadUsageState,
   type ThreadUsageSummary
 } from './use-thread-usage'
+import type { ThreadUsageSnapshot } from '../agent/thread-runtime-types'
 
 type RuntimeRequest = (path: string, method?: string) => Promise<{ ok: boolean; status: number; body: string }>
 
@@ -38,6 +40,32 @@ function usageSummary(overrides: Partial<ThreadUsageSummary> = {}): ThreadUsageS
     turns: 1,
     avgTtftMs: null,
     avgTokensPerSecond: null,
+    ...overrides
+  }
+}
+
+function liveUsage(overrides: Partial<ThreadUsageSnapshot> = {}): ThreadUsageSnapshot {
+  return {
+    inputTokens: 180,
+    outputTokens: 40,
+    reasoningTokens: 8,
+    cachedTokens: 150,
+    cacheMissTokens: 30,
+    cacheHitRate: 5 / 6,
+    totalTokens: 220,
+    costUsd: 0.02,
+    costCny: null,
+    tokenEconomySavingsTokens: 128,
+    turns: 2,
+    avgTtftMs: 900,
+    avgTokensPerSecond: 45,
+    turnAvgTtftMs: 900,
+    turnAvgTokensPerSecond: 45,
+    lastRequestCacheHitRate: 0.92,
+    cacheableTokenHitRate: 0.92,
+    totalInputTokenHitRate: 0.6,
+    cacheMissReasons: ['cold_request'],
+    cacheSuggestions: ['Keep prompts stable.'],
     ...overrides
   }
 }
@@ -185,6 +213,68 @@ describe('thread usage formatting', () => {
     expect(retainPendingThreadUsage(previous, usageSummary({ lastTurnCacheHitRate: 0 })))
       .toMatchObject({ lastTurnCacheHitRate: 0 })
     expect(retainPendingThreadUsage(previous, null)).toBe(previous)
+  })
+
+  it('merges live usage over the REST summary while preserving REST-only fields', () => {
+    const rest = usageSummary({
+      totalTokens: 120,
+      costUsd: 0.05,
+      valueEstimateUsd: 0.25,
+      valueEstimateCny: 1.8,
+      valueEstimateCoverage: 'complete',
+      lastTurnCacheHitRate: 0.5
+    })
+
+    const merged = mergeLiveThreadUsage(rest, liveUsage())
+
+    expect(merged).toMatchObject({
+      inputTokens: 180,
+      outputTokens: 40,
+      reasoningTokens: 8,
+      cachedTokens: 150,
+      cacheMissTokens: 30,
+      cacheHitRate: 5 / 6,
+      totalTokens: 220,
+      costUsd: 0.02,
+      turns: 2,
+      avgTtftMs: 900,
+      avgTokensPerSecond: 45,
+      lastTurnCacheHitRate: 0.92,
+      lastTurnCacheableHitRate: 0.92,
+      lastTurnTotalInputHitRate: 0.6,
+      cacheMissReasons: ['cold_request'],
+      cacheSuggestions: ['Keep prompts stable.'],
+      valueEstimateUsd: 0.25,
+      valueEstimateCny: 1.8,
+      valueEstimateCoverage: 'complete'
+    })
+  })
+
+  it('constructs a summary from live usage when REST is unavailable', () => {
+    const merged = mergeLiveThreadUsage(null, liveUsage())
+
+    expect(merged).toMatchObject({
+      inputTokens: 180,
+      cacheHitRate: 5 / 6,
+      lastTurnCacheHitRate: 0.92,
+      valueEstimateUsd: null,
+      valueEstimateCny: null,
+      valueEstimateCoverage: 'unavailable'
+    })
+  })
+
+  it('returns the REST summary when no live snapshot is present', () => {
+    const rest = usageSummary()
+    expect(mergeLiveThreadUsage(rest, null)).toBe(rest)
+    expect(mergeLiveThreadUsage(null, null)).toBeNull()
+  })
+
+  it('keeps the REST last-turn rate when live lacks per-request telemetry', () => {
+    const rest = usageSummary({ lastTurnCacheHitRate: 0.9, cacheHitRate: 0.8 })
+    const merged = mergeLiveThreadUsage(rest, liveUsage({ lastRequestCacheHitRate: null }))
+
+    expect(merged?.lastTurnCacheHitRate).toBe(0.9)
+    expect(merged?.cacheHitRate).toBe(5 / 6)
   })
 
   it('derives the cumulative cache rate from tokens to match the overall usage panel (#654)', () => {

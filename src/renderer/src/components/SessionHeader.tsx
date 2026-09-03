@@ -14,6 +14,7 @@ import {
   formatCacheMissReason,
   formatCost,
   formatPercent,
+  mergeLiveThreadUsage,
   primaryCacheHitRate,
   useThreadUsage
 } from '../hooks/use-thread-usage'
@@ -119,6 +120,11 @@ export function SessionHeader({
   const blocks = useChatStore((s) => s.blocks)
   const currentTurnId = useChatStore((s) => s.currentTurnId)
   const currentTurnUserId = useChatStore((s) => s.currentTurnUserId)
+  const liveThreadUsage = useChatStore((s) =>
+    s.lastTurnUsage && s.lastTurnUsage.threadId === s.activeThreadId
+      ? s.lastTurnUsage.snapshot
+      : null
+  )
   const runtimeConnection = useChatStore((s) => s.runtimeConnection)
   const workspaceLabel = useChatStore((s) => s.workspaceLabel)
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
@@ -133,11 +139,12 @@ export function SessionHeader({
   const [draftTitle, setDraftTitle] = useState('')
   // Usage stats are no longer shown in compact mode (the composer footer
   // already shows them in the chat route), so skip fetching there.
-  const threadUsage = useThreadUsage(
+  const restThreadUsage = useThreadUsage(
     activeThreadId,
     runtimeConnection === 'ready' && !compact,
     `${active?.updatedAt ?? ''}:${busy ? 'busy' : 'idle'}`
   )
+  const threadUsage = mergeLiveThreadUsage(restThreadUsage, liveThreadUsage)
   const latestCacheHitRate = threadUsage ? primaryCacheHitRate(threadUsage) : null
   const forkedFromTitle = active?.forkedFromTitle?.trim() ?? ''
   const forkLabel =

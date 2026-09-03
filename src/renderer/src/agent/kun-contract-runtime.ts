@@ -478,6 +478,13 @@ export type CoreUsageSnapshotJson = {
   cacheHitTokens?: number
   cacheMissTokens?: number
   cacheHitRate?: number
+  reasoningTokens?: number
+  cacheableTokenHitRate?: number | null
+  totalInputTokenHitRate?: number | null
+  cacheMissReasons?: string[]
+  cacheSuggestions?: string[]
+  /** Hit rate of the single request that produced this live usage event. */
+  lastRequestCacheHitRate?: number | null
   turns?: number
   costUsd?: number
   costCny?: number

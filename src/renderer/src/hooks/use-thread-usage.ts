@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { requestUsage } from './usage-request-cache'
 import { parseUsageResponse } from './usage-response'
+import type { ThreadUsageSnapshot } from '../agent/thread-runtime-types'
 
 const THREAD_USAGE_RETRY_DELAYS_MS = [250, 750] as const
 
@@ -55,6 +56,67 @@ export function retainPendingThreadUsage(
     lastTurnTotalInputHitRate: previous.lastTurnTotalInputHitRate,
     cacheMissReasons: previous.cacheMissReasons,
     cacheSuggestions: previous.cacheSuggestions
+  }
+}
+
+/**
+ * Merge the live per-request `usage` SSE snapshot over the persisted REST
+ * summary. The REST summary stays authoritative after settle/reload; the live
+ * snapshot only overlays fields the runtime reports every model response, so
+ * the footer and session header update between turns instead of freezing.
+ * Fields the live snapshot never carries (reference price estimates and
+ * coverage) are left to the REST value and refreshed on reconcile.
+ */
+export function mergeLiveThreadUsage(
+  rest: ThreadUsageSummary | null,
+  live: ThreadUsageSnapshot | null
+): ThreadUsageSummary | null {
+  if (!live) return rest
+  if (!rest) {
+    return {
+      inputTokens: live.inputTokens,
+      outputTokens: live.outputTokens,
+      reasoningTokens: live.reasoningTokens,
+      cachedTokens: live.cachedTokens,
+      cacheMissTokens: live.cacheMissTokens,
+      cacheHitRate: live.cacheHitRate,
+      lastTurnCacheHitRate: live.lastRequestCacheHitRate ?? null,
+      lastTurnCacheableHitRate: live.cacheableTokenHitRate ?? null,
+      lastTurnTotalInputHitRate: live.totalInputTokenHitRate ?? null,
+      cacheMissReasons: live.cacheMissReasons,
+      cacheSuggestions: live.cacheSuggestions,
+      totalTokens: live.totalTokens,
+      costUsd: live.costUsd,
+      costCny: live.costCny,
+      valueEstimateUsd: null,
+      valueEstimateCny: null,
+      valueEstimateCoverage: 'unavailable',
+      tokenEconomySavingsTokens: live.tokenEconomySavingsTokens,
+      turns: live.turns,
+      avgTtftMs: live.avgTtftMs,
+      avgTokensPerSecond: live.avgTokensPerSecond
+    }
+  }
+  return {
+    ...rest,
+    inputTokens: live.inputTokens,
+    outputTokens: live.outputTokens,
+    reasoningTokens: live.reasoningTokens,
+    cachedTokens: live.cachedTokens,
+    cacheMissTokens: live.cacheMissTokens,
+    cacheHitRate: live.cacheHitRate,
+    lastTurnCacheHitRate: live.lastRequestCacheHitRate ?? rest.lastTurnCacheHitRate,
+    lastTurnCacheableHitRate: live.cacheableTokenHitRate ?? rest.lastTurnCacheableHitRate,
+    lastTurnTotalInputHitRate: live.totalInputTokenHitRate ?? rest.lastTurnTotalInputHitRate,
+    cacheMissReasons: live.cacheMissReasons ?? rest.cacheMissReasons,
+    cacheSuggestions: live.cacheSuggestions ?? rest.cacheSuggestions,
+    totalTokens: live.totalTokens,
+    costUsd: live.costUsd,
+    costCny: live.costCny,
+    tokenEconomySavingsTokens: live.tokenEconomySavingsTokens,
+    turns: live.turns,
+    avgTtftMs: live.avgTtftMs,
+    avgTokensPerSecond: live.avgTokensPerSecond
   }
 }
 
