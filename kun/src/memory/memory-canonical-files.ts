@@ -3,7 +3,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path'
 import { atomicWriteFile } from '../adapters/file/atomic-write.js'
 import { applyPosixMode } from '../security/posix-permissions.js'
 import type { MemoryRecord } from '../contracts/memory.js'
-import { normalizeMemoryRecord } from './memory-record-normalizer.js'
+import { canonicalMemoryHash, normalizeMemoryRecord } from './memory-record-normalizer.js'
 
 export const MEMORY_MAX_FALLBACK_FILES = 5_000
 const SAFE_MEMORY_ID = /^[A-Za-z][A-Za-z0-9_-]{0,127}$/u
@@ -43,6 +43,23 @@ export async function readCanonicalMemoryDirectory(
     totalFiles: entries.length,
     truncated: entries.length > selected.length
   }
+}
+
+export async function readCanonicalMemoryRecordHashes(
+  rootDir: string,
+  ids: readonly string[]
+): Promise<Map<string, string>> {
+  const hashes = new Map<string, string>()
+  await Promise.all(ids.map(async (id) => {
+    try {
+      const value = JSON.parse(await readFile(memoryRecordPath(rootDir, id), 'utf8')) as unknown
+      const normalized = normalizeMemoryRecord(value, id)
+      if (normalized.ok) hashes.set(id, canonicalMemoryHash(normalized.record))
+    } catch {
+      // Missing, malformed, or unsafe id: omit from the map so the caller skips the record.
+    }
+  }))
+  return hashes
 }
 
 export async function writeCanonicalMemoryRecord(rootDir: string, record: MemoryRecord): Promise<void> {

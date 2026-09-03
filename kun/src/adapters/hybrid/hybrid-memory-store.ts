@@ -11,7 +11,8 @@ import {
 } from '../../contracts/memory.js'
 import {
   assertSafeMemoryIndexPath,
-  readCanonicalMemoryDirectory
+  readCanonicalMemoryDirectory,
+  readCanonicalMemoryRecordHashes
 } from '../../memory/memory-canonical-files.js'
 import { canonicalMemoryHash } from '../../memory/memory-record-normalizer.js'
 import {
@@ -53,6 +54,7 @@ export class HybridMemoryStore implements MemoryStore {
   private lastRetrieval: MemoryRetrievalTrace | undefined
   private lastInjectedIds: string[] = []
   private mutationQueue: Promise<unknown> = Promise.resolve()
+  private mutationGeneration = 0
 
   constructor(private readonly options: {
     dataDir: string
@@ -68,6 +70,8 @@ export class HybridMemoryStore implements MemoryStore {
     beforeIndexQuery?: (operation: 'list' | 'retrieve') => void
     beforeIndexRemove?: (id: string) => void
     backfillBatchSize?: number
+    backfillYield?: () => Promise<void>
+    beforeBackfillBatch?: () => Promise<void> | void
   }) {
     this.dataDir = resolve(options.dataDir)
     this.rootDir = resolve(options.rootDir ?? join(this.dataDir, 'memory'))
@@ -97,6 +101,7 @@ export class HybridMemoryStore implements MemoryStore {
 
   async create(input: MemoryCreateRequest): Promise<MemoryRecord> {
     return this.enqueueMutation(async () => {
+      this.mutationGeneration += 1
       await this.ready()
       const record = await this.canonical.create(input)
       await this.projectCanonicalIds([record.id, ...(input.supersedes ? [input.supersedes] : [])])
@@ -106,6 +111,7 @@ export class HybridMemoryStore implements MemoryStore {
 
   async createWithId(id: string, input: MemoryCreateRequest): Promise<MemoryRecord> {
     return this.enqueueMutation(async () => {
+      this.mutationGeneration += 1
       await this.ready()
       const record = await this.canonical.createWithId(id, input)
       await this.projectCanonicalIds([record.id, ...(input.supersedes ? [input.supersedes] : [])])
@@ -115,6 +121,7 @@ export class HybridMemoryStore implements MemoryStore {
 
   async update(id: string, patch: MemoryUpdateRequest, access?: MemoryAccess): Promise<MemoryRecord> {
     return this.enqueueMutation(async () => {
+      this.mutationGeneration += 1
       await this.ready()
       const record = await this.canonical.update(id, patch, access)
       await this.projectRecord(record)
@@ -124,6 +131,7 @@ export class HybridMemoryStore implements MemoryStore {
 
   async delete(id: string, access?: MemoryAccess): Promise<MemoryRecord> {
     return this.enqueueMutation(async () => {
+      this.mutationGeneration += 1
       await this.ready()
       const record = await this.canonical.delete(id, access)
       await this.projectRecord(record)
@@ -133,6 +141,7 @@ export class HybridMemoryStore implements MemoryStore {
 
   async purge(id: string): Promise<void> {
     return this.enqueueMutation(async () => {
+      this.mutationGeneration += 1
       await this.ready()
       await this.canonical.purge(id)
       if (!this.index) return
@@ -287,15 +296,20 @@ export class HybridMemoryStore implements MemoryStore {
       this.index.integrityCheck()
       this.backfill = new HybridMemoryBackfillCoordinator({
         readCanonical: () => readCanonicalMemoryDirectory(this.rootDir),
+        readCanonicalRecordHashes: (ids) => readCanonicalMemoryRecordHashes(this.rootDir, ids),
         indexedRows: () => this.index!.indexedRows(),
         upsert: (record, hash) => this.index!.upsert(record, hash),
         remove: (id) => this.index!.remove(id),
+        enqueueIndexWrite: (write) => this.enqueueMutation(async () => { write() }),
         noteState: (state) => { this.backfillState = state; this.index!.noteBackfillState(state) },
-        complete: () => {
+        generation: () => this.mutationGeneration,
+        beforeBatch: this.options.beforeBackfillBatch,
+        complete: (clean) => {
+          if (!clean) return
           this.indexStale = false
           this.degraded.recover()
         },
-        yieldToEventLoop,
+        yieldToEventLoop: this.options.backfillYield ?? yieldToEventLoop,
         warn: (action, error) => this.degraded.fail(action, error),
         batchSize: this.options.backfillBatchSize
       })

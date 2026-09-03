@@ -362,6 +362,72 @@ describe('HybridMemoryStore', () => {
       await store.shutdown()
     }
   })
+
+  it('does not let backfill overwrite a foreground update that lands mid-backfill', async () => {
+    const { root } = await seedCanonicalRecord('mem_race', 'stale snapshot content')
+    const gate = backfillGate()
+    const store = new HybridMemoryStore({
+      dataDir: root,
+      config: policy,
+      nowIso: () => '2026-08-28T00:00:00.000Z',
+      backfillBatchSize: 1,
+      beforeBackfillBatch: gate.beforeBatch
+    })
+    try {
+      await store.ready()
+      await gate.arrived
+      await store.update('mem_race', { content: 'fresh foreground update' }, { workspace: '/workspace-a' })
+      gate.release()
+      await store.waitForBackfill()
+
+      await expect(store.retrieve({ query: 'fresh foreground', workspace: '/workspace-a', limit: 3 }))
+        .resolves.toMatchObject([{ id: 'mem_race', content: 'fresh foreground update' }])
+      expect((await store.diagnostics()).lastRetrieval?.mode).toBe('sqlite-fts5')
+      expect(await store.list({ workspace: '/workspace-a' }))
+        .toMatchObject([{ id: 'mem_race', content: 'fresh foreground update' }])
+      const diagnostics = await store.diagnostics()
+      expect(diagnostics).toMatchObject({
+        indexState: 'ready',
+        staleCount: 0,
+        degradedReason: undefined
+      })
+      expect(diagnostics.indexedCount).toBeGreaterThanOrEqual(1)
+      expect(JSON.parse(await readFile(join(root, 'memory', 'mem_race.json'), 'utf8'))).toMatchObject({
+        id: 'mem_race',
+        content: 'fresh foreground update'
+      })
+    } finally {
+      await store.shutdown()
+    }
+  })
+
+  it('does not resurrect a memory deleted during backfill', async () => {
+    const { root } = await seedCanonicalRecord('mem_delete_race', 'will be deleted during backfill')
+    const gate = backfillGate()
+    const store = new HybridMemoryStore({
+      dataDir: root,
+      config: policy,
+      nowIso: () => '2026-08-28T00:00:00.000Z',
+      backfillBatchSize: 1,
+      beforeBackfillBatch: gate.beforeBatch
+    })
+    try {
+      await store.ready()
+      await gate.arrived
+      await store.delete('mem_delete_race', { workspace: '/workspace-a' })
+      gate.release()
+      await store.waitForBackfill()
+
+      await expect(store.retrieve({ query: 'deleted during backfill', workspace: '/workspace-a', limit: 3 }))
+        .resolves.toEqual([])
+      expect(await store.list({ workspace: '/workspace-a' })).toEqual([])
+      expect(await store.list({ all: true, includeDeleted: true }))
+        .toMatchObject([{ id: 'mem_delete_race', deletedAt: expect.any(String) }])
+      expect(await store.diagnostics()).toMatchObject({ staleCount: 0 })
+    } finally {
+      await store.shutdown()
+    }
+  })
 })
 
 async function createStore(): Promise<{ root: string; store: HybridMemoryStore }> {
@@ -384,4 +450,40 @@ async function tempRoot(): Promise<string> {
 async function removeIndexFiles(root: string): Promise<void> {
   await Promise.all(['memory-index.sqlite3', 'memory-index.sqlite3-wal', 'memory-index.sqlite3-shm']
     .map((name) => rm(join(root, name), { force: true })))
+}
+
+async function seedCanonicalRecord(id: string, content: string): Promise<{ root: string }> {
+  const root = await tempRoot()
+  const seed = new HybridMemoryStore({
+    dataDir: root,
+    config: policy,
+    nowIso: () => '2026-08-28T00:00:00.000Z'
+  })
+  await seed.ready()
+  await seed.createWithId(id, { content, scope: 'workspace', workspace: '/workspace-a' })
+  await seed.shutdown()
+  await removeIndexFiles(root)
+  return { root }
+}
+
+function backfillGate(): {
+  arrived: Promise<void>
+  release: () => void
+  beforeBatch: () => Promise<void> | void
+} {
+  let release!: () => void
+  let markArrived!: () => void
+  const releaseSignal = new Promise<void>((resolve) => { release = resolve })
+  const arrived = new Promise<void>((resolve) => { markArrived = resolve })
+  let used = false
+  return {
+    arrived,
+    release,
+    beforeBatch: () => {
+      if (used) return
+      used = true
+      markArrived()
+      return releaseSignal
+    }
+  }
 }
