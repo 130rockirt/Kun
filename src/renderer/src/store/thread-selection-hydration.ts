@@ -1,5 +1,6 @@
 import type { AgentProvider, NormalizedThread, ThreadDetail } from '../agent/types'
 import type { ThreadActionRuntime } from './chat-store-thread-actions-support'
+import { parseRuntimeErrorBody } from '@shared/runtime-error'
 import { cancelThreadRecoveriesExcept } from './thread-recovery-coordinator'
 import { threadPrewarmHandleIsCurrent, type ThreadPrewarmHandle } from './thread-detail-prewarm'
 
@@ -66,14 +67,23 @@ export async function hydrateThreadDetail(
 
 /**
  * Cancellation of an unrelated in-flight request (prewarm coordinator,
- * superseded subscription) is not a selection failure. Chromium's default
- * message for `controller.abort()` without a reason reads
- * "signal is aborted without reason".
+ * superseded subscription) is not a selection failure. Only three explicit
+ * signals count as cancellation:
+ *
+ * - a `DOMException` named `AbortError` (renderer-side `throwIfAborted()`),
+ * - an `Error` named `AbortError` (some platform/transport paths), and
+ * - the Kun stable error code `aborted` returned by the main process when it
+ *   cancels a request, which `runtimeErrorToError` embeds in the message.
+ *
+ * Free-text matching against the message is deliberately avoided so real
+ * errors that merely mention "aborted" (e.g. "transaction aborted") surface
+ * instead of being swallowed.
  */
 export function isThreadHydrationCancellation(error: unknown): boolean {
   if (error instanceof DOMException && error.name === 'AbortError') return true
   if (error instanceof Error) {
-    return error.name === 'AbortError' || /\babort/i.test(error.message)
+    if (error.name === 'AbortError') return true
+    return parseRuntimeErrorBody(error.message, '').code === 'aborted'
   }
   return false
 }

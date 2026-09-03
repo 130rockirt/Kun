@@ -9,6 +9,7 @@ import {
   threadSnapshotFingerprint
 } from './thread-snapshot-cache'
 import { requestThreadPrewarm, resetThreadPrewarmState } from './thread-detail-prewarm'
+import { runtimeErrorToError } from '@shared/runtime-error'
 
 const registryMock = vi.hoisted(() => ({ getProvider: vi.fn() }))
 
@@ -369,6 +370,42 @@ describe('thread selection prewarm hydration', () => {
     expect(state.blocks).toEqual([
       { kind: 'assistant', id: 'answer-b', text: 'shared request' }
     ])
+  })
+
+  it('surfaces a real error whose message merely mentions "aborted"', async () => {
+    const getThreadDetail = vi.fn(() => Promise.reject(new Error('transaction aborted')))
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail,
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    const target = thread('thread-b')
+    state.activeThreadId = 'thread-a'
+    state.threads = [thread('thread-a'), target]
+
+    await actions.selectThread(target.id)
+
+    expect(state.error).toContain('transaction aborted')
+    expect(state.threadLoadingId).toBeNull()
+  })
+
+  it('stays silent when hydration rejects with the Kun aborted error code', async () => {
+    const getThreadDetail = vi.fn(() => Promise.reject(
+      runtimeErrorToError({ code: 'aborted', message: 'Runtime request was cancelled.' })
+    ))
+    registryMock.getProvider.mockReturnValue({
+      getThreadDetail,
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    const { actions, state } = buildHarness()
+    const target = thread('thread-b')
+    state.activeThreadId = 'thread-a'
+    state.threads = [thread('thread-a'), target]
+
+    await actions.selectThread(target.id)
+
+    expect(state.error).toBeNull()
+    expect(state.threadLoadingId).toBeNull()
   })
 
 })
