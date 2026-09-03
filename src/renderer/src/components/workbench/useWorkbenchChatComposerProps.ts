@@ -298,8 +298,8 @@ export function useWorkbenchChatComposerProps({
         queuedMessageMatchesRunningTurn(message, runningTurnMeta)
     })),
     onRemoveQueuedMessage: removeQueuedMessage,
-    onRestoreQueuedMessageToComposer: (id) => {
-      const restored = restoreQueuedMessage(id)
+    onRestoreQueuedMessageToComposer: async (id) => {
+      const restored = await restoreQueuedMessage(id)
       if (!restored) return false
       const text = queuedMessageComposerRestoreText(restored)
       setInput(text
@@ -308,7 +308,7 @@ export function useWorkbenchChatComposerProps({
       if (restored.attachments?.length) void restoreComposerAttachments(restored.attachments)
       // Replay the frozen submission settings so a re-send reproduces the
       // original turn instead of silently adopting current composer state.
-      if (restored.mode === 'agent' || restored.mode === 'auto') setComposerMode(restored.mode)
+      if (restored.mode === 'agent' || restored.mode === 'auto' || restored.mode === 'plan') setComposerMode(restored.mode)
       if (restored.model?.trim()) setComposerModel(restored.model.trim())
       if (restored.reasoningEffort && setComposerReasoningEffort) {
         setComposerReasoningEffort(

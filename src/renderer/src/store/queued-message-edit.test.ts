@@ -60,16 +60,45 @@ describe('queued-message-edit', () => {
     expect(queuedMessageComposerRestoreText({ text: 'visible prompt' })).toBe('visible prompt')
   })
 
+  it('restores the user-facing displayText for plan/auto messages', () => {
+    expect(queuedMessageComposerRestoreText({
+      text: 'internal plan prompt',
+      displayText: 'give me a plan',
+      mode: 'plan'
+    })).toBe('give me a plan')
+    expect(queuedMessageComposerRestoreText({
+      text: 'internal auto prompt',
+      displayText: 'build it for me',
+      mode: 'auto'
+    })).toBe('build it for me')
+  })
+
   it.each([
     ['plan mode', { mode: 'plan' }],
     ['auto mode', { mode: 'auto' }],
+    ['in-flight delivery', {
+      deliveryState: 'in_flight',
+      deliveryTurnId: 'turn-1',
+      deliveryUserMessageItemId: 'item-1'
+    }]
+  ] as const)('allows composer restore for %s', (_name, fields) => {
+    const message = {
+      id: 'q-editable',
+      text: 'structured prompt',
+      deliveryState: 'pending',
+      ...fields
+    } as QueuedUserMessage
+
+    expect(canRestoreQueuedMessageToComposer(message)).toBe(true)
+  })
+
+  it.each([
     ['file references', { fileReferences: [{ path: '/workspace/file.ts' }] }],
     ['document attachments', {
       attachments: [{ id: 'doc-1', kind: 'document', name: 'spec.pdf' }]
     }],
     ['write surface', { agentSurface: 'write' }],
     ['design surface', { agentSurface: 'design' }],
-    ['in-flight delivery', { deliveryState: 'in_flight', deliveryTurnId: 'turn-1' }],
     ['runtime admission wait', { waitForRuntimeAdmission: true }],
     ['no text and no attachments', { text: '   ' }]
   ] as const)('rejects composer restore for %s', (_name, fields) => {

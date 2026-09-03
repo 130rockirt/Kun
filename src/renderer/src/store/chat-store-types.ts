@@ -615,7 +615,7 @@ export type ChatState = {
   reviewActiveThread: (target: ReviewTarget) => Promise<boolean>
   drainQueuedMessages: () => Promise<void>
   removeQueuedMessage: (id: string) => Promise<void> | void
-  restoreQueuedMessage: (id: string) => QueuedUserMessage | null
+  restoreQueuedMessage: (id: string) => Promise<QueuedUserMessage | null>
   reorderQueuedMessage: (id: string, targetId: string, position: 'before' | 'after') => Promise<void> | void
   /** Resume a runtime queue paused by an interrupt. */
   resumeQueuedTurns: () => Promise<boolean>

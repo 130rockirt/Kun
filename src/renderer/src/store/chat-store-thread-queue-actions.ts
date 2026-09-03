@@ -172,6 +172,21 @@ export function createThreadQueueActions(
   runtime: ThreadActionRuntime
 ): Pick<ChatState, 'drainQueuedMessages' | 'removeQueuedMessage' | 'restoreQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage' | 'resumeQueuedTurns'> {
   const { set, get, sseAbortRef } = context
+  const cancelRuntimeQueuedTurn = async (message: QueuedUserMessage | undefined): Promise<void> => {
+    if (message?.deliveryState !== 'in_flight' || !message.deliveryTurnId) return
+    const threadId = get().activeThreadId
+    const provider = getProvider()
+    if (!threadId || typeof provider.cancelQueuedTurn !== 'function') return
+    try {
+      await provider.cancelQueuedTurn(threadId, message.deliveryTurnId)
+    } catch (error) {
+      // The turn may have started already; that is fine, the message
+      // simply delivered before the cancel landed.
+      if (!/not found|no longer queued|not queued/i.test(formatRuntimeError(error))) {
+        set({ error: describeRuntimeError(error).message })
+      }
+    }
+  }
   return {
   drainQueuedMessages: async () => {
     const threadId = get().activeThreadId?.trim()
@@ -232,28 +247,17 @@ export function createThreadQueueActions(
     // In-flight entries are admitted to the durable runtime queue; removing
     // them locally must also cancel the server-side queued turn or it would
     // still execute later.
-    if (removed?.deliveryState === 'in_flight' && removed.deliveryTurnId) {
-      const threadId = get().activeThreadId
-      const provider = getProvider()
-      if (threadId && typeof provider.cancelQueuedTurn === 'function') {
-        try {
-          await provider.cancelQueuedTurn(threadId, removed.deliveryTurnId)
-        } catch (error) {
-          // The turn may have started already; that is fine, the message
-          // simply delivered before the cancel landed.
-          if (!/not found|no longer queued|not queued/i.test(formatRuntimeError(error))) {
-            set({ error: describeRuntimeError(error).message })
-          }
-        }
-      }
-    }
+    await cancelRuntimeQueuedTurn(removed)
   },
 
-  restoreQueuedMessage: (id) => {
+  restoreQueuedMessage: async (id) => {
     const restored = restoreQueuedMessageFromQueue(get().queuedMessages, id)
     if (!restored.restored) return null
     set({ queuedMessages: restored.messages })
     runtime.persistActiveQueuedMessages()
+    // Editing an already-admitted queued turn cancels its server-side entry
+    // so it does not keep executing after the composer re-send.
+    await cancelRuntimeQueuedTurn(restored.restored)
     return restored.restored
   },
 

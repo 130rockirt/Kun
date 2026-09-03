@@ -310,6 +310,25 @@ describe('FloatingComposerQueuedMessages DSH queue dock interactions', () => {
     expect(container.querySelector('[data-queued-message-id="q-reject"]')).not.toBeNull()
   })
 
+  it('awaits an async composer restore handler before clearing the busy interlock', async () => {
+    const pending = deferred<boolean>()
+    const onRestoreToComposer = vi.fn(() => pending.promise)
+    await render({
+      messages: [message('q-edit', 'before', { composerRestoreEligible: true })],
+      onRestoreToComposer
+    })
+    const editButton = action('edit')
+    await act(async () => editButton.click())
+    expect(editButton.disabled).toBe(true)
+
+    await act(async () => {
+      pending.resolve(true)
+      await pending.promise
+    })
+    expect(action('edit').disabled).toBe(false)
+    expect(container.querySelector('[data-queued-message-editor]')).toBeNull()
+  })
+
   it('keeps structured rows visible but disables restore editing', async () => {
     await render({
       messages: [message('q-structured', 'inspect the file', {
