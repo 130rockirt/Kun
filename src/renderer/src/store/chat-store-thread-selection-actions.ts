@@ -134,8 +134,8 @@ import {
   turnTimingSnapshotPatch
 } from './thread-snapshot-cache'
 import { copyLiveProjection, emptyLiveProjection, restoredLiveProjection } from './chat-store-live-projection'
-import { getThreadPrewarmHandle, threadPrewarmHandleIsCurrent } from './thread-detail-prewarm'
-import { beginThreadSelection, finishThreadHydration, loadForegroundThreadDetail, startThreadHydration } from './thread-selection-hydration'
+import { getThreadPrewarmHandle } from './thread-detail-prewarm'
+import { beginThreadSelection, finishThreadHydration, hydrateThreadDetail, isThreadHydrationCancellation, startThreadHydration } from './thread-selection-hydration'
 import {
   ensureRuntimeProviderForSend,
   fallbackComposerProviderIdForSend,
@@ -343,18 +343,8 @@ export function createThreadSelectionActions(
     const hydrationAbort = startThreadHydration(runtime)
     try {
       const prewarmHandle = targetThread ? getThreadPrewarmHandle(targetThread) : null
-      let detail = await (prewarmHandle?.promise ?? loadForegroundThreadDetail(p, id, hydrationAbort.signal))
+      const detail = await hydrateThreadDetail(p, id, prewarmHandle, () => get().threads.find((thread) => thread.id === id) ?? null, hydrationAbort.signal)
       if (!selectionStillCurrent()) return
-      if (prewarmHandle) {
-        const currentThread = get().threads.find((thread) => thread.id === id) ?? null
-        // The thread may have advanced while the prewarm request was in
-        // flight; a stale detail would both render outdated blocks and be
-        // re-cached under the new fingerprint by snapshotThreadProjection.
-        if (!threadPrewarmHandleIsCurrent(prewarmHandle, currentThread)) {
-          detail = await loadForegroundThreadDetail(p, id, hydrationAbort.signal)
-          if (!selectionStillCurrent()) return
-        }
-      }
       const {
         blocks: rawBlocks,
         latestSeq,
@@ -498,6 +488,11 @@ export function createThreadSelectionActions(
       }
     } catch (e) {
       if (hydrationAbort.signal.aborted) return
+      if (isThreadHydrationCancellation(e)) {
+        // An unrelated in-flight request was cancelled, not a selection failure.
+        set({ threadLoadingId: null, threadRefreshingId: get().threadRefreshingId === id ? null : get().threadRefreshingId })
+        return
+      }
       if (!selectionStillCurrent()) return
       set({
         threadLoadingId: null,

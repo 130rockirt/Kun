@@ -46,7 +46,9 @@ function ensureRecoveryObserver(): void {
   if (recoveryActivityUnsubscribe) return
   recoveryActivityUnsubscribe = onThreadRecoveryActivity(() => {
     if (hasForegroundThreadRecovery()) {
-      for (const entry of inFlight.values()) entry.controller.abort()
+      for (const entry of inFlight.values()) {
+        entry.controller.abort(new Error('prewarm superseded by foreground recovery'))
+      }
       return
     }
     pumpQueue()
@@ -222,7 +224,7 @@ export function cancelThreadPrewarm(threadId: string): void {
   if (timer) clearTimeout(timer)
   dwellTimers.delete(threadId)
   queue = queue.filter((job) => job.thread.id !== threadId)
-  inFlight.get(threadId)?.controller.abort()
+  inFlight.get(threadId)?.controller.abort(new Error('prewarm hover cancelled'))
 }
 
 /** Test-only visibility into the bounded background coordinator. */
@@ -243,7 +245,9 @@ export function resetThreadPrewarmState(): void {
   managerGeneration += 1
   for (const timer of dwellTimers.values()) clearTimeout(timer)
   dwellTimers.clear()
-  for (const entry of inFlight.values()) entry.controller.abort()
+  for (const entry of inFlight.values()) {
+    entry.controller.abort(new Error('prewarm state reset'))
+  }
   queue = []
   inFlight.clear()
   retryAfterByThread.clear()
