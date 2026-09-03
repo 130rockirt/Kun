@@ -14,7 +14,7 @@ export type RestartReconciliationReport = {
 
 type RestartRuntime = Pick<
   ServerRuntime,
-  'delegationRuntime' | 'resumeInterruptedGoals' | 'resumeInterruptedTurns' | 'threadStore' | 'turnService'
+  'delegationRuntime' | 'resumeInterruptedGoals' | 'resumeInterruptedTurns' | 'threadStore' | 'turnService' | 'queuedTurnDispatcher'
 >
 
 /**
@@ -123,6 +123,19 @@ export async function reconcileRuntimeAfterRestart(
         return 0
       })
     : 0
+  // Durable queued turns survive restart verbatim; no interrupted-turn
+  // checkpointing applies to them. Drain every thread that still owns one.
+  if (runtime.queuedTurnDispatcher && runtime.threadStore) {
+    const queuedThreads = await runtime.queuedTurnDispatcher
+      .drainAllQueued(runtime.threadStore)
+      .catch((error) => {
+        console.warn('[kun] queued-turn restart sweep failed:', error)
+        return 0
+      })
+    if (queuedThreads > 0) {
+      console.warn(`[kun] resumed queued turns on ${queuedThreads} thread(s) after restart`)
+    }
+  }
   return {
     orphanedChildren,
     orphanedThreadIds,

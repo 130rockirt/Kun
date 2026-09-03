@@ -171,6 +171,9 @@ import {
   type ThreadActionRuntime
 } from './chat-store-thread-actions-support'
 import { performPreparedThreadSend } from './chat-store-thread-send-direct'
+import { submitToRuntimeQueue } from './chat-store-thread-send-enqueue'
+import { runtimePromptForSurface } from './chat-store-send-prompt'
+import { startWorkspaceCheckpointSnapshot } from './chat-store-thread-send-checkpoint'
 
 function mergeTurnComposerContexts(
   primary: readonly ComposerContextAttachment[],
@@ -410,6 +413,44 @@ export async function sendThreadMessage(
         (mode === 'agent' && state.route === 'chat' && state.graphEnabled
           ? state.composerOrchestration
           : 'direct')
+      // Runtime-owned queue: submit the follow-up directly with
+      // enqueueIfBusy so it executes even when this conversation is never
+      // opened again. Write sends stay on the local queue: their writeContext
+      // identity is a composer-side contract the runtime queue lacks.
+      if (activeThreadId && !shouldWaitForRuntimeAdmission && !writeContext) {
+        const submitted = await submitToRuntimeQueue({
+          provider: p,
+          activeThreadId,
+          trimmedText,
+          clientRequestId,
+          mode,
+          orchestration,
+          requestedAgentSurface,
+          writeContext,
+          composerModel,
+          composerProviderId,
+          composerAccountId,
+          userModelChip,
+          displayText,
+          reasoningEffort,
+          serviceTier,
+          subagentResume,
+          messageSource,
+          persona,
+          designProfile,
+          designDocumentTarget,
+          designImagePlacementTarget,
+          attachmentIds,
+          fileReferences,
+          composerContexts,
+          queued,
+          overrides,
+          set,
+          get,
+          persistActiveQueuedMessages: runtime.persistActiveQueuedMessages
+        })
+        if (submitted !== null) return submitted
+      }
       set((s) => ({
         queuedMessages: upsertQueuedSubmission(s.queuedMessages, {
           ...queued,

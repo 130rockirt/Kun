@@ -63,6 +63,7 @@ import { turnServiceCompactionOperations } from './turn-service-compaction-opera
 import { turnServicePruneOperations } from './turn-service-prune-operations.js'
 import type { ThreadSnapshotStore } from './thread-snapshot-store.js'
 import { turnServiceGraphOperations } from './turn-service-graph-operations.js'
+import { turnServiceQueueOperations } from './turn-service-queue-operations.js'
 import { turnServiceRuntimeStateOperations } from './turn-service-runtime-state-operations.js'
 import { turnServiceItemPersistenceOperations } from './turn-service-item-persistence-operations.js'
 import type { TurnServiceOperations } from './turn-service-operations-contract.js'
@@ -274,6 +275,12 @@ export const DEFAULT_MAX_CONCURRENT_TURNS = 256
  * directly.
  */
 export class TurnService {
+  private deps: TurnServiceDeps
+  private readonly leasedTurns = new Map<string, ThreadExecutionLease>()
+  private readonly inflightTurns = new Map<string, AbortController>()
+  /** Turn ids that own one global admission slot. */
+  private readonly admittedTurnThreads = new Map<string, string>()
+
   declare private findIdempotentStart: (input: {
     threadId: string
     request: StartTurnRequest
@@ -313,12 +320,7 @@ export class TurnService {
   declare private finalizePersistedOpenItems: (threadId: string, turnId: string, status: Extract<TurnStatus, 'completed' | 'failed' | 'aborted'>) => Promise<void>
   declare private keepUserItems: (items: TurnItem[]) => TurnItem[]
 
-  private deps: TurnServiceDeps
   private readonly threadItems: ThreadItemProjectionService
-  private readonly inflightTurns = new Map<string, AbortController>()
-  /** Turn ids that own one global admission slot. */
-  private readonly admittedTurnThreads = new Map<string, string>()
-  private readonly leasedTurns = new Map<string, ThreadExecutionLease>()
   /** Steering requests that are restoring a parked Graph lease before enqueueing. */
   private readonly graphSteeringResumeFences = new Map<string, number>()
   /** New turn/Graph execution admission is permanently closed once host shutdown starts. */
@@ -326,6 +328,27 @@ export class TurnService {
   private activeExecutionAdmissions = 0
   private readonly executionAdmissionIdleWaiters = new Set<() => void>()
   private maxConcurrentTurns: number
+  /** Late-bound queue drain trigger; the serve runtime installs it once its
+   * agent-loop dispatcher exists. */
+  private onTurnSettledHook: ((threadId: string) => void | Promise<void>) | null = null
+
+  /** Installed by the serve runtime; invoked after terminal settlement. */
+  setTurnSettledHook(hook: (threadId: string) => void | Promise<void>): void {
+    this.onTurnSettledHook = hook
+  }
+
+  notifyTurnSettled(threadId: string): void {
+    const hook = this.onTurnSettledHook
+    if (!hook) return
+    Promise.resolve()
+      .then(() => hook(threadId))
+      .catch((error) => {
+        console.warn(
+          `[kun] queued-turn drain failed for ${threadId}: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+        )
+      })
+  }
 
   constructor(deps: TurnServiceDeps) {
     this.deps = deps
@@ -372,6 +395,7 @@ installServiceOperations(
   turnServiceCompactionOperations,
   turnServicePruneOperations,
   turnServiceGraphOperations,
+  turnServiceQueueOperations,
   turnServiceRuntimeStateOperations,
   turnServiceItemPersistenceOperations
 )

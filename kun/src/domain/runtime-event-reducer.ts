@@ -9,7 +9,7 @@ import type { UsageSnapshot } from '../contracts/usage.js'
 import { emptyUsageSnapshot } from '../contracts/usage.js'
 import { addUsage } from './usage.js'
 
-export type EventSourcedTurnStatus = 'unknown' | 'running' | 'completed' | 'failed' | 'aborted'
+export type EventSourcedTurnStatus = 'unknown' | 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
 
 export type EventSourcedTurnProjection = {
   id: string
@@ -246,7 +246,7 @@ export function applyRuntimeEvent(
 
 function applyTurnEvent(
   projection: MutableProjection,
-  event: Extract<RuntimeEvent, { kind: 'turn_started' | 'turn_completed' | 'turn_failed' | 'turn_aborted' | 'turn_steered' }>
+  event: Extract<RuntimeEvent, { kind: 'turn_started' | 'turn_queued' | 'turn_completed' | 'turn_failed' | 'turn_aborted' | 'turn_steered' }>
 ): void {
   if (event.child) {
     upsertChildRun(projection, event)
@@ -261,6 +261,9 @@ function applyTurnEvent(
       if (event.approvalPolicy) turn.approvalPolicy = event.approvalPolicy
       if (event.sandboxMode) turn.sandboxMode = event.sandboxMode
       if (event.approvalReviewer) turn.approvalReviewer = event.approvalReviewer
+      break
+    case 'turn_queued':
+      turn.status = 'queued'
       break
     case 'turn_completed':
       turn.status = 'completed'
@@ -282,7 +285,7 @@ function applyTurnEvent(
 
 function upsertChildRun(
   projection: MutableProjection,
-  event: Extract<RuntimeEvent, { kind: 'turn_started' | 'turn_completed' | 'turn_failed' | 'turn_aborted' | 'turn_steered' }>
+  event: Extract<RuntimeEvent, { kind: 'turn_started' | 'turn_queued' | 'turn_completed' | 'turn_failed' | 'turn_aborted' | 'turn_steered' }>
 ): void {
   const child = event.child
   if (!child) return

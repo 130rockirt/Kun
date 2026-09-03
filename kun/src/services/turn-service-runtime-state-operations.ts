@@ -163,6 +163,12 @@ async reconcileOrphanedTurns(this: TurnService): Promise<RestartRecoverySource[]
       for (const turn of thread.turns) {
         if (turn.status !== 'running' && turn.status !== 'queued') continue
         if (this['inflightTurns'].has(turn.id)) continue
+        if (turn.status === 'queued') {
+          // Durable queue entries never execute in-process, so they cannot
+          // be orphaned. The queued-turn dispatcher drains them after
+          // reconciliation.
+          continue
+        }
         if (
           turn.admissionPending ||
           (!turn.admissionCompletedAt && thread.designProfile?.lockedAtTurnId === turn.id)

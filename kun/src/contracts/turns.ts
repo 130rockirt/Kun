@@ -385,7 +385,14 @@ export const StartTurnRequest = z.object({
    * True when the turn is handled through an IM bridge. This gates
    * IM-only tool exposure separately from generic headless turns.
    */
-  imContext: z.boolean().optional()
+  imContext: z.boolean().optional(),
+  /**
+   * When true and the thread already has an active turn, the request is
+   * persisted as a queued turn instead of being rejected with a busy
+   * conflict. The runtime starts queued turns in order once the active
+   * turn settles. Callers that omit this keep the historical 409 behavior.
+   */
+  enqueueIfBusy: z.boolean().optional()
 }).superRefine((value, ctx) => {
   if (Boolean(value.designProfile) !== Boolean(value.designDocumentTarget)) {
     ctx.addIssue({
@@ -429,6 +436,10 @@ export const StartTurnResponse = z.object({
   threadId: z.string().min(1),
   turnId: z.string().min(1),
   userMessageItemId: z.string().min(1),
+  /** Present for enqueueIfBusy requests persisted as queued turns. */
+  status: TurnStatus.optional(),
+  /** 1-based position among this thread's queued turns when status is queued. */
+  queuedPosition: z.number().int().positive().optional(),
   /** Durable thread ownership; distinct from the effective surface of this turn. */
   threadAgentSurface: z.enum(['code', 'write', 'design']).optional(),
   /** Effective surface for this turn. */
@@ -437,6 +448,17 @@ export const StartTurnResponse = z.object({
   designDocumentTarget: DesignDocumentTargetSchema.optional()
 })
 export type StartTurnResponse = z.infer<typeof StartTurnResponse>
+
+export const MoveQueuedTurnRequest = z.object({
+  /** Move the queued turn directly before this queued sibling. */
+  beforeTurnId: z.string().min(1).optional(),
+  /** Move the queued turn directly after this queued sibling. */
+  afterTurnId: z.string().min(1).optional()
+}).refine(
+  (value) => Boolean(value.beforeTurnId) !== Boolean(value.afterTurnId),
+  { message: 'exactly one of beforeTurnId or afterTurnId is required' }
+)
+export type MoveQueuedTurnRequest = z.infer<typeof MoveQueuedTurnRequest>
 
 export const SteerTurnRequest = z.object({
   text: z.string().min(1),

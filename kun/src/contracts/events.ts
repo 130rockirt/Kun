@@ -47,6 +47,7 @@ export const RuntimeEventKind = z.enum([
   'thread_pruned',
   'thread_restored',
   'turn_started',
+  'turn_queued',
   'turn_completed',
   'turn_failed',
   'turn_aborted',
@@ -235,6 +236,7 @@ export type ThreadLifecycleEvent = z.infer<typeof ThreadLifecycleEvent>
 export const TurnLifecycleEvent = RuntimeEventBase.extend({
   kind: z.enum([
     'turn_started',
+    'turn_queued',
     'turn_completed',
     'turn_failed',
     'turn_aborted',

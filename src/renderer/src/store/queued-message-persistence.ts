@@ -335,6 +335,19 @@ export function reconcileQueuedMessages(
       continue
     }
     if (!runtime.busy) {
+      if (
+        message.deliveryState === 'in_flight' &&
+        message.deliveryTurnId &&
+        message.deliveryTurnId !== activeTurnId &&
+        message.clientRequestId
+      ) {
+        // Runtime-queue ownership (clientRequestId marks an enqueueIfBusy
+        // admission): the server drains this entry, so a local reset to
+        // pending would double-send. Entries without the marker keep the
+        // historical evidence-based settlement below.
+        reconciled.push(message)
+        continue
+      }
       const deliveryTurnId = normalizedString(message.deliveryTurnId)
       const deliveryUserMessageItemId = normalizedString(message.deliveryUserMessageItemId)
       const wasAccepted = runtime.blocks?.some((block) =>
@@ -350,7 +363,12 @@ export function reconcileQueuedMessages(
       continue
     }
     const deliveryTurnId = normalizedString(message.deliveryTurnId)
-    if (deliveryTurnId && activeTurnId && deliveryTurnId !== activeTurnId) continue
+    if (deliveryTurnId && activeTurnId && deliveryTurnId !== activeTurnId) {
+      // Parked runtime-queue entry: the active turn belongs to an earlier
+      // message, this one still waits in the server-side queue.
+      reconciled.push(message)
+      continue
+    }
     const resolvedTurnId = deliveryTurnId || activeTurnId
     if (message.deliveryState === 'in_flight' && message.deliveryTurnId === resolvedTurnId) {
       reconciled.push(message)

@@ -84,6 +84,30 @@ export interface TurnServiceOperations {
     /** Runs only for a newly admitted turn, never for an idempotent replay. */
     onAdmitted?: (response: StartTurnResponse) => void | Promise<void>
   } ): Promise<StartTurnResponse>;
+  /** Persist a start request as a durable queued turn for later execution. */
+  enqueueTurn(input: {
+    threadId: string
+    request: StartTurnRequest
+  }): Promise<StartTurnResponse>;
+  /**
+   * Promote the oldest queued turn to running after re-running full
+   * admission. Returns null when execution cannot start yet (busy thread,
+   * full capacity, closing, or no queued turns). Transiently unadmittable
+   * queued turns are marked failed and skipped within the same call.
+   */
+  startNextQueuedTurn(threadId: string): Promise<{ turnId: string } | null>;
+  /** Abort a queued turn before it starts; running turns must use interrupt. */
+  cancelQueuedTurn(input: {
+    threadId: string
+    turnId: string
+  }): Promise<{ threadId: string; turnId: string; status: 'aborted' }>;
+  /** Reorder a queued turn relative to another queued sibling. */
+  moveQueuedTurn(input: {
+    threadId: string
+    turnId: string
+    beforeTurnId?: string
+    afterTurnId?: string
+  }): Promise<{ threadId: string; turnId: string; queuedPosition: number }>;
   rewindThread(input: {
     threadId: string
     turnId: string

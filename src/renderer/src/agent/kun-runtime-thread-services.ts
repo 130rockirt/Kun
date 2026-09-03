@@ -22,7 +22,10 @@ import {
   KUN_SKILLS_PATH,
   KUN_THREAD_STATES_PATH,
   KUN_THREADS_BULK_DELETE_PATH,
+  kunThreadCancelQueuedPath,
   kunThreadCompactPath,
+  kunThreadQueuePositionPath,
+  kunThreadQueueResumePath,
   kunThreadEventsPath,
   kunThreadForkPath,
   kunThreadGoalPath,
@@ -227,6 +230,46 @@ export class KunRuntimeThreadServices extends KunRuntimeProviderServices {
     if (!response.ok) {
       throw runtimeErrorToError(readRuntimeError(response.body, 'failed to queue message'))
     }
+  }
+
+  async cancelQueuedTurn(threadId: string, turnId: string): Promise<void> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      kunThreadCancelQueuedPath(threadId, turnId),
+      'POST'
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to cancel queued turn'))
+    }
+  }
+
+  async moveQueuedTurn(
+    threadId: string,
+    turnId: string,
+    position: { beforeTurnId?: string; afterTurnId?: string }
+  ): Promise<void> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      kunThreadQueuePositionPath(threadId, turnId),
+      'PATCH',
+      JSON.stringify(position)
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to reorder queued turn'))
+    }
+  }
+
+  async resumeQueuedTurns(threadId: string): Promise<{ started: boolean; turnId?: string }> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      kunThreadQueueResumePath(threadId),
+      'POST'
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'failed to resume queued turns'))
+    }
+    const parsed = readRuntimeJson<{
+      started: boolean
+      turnId?: string
+    }>(response.body, 'runtime returned an invalid queue resume response')
+    return { started: parsed.started, ...(parsed.turnId ? { turnId: parsed.turnId } : {}) }
   }
 
   async interruptTurn(threadId: string, turnId: string, options?: { discard?: boolean }): Promise<void> {

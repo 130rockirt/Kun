@@ -212,6 +212,8 @@ export interface AgentProvider {
     text: string,
     options?: {
       clientRequestId?: string
+      /** Queue this turn durably when the thread already has an active turn. */
+      enqueueIfBusy?: boolean
       mode?: string
       orchestration?: 'direct' | 'graph'
       model?: string
@@ -327,6 +329,13 @@ export interface AgentProvider {
     options?: { displayText?: string; attachmentIds?: string[] }
   ): Promise<void>
   interruptTurn(threadId: string, turnId: string, options?: { discard?: boolean }): Promise<void>
+  cancelQueuedTurn?(threadId: string, turnId: string): Promise<void>
+  moveQueuedTurn?(
+    threadId: string,
+    turnId: string,
+    position: { beforeTurnId?: string; afterTurnId?: string }
+  ): Promise<void>
+  resumeQueuedTurns?(threadId: string): Promise<{ started: boolean; turnId?: string }>
   cancelToolCall?(
     threadId: string,
     turnId: string,

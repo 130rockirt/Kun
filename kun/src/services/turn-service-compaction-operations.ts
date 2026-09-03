@@ -495,6 +495,10 @@ async finishTurn(this: TurnService, input: {
       return settlement
     } finally {
       this['clearRuntimeTurnState'](input.threadId, input.turnId)
+      // Aborted turns are excluded on purpose: an explicit user interrupt
+      // pauses the queue instead of immediately starting the next queued
+      // turn, so Stop reliably stops the conversation.
+      if (input.status !== 'aborted') this.notifyTurnSettled(input.threadId)
     }
   },
 }

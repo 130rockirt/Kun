@@ -222,6 +222,7 @@ export function createServerRuntimeComposition(
     runTurn(threadId, turnId) {
       return runAgentTurn(threadId, turnId)
     },
+    queuedTurnDispatcher: agent.queuedTurnDispatcher,
     resumeInterruptedGoals(sources) {
       return agent.loop.resumeInterruptedGoals(sources)
     },

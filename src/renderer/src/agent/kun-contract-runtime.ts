@@ -398,6 +398,10 @@ export type CoreStartTurnResponseJson = {
   threadId: string
   turnId: string
   userMessageItemId?: string
+  /** Present for enqueueIfBusy requests persisted as queued turns. */
+  status?: CoreTurnStatus
+  /** 1-based position among this thread's queued turns when status is queued. */
+  queuedPosition?: number
   agentSurface?: 'code' | 'write' | 'design'
   threadAgentSurface?: 'code' | 'write' | 'design'
   designProfile?: DesignTaskProfile

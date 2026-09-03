@@ -275,6 +275,11 @@ export type ServerRuntime = {
     childRecoveryCandidates?: readonly import('../../loop/interrupted-turn-coordinator.js').InterruptedSubagentRecoveryCandidate[]
   ): Promise<number>
   /**
+   * Durable per-thread turn queue drain, used by turn settlement and by the
+   * restart sweep. Optional so embedders without the agent loop can omit it.
+   */
+  queuedTurnDispatcher?: import('../queued-turn-dispatcher.js').QueuedTurnDispatcher
+  /**
    * Canonical thread store, exposed for maintenance sweeps (e.g. the
    * memory-pressure monitor compacting idle thread histories).
    */

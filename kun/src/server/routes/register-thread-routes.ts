@@ -41,6 +41,9 @@ import {
   rewindThread,
   startTurn,
   steerTurn,
+  cancelQueuedTurn,
+  moveQueuedTurn,
+  resumeQueuedTurns,
   replaceSteeringQueue
 } from './turns.js'
 import { startReview } from './review.js'
@@ -268,6 +271,20 @@ export function registerThreadRoutes(
   router.add('POST', '/v1/threads/:id/rewind', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return rewindThread(runtime.turnService, ctx.params.id, request)
+  })
+  router.add('POST', '/v1/threads/:id/turns/:turnId/cancel-queued', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return cancelQueuedTurn(runtime.turnService, ctx.params.id, ctx.params.turnId)
+  })
+  router.add('PATCH', '/v1/threads/:id/turns/:turnId/queue-position', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return moveQueuedTurn(runtime.turnService, ctx.params.id, ctx.params.turnId, request)
+  })
+  router.add('POST', '/v1/threads/:id/queue/resume', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return resumeQueuedTurns(runtime.turnService, ctx.params.id, (threadId, turnId) => {
+      runtime.runTurn(threadId, turnId)
+    })
   })
   router.add('POST', '/v1/threads/:id/review', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

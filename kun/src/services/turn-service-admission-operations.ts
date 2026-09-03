@@ -97,6 +97,13 @@ async startTurn(this: TurnService, input: {
       ? null
       : await this['findIdempotentStart'](input, requestFingerprint)
     if (replay) return replay
+    if (
+      !options.expectedLatestFailedTurnId &&
+      input.request.enqueueIfBusy === true &&
+      await this['deps'].executionLeases?.owner(input.threadId)
+    ) {
+      return this.enqueueTurn(input)
+    }
     const finishAdmission = this['beginExecutionAdmission']()
     try {
     if (this['deps'].migrationMaintenance?.isLocked()) {
@@ -114,6 +121,14 @@ async startTurn(this: TurnService, input: {
         }
         const thread = await this['deps'].threadStore.get(input.threadId)
         if (!thread) throw new Error(`thread not found: ${input.threadId}`)
+        if (thread.turns.some((turn) => turn.status === 'running')) {
+          if (
+            !options.expectedLatestFailedTurnId &&
+            input.request.enqueueIfBusy === true
+          ) {
+            return { kind: 'enqueue' as const }
+          }
+        }
         if (options.expectedLatestFailedTurnId) {
           const latest = thread.turns.at(-1)
           if (
@@ -303,6 +318,7 @@ async startTurn(this: TurnService, input: {
       })
       )
       if (started.kind === 'replay') return started.response
+      if (started.kind === 'enqueue') return this.enqueueTurn(input)
       const committedThread = await this['markTurnAdmissionCompleted'](
         input.threadId,
         started.turnId,

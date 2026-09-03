@@ -12,7 +12,7 @@ type SseAbortRef = { current: AbortController | null }
 
 export function createThreadActions(
   context: { set: ChatStoreSet; get: ChatStoreGet; sseAbortRef: SseAbortRef }
-): Pick<ChatState, 'createThread' | 'createConversation' | 'recoverActiveTurn' | 'selectThread' | 'loadEarlierThreadHistory' | 'subscribeThreadEventsLive' | 'drainQueuedMessages' | 'removeQueuedMessage' | 'restoreQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
+): Pick<ChatState, 'createThread' | 'createConversation' | 'recoverActiveTurn' | 'selectThread' | 'loadEarlierThreadHistory' | 'subscribeThreadEventsLive' | 'drainQueuedMessages' | 'removeQueuedMessage' | 'restoreQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage' | 'resumeQueuedTurns' | 'sendMessage' | 'reviewActiveThread'> {
   const actionContext: StoreActionContext = context
   const runtime: ThreadActionRuntime = {
     threadSelectionGeneration: 0,

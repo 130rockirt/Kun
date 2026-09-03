@@ -1,3 +1,4 @@
+import { QueuedTurnDispatcher } from './queued-turn-dispatcher.js'
 import {
   type AttachmentStore,
   CapabilityRegistry,
@@ -394,6 +395,11 @@ export async function createRuntimeAgentComposition(
 	    turnService,
 	    runTurn: runAgentTurn
 	  })
+	  const queuedTurnDispatcher = new QueuedTurnDispatcher({
+	    turns: turnService,
+	    runTurn: runAgentTurn
+	  })
+	  turnService.setTurnSettledHook((threadId) => queuedTurnDispatcher.drain(threadId))
 	  const extensionProfiles = new ExtensionAgentProfileRegistry()
 	  const extensionAgent = new ExtensionAgentService({
 	    threads: threadService,
@@ -428,6 +434,7 @@ export async function createRuntimeAgentComposition(
     trackRuntimeRun,
     runAgentTurn,
     runReview,
+    queuedTurnDispatcher,
     extensionProfiles,
     extensionAgent,
     get prepareExtensionContributions() { return prepareExtensionContributions },

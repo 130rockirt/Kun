@@ -170,7 +170,7 @@ import {
 export function createThreadQueueActions(
   context: StoreActionContext,
   runtime: ThreadActionRuntime
-): Pick<ChatState, 'drainQueuedMessages' | 'removeQueuedMessage' | 'restoreQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage'> {
+): Pick<ChatState, 'drainQueuedMessages' | 'removeQueuedMessage' | 'restoreQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage' | 'resumeQueuedTurns'> {
   const { set, get, sseAbortRef } = context
   return {
   drainQueuedMessages: async () => {
@@ -220,7 +220,7 @@ export function createThreadQueueActions(
     }
   },
 
-  removeQueuedMessage: (id) => {
+  removeQueuedMessage: async (id) => {
     const removed = get().queuedMessages.find((message) => message.id === id)
     set((s) => ({
       queuedMessages: s.queuedMessages.filter((message) => message.id !== id)
@@ -228,6 +228,24 @@ export function createThreadQueueActions(
     runtime.persistActiveQueuedMessages()
     if (removed?.waitForRuntimeAdmission) {
       settleRuntimeTurnAdmission(removed.clientRequestId, false)
+    }
+    // In-flight entries are admitted to the durable runtime queue; removing
+    // them locally must also cancel the server-side queued turn or it would
+    // still execute later.
+    if (removed?.deliveryState === 'in_flight' && removed.deliveryTurnId) {
+      const threadId = get().activeThreadId
+      const provider = getProvider()
+      if (threadId && typeof provider.cancelQueuedTurn === 'function') {
+        try {
+          await provider.cancelQueuedTurn(threadId, removed.deliveryTurnId)
+        } catch (error) {
+          // The turn may have started already; that is fine, the message
+          // simply delivered before the cancel landed.
+          if (!/not found|no longer queued|not queued/i.test(formatRuntimeError(error))) {
+            set({ error: describeRuntimeError(error).message })
+          }
+        }
+      }
     }
   },
 
@@ -239,7 +257,10 @@ export function createThreadQueueActions(
     return restored.restored
   },
 
-  reorderQueuedMessage: (id, targetId, position) => {
+  reorderQueuedMessage: async (id, targetId, position) => {
+    const moving = get().queuedMessages.find((message) => message.id === id)
+    const anchor = get().queuedMessages.find((message) => message.id === targetId)
+    const anchorTurnId = anchor?.deliveryTurnId
     set((state) => {
       if (id === targetId) return {}
       const sourceIndex = state.queuedMessages.findIndex((message) => message.id === id)
@@ -258,6 +279,46 @@ export function createThreadQueueActions(
       return { queuedMessages }
     })
     runtime.persistActiveQueuedMessages()
+    if (
+      moving?.deliveryState === 'in_flight' &&
+      moving.deliveryTurnId &&
+      anchorTurnId
+    ) {
+      const threadId = get().activeThreadId
+      const provider = getProvider()
+      if (threadId && typeof provider.moveQueuedTurn === 'function') {
+        try {
+          await provider.moveQueuedTurn(threadId, moving.deliveryTurnId, {
+            [position === 'before' ? 'beforeTurnId' : 'afterTurnId']: anchorTurnId
+          })
+        } catch (error) {
+          set({ error: describeRuntimeError(error).message })
+        }
+      }
+    }
+  },
+
+  resumeQueuedTurns: async () => {
+    const state = get()
+    const threadId = state.activeThreadId
+    if (!threadId || state.busy) return false
+    const provider = getProvider()
+    if (typeof provider.resumeQueuedTurns !== 'function') return false
+    const result = await provider.resumeQueuedTurns(threadId)
+    if (!result.started) return false
+    // The interrupt paused locally parked entries; the runtime queue kept
+    // them queued, so resume them locally too. Paused entries that never
+    // reached the runtime stay local and keep their paused state.
+    set((current) => ({
+      queuedMessages: current.queuedMessages.map((message) =>
+        message.deliveryState === 'paused' && message.clientRequestId
+          ? { ...message, deliveryState: 'in_flight' as const }
+          : message
+      )
+    }))
+    runtime.persistActiveQueuedMessages()
+    await get().recoverActiveTurn()
+    return true
   },
 
   guideQueuedMessage: async (id) => {
@@ -271,6 +332,11 @@ export function createThreadQueueActions(
         return false
       }
       if (state.busy) return false
+      // Runtime-parked entries (admitted, then paused by an interrupt) resume
+      // the server-side queue instead of re-submitting a new turn.
+      if (message.deliveryState === 'paused' && message.clientRequestId) {
+        return get().resumeQueuedTurns()
+      }
       set((current) => ({
         queuedMessages: current.queuedMessages.map((candidate) => candidate.id === id
           ? {

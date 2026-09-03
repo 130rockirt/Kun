@@ -612,13 +612,11 @@ export type ChatState = {
   sendMessage: (text: string, mode?: string, overrides?: SendMessageOverrides) => Promise<boolean>
   reviewActiveThread: (target: ReviewTarget) => Promise<boolean>
   drainQueuedMessages: () => Promise<void>
-  removeQueuedMessage: (id: string) => void
+  removeQueuedMessage: (id: string) => Promise<void> | void
   restoreQueuedMessage: (id: string) => QueuedUserMessage | null
-  reorderQueuedMessage: (
-    id: string,
-    targetId: string,
-    position: 'before' | 'after'
-  ) => void
+  reorderQueuedMessage: (id: string, targetId: string, position: 'before' | 'after') => Promise<void> | void
+  /** Resume a runtime queue paused by an interrupt. */
+  resumeQueuedTurns: () => Promise<boolean>
   guideQueuedMessage: (id: string) => Promise<boolean>
   attachExtensionComposerContext: (event: ExtensionComposerContextEvent) => void
   removeExtensionComposerContext: (attachmentId: string) => void

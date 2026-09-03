@@ -540,6 +540,8 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
         relativePath: string
       }
       attachmentIds?: string[]
+      /** Queue this turn durably when the thread already has an active turn. */
+      enqueueIfBusy?: boolean
       workspaceCheckpointId?: string
       workspaceCheckpointRequestId?: string
       fileReferences?: Array<{ path: string; relativePath: string; name: string; kind?: 'file' | 'directory' }>
@@ -549,6 +551,8 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
     turnId: string
     threadId: string
     userMessageItemId?: string
+    status?: 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
+    queuedPosition?: number
     agentSurface?: 'code' | 'write' | 'design'
     threadAgentSurface?: 'code' | 'write' | 'design'
     designProfile?: DesignTaskProfile
@@ -568,6 +572,7 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       ...(options?.clientRequestId?.trim()
         ? { clientRequestId: options.clientRequestId.trim() }
         : {}),
+      ...(options?.enqueueIfBusy === true ? { enqueueIfBusy: true } : {}),
       ...(options?.orchestration === 'graph' ? { orchestration: 'graph' } : {}),
       clientSurface: 'gui',
       ...(selectedModel ? { model: selectedModel } : {}),
@@ -658,6 +663,8 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
     )
     return {
       threadId: parsed.threadId,
+      ...(parsed.status ? { status: parsed.status } : {}),
+      ...(parsed.queuedPosition !== undefined ? { queuedPosition: parsed.queuedPosition } : {}),
       turnId: parsed.turnId,
       userMessageItemId: parsed.userMessageItemId,
       ...(parsed.agentSurface ? { agentSurface: parsed.agentSurface } : {}),
