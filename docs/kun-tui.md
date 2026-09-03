@@ -48,8 +48,14 @@ kun
 kun tui --workspace "$PWD" --continue
 kun tui --thread <thread-id>
 
-# 只连接，不自动启动
+# 只连接已由 GUI 等客户端持有的 Runtime
 kun --no-start
+
+# 启动完全独立的 TUI Runtime（独立会话、记忆和设置）
+KUN_MANAGER_CONTROL_DIR="$HOME/.kun/tui-control" \
+KUN_MANAGER_SETTINGS_PATH="$HOME/.kun/tui-settings.json" \
+KUN_DATA_DIR="$HOME/.kun/tui-data" \
+kun tui
 ```
 
 默认 TUI 会在 data-dir/flavor 启动锁与 Manager fence 下选主，生成运行时 token、
@@ -65,11 +71,14 @@ TUI 在 `/quit`、终端/信号退出、初始化失败或其他命令退出路�
 Quit 会停止 GUI Runtime，隐藏窗口、最小化到托盘或 macOS 应用仍驻留时不会停止，
 所以此时默认 TUI 仍会收到同槽位冲突。GUI 顶部重启只重启 GUI 自己的 Runtime。
 
-`--url` 和 `--no-start` 是显式非拥有连接：TUI 不启动也不停止目标 Runtime，目标
-owner 退出后连接可以随之断开。首次升级时，如果同一 canonical data-dir 中只剩一个
-已认证、身份精确、无 client-owner 元数据的旧 `launchMode: shared` daemon，当前
-launcher 可以优雅退休该精确实例后再启动；身份有歧义时 fail closed，不扫描或终止
-其他 data-dir/用户进程。
+`--url` 和 `--no-start` 是显式非拥有连接：当 GUI 已持有默认 Runtime 时，运行
+`kun tui --no-start` 即可共用其会话和设置；TUI 不启动也不停止目标 Runtime，目标
+owner 退出后连接可以随之断开。若要让 GUI 和 TUI 各自持有 Runtime，必须像上例一样
+同时隔离 `KUN_MANAGER_CONTROL_DIR`、`KUN_MANAGER_SETTINGS_PATH` 和 `KUN_DATA_DIR`；
+仅更换端口或 data-dir 不能建立完整的独立 Manager profile。首次升级时，如果同一
+canonical data-dir 中只剩一个已认证、身份精确、无 client-owner 元数据的旧
+`launchMode: shared` daemon，当前 launcher 可以优雅退休该精确实例后再启动；身份有
+歧义时 fail closed，不扫描或终止其他 data-dir/用户进程。
 
 没有显式 `--data-dir` 或 `KUN_DATA_DIR` 时，CLI 会读取当前平台 Kun GUI 设置中的
 `agents.kun.dataDir`，因此仍使用旧 `~/.deepseekgui/kun` 的升级用户不会被错误分流到

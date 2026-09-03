@@ -32,10 +32,13 @@ export class ClientOwnedRuntimeConflictError extends Error {
     readonly dataDir: string
   ) {
     const owner = existing.discovery.clientOwnerKind ?? 'legacy-or-external'
+    const tuiHint = requestedOwnerKind === 'tui'
+      ? ' To use the existing Runtime, run `kun tui --no-start`.'
+      : ''
     super(
       `Kun Runtime is already owned by ${owner} process ${existing.discovery.pid} ` +
-      `for ${dataDir}; close that client before retrying, or use an explicitly ` +
-      'isolated Manager profile and control directory'
+      `for ${dataDir}; close that client before retrying.${tuiHint} To start an independent ` +
+      'Runtime, isolate KUN_MANAGER_CONTROL_DIR, KUN_MANAGER_SETTINGS_PATH, and KUN_DATA_DIR.'
     )
     this.name = 'ClientOwnedRuntimeConflictError'
   }

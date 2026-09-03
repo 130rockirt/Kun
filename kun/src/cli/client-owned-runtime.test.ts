@@ -48,17 +48,22 @@ describe('client-owned Runtime election', () => {
     const fetchMock = runtimeFetch([{ record: existing, dataDir }])
     const operation = vi.fn(async () => 'started')
 
-    await expect(withClientOwnedRuntimeElection({
+    const error = await withClientOwnedRuntimeElection({
       dataDir,
       ownerKind: 'tui',
       controlDir: join(root, 'control'),
       fetch: fetchMock as unknown as typeof fetch
-    }, operation)).rejects.toMatchObject({
+    }, operation).catch((value) => value)
+
+    expect(error).toMatchObject({
       name: ClientOwnedRuntimeConflictError.name,
       code: 'client_runtime_owner_busy',
       requestedOwnerKind: 'tui',
-      message: expect.stringContaining('explicitly isolated Manager profile')
+      message: expect.stringContaining('run `kun tui --no-start`')
     })
+    expect(String(error)).toContain(
+      'isolate KUN_MANAGER_CONTROL_DIR, KUN_MANAGER_SETTINGS_PATH, and KUN_DATA_DIR'
+    )
     expect(operation).not.toHaveBeenCalled()
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
   })

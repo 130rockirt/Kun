@@ -55,8 +55,14 @@ kun
 kun tui --workspace "$PWD" --continue
 kun tui --thread <thread-id>
 
-# Attach only
+# Attach to a Runtime already owned by the GUI or another client
 kun --no-start
+
+# Start a fully independent TUI Runtime (separate threads, memory, and settings)
+KUN_MANAGER_CONTROL_DIR="$HOME/.kun/tui-control" \
+KUN_MANAGER_SETTINGS_PATH="$HOME/.kun/tui-settings.json" \
+KUN_DATA_DIR="$HOME/.kun/tui-data" \
+kun tui
 ```
 
 Default TUI startup elects under the data-directory/flavor lock and Manager
@@ -77,13 +83,17 @@ tray, or macOS residency without a window does not. A default TUI therefore
 still conflicts while the GUI is in the tray. The GUI restart control restarts
 only that GUI's Runtime.
 
-`--url` and `--no-start` are explicit non-owning modes: the TUI neither starts
-nor stops the target, and the connection may disappear when its real owner
-exits. On the first upgraded launch, an authenticated, exact legacy
-`launchMode: shared` daemon without client-owner metadata in the same canonical
-data directory may be retired gracefully before the owned Runtime starts.
-Ambiguous identity fails closed and never authorizes a broad process scan or
-termination in another data directory.
+`--url` and `--no-start` are explicit non-owning connections. When the GUI owns
+the default Runtime, run `kun tui --no-start` to share its threads and settings.
+The TUI neither starts nor stops that Runtime, and the connection may end when
+the owner exits. To let the GUI and TUI each own a Runtime, isolate
+`KUN_MANAGER_CONTROL_DIR`, `KUN_MANAGER_SETTINGS_PATH`, and `KUN_DATA_DIR`
+together as shown above; changing only the port or data directory does not form
+a fully isolated Manager profile. During the first upgrade, the launcher may
+gracefully retire one authenticated, exact legacy `launchMode: shared` daemon
+without client-owner metadata in the same canonical data directory. Ambiguous
+identity fails closed and never scans or terminates other data directories or
+user processes.
 
 Without `--data-dir` or `KUN_DATA_DIR`, the CLI reads `agents.kun.dataDir`
 from the installed GUI settings. Existing users whose authoritative data is

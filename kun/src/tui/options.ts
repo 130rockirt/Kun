@@ -15,6 +15,9 @@ export const KUN_TUI_USAGE = `kun [tui options]
 Open Kun's inline terminal client. By default Kun starts one Runtime owned by
 this TUI session and stops it when the TUI exits; \`kun tui\` is an alias.
 The GUI and default TUI cannot own the same data directory/flavor concurrently.
+Use \`kun tui --no-start\` to connect to a Runtime already owned by the GUI.
+For an independent Runtime, isolate KUN_MANAGER_CONTROL_DIR,
+KUN_MANAGER_SETTINGS_PATH, and KUN_DATA_DIR.
 
 Options:
   --url <url>               Explicit runtime URL (default: discover from data dir)
