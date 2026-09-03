@@ -103,7 +103,9 @@ export function releaseThreadWorktreeIfNeeded(threadId: string | null): void {
 export function finalizeTurnTiming(state: ChatState): Partial<ChatState> {
   const userId = state.currentTurnUserId
   if (!userId) return {}
-  const startedAt = state.turnStartedAtByUserId[userId]
+  // Fall back to the persisted turn start recovered on hydration; a mid-turn
+  // rehydrate clears turnStartedAtByUserId but keeps currentTurnStartedAtMs.
+  const startedAt = state.turnStartedAtByUserId[userId] ?? state.currentTurnStartedAtMs ?? undefined
   if (typeof startedAt !== 'number') {
     return { currentTurnUserId: null }
   }

@@ -349,6 +349,17 @@ export function reduceLateChatProjection(
             ? snapshot.latestTurnStartedAtMs ?? state.currentTurnStartedAtMs
             : null
           : state.currentTurnStartedAtMs,
+        // Merge server-derived durations from the reconciled turn records; the
+        // durable record is authoritative, but keep locally recorded durations
+        // for turns the snapshot page does not cover.
+        ...(snapshot.turnDurationByUserId
+          ? {
+              turnDurationByUserId: {
+                ...state.turnDurationByUserId,
+                ...snapshot.turnDurationByUserId
+              }
+            }
+          : {}),
         ...(state.lastTurnUsage && state.lastTurnUsage.threadId !== snapshot.threadId
           ? { turnTimingMetrics: new Map() }
           : {}),

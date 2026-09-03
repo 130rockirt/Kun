@@ -8,6 +8,7 @@ import {
   clearThreadSnapshotCache,
   getThreadSnapshot,
   getThreadSnapshotForSelection,
+  hydratedTurnTimingPatch,
   invalidateThreadSnapshot,
   snapshotThreadProjection,
   THREAD_SNAPSHOT_CACHE_MAX_BYTES,
@@ -379,5 +380,42 @@ describe('thread snapshot cache', () => {
 
     expect(snapshot?.activeThreadGoal).toBe(goal)
     expect(snapshot?.activeThreadTodos).toBe(todos)
+  })
+})
+
+describe('hydratedTurnTimingPatch', () => {
+  const base = {
+    latestTurnId: 'turn_1',
+    latestTurnOrchestration: 'direct' as const,
+    currentTurnUserId: 'user_1',
+    latestTurnStartedAtMs: 42_000,
+    turnDurationByUserId: { user_old: 1_000 }
+  }
+
+  it('re-seeds the running turn start from the persisted record', () => {
+    const patch = hydratedTurnTimingPatch({ ...base, busy: true })
+
+    expect(patch.currentTurnUserId).toBe('user_1')
+    expect(patch.currentTurnStartedAtMs).toBe(42_000)
+    expect(patch.turnStartedAtByUserId).toEqual({ user_1: 42_000 })
+    expect(patch.turnDurationByUserId).toEqual({ user_old: 1_000 })
+  })
+
+  it('keeps per-user starts empty for settled threads', () => {
+    const patch = hydratedTurnTimingPatch({ ...base, busy: false })
+
+    expect(patch.currentTurnStartedAtMs).toBeNull()
+    expect(patch.turnStartedAtByUserId).toEqual({})
+  })
+
+  it('keeps per-user starts empty when the persisted turn start is unknown', () => {
+    const patch = hydratedTurnTimingPatch({
+      ...base,
+      busy: true,
+      latestTurnStartedAtMs: undefined
+    })
+
+    expect(patch.currentTurnStartedAtMs).toBeNull()
+    expect(patch.turnStartedAtByUserId).toEqual({})
   })
 })

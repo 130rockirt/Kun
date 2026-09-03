@@ -110,7 +110,15 @@ export function hydratedTurnTimingPatch(input: {
     currentTurnOrchestration: input.busy ? input.latestTurnOrchestration ?? 'direct' : null,
     currentTurnUserId: input.currentTurnUserId,
     currentTurnStartedAtMs: input.busy ? input.latestTurnStartedAtMs ?? null : null,
-    turnStartedAtByUserId: {},
+    // Re-seed the running turn's start from the persisted record so the live
+    // elapsed display and the settle-time finalize keep working after this
+    // hydration reset the per-user starts.
+    turnStartedAtByUserId:
+      input.busy &&
+      input.currentTurnUserId &&
+      typeof input.latestTurnStartedAtMs === 'number'
+        ? { [input.currentTurnUserId]: input.latestTurnStartedAtMs }
+        : {},
     turnDurationByUserId: input.turnDurationByUserId,
     turnReasoningFirstAtByUserId: {},
     turnReasoningLastAtByUserId: {}

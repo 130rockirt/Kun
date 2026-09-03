@@ -211,7 +211,10 @@ export function runtimeEventStartedAt(createdAt: string | undefined, now: number
 export function finalizeTurnTimingAt(state: ChatState, now: number): Partial<ChatState> {
   const userId = state.currentTurnUserId
   if (!userId) return {}
-  const startedAt = state.turnStartedAtByUserId[userId]
+  // A mid-turn hydration resets turnStartedAtByUserId to {} but keeps the
+  // persisted turn start in currentTurnStartedAtMs; fall back to it so the
+  // duration is still recorded when the turn settles.
+  const startedAt = state.turnStartedAtByUserId[userId] ?? state.currentTurnStartedAtMs ?? undefined
   if (typeof startedAt !== 'number') return { currentTurnUserId: null }
   return {
     currentTurnUserId: null,
