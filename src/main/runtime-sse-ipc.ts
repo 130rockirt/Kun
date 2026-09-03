@@ -6,21 +6,18 @@ import { kunThreadEventsPath } from '../shared/kun-endpoints'
 import { sseAckPayloadSchema, sseStartPayloadSchema, streamIdSchema } from './ipc/app-ipc-schemas'
 import type { JsonSettingsStore } from './settings-store'
 import { getRuntimeBaseUrlForSettings, runtimeAuthHeaders } from './runtime/kun-adapter'
+import { SseAckWindow } from './runtime/sse-ack-window'
 
 type SseControllerState = {
   controller: AbortController
   owner: WebContents
   stoppedByClient: boolean
-  pendingAck?: {
-    batchId: string
-    resolve: (acknowledged: boolean) => void
-  }
+  ackWindow: SseAckWindow
 }
 
 const SSE_RECONNECT_BASE_MS = 750
 const SSE_RECONNECT_MAX_MS = 5_000
 const SSE_START_TIMEOUT_MS = 15_000
-const SSE_ACK_TIMEOUT_MS = 15_000
 export const MAX_SSE_FRAME_BUFFER_BYTES = 1 * 1024 * 1024
 export const MAX_SSE_BATCH_EVENTS = 128
 export const MAX_SSE_BATCH_BYTES = 512 * 1024
@@ -31,7 +28,7 @@ const observedSseOwners = new WeakSet<WebContents>()
 
 function stopSseState(state: SseControllerState): void {
   state.stoppedByClient = true
-  state.pendingAck?.resolve(false)
+  state.ackWindow.rejectAll()
   state.controller.abort()
 }
 
@@ -47,29 +44,6 @@ function observeSseOwner(owner: WebContents): void {
   }
   ;(owner as WebContents & { once?: (event: 'destroyed', listener: () => void) => void })
     .once?.('destroyed', onDestroyed)
-}
-
-function waitForSseBatchAck(
-  state: SseControllerState,
-  batchId: string,
-  signal: AbortSignal
-): Promise<boolean> {
-  if (state.stoppedByClient || signal.aborted) return Promise.resolve(false)
-  return new Promise((resolve) => {
-    let settled = false
-    const finish = (acknowledged: boolean): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      signal.removeEventListener('abort', onAbort)
-      if (state.pendingAck?.batchId === batchId) state.pendingAck = undefined
-      resolve(acknowledged)
-    }
-    const timer = setTimeout(() => finish(false), SSE_ACK_TIMEOUT_MS)
-    const onAbort = () => finish(false)
-    state.pendingAck = { batchId, resolve: finish }
-    signal.addEventListener('abort', onAbort, { once: true })
-  })
 }
 
 function sendSseMessage(wc: WebContents, channel: string, payload: unknown): boolean {
@@ -229,7 +203,12 @@ export function registerRuntimeSseIpc(options: {
       sseControllers.delete(id)
     }
     const ac = new AbortController()
-    const state: SseControllerState = { controller: ac, owner: wc, stoppedByClient: false }
+    const state: SseControllerState = {
+      controller: ac,
+      owner: wc,
+      stoppedByClient: false,
+      ackWindow: new SseAckWindow()
+    }
     sseControllers.set(id, state)
     const acknowledgedBatches = request.acknowledgedBatches === true
 
@@ -323,6 +302,15 @@ export function registerRuntimeSseIpc(options: {
               pendingEvents = []
               pendingBytes = 0
               const batchId = acknowledgedBatches ? randomUUID() : undefined
+              // Sliding-window flow control: wait for a free slot before the
+              // send so at most MAX_INFLIGHT_SSE_BATCHES batches are in
+              // flight, then advance the reconnect cursor on send. ACK remains
+              // the renderer's per-batch flow signal, but a busy renderer no
+              // longer stalls the upstream read loop one batch at a time.
+              if (batchId && !await state.ackWindow.waitForCapacity(ac.signal)) {
+                if (state.stoppedByClient || ac.signal.aborted) return false
+                throw new Error('sse renderer acknowledgement timeout')
+              }
               if (!sendSseMessage(wc, 'runtime:sse-event', {
                 streamId: id,
                 events: batch,
@@ -333,12 +321,15 @@ export function registerRuntimeSseIpc(options: {
                 return false
               }
               if (batchId) {
-                const acknowledged = await waitForSseBatchAck(state, batchId, ac.signal)
-                if (!acknowledged) {
-                  if (state.stoppedByClient || ac.signal.aborted) return false
-                  throw new Error('sse renderer acknowledgement timeout')
-                }
+                state.ackWindow.registerSentBatch({
+                  batchId,
+                  eventCount: batch.length,
+                  signal: ac.signal
+                })
               }
+              // Advance on send: IPC delivery to a live renderer is reliable;
+              // a dead renderer re-subscribes from its snapshot cursor, so no
+              // event can be lost or duplicated across those paths.
               nextSinceSeq = batchMaxSeq
               return true
             }
@@ -446,7 +437,7 @@ export function registerRuntimeSseIpc(options: {
           }
         }
       } finally {
-        state.pendingAck?.resolve(false)
+        state.ackWindow.rejectAll()
         if (!state.stoppedByClient && !ac.signal.aborted) {
           sendSseMessage(wc, 'runtime:sse-end', { streamId: id })
         }
@@ -466,9 +457,8 @@ export function registerRuntimeSseIpc(options: {
   ipcMain.handle('runtime:sse:ack', async (event, args: unknown) => {
     const acknowledgement = sseAckPayloadSchema.parse(args)
     const state = sseControllers.get(acknowledgement.streamId)
-    if (!state || state.owner !== event.sender || state.pendingAck?.batchId !== acknowledgement.batchId) return false
-    state.pendingAck.resolve(true)
-    return true
+    if (!state || state.owner !== event.sender) return false
+    return state.ackWindow.acknowledge(acknowledgement.batchId)
   })
 
   ipcMain.handle('runtime:sse:stop', async (event, streamId: unknown) => {

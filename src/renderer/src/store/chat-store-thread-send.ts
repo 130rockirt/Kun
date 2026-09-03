@@ -2,6 +2,7 @@ import type { ChatBlock, NormalizedThread, ReviewTarget } from '../agent/types'
 import type { DesignDocumentTarget, DesignTaskProfileInput } from '../agent/design-task-profile'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
+import { prepareAssistantMarkdownRenderer } from '../components/chat/AssistantMarkdown'
 import {
   showWorkspaceMissingDialog,
   workspaceDirectoryExists,
@@ -258,6 +259,10 @@ export async function sendThreadMessage(
   const { set, get } = context
     const trimmedText = text.trim()
     if (!trimmedText) return false
+    // The first streaming token usually lands before the lazy Streamdown
+    // chunk finishes loading on a cold start. Warm it as soon as the user
+    // commits a turn so the fallback plain-text frame is as short as possible.
+    void prepareAssistantMarkdownRenderer().catch(() => undefined)
     const queued = overrides?.queued
     const clientRequestId = queued?.clientRequestId?.trim() ||
       overrides?.clientRequestId?.trim() ||
