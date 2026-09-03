@@ -97,7 +97,7 @@ export function startMainApp(): Promise<void> {
       mainState.logDir,
       {
         ...(recoverHandoff ? { recoverHandoff } : {}),
-        recoverRetry: prepareGuiRuntimeForStartupRetry,
+        recoverRetry: () => prepareGuiRuntimeForStartupRetry(error),
         replaceWindow: earlyWindow
       }
     )

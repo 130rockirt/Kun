@@ -53,7 +53,15 @@ const harness = vi.hoisted(() => {
     alreadyExitedPids: [],
     failedPids: []
   }))
+  const drainKunOwnersForHandoff = vi.fn(async () => undefined)
+  const activeServiceManager = {
+    discovery: {
+      dataDir: '/tmp/kun-data',
+      settingsPath: '/tmp/kun-settings.json'
+    }
+  }
   const mainState = {
+    activeServiceManager: activeServiceManager as typeof activeServiceManager | null,
     assertCanonicalRuntimeMigrationReady: vi.fn(),
     settledRuntimeSettings: null as AppSettingsV1 | null,
     store: { updateIf }
@@ -70,12 +78,14 @@ const harness = vi.hoisted(() => {
 
   return {
     clearHistoricalKunServeProcesses,
+    drainKunOwnersForHandoff,
     childRunning: () => childRunning,
     ensureReplacementRunning,
     ensureRunning,
     resolveAvailablePort,
     resolveConnection,
     mainState,
+    activeServiceManager,
     noteRuntimeHealthy,
     probeRuntimeApi,
     probeBundledBuildReplacement,
@@ -112,6 +122,15 @@ vi.mock('./kun-process', () => ({
 vi.mock('./runtime/kun-serve-process-cleanup', () => ({
   clearHistoricalKunServeProcesses: harness.clearHistoricalKunServeProcesses
 }))
+vi.mock('./runtime/kun-installed-build-handoff', () => ({
+  drainKunOwnersForHandoff: harness.drainKunOwnersForHandoff
+}))
+vi.mock('./runtime/kun-handoff-logging', () => ({
+  logKunHandoffEvent: vi.fn()
+}))
+vi.mock('../../kun/src/manager/manager-discovery.js', () => ({
+  defaultKunControlDir: () => '/tmp/kun-control'
+}))
 vi.mock('./runtime/managed-runtime-idle', () => ({
   waitForRuntimeTurnsIdle: harness.waitForRuntimeTurnsIdle
 }))
@@ -136,6 +155,7 @@ import {
   ensureKunRuntime,
   ensureManagedKunRuntimeToken,
   ensureKunServeFreshOnStartup,
+  isServiceManagerDataMutexFailure,
   prepareGuiRuntimeForStartupRetry,
   reconcileBundledRuntimeAfterInstall,
   replaceKunServe,
@@ -170,6 +190,9 @@ beforeEach(() => {
   harness.resolveAvailablePort.mockReset()
   harness.resolveAvailablePort.mockImplementation(async (port: number) => ({ port, changed: false }))
   harness.updateIf.mockClear()
+  harness.drainKunOwnersForHandoff.mockReset()
+  harness.drainKunOwnersForHandoff.mockResolvedValue(undefined)
+  harness.mainState.activeServiceManager = harness.activeServiceManager
   harness.mainState.settledRuntimeSettings = null
   harness.resolveConnection.mockReset()
   harness.resolveConnection.mockResolvedValue(false)
@@ -263,6 +286,44 @@ describe('GUI Runtime startup preparation', () => {
     expect(harness.runtimeSupervisor.setManagedRuntimeExpected).toHaveBeenCalledWith(false)
     expect(harness.runtimeSupervisor.waitForIdle).toHaveBeenCalledOnce()
     expect(harness.stopAndWait).toHaveBeenCalledOnce()
+    expect(harness.drainKunOwnersForHandoff).not.toHaveBeenCalled()
+  })
+
+  it('replaces the exact Service Manager after a data-mutex HTTP 500', async () => {
+    await prepareGuiRuntimeForStartupRetry(new Error(
+      'Kun Service Manager data mutex failed with HTTP 500: internal_error'
+    ))
+
+    expect(harness.stopAndWait).toHaveBeenCalledOnce()
+    expect(harness.drainKunOwnersForHandoff).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'startup-retry',
+      dataDirs: ['/tmp/kun-data'],
+      settingsPath: '/tmp/kun-settings.json',
+      controlDir: '/tmp/kun-control'
+    }))
+    expect(harness.mainState.activeServiceManager).toBeNull()
+  })
+
+  it('keeps the Manager binding when verified replacement fails', async () => {
+    harness.drainKunOwnersForHandoff.mockRejectedValueOnce(new Error('another TUI owns the Runtime'))
+
+    await expect(prepareGuiRuntimeForStartupRetry(new Error(
+      'Kun Service Manager data mutex failed with HTTP 500: internal_error'
+    ))).rejects.toThrow(/another TUI owns the Runtime/)
+
+    expect(harness.mainState.activeServiceManager).toBe(harness.activeServiceManager)
+  })
+
+  it('recognizes only the persistent Manager data-mutex failure', () => {
+    expect(isServiceManagerDataMutexFailure(
+      new Error('Kun Service Manager data mutex failed with HTTP 500: internal_error')
+    )).toBe(true)
+    expect(isServiceManagerDataMutexFailure(
+      new Error('Kun Service Manager request failed with HTTP 500')
+    )).toBe(false)
+    expect(isServiceManagerDataMutexFailure(
+      new Error('Kun Service Manager data mutex failed with HTTP 503')
+    )).toBe(false)
   })
 
   it('stops only the controller-held child when generating a token', async () => {

@@ -31,6 +31,7 @@ export type KunInstalledBuildProbe = 'matched' | 'mismatched' | 'unknown'
 export type KunHandoffReason =
   | 'in-app-update'
   | 'installed-build-change'
+  | 'startup-retry'
   | 'exclusive-data-migration'
 
 export type KunHandoffPhase =
@@ -148,7 +149,7 @@ export async function probeInstalledBuildHandoff(
 ): Promise<KunInstalledBuildProbe> {
   const deps = { ...defaultDependencies, ...overrides }
   const discovered = await discoverHandoffOwnersSafely(input, deps)
-  assertInstalledBuildChangeHasNoClientOwner(input, discovered)
+  assertReplacementHasNoClientOwner(input, discovered)
   if (!input.targetBuildId) return 'unknown'
   if (discovered.staleManager || discovered.staleRuntimes.length > 0) return 'mismatched'
   const targetBuildId = input.targetBuildId
@@ -234,7 +235,7 @@ export async function drainKunOwnersForHandoffWithLock(
     throw error
   }
   discovered = await settleAndRediscoverStaleOwners(input, discovered, deps)
-  assertInstalledBuildChangeHasNoClientOwner(input, discovered)
+  assertReplacementHasNoClientOwner(input, discovered)
   for (const probeClassification of discovered.probeClassifications) {
     emit(input, startedAt, deps, { phase: 'discover', probeClassification })
   }
@@ -295,7 +296,7 @@ export async function drainKunOwnersForHandoffWithLock(
     }
     discovered = await discoverHandoffOwnersSafely(input, deps)
     discovered = await settleAndRediscoverStaleOwners(input, discovered, deps)
-    assertInstalledBuildChangeHasNoClientOwner(input, discovered)
+    assertReplacementHasNoClientOwner(input, discovered)
   }
 
   // Recheck immediately before stopping the independent Manager. A client may
@@ -303,7 +304,7 @@ export async function drainKunOwnersForHandoffWithLock(
   // startup has no authority to take either that Runtime or its Manager down.
   discovered = await discoverHandoffOwnersSafely(input, deps)
   discovered = await settleAndRediscoverStaleOwners(input, discovered, deps)
-  assertInstalledBuildChangeHasNoClientOwner(input, discovered)
+  assertReplacementHasNoClientOwner(input, discovered)
   if (discovered.manager) {
     const managerOwner = managerOwnerReport(discovered.manager)
     try {
@@ -344,7 +345,7 @@ export async function drainKunOwnersForHandoffWithLock(
   // with the first pass, then prove the scope is stable.
   discovered = await discoverHandoffOwnersSafely(input, deps)
   discovered = await settleAndRediscoverStaleOwners(input, discovered, deps)
-  assertInstalledBuildChangeHasNoClientOwner(input, discovered)
+  assertReplacementHasNoClientOwner(input, discovered)
   for (const runtime of discovered.runtimes) {
     const owner = runtimeOwnerReport(runtime)
     try {
@@ -428,11 +429,11 @@ export async function drainKunOwnersForHandoffWithLock(
   }
 }
 
-function assertInstalledBuildChangeHasNoClientOwner(
+function assertReplacementHasNoClientOwner(
   input: KunInstalledBuildHandoffInput,
   discovered: DiscoveredHandoffOwners
 ): void {
-  if (input.reason !== 'installed-build-change') return
+  if (input.reason !== 'installed-build-change' && input.reason !== 'startup-retry') return
   const runtime = discovered.runtimes.find(
     (candidate) => candidate.inspection.discovery.clientOwnerKind !== undefined
   )
