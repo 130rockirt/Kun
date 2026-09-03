@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import type { DailyUsageBucket } from '../../hooks/use-daily-usage'
 import { formatCompactNumber, formatCost } from '../../hooks/use-thread-usage'
@@ -22,7 +21,6 @@ const CELL_SIZE = 13
 const CELL_GAP = 4
 const WEEKDAY_COLUMN_WIDTH = 30
 const WEEKDAY_LABEL_ROWS = new Set([0, 2, 4, 6])
-const TOOLTIP_WIDTH = 208
 // 2026-08-31 is a Monday; weekday labels come from Intl so they localize.
 const REFERENCE_MONDAY = '2026-08-31T00:00:00.000Z'
 const HEATMAP_CLASSES = [
@@ -185,13 +183,6 @@ function ContributionHeatmap({
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const [selected, setSelected] = useState<DailyUsageBucket | null>(null)
-  const [tooltip, setTooltip] = useState<{
-    bucket: DailyUsageBucket
-    left: number
-    top: number
-    above: boolean
-    arrowLeft: number
-  } | null>(null)
   const weeks = useMemo(() => buildContributionWeeks(buckets, visibleWeeks), [buckets, visibleWeeks])
   const visibleBuckets = useMemo(
     () => weeks.flatMap((week) => week.cells).filter((cell): cell is DailyUsageBucket => Boolean(cell)),
@@ -207,24 +198,8 @@ function ContributionHeatmap({
     [i18n.language, mode, visibleBuckets]
   )
 
-  const showTooltip = (bucket: DailyUsageBucket, element: HTMLElement): void => {
-    if (typeof window === 'undefined') return
-    const rect = element.getBoundingClientRect()
-    const centerX = rect.left + rect.width / 2
-    const left = Math.max(8, Math.min(centerX - TOOLTIP_WIDTH / 2, window.innerWidth - TOOLTIP_WIDTH - 8))
-    const above = rect.top > 56
-    setTooltip({
-      bucket,
-      left,
-      top: above ? rect.top - 38 : rect.bottom + 10,
-      above,
-      arrowLeft: Math.max(12, Math.min(centerX - left, TOOLTIP_WIDTH - 12))
-    })
-  }
-
-  const selectBucket = (bucket: DailyUsageBucket, element: HTMLElement): void => {
+  const selectBucket = (bucket: DailyUsageBucket): void => {
     setSelected((current) => (current?.date === bucket.date ? null : bucket))
-    showTooltip(bucket, element)
   }
 
   return (
@@ -273,11 +248,7 @@ function ContributionHeatmap({
                     title={tooltipText(bucket, mode, i18n.language)}
                     aria-label={tooltipText(bucket, mode, i18n.language)}
                     aria-pressed={selected?.date === bucket.date}
-                    onMouseEnter={(event) => showTooltip(bucket, event.currentTarget)}
-                    onMouseLeave={() => setTooltip(null)}
-                    onFocus={(event) => showTooltip(bucket, event.currentTarget)}
-                    onBlur={() => setTooltip(null)}
-                    onClick={(event) => selectBucket(bucket, event.currentTarget)}
+                    onClick={() => selectBucket(bucket)}
                     className={`rounded-[3px] transition-[box-shadow] hover:ring-2 hover:ring-ds-ink/30 focus:outline-none focus:ring-2 focus:ring-accent dark:hover:ring-white/40 ${HEATMAP_CLASSES[usageHeatmapIntensityLevel(
                       { totalTokens: heatmapValue(bucket, mode), turns: bucket.turns },
                       values
@@ -320,23 +291,6 @@ function ContributionHeatmap({
         </div>
       </div>
 
-      {tooltip && typeof document !== 'undefined' ? createPortal(
-        <div
-          role="tooltip"
-          className="pointer-events-none fixed z-[12000] whitespace-nowrap rounded-md bg-[#1f2328] px-2.5 py-1.5 text-[10.5px] font-medium text-white shadow-lg dark:bg-white dark:text-[#1f2328]"
-          style={{ left: tooltip.left, top: tooltip.top, minWidth: 120 }}
-        >
-          {tooltipText(tooltip.bucket, mode, i18n.language)}
-          <span
-            aria-hidden
-            className={`absolute h-2 w-2 rotate-45 bg-inherit ${
-              tooltip.above ? 'top-full -translate-y-1/2' : 'bottom-full translate-y-1/2'
-            }`}
-            style={{ left: tooltip.arrowLeft - 4 }}
-          />
-        </div>,
-        document.body
-      ) : null}
     </div>
   )
 }
