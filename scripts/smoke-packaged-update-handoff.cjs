@@ -252,17 +252,14 @@ async function runPositiveScenario(input) {
 
     await quitDesktopNormally(candidateDesktop, debuggingPort, input.timeoutMs)
     tracked.splice(tracked.indexOf(candidateDesktop), 1)
+    if (current.runtime &&
+      !await waitForProcessExit(current.runtime.pid, Math.min(input.timeoutMs, 20_000))) {
+      throw new Error('Ordinary GUI quit left the GUI-owned Runtime running')
+    }
     const managerStatus = await managerJson(current.manager, '/v1/manager/status')
     if (managerStatus.instanceId !== current.manager.instanceId ||
       managerStatus.pid !== current.manager.pid) {
       throw new Error('Ordinary GUI quit unexpectedly stopped the current Service Manager')
-    }
-    if (current.runtime) {
-      const runtimeInfo = await runtimeJson(current.runtime, '/v1/runtime/info')
-      if (runtimeInfo.instanceId !== current.runtime.instanceId ||
-        runtimeInfo.pid !== current.runtime.pid) {
-        throw new Error('Ordinary GUI quit unexpectedly stopped the shared Runtime')
-      }
     }
     await stopCurrentOwners(current, input.timeoutMs)
   } catch (error) {

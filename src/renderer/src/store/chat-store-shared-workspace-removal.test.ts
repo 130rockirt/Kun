@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NormalizedThread } from '../agent/types'
 import {
   REMOVED_CODE_WORKSPACES_STORAGE_KEY,
@@ -22,9 +22,26 @@ function thread(id: string, workspace: string): NormalizedThread {
   }
 }
 
+function memoryStorage(): Storage {
+  const values = new Map<string, string>()
+  return {
+    get length() { return values.size },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, value)
+  }
+}
+
 describe('chat store shared workspace removals', () => {
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', memoryStorage())
+  })
+
   afterEach(() => {
     localStorage.clear()
+    vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
 

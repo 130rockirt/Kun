@@ -123,6 +123,7 @@ import {
   withManagerStartLock
 } from '../../kun/src/manager/manager-discovery.js'
 import { configureManagerAtomicJsonClient } from '../../kun/src/extensions/atomic-json.js'
+import { kunManagerLaunchEnvironment } from './runtime/kun-manager-launch-environment'
 import { handoffExistingKunServiceManagerForDataDir } from './runtime/service-manager-build-handoff'
 import {
   drainKunOwnersForHandoffWithLock,
@@ -518,6 +519,11 @@ async function prepareKunLaunch(
     : undefined
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ...kunManagerLaunchEnvironment({
+      manager: mainManagerBinding,
+      controlDir: defaultKunControlDir(),
+      settingsPath: serviceManagerSettingsPath
+    }),
     DEEPSEEK_API_KEY: defaultClientApiKey || process.env.DEEPSEEK_API_KEY || '',
     KUN_PPT_TOOLCHAIN_DIR: pptToolchainDirectory,
     ...(activeProviderKind ? { KUN_RUNTIME_PROVIDER_KIND: activeProviderKind } : {}),

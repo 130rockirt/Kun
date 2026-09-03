@@ -401,7 +401,12 @@ describe('KunRuntimeProvider', () => {
       latestTurnStatus: 'running',
       latestTurnOrchestration: 'direct'
     })
-    expect(runtimeRequest).toHaveBeenCalledWith('/v1/threads/thr_state/state', 'GET')
+    expect(runtimeRequest).toHaveBeenCalledWith(
+      '/v1/threads/thr_state/state',
+      'GET',
+      undefined,
+      { priority: 'foreground' }
+    )
   })
 
   it('maps batch thread states and keeps per-thread failures', async () => {

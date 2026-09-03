@@ -436,7 +436,10 @@ describe('chat-store-thread-actions queued messages', () => {
     await actions.selectThread('thr_a')
 
     expect(getThreadDetail).toHaveBeenCalledTimes(1)
-    expect(getThreadDetail).toHaveBeenCalledWith('thr_b')
+    expect(getThreadDetail).toHaveBeenCalledWith('thr_b', {
+      priority: 'foreground',
+      signal: expect.any(AbortSignal)
+    })
     expect(state.blocks).toEqual([{ kind: 'assistant', id: 'a-answer', text: 'A' }])
     expect(state.lastSeq).toBe(11)
     expect(state.queuedMessages).toEqual([
