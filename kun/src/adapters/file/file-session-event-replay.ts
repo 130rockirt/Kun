@@ -30,7 +30,7 @@ export async function* iterateFileSessionEvents(input: {
   const release = await input.fileAccess.acquireRead(input.path)
   try {
     const startOffset = input.eventIndex && input.threadId
-      ? await input.eventIndex.startOffset(input.threadId, input.path, input.sinceSeq)
+      ? await input.eventIndex.startOffset(input.threadId, input.path, input.sinceSeq, input.maxRecordBytes)
       : 0
     yield* iterateRuntimeEventsJsonl(input.path, input.sinceSeq, input.maxRecordBytes, startOffset)
   } finally {
@@ -75,7 +75,8 @@ export class FileSessionEventHistory {
     const path = this.options.pathFor(threadId)
     return loadFileSessionEventPage({
       path, options,
-      resolveInitialOffset: () => this.eventIndex.startOffset(threadId, path, options.sinceSeq),
+      resolveInitialOffset: () =>
+        this.eventIndex.startOffset(threadId, path, options.sinceSeq, this.options.maxRecordBytes),
       defaultMaxRecordBytes: this.options.maxRecordBytes, fileAccess: this.options.fileAccess
     })
   }

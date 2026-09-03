@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, rm, stat, truncate, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { atomicWriteFile } from './atomic-write.js'
@@ -7,8 +7,12 @@ export const EVENT_INDEX_RECORD_BYTES = 16
 export const EVENT_INDEX_SEQ_STEP = 256
 export const EVENT_INDEX_BYTE_STEP = 1024 * 1024
 
+/** Bound for the single-line read used to cross-check an indexed seek target. */
+const DEFAULT_MAX_LINE_BYTES = 4 * 1024 * 1024
+
 const EventIndexStateSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
+  generation: z.number().int().nonnegative(),
   dev: z.number().int().nonnegative(),
   ino: z.number().int().nonnegative(),
   indexedBytes: z.number().int().nonnegative(),
@@ -19,11 +23,14 @@ const EventIndexStateSchema = z.object({
 
 type EventIndexState = z.infer<typeof EventIndexStateSchema>
 
+type IndexEntry = { seq: number; offset: number }
+
 export type EventIndexStats = {
   seeks: number
   fallbacks: number
   appendedEntries: number
   lastStartOffset: number
+  repairs: number
 }
 
 export class FileSessionEventIndex {
@@ -32,6 +39,7 @@ export class FileSessionEventIndex {
   private fallbacks = 0
   private appendedEntries = 0
   private lastStartOffset = 0
+  private repairs = 0
 
   async recordAppend(input: {
     threadId: string
@@ -44,7 +52,7 @@ export class FileSessionEventIndex {
   }): Promise<void> {
     let state = this.stateCache.get(input.threadId)
     if (!state) state = await this.readState(input.threadId, input.sourcePath)
-    const validState = state && state.dev === input.dev && state.ino === input.ino &&
+    let validState = state && state.dev === input.dev && state.ino === input.ino &&
       state.indexedBytes <= input.recordOffset && state.lastIndexedOffset <= input.recordOffset &&
       state.lastIndexedSeq <= input.seq ? state : undefined
     const due = !validState || input.seq - validState.lastIndexedSeq >= EVENT_INDEX_SEQ_STEP ||
@@ -54,10 +62,28 @@ export class FileSessionEventIndex {
     const indexPath = eventIndexPath(input.sourcePath)
     const entry = encodeEntry(input.seq, input.recordOffset)
     await mkdir(dirname(indexPath), { recursive: true, mode: 0o700 })
+
+    // Align the binary file to the committed length before appending. A crash
+    // can leave a full or partial tail past `entryCount * EVENT_INDEX_RECORD_BYTES`
+    // while the state file still points at the old count. Truncate that residual
+    // away; if the binary is missing or shorter than committed, the state is no
+    // longer trustworthy and we rebuild from scratch.
+    if (validState) {
+      const expectedBytes = validState.entryCount * EVENT_INDEX_RECORD_BYTES
+      const info = await stat(indexPath).catch(() => null)
+      if (info && info.size > expectedBytes) {
+        await truncate(indexPath, expectedBytes)
+      } else if (!info || info.size < expectedBytes) {
+        validState = undefined
+      }
+    }
+
     if (validState) await appendFile(indexPath, entry, { mode: 0o600 })
     else await writeFile(indexPath, entry, { mode: 0o600 })
+
     const next: EventIndexState = {
-      version: 1,
+      version: 2,
+      generation: validState ? validState.generation : (state?.generation ?? 0) + 1,
       dev: input.dev,
       ino: input.ino,
       indexedBytes: input.sourceSize,
@@ -70,7 +96,12 @@ export class FileSessionEventIndex {
     this.appendedEntries += 1
   }
 
-  async startOffset(threadId: string, sourcePath: string, sinceSeq: number): Promise<number> {
+  async startOffset(
+    threadId: string,
+    sourcePath: string,
+    sinceSeq: number,
+    maxLineBytes = DEFAULT_MAX_LINE_BYTES
+  ): Promise<number> {
     if (sinceSeq <= 0) return 0
     try {
       const [source, state, bytes] = await Promise.all([
@@ -80,19 +111,31 @@ export class FileSessionEventIndex {
       ])
       if (!state || state.dev !== source.dev || state.ino !== source.ino ||
         state.indexedBytes > source.size || state.entryCount <= 0 ||
-        bytes.length < state.entryCount * EVENT_INDEX_RECORD_BYTES) {
-        this.fallbacks += 1
+        bytes.length !== state.entryCount * EVENT_INDEX_RECORD_BYTES) {
+        return this.failRebuild(threadId, sourcePath)
+      }
+      if (!validEntries(bytes, state.entryCount)) {
+        return this.failRebuild(threadId, sourcePath)
+      }
+      if (!tailMatchesState(bytes, state)) {
+        return this.failRebuild(threadId, sourcePath)
+      }
+      const candidate = seekCandidate(bytes, state.entryCount, sinceSeq, source.size)
+      if (candidate === null) {
+        return this.failRebuild(threadId, sourcePath)
+      }
+      // No indexed entry at or below `sinceSeq`: replay from the top is safe.
+      if (candidate.offset === 0) {
+        this.seeks += 1
+        this.lastStartOffset = 0
         return 0
       }
-      const view = bytes.subarray(0, state.entryCount * EVENT_INDEX_RECORD_BYTES)
-      const offset = indexedOffset(view, sinceSeq, source.size)
-      if (offset === null) {
-        this.fallbacks += 1
-        return 0
+      if (!(await this.lineMatches(sourcePath, candidate, source.size, maxLineBytes))) {
+        return this.failRebuild(threadId, sourcePath)
       }
       this.seeks += 1
-      this.lastStartOffset = offset
-      return offset
+      this.lastStartOffset = candidate.offset
+      return candidate.offset
     } catch {
       this.fallbacks += 1
       return 0
@@ -117,8 +160,41 @@ export class FileSessionEventIndex {
       seeks: this.seeks,
       fallbacks: this.fallbacks,
       appendedEntries: this.appendedEntries,
-      lastStartOffset: this.lastStartOffset
+      lastStartOffset: this.lastStartOffset,
+      repairs: this.repairs
     }
+  }
+
+  private async failRebuild(threadId: string, sourcePath: string): Promise<number> {
+    this.fallbacks += 1
+    this.repairs += 1
+    await this.invalidate(threadId, sourcePath).catch(() => undefined)
+    return 0
+  }
+
+  private async lineMatches(
+    sourcePath: string,
+    candidate: IndexEntry,
+    sourceSize: number,
+    maxLineBytes: number
+  ): Promise<boolean> {
+    if (candidate.offset < 0 || candidate.offset >= sourceSize) return false
+    if (candidate.offset > 0) {
+      const previous = await readBytesAt(sourcePath, candidate.offset - 1, 1)
+      if (previous.length !== 1 || previous[0] !== 0x0a) return false
+    }
+    const length = Math.min(Math.max(1, Math.floor(maxLineBytes)) + 1, sourceSize - candidate.offset)
+    const chunk = await readBytesAt(sourcePath, candidate.offset, length)
+    const newline = chunk.indexOf(0x0a)
+    if (newline < 0) return false
+    let seq: unknown
+    try {
+      const parsed = JSON.parse(chunk.subarray(0, newline).toString('utf8')) as unknown
+      seq = (parsed as { seq?: unknown }).seq
+    } catch {
+      return false
+    }
+    return typeof seq === 'number' && Number.isSafeInteger(seq) && seq === candidate.seq
   }
 
   private async readState(threadId: string, sourcePath: string): Promise<EventIndexState | undefined> {
@@ -152,21 +228,66 @@ function encodeEntry(seq: number, offset: number): Buffer {
   return entry
 }
 
-function indexedOffset(bytes: Buffer, sinceSeq: number, sourceSize: number): number | null {
-  const entries = bytes.length / EVENT_INDEX_RECORD_BYTES
+function decodeEntry(bytes: Buffer, index: number): IndexEntry | null {
+  const seq = Number(bytes.readBigUInt64LE(index * EVENT_INDEX_RECORD_BYTES))
+  const offset = Number(bytes.readBigUInt64LE(index * EVENT_INDEX_RECORD_BYTES + 8))
+  if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(offset)) return null
+  return { seq, offset }
+}
+
+function validEntries(bytes: Buffer, entryCount: number): boolean {
+  let previousSeq = -1
+  let previousOffset = -1
+  for (let index = 0; index < entryCount; index += 1) {
+    const entry = decodeEntry(bytes, index)
+    if (!entry || entry.seq < previousSeq || entry.offset < previousOffset) return false
+    previousSeq = entry.seq
+    previousOffset = entry.offset
+  }
+  return true
+}
+
+function tailMatchesState(bytes: Buffer, state: EventIndexState): boolean {
+  const tail = decodeEntry(bytes, state.entryCount - 1)
+  return tail !== null && tail.seq === state.lastIndexedSeq && tail.offset === state.lastIndexedOffset
+}
+
+function seekCandidate(
+  bytes: Buffer,
+  entryCount: number,
+  sinceSeq: number,
+  sourceSize: number
+): IndexEntry | null {
   let low = 0
-  let high = entries - 1
+  let high = entryCount - 1
   let match = -1
   while (low <= high) {
     const middle = Math.floor((low + high) / 2)
-    const seq = Number(bytes.readBigUInt64LE(middle * EVENT_INDEX_RECORD_BYTES))
-    if (!Number.isSafeInteger(seq)) return null
-    if (seq <= sinceSeq) {
+    const entry = decodeEntry(bytes, middle)
+    if (!entry) return null
+    if (entry.seq <= sinceSeq) {
       match = middle
       low = middle + 1
     } else high = middle - 1
   }
-  if (match < 0) return 0
-  const offset = Number(bytes.readBigUInt64LE(match * EVENT_INDEX_RECORD_BYTES + 8))
-  return Number.isSafeInteger(offset) && offset >= 0 && offset < sourceSize ? offset : null
+  if (match < 0) return { seq: 0, offset: 0 }
+  const entry = decodeEntry(bytes, match)
+  if (!entry) return null
+  return entry.offset >= 0 && entry.offset < sourceSize ? entry : null
+}
+
+async function readBytesAt(path: string, start: number, length: number): Promise<Buffer> {
+  const handle = await open(path, 'r')
+  try {
+    const buffer = Buffer.allocUnsafe(Math.max(0, length))
+    let position = 0
+    while (position < length) {
+      const { bytesRead } = await handle.read(buffer, position, length - position, start + position)
+      if (bytesRead === 0) break
+      position += bytesRead
+    }
+    return buffer.subarray(0, position)
+  } finally {
+    await handle.close()
+  }
 }
