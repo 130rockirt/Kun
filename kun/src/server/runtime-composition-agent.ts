@@ -94,16 +94,30 @@ export async function createRuntimeAgentComposition(
   // npx cold start eventually shows up as connected instead of staying "error"
   // until the next runtime restart (issue #342). Both registries advertise the
   // MCP providers, so a late connection must be registered into each.
-  void services.mcpProviders.startBackgroundReconnect((provider) => {
-    try {
-      registryComposition.registry.registerProvider(provider)
-    } catch {
-      // ignore duplicate/colliding registration
-    }
-    try {
-      services.childRegistry.registerProvider(provider)
-    } catch {
-      // ignore duplicate/colliding registration
+  void services.mcpProviders.startBackgroundReconnect({
+    register: (provider) => {
+      try {
+        registryComposition.registry.registerProvider(provider)
+      } catch {
+        // ignore duplicate/colliding registration
+      }
+      try {
+        services.childRegistry.registerProvider(provider)
+      } catch {
+        // ignore duplicate/colliding registration
+      }
+    },
+    unregister: (providerId) => {
+      try {
+        registryComposition.registry.unregisterProvider(providerId)
+      } catch {
+        // ignore missing/colliding removal
+      }
+      try {
+        services.childRegistry.unregisterProvider(providerId)
+      } catch {
+        // ignore missing/colliding removal
+      }
     }
   })
   // Provider-native subscription engines own whole turns and share the same

@@ -2,14 +2,13 @@ import type { McpCapabilityConfig, McpServerConfig } from '../../contracts/capab
 import { assertBuiltinGitHubMcpCallAllowed } from '../../contracts/builtin-mcp.js'
 import { redactSecretText } from '../../config/secret-redaction.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
-import type { CapabilityToolProvider } from './capability-registry.js'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 import { catalogFingerprint, canUseMcpServer, isMcpServerTrusted, isMcpServerVisible, normalizeMcpToolName } from './mcp-naming.js'
 import { isMcpAuthorizationRequiredError } from './mcp-transport.js'
 import { errorMessage, formatMcpConnectionError } from './mcp-stdio-environment.js'
 import { projectMcpSchemaForModel } from './mcp-schema-projection.js'
 import type { McpClientLike, McpServerDiagnostic, McpToolDescriptor } from './mcp-types.js'
-import type { McpSearchCatalogRecord, McpSearchCatalogState } from './mcp-tool-search.js'
+import type { McpSearchCatalogRecord } from './mcp-tool-search.js'
 import type { McpBackgroundReconnectOptions, McpConnectionState } from './mcp-tool-provider.js'
 
 const DEFAULT_MCP_RECONNECT_MAX_ATTEMPTS = 5
@@ -30,11 +29,7 @@ type McpBackgroundReconnectParams = {
   failedServers: FailedMcpServer[]
   clientFactory: (serverId: string, server: McpServerConfig) => Promise<McpClientLike>
   nowIso: () => string
-  diagnostics: McpServerDiagnostic[]
-  connected: McpConnectionState[]
-  catalogState: McpSearchCatalogState
-  searchActive: boolean
-  register: (provider: CapabilityToolProvider) => void
+  onServerConnected: (state: McpConnectionState, listed: McpToolDescriptor[]) => void
   isAborted: () => boolean
   delay: (ms: number) => Promise<void>
   options?: McpBackgroundReconnectOptions
@@ -90,40 +85,12 @@ async function reconnectFailedMcpServer(
         await client.close().catch(() => undefined)
         return
       }
-      registerLateMcpConnection(params, state, listed)
+      params.onServerConnected(state, listed)
       return
     } catch {
       // Leave the diagnostic as "error" and try again until attempts run out.
     }
   }
-}
-
-function registerLateMcpConnection(
-  params: McpBackgroundReconnectParams,
-  state: McpConnectionState,
-  listed: McpToolDescriptor[]
-): void {
-  params.connected.push(state)
-  params.catalogState.records.push(...listed.map((tool) => createMcpSearchCatalogRecord(state, tool)))
-  const tools = listed.map((tool) => createMcpLocalTool(state, tool))
-  if (!params.searchActive) {
-    try {
-      params.register({
-        id: `mcp:${state.serverId}`,
-        kind: 'mcp',
-        enabled: true,
-        available: true,
-        tools
-      })
-    } catch {
-      // A registry collision must not crash the loop; the diagnostic still
-      // flips to connected below so the UI stops showing the server as failed.
-    }
-  }
-  const diagnostic = syncMcpDiagnostic(state, 'connected', tools.length)
-  const index = params.diagnostics.findIndex((entry) => entry.id === state.serverId)
-  if (index >= 0) params.diagnostics[index] = diagnostic
-  else params.diagnostics.push(diagnostic)
 }
 
 export function defaultMcpReconnectDelay(ms: number): Promise<void> {

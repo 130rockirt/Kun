@@ -82,6 +82,30 @@ const descriptor: McpToolDescriptor = {
   annotations: { readOnlyHint: true }
 }
 
+const descriptors = (count: number, prefix: string): McpToolDescriptor[] =>
+  Array.from({ length: count }, (_, index) => ({
+    name: `${prefix}${index}`,
+    description: `${prefix} tool ${index}`,
+    inputSchema: { type: 'object', properties: {} }
+  }))
+
+const autoSearchConfig = (autoThresholdToolCount: number) =>
+  McpCapabilityConfig.parse({
+    enabled: true,
+    servers: {
+      a: server,
+      b: { ...server, url: 'http://127.0.0.1:39998/mcp' }
+    },
+    search: {
+      enabled: true,
+      mode: 'auto',
+      autoThresholdToolCount,
+      topKDefault: 5,
+      topKMax: 10,
+      minScore: 0.15
+    }
+  })
+
 describe('mcp tool provider reliability', () => {
   it('uses only host configuration, not remote read-only annotations, for Plan access', async () => {
     const client = new MockMcpClient([descriptor], vi.fn(async () => ({ ok: true })))
@@ -370,7 +394,7 @@ describe('mcp tool provider reliability', () => {
     const listPromptsTool = facade?.tools.find((tool) => tool.name === 'mcp_list_prompts')
 
     expect(listPromptsTool?.shouldAdvertise?.(context)).toBe(false)
-    await built.startBackgroundReconnect(() => undefined)
+    await built.startBackgroundReconnect({ register: () => undefined, unregister: () => undefined })
     expect(listPromptsTool?.shouldAdvertise?.(context)).toBe(true)
   })
 
@@ -401,5 +425,114 @@ describe('mcp tool provider reliability', () => {
       output: { error: 'No connected MCP server can use listResources in this workspace.' },
       isError: true
     })
+  })
+
+  it('atomically swaps direct providers to search mode when a late reconnect crosses the auto threshold', async () => {
+    const clientFactory = vi.fn()
+      .mockResolvedValueOnce(new MockMcpClient(descriptors(1, 'a'), vi.fn(async () => ({ ok: true }))))
+      .mockRejectedValueOnce(new Error('startup timeout'))
+      .mockResolvedValueOnce(new MockMcpClient(descriptors(5, 'b'), vi.fn(async () => ({ ok: true }))))
+
+    const built = await buildMcpToolProviders(autoSearchConfig(3), {
+      clientFactory,
+      delay: async () => undefined
+    })
+
+    expect(built.providers.map((provider) => provider.id)).toContain('mcp:a')
+
+    const registered: string[] = []
+    const unregistered: string[] = []
+    await built.startBackgroundReconnect({
+      register: (provider) => registered.push(provider.id),
+      unregister: (providerId) => unregistered.push(providerId)
+    })
+
+    expect(unregistered).toContain('mcp:a')
+    expect(unregistered).not.toContain('mcp:b')
+    expect(registered).toEqual([])
+    expect(built.search.indexedToolCount).toBe(6)
+    expect(built.search.active).toBe(true)
+  })
+
+  it('atomically swaps to search mode when OAuth authorization crosses the auto threshold', async () => {
+    const clientFactory = vi.fn()
+      .mockResolvedValueOnce(new MockMcpClient(descriptors(1, 'a'), vi.fn(async () => ({ ok: true }))))
+      .mockRejectedValueOnce(new McpAuthorizationRequiredError('b'))
+      .mockResolvedValueOnce(new MockMcpClient(descriptors(5, 'b'), vi.fn(async () => ({ ok: true }))))
+    const authorize = vi.fn(async () => ({ serverId: 'b', status: 'authorized' as const, authorized: true }))
+
+    const built = await buildMcpToolProviders(autoSearchConfig(3), {
+      clientFactory,
+      authorize,
+      oauthStorageDir: 'C:/tmp/oauth'
+    })
+
+    expect(built.providers.map((provider) => provider.id)).toContain('mcp:a')
+
+    const registered: string[] = []
+    const unregistered: string[] = []
+    await built.startBackgroundReconnect({
+      register: (provider) => registered.push(provider.id),
+      unregister: (providerId) => unregistered.push(providerId)
+    })
+
+    await built.authorizeOAuth('b')
+
+    expect(unregistered).toContain('mcp:a')
+    expect(registered).toEqual([])
+    expect(built.search.indexedToolCount).toBe(6)
+    expect(built.search.active).toBe(true)
+  })
+
+  it('does not register direct providers for a late server when already in search mode', async () => {
+    const clientFactory = vi.fn()
+      .mockResolvedValueOnce(new MockMcpClient(descriptors(5, 'a'), vi.fn(async () => ({ ok: true }))))
+      .mockRejectedValueOnce(new Error('startup timeout'))
+      .mockResolvedValueOnce(new MockMcpClient(descriptors(3, 'b'), vi.fn(async () => ({ ok: true }))))
+
+    const built = await buildMcpToolProviders(autoSearchConfig(3), {
+      clientFactory,
+      delay: async () => undefined
+    })
+
+    expect(built.providers.map((provider) => provider.id)).toEqual(['mcp:search', 'mcp:facade'])
+
+    const registered: string[] = []
+    const unregistered: string[] = []
+    await built.startBackgroundReconnect({
+      register: (provider) => registered.push(provider.id),
+      unregister: (providerId) => unregistered.push(providerId)
+    })
+
+    expect(registered).toEqual([])
+    expect(unregistered).toEqual([])
+    expect(built.search.indexedToolCount).toBe(8)
+    expect(built.search.active).toBe(true)
+  })
+
+  it('still registers a direct provider for a late server when below the auto threshold', async () => {
+    const clientFactory = vi.fn()
+      .mockResolvedValueOnce(new MockMcpClient(descriptors(1, 'a'), vi.fn(async () => ({ ok: true }))))
+      .mockRejectedValueOnce(new Error('startup timeout'))
+      .mockResolvedValueOnce(new MockMcpClient(descriptors(1, 'b'), vi.fn(async () => ({ ok: true }))))
+
+    const built = await buildMcpToolProviders(autoSearchConfig(3), {
+      clientFactory,
+      delay: async () => undefined
+    })
+
+    expect(built.providers.map((provider) => provider.id)).toContain('mcp:a')
+
+    const registered: string[] = []
+    const unregistered: string[] = []
+    await built.startBackgroundReconnect({
+      register: (provider) => registered.push(provider.id),
+      unregister: (providerId) => unregistered.push(providerId)
+    })
+
+    expect(registered).toContain('mcp:b')
+    expect(unregistered).toEqual([])
+    expect(built.search.active).toBe(false)
+    expect(built.search.indexedToolCount).toBe(2)
   })
 })

@@ -632,16 +632,30 @@ export function createRuntimeConfigController(
 	        console.warn('[kun] Graph background-service reconcile failed after config apply:', error)
 	      })
 	    }
-	    void mcpProviders.startBackgroundReconnect((provider) => {
-	      try {
-	        registry.registerProvider(provider)
-	      } catch {
-	        // ignore duplicate/colliding registration
-	      }
-	      try {
-	        childRegistry.registerProvider(provider)
-	      } catch {
-	        // ignore duplicate/colliding registration
+	    void mcpProviders.startBackgroundReconnect({
+	      register: (provider) => {
+	        try {
+	          registry.registerProvider(provider)
+	        } catch {
+	          // ignore duplicate/colliding registration
+	        }
+	        try {
+	          childRegistry.registerProvider(provider)
+	        } catch {
+	          // ignore duplicate/colliding registration
+	        }
+	      },
+	      unregister: (providerId) => {
+	        try {
+	          registry.unregisterProvider(providerId)
+	        } catch {
+	          // ignore missing/colliding removal
+	        }
+	        try {
+	          childRegistry.unregisterProvider(providerId)
+	        } catch {
+	          // ignore missing/colliding removal
+	        }
 	      }
 	    }).catch((error) => {
 	      console.warn('[kun] MCP background reconnect failed after config apply:', error)
