@@ -1,5 +1,6 @@
 import { readFile, rm } from 'node:fs/promises'
 import { relative, resolve, sep } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
 import { HybridSessionStore } from '../adapters/hybrid/hybrid-session-store.js'
 import { HybridMemoryStore } from '../adapters/hybrid/hybrid-memory-store.js'
@@ -131,6 +132,14 @@ export abstract class ManagerSharedDataStoreCore {
     const document = this.atomicJsonDocument(target)
     const run = document.queue.catch(() => undefined).then(async () => {
       await this.loadAtomicJson(target, document)
+      // Treat an already-satisfied JSON write as success even when the caller
+      // read an older Manager revision. Runtime initialization and GUI catalog
+      // reconciliation can independently converge on the same canonical
+      // document; rewriting that identical value only churns the Manager CAS
+      // revision and can starve a real startup mutation behind no-op writers.
+      if (isDeepStrictEqual(document.value, input.value)) {
+        return { revision: document.revision, value: input.value }
+      }
       if (document.revision !== input.expectedRevision) {
         throw new RevisionConflictError(document.revision)
       }
