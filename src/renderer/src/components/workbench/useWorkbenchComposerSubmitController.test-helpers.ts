@@ -15,6 +15,8 @@ export function controllerParams(overrides: Partial<ControllerParams> = {}): Con
     clearComposerAttachments: vi.fn(),
     removeComposerAttachments: vi.fn(),
     clearComposerFileReferences: vi.fn(),
+    restoreComposerAttachments: vi.fn(async () => undefined),
+    restoreComposerFileReferences: vi.fn(),
     composerAttachments: [],
     composerFileReferences: [],
     composerMode: 'agent',

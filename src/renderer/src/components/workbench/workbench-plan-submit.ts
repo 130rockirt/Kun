@@ -8,6 +8,7 @@ export async function submitWorkbenchPlanIntent(input: {
   sendPlanTurn: (text: string, overrides?: PlanTurnOverrides) => Promise<boolean>
   requestAutoPlanBuild: RequestAutoPlanBuild
   consumeComposer: () => void
+  restoreComposer: () => void
 }): Promise<void> {
   if (input.mode === 'plan') {
     input.consumeComposer()
@@ -17,6 +18,8 @@ export async function submitWorkbenchPlanIntent(input: {
   await input.requestAutoPlanBuild({
     text: input.text,
     overrides: input.overrides,
-    onStarted: input.consumeComposer
+    onStarted: () => {},
+    onSubmitting: input.consumeComposer,
+    onRejected: input.restoreComposer
   })
 }

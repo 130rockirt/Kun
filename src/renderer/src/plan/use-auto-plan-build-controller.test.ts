@@ -13,6 +13,7 @@ import {
   autoPlanBuildControllerTestApi,
   resetAutoPlanBuildControllerForTests
 } from './use-auto-plan-build-controller'
+import { runAutomaticSubmitLifecycle } from './auto-plan-build-submit-lifecycle'
 import type { GuiPlanToolMeta } from './plan-tool'
 
 const provider = vi.hoisted(() => ({
@@ -181,6 +182,62 @@ describe('Automatic plan-build orchestration', () => {
       agentSurface: 'code'
     })
     expect(onStarted).toHaveBeenCalledOnce()
+  })
+
+  it('runs the Automatic submit lifecycle in order on a successful send', async () => {
+    const calls: string[] = []
+    const onSubmitting = vi.fn(() => calls.push('submitting'))
+    const onStarted = vi.fn(() => calls.push('started'))
+    const onRejected = vi.fn(() => calls.push('rejected'))
+    const result = await runAutomaticSubmitLifecycle(
+      { onSubmitting, onStarted, onRejected },
+      vi.fn(async () => true)
+    )
+    expect(result).toBe(true)
+    expect(calls).toEqual(['submitting', 'started'])
+  })
+
+  it('rejects the Automatic submit lifecycle without marking it started', async () => {
+    const calls: string[] = []
+    const onSubmitting = vi.fn(() => calls.push('submitting'))
+    const onStarted = vi.fn(() => calls.push('started'))
+    const onRejected = vi.fn(() => calls.push('rejected'))
+    const result = await runAutomaticSubmitLifecycle(
+      { onSubmitting, onStarted, onRejected },
+      vi.fn(async () => false)
+    )
+    expect(result).toBe(false)
+    expect(calls).toEqual(['submitting', 'rejected'])
+  })
+
+  it('rejects the Automatic submit lifecycle and rethrows when the send throws', async () => {
+    const calls: string[] = []
+    const onSubmitting = vi.fn(() => calls.push('submitting'))
+    const onStarted = vi.fn(() => calls.push('started'))
+    const onRejected = vi.fn(() => calls.push('rejected'))
+    const failure = new Error('send failed')
+    await expect(runAutomaticSubmitLifecycle(
+      { onSubmitting, onStarted, onRejected },
+      vi.fn(async () => { throw failure })
+    )).rejects.toBe(failure)
+    expect(calls).toEqual(['submitting', 'rejected'])
+  })
+
+  it('fires submitting before routing a distinct follow-up and rejects on failure', async () => {
+    const existing = directIntent(false, 'original request')
+    const calls: string[] = []
+    const onSubmitting = vi.fn(() => calls.push('submitting'))
+    const onStarted = vi.fn(() => calls.push('started'))
+    const onRejected = vi.fn(() => calls.push('rejected'))
+    const sendMessage = vi.fn(async () => false)
+    const routed = await autoPlanBuildControllerTestApi.routeExistingAutomaticIntent(
+      existing,
+      { text: 'add this guidance', onSubmitting, onStarted, onRejected },
+      sendMessage as never
+    )
+    expect(routed).toBe(false)
+    expect(calls).toEqual(['submitting', 'rejected'])
+    expect(sendMessage).toHaveBeenCalledOnce()
   })
 
   it('matches only the exact successful plan identity', () => {

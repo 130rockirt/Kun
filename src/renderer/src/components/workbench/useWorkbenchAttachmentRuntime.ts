@@ -214,22 +214,24 @@ export function useWorkbenchAttachmentRuntime({
     onFallbackToFileReference
   })
 
-  // Returns an image-bearing queued message to the composer: merge references
-  // by id, then lazily fetch missing thumbnails from the attachment store.
-  // Preview failures stay silent; the composer already renders a file-name
-  // chip for attachments without a previewUrl.
+  // Returns a queued message's attachments to the composer: merge references
+  // by id (documents are restored as reference chips only), then lazily fetch
+  // missing image thumbnails from the attachment store. Preview failures stay
+  // silent; the composer already renders a file-name chip for attachments
+  // without a previewUrl.
   const restoreComposerAttachments = useCallback(async (
-    attachments: readonly AttachmentReference[]
+    attachments: readonly AttachmentReference[],
+    scope = composerAttachmentScopeRef.current
   ): Promise<void> => {
-    const images = attachments.filter((attachment) => attachment.kind !== 'document')
-    if (images.length === 0) return
-    const scope = composerAttachmentScopeRef.current
-    const workspace = activeComposerWorkspace()
+    if (attachments.length === 0) return
     setComposerAttachmentsForScope(scope, (current) => {
       const byId = new Map(current.map((item) => [item.id, item]))
-      for (const attachment of images) byId.set(attachment.id, attachment)
+      for (const attachment of attachments) byId.set(attachment.id, attachment)
       return [...byId.values()]
     })
+    const images = attachments.filter((attachment) => attachment.kind !== 'document')
+    if (images.length === 0) return
+    const workspace = activeComposerWorkspace()
     const provider = getProvider()
     await Promise.all(images.map(async (attachment) => {
       if (attachment.previewUrl) return

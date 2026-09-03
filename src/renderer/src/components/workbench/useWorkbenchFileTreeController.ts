@@ -3,6 +3,7 @@ import type { WorkspaceFileTarget } from '@shared/workspace-file'
 import type { NormalizedThread } from '../../agent/types'
 import {
   composerFileReferenceFromPath,
+  composerFileReferenceKey,
   mergeComposerFileReferences,
   type ComposerFileReference
 } from '../../lib/composer-file-references'
@@ -209,6 +210,15 @@ export function useWorkbenchFileTreeController({
 
   function addComposerFileReference(reference: ComposerFileReference): void {
     setComposerFileReferences((current) => mergeComposerFileReferences(current, reference))
+  }
+
+  function restoreComposerFileReferences(references: readonly ComposerFileReference[]): void {
+    if (references.length === 0) return
+    setComposerFileReferences((current) => {
+      const byKey = new Map(current.map((reference) => [composerFileReferenceKey(reference), reference]))
+      for (const reference of references) byKey.set(composerFileReferenceKey(reference), reference)
+      return [...byKey.values()]
+    })
   }
 
   async function pickComposerFileReferences(): Promise<void> {
@@ -482,6 +492,7 @@ export function useWorkbenchFileTreeController({
     fileTreeWorkspaceRoot,
     clearComposerFileReferences,
     addComposerFileReference,
+    restoreComposerFileReferences,
     pickComposerFileReferences,
     removeComposerFileReference,
     openWorkspaceFilePreviewTarget,

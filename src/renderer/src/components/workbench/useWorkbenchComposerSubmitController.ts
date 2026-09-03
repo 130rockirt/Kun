@@ -43,6 +43,7 @@ import {
 import { readWorkbenchComposerFileContextEntries } from './workbench-composer-file-context'
 import { mirrorWorkbenchClawCommand } from './workbench-claw-message-mirror'
 import { restoreWorkbenchWritePrompt } from './workbench-write-prompt-state'
+import { restoreChatComposerSnapshot } from './workbench-chat-prompt-state'
 import { workbenchWriteSourceContext } from './workbench-write-source-reference'
 import { submitWorkbenchPlanIntent } from './workbench-plan-submit'
 import { buildWorkbenchClawHelpText } from './workbench-claw-help'
@@ -66,6 +67,7 @@ export function useWorkbenchComposerSubmitController({
   clearComposerAttachments,
   removeComposerAttachments,
   clearComposerFileReferences,
+  restoreComposerAttachments, restoreComposerFileReferences,
   composerAttachments,
   composerFileReferences,
   composerMode,
@@ -489,20 +491,14 @@ export function useWorkbenchComposerSubmitController({
           text: prepared.text,
           overrides: {
             agentSurface: taskSurface,
-            ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
-            ...(reasoningEffort ? { reasoningEffort } : {}),
-            ...(serviceTier ? { serviceTier } : {}),
-            ...(attachmentIds.length ? { attachmentIds } : {}),
-            ...(publicAttachments.length ? { attachments: publicAttachments } : {}),
-            ...(userFileReferences.length ? { fileReferences: userFileReferences } : {})
+            ...(prepared.displayText ? { displayText: prepared.displayText } : {}), ...(reasoningEffort ? { reasoningEffort } : {}),
+            ...(serviceTier ? { serviceTier } : {}), ...(attachmentIds.length ? { attachmentIds } : {}),
+            ...(publicAttachments.length ? { attachments: publicAttachments } : {}), ...(userFileReferences.length ? { fileReferences: userFileReferences } : {})
           },
           sendPlanTurn,
           requestAutoPlanBuild,
-          consumeComposer: () => {
-            setInput('')
-            clearComposerAttachments(attachmentScope)
-            clearComposerFileReferences()
-          }
+          consumeComposer: () => { setInput(''); clearComposerAttachments(attachmentScope); clearComposerFileReferences() },
+          restoreComposer: () => restoreChatComposerSnapshot({ text: v, threadId: activeThreadId, attachments, fileReferences, scope: attachmentScope }, setInput, restoreComposerAttachments, restoreComposerFileReferences),
         })
         return
       }
@@ -665,6 +661,7 @@ export function useWorkbenchComposerSubmitController({
     clawHelpText,
     clearComposerAttachments,
     clearComposerFileReferences,
+    restoreComposerAttachments, restoreComposerFileReferences,
     clawModelListText,
     composerAttachments,
     composerFileReferences,

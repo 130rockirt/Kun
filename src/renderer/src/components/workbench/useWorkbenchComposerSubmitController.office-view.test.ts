@@ -30,7 +30,7 @@ function controllerParams(overrides: Partial<ControllerParams>): ControllerParam
     activeClawChannelId: '', activeSddDraft: false, activeThreadId: 'thr_write',
     attachmentUploadEnabled: true, buildCodeCanvasOutboundPrompt: vi.fn(async () => ''),
     clearComposerAttachments: vi.fn(), removeComposerAttachments: vi.fn(),
-    clearComposerFileReferences: vi.fn(), composerAttachments: [], composerFileReferences: [],
+    clearComposerFileReferences: vi.fn(), restoreComposerAttachments: vi.fn(async () => undefined), restoreComposerFileReferences: vi.fn(), composerAttachments: [], composerFileReferences: [],
     composerMode: 'agent', composerModel: '', composerProviderId: '', composerModelGroups: [],
     composerReasoningEffort: 'auto', composerFastMode: false, getAttachmentScope: () => 'write',
     handleGuiPlanCommand: vi.fn(), input: 'explain this slide',

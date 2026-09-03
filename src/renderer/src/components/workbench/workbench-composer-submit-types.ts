@@ -43,6 +43,8 @@ export type UseWorkbenchComposerSubmitControllerParams = {
   clearComposerAttachments: (scope?: ComposerAttachmentScope) => void
   removeComposerAttachments: (ids: readonly string[], scope?: ComposerAttachmentScope) => void
   clearComposerFileReferences: () => void
+  restoreComposerAttachments: (attachments: readonly AttachmentReference[], scope?: ComposerAttachmentScope) => Promise<void>
+  restoreComposerFileReferences: (references: readonly ComposerFileReference[]) => void
   composerAttachments: AttachmentReference[]
   composerFileReferences: ComposerFileReference[]
   composerMode: 'plan' | 'agent' | 'auto'

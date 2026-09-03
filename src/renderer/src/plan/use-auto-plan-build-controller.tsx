@@ -8,6 +8,7 @@ import { rendererRuntimeClient } from '../agent/runtime-client'
 import { useChatStore } from '../store/chat-store'
 import type { SendMessageOverrides } from '../store/chat-store-types'
 import { clearUnreadCompletion } from '../store/unread-completions'
+import { runAutomaticSubmitLifecycle } from './auto-plan-build-submit-lifecycle'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import { getRuntimeErrorCode } from '../lib/format-runtime-error'
 import { emitRendererSettingsChanged } from '../lib/keyboard-shortcut-settings'
@@ -57,6 +58,8 @@ type PendingDialog = {
   text: string
   overrides?: AutoPlanTurnOverrides
   onStarted: () => void
+  onSubmitting?: () => void
+  onRejected?: () => void
   settings: AppSettingsV1
 }
 
@@ -65,6 +68,8 @@ export type RequestAutoPlanBuild = (input: {
   text: string
   overrides?: AutoPlanTurnOverrides
   onStarted: () => void
+  onSubmitting?: () => void
+  onRejected?: () => void
 }) => Promise<AutoPlanBuildRequestResult>
 
 const dispatchingIntentIds = new Set<string>()
@@ -180,17 +185,16 @@ async function routeExistingAutomaticIntent(
   if (existing.status === 'needs_attention') return null
   const requestFingerprint = autoPlanBuildRequestFingerprint(pending.text)
   if (existing.requestFingerprint && existing.requestFingerprint === requestFingerprint) {
+    pending.onSubmitting?.()
     pending.onStarted()
     return true
   }
-  const sent = await sendMessage(pending.text, 'agent', {
+  return runAutomaticSubmitLifecycle(pending, () => sendMessage(pending.text, 'agent', {
     ...pending.overrides,
     expectedThreadId: existing.threadId,
     orchestration: 'direct',
     agentSurface: 'code'
-  })
-  if (sent) pending.onStarted()
-  return sent
+  }))
 }
 
 async function existingPlanPaths(workspaceRoot: string): Promise<string[]> {
@@ -555,13 +559,13 @@ export function useAutoPlanBuildController({
         setError('Automatic plan build could not persist its recovery intent.')
         return false
       }
-      const sent = await sendPlanTurn(pending.text, {
+      const sent = await runAutomaticSubmitLifecycle(pending, () => sendPlanTurn(pending.text, {
         ...pending.overrides,
         workspaceRoot: targetWorkspace,
         guiPlan: draft.guiPlan,
         clientRequestId: intent.planClientRequestId,
         waitForRuntimeAdmission: true
-      })
+      }))
       if (!sent) {
         removeAutoPlanBuildIntent(intent.id)
         return false
@@ -582,7 +586,6 @@ export function useAutoPlanBuildController({
         error: ''
       })
       requestAutomaticRecovery()
-      pending.onStarted()
       return true
     } finally {
       releaseStartScope()
@@ -593,6 +596,8 @@ export function useAutoPlanBuildController({
     text: string
     overrides?: AutoPlanTurnOverrides
     onStarted: () => void
+    onSubmitting?: () => void
+    onRejected?: () => void
   }): Promise<AutoPlanBuildRequestResult> => {
     const settings = await rendererRuntimeClient.getSettings({ forceRefresh: true })
     const current = settings.agents.kun.lab.autoPlanBuild
