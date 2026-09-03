@@ -3,6 +3,7 @@ import { act, create } from 'react-test-renderer'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   cumulativeCacheHitRate,
+  formatCompactNumber,
   formatCost,
   loadThreadUsage,
   mergeLiveThreadUsage,
@@ -91,6 +92,20 @@ afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
   Reflect.deleteProperty(globalThis, 'window')
+})
+
+describe('formatCompactNumber', () => {
+  it('formats values below one million with k or locale grouping', () => {
+    expect(formatCompactNumber(999)).toBe(new Intl.NumberFormat().format(999))
+    expect(formatCompactNumber(11_900_000 / 1000)).toBe('11.9k')
+    expect(formatCompactNumber(11_900_000)).toBe('11.9M')
+  })
+
+  it('keeps M below the four-digit threshold and switches to B at 1000M', () => {
+    expect(formatCompactNumber(999_949_999)).toBe('999.9M')
+    expect(formatCompactNumber(1_000_000_000)).toBe('1.0B')
+    expect(formatCompactNumber(12_481_900_000)).toBe('12.5B')
+  })
 })
 
 describe('thread usage formatting', () => {
