@@ -1,5 +1,19 @@
-import { describe, expect, it } from 'vitest'
-import { buildWindowsReplacementScript } from './self-update-windows.js'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('node:child_process', () => ({
+  spawn: vi.fn(),
+  execFileSync: vi.fn()
+}))
+
+import { spawn } from 'node:child_process'
+import {
+  buildWindowsReplacementScript,
+  scheduleWindowsReplacement,
+  WindowsReplacementHandoffError
+} from './self-update-windows.js'
 
 function input(overrides: Partial<Parameters<typeof buildWindowsReplacementScript>[0]> = {}) {
   return {
@@ -14,6 +28,9 @@ function input(overrides: Partial<Parameters<typeof buildWindowsReplacementScrip
     scriptPath: 'C:\\Users\\me\\AppData\\Local\\KunTui\\.kun.kun-tui-update\\apply-update.ps1',
     previousVersion: '1.2.3',
     targetVersion: '1.2.4',
+    lockToken: 'test-lock-token',
+    ackPath: 'C:\\Users\\me\\AppData\\Local\\KunTui\\.kun.kun-tui-update\\updater.json',
+    updaterStartedAt: '2026-09-03T00:00:00.000Z',
     ...overrides
   }
 }
@@ -41,7 +58,7 @@ describe('Windows replacement script', () => {
     expect(script).toContain('Move-Item -LiteralPath $next -Destination $current -ErrorAction Stop')
     expect(script).toContain('Move-Item -LiteralPath $backup -Destination $current -ErrorAction Stop')
     expect(script).toContain('Start-Sleep -Seconds 3')
-    expect(script).toContain("replacement failed after 5 attempts")
+    expect(script).toContain('replacement failed after 5 attempts')
   })
 
   it('writes update-result.json in both outcomes and appends a diagnostic log', () => {
@@ -93,5 +110,115 @@ describe('Windows replacement script', () => {
     }))
     expect(quoted).toContain("$current = 'C:\\Install''s\\kun'")
     expect(quoted).toContain("$log = 'C:\\Install''s\\update.log'")
+  })
+
+  it('takes over the lock and writes an ack before entering the wait phase', () => {
+    const script = buildWindowsReplacementScript(input())
+    expect(script).toContain(
+      '$processIdentity = "win32-v1:" + (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").CreationDate.ToUniversalTime().ToString("O")'
+    )
+    expect(script).toContain("$lockToken = 'test-lock-token'")
+    expect(script).toContain("$updaterStartedAt = '2026-09-03T00:00:00.000Z'")
+    expect(script).toContain('Move-Item -LiteralPath $lockTmp -Destination $lock -Force -ErrorAction Stop')
+    expect(script).toContain('Set-Content -LiteralPath $ack -Encoding utf8')
+    expect(script).toContain('root = $current')
+    expect(script).toContain('processIdentity = $processIdentity')
+    expect(script).toContain('if (-not $takeoverOk) { exit 1 }')
+    // The handoff runs before the wait/swap phase and still cleans the lock.
+    expect(script.indexOf('if (-not $takeoverOk)')).toBeGreaterThan(-1)
+    expect(script.indexOf('if (-not $takeoverOk)')).toBeLessThan(script.indexOf("$stage = 'wait'"))
+    expect(script).toContain('Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue')
+  })
+
+  it('aborts before the wait phase when the lock takeover fails', () => {
+    const script = buildWindowsReplacementScript(input())
+    const handoff = script.indexOf('if (-not $takeoverOk) { exit 1 }')
+    const wait = script.indexOf("$stage = 'wait'")
+    expect(handoff).toBeGreaterThan(-1)
+    expect(handoff).toBeLessThan(wait)
+    // Failure exits the process instead of falling through to the swap loop.
+    expect(script.indexOf('exit 1')).toBeLessThan(wait)
+  })
+})
+
+describe('Windows replacement scheduling', () => {
+  it('reports a stopped updater with no lock takeover when the ack never arrives', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-win-ack-test-'))
+    const transactionDir = join(dir, 'txn')
+    await mkdir(transactionDir, { recursive: true })
+    const ackPath = join(transactionDir, 'updater.json')
+    const child = {
+      pid: 99999,
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill: () => {
+        child.exitCode = 1
+        return true
+      },
+      unref: () => undefined,
+      once: () => undefined
+    }
+    vi.mocked(spawn).mockReturnValue(child as never)
+    try {
+      const error = await scheduleWindowsReplacement({
+        currentRoot: join(dir, 'kun'),
+        nextRoot: join(dir, 'next', 'kun'),
+        backupRoot: join(dir, 'kun.previous'),
+        stagingRoot: join(dir, 'next'),
+        transactionDir,
+        resultPath: join(transactionDir, 'update-result.json'),
+        logPath: join(transactionDir, 'update.log'),
+        lockPath: join(dir, 'kun.lock'),
+        previousVersion: '1.2.3',
+        targetVersion: '1.2.4',
+        lockToken: 'token',
+        ackPath,
+        updaterStartedAt: new Date().toISOString(),
+        ackTimeoutMs: 50
+      }).catch((caught: unknown) => caught)
+      expect(error).toBeInstanceOf(WindowsReplacementHandoffError)
+      expect((error as WindowsReplacementHandoffError).lockTakenOver).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('reports a surviving updater as having taken over the lock when it cannot be stopped', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kun-win-ack-test-'))
+    const transactionDir = join(dir, 'txn')
+    await mkdir(transactionDir, { recursive: true })
+    const ackPath = join(transactionDir, 'updater.json')
+    const child = {
+      pid: 99999,
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill: () => false,
+      unref: () => undefined,
+      once: () => undefined
+    }
+    vi.mocked(spawn).mockReturnValue(child as never)
+    try {
+      const error = await scheduleWindowsReplacement({
+        currentRoot: join(dir, 'kun'),
+        nextRoot: join(dir, 'next', 'kun'),
+        backupRoot: join(dir, 'kun.previous'),
+        stagingRoot: join(dir, 'next'),
+        transactionDir,
+        resultPath: join(transactionDir, 'update-result.json'),
+        logPath: join(transactionDir, 'update.log'),
+        lockPath: join(dir, 'kun.lock'),
+        previousVersion: '1.2.3',
+        targetVersion: '1.2.4',
+        lockToken: 'token',
+        ackPath,
+        updaterStartedAt: new Date().toISOString(),
+        ackTimeoutMs: 50,
+        killGraceMs: 50
+      }).catch((caught: unknown) => caught)
+      expect(error).toBeInstanceOf(WindowsReplacementHandoffError)
+      expect((error as WindowsReplacementHandoffError).lockTakenOver).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

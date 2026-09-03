@@ -4,11 +4,15 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   acquireTuiUpdateLock,
+  clearTuiUpdateTransaction,
+  parseTuiUpdateUpdater,
   reconcilePendingTuiUpdate,
+  recordTuiUpdateUpdater,
   tuiUpdateLockPath,
   tuiUpdateLogPath,
   tuiUpdateResultPath,
   tuiUpdateTransactionDir,
+  tuiUpdateUpdaterPath,
   writeTuiUpdateResult,
   writeTuiUpdateTransaction,
   type TuiUpdateTransaction
@@ -174,5 +178,89 @@ describe('pending TUI update reconciliation', () => {
     expect(report && 'message' in report && report.message).toContain('unreadable')
     expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
       .toMatchObject({ version: '1.2.3' })
+  })
+})
+
+describe('TUI update updater record', () => {
+  it('round-trips the updater record and rejects malformed data', async () => {
+    const root = await installRoot()
+    await recordTuiUpdateUpdater(root, {
+      schemaVersion: 1,
+      pid: process.pid,
+      token: 'tok',
+      startedAt: '2026-09-03T00:00:00.000Z',
+      processIdentity: 'win32-v1:2026-09-03T00:00:00.0000000Z'
+    })
+    const parsed = parseTuiUpdateUpdater(await readFile(tuiUpdateUpdaterPath(root), 'utf8'))
+    expect(parsed).toMatchObject({
+      pid: process.pid,
+      token: 'tok',
+      processIdentity: 'win32-v1:2026-09-03T00:00:00.0000000Z'
+    })
+    expect(parseTuiUpdateUpdater('not json')).toBeNull()
+    expect(parseTuiUpdateUpdater(JSON.stringify({
+      schemaVersion: 2,
+      pid: 1,
+      token: 't',
+      startedAt: 'x'
+    }))).toBeNull()
+    expect(parseTuiUpdateUpdater(JSON.stringify({
+      schemaVersion: 1,
+      pid: 0,
+      token: 't',
+      startedAt: 'x'
+    }))).toBeNull()
+    expect(parseTuiUpdateUpdater(JSON.stringify({
+      schemaVersion: 1,
+      pid: 1,
+      token: '',
+      startedAt: 'x'
+    }))).toBeNull()
+  })
+
+  it('stays busy while the recorded updater process is alive even without the lock', async () => {
+    const root = await installRoot()
+    await writeTuiUpdateTransaction(root, transactionInput(root))
+    await recordTuiUpdateUpdater(root, {
+      schemaVersion: 1,
+      pid: 424242,
+      token: 'tok',
+      startedAt: '2026-09-03T00:00:00.000Z'
+    })
+    const report = await reconcilePendingTuiUpdate(root, {
+      processIsAlive: (pid) => pid === 424242
+    })
+    expect(report).toEqual({ kind: 'busy', pid: 424242 })
+    expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
+      .toMatchObject({ version: '1.2.3' })
+  })
+
+  it('removes the updater record when clearing the transaction', async () => {
+    const root = await installRoot()
+    await writeTuiUpdateTransaction(root, transactionInput(root))
+    await recordTuiUpdateUpdater(root, {
+      schemaVersion: 1,
+      pid: 1,
+      token: 'tok',
+      startedAt: '2026-09-03T00:00:00.000Z'
+    })
+    await clearTuiUpdateTransaction(root)
+    await expect(stat(tuiUpdateUpdaterPath(root))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rolls forward when the recorded updater process is dead and the lock is gone', async () => {
+    const root = await installRoot()
+    const transaction = await writeTuiUpdateTransaction(root, transactionInput(root))
+    await stagedRelease(transaction)
+    await recordTuiUpdateUpdater(root, {
+      schemaVersion: 1,
+      pid: 424242,
+      token: 'tok',
+      startedAt: '2026-09-03T00:00:00.000Z'
+    })
+    const report = await reconcilePendingTuiUpdate(root, { processIsAlive: () => false })
+    expect(report).toEqual({ kind: 'activated', previousVersion: '1.2.3', targetVersion: '1.2.4' })
+    expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
+      .toMatchObject({ version: '1.2.4', buildId: BUILD_ID })
   })
 })

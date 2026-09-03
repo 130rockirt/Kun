@@ -18,14 +18,20 @@ import semver from 'semver'
 import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-lease.js'
 import {
   acquireTuiUpdateLock,
+  clearTuiUpdateTransaction,
   reconcilePendingTuiUpdate,
+  recordTuiUpdateUpdater,
   tuiUpdateLogPath,
   tuiUpdateResultPath,
   tuiUpdateLockPath,
   tuiUpdateTransactionDir,
+  tuiUpdateUpdaterPath,
   writeTuiUpdateTransaction
 } from './self-update-transaction.js'
-import { scheduleWindowsReplacement } from './self-update-windows.js'
+import {
+  scheduleWindowsReplacement,
+  WindowsReplacementHandoffError
+} from './self-update-windows.js'
 
 const RELEASE_METADATA_FILENAME = 'release.json'
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1_000
@@ -277,6 +283,13 @@ export async function runSelfUpdateCommand(
     io.stderr.write(`kun update: ${pending.message}\n`)
     return 70
   }
+  if (pending?.kind === 'busy') {
+    io.stderr.write(
+      `kun update: another update is already in progress (process ${pending.pid}); ` +
+      'wait for it to finish and run again.\n'
+    )
+    return 70
+  }
   try {
     const check = await checkStandaloneTuiUpdate({
       env: io.env,
@@ -335,6 +348,7 @@ async function installStandaloneTuiUpdate(
     }
     await smokeNewRelease(nextRoot, check.latest.version)
     const lock = await acquireTuiUpdateLock(currentRoot)
+    let lockHandedOff = false
     try {
       // A concurrent updater may have finished while we downloaded; do not
       // swap twice.
@@ -355,18 +369,43 @@ async function installStandaloneTuiUpdate(
           backupRoot
         })
         const transactionDir = tuiUpdateTransactionDir(currentRoot)
-        await scheduleWindowsReplacement({
-          currentRoot,
-          nextRoot,
-          backupRoot,
-          stagingRoot,
-          transactionDir,
-          resultPath: tuiUpdateResultPath(currentRoot),
-          logPath: tuiUpdateLogPath(currentRoot),
-          lockPath: tuiUpdateLockPath(currentRoot),
-          previousVersion: check.current.version,
-          targetVersion: check.latest.version
-        })
+        const updaterStartedAt = new Date().toISOString()
+        try {
+          const updater = await scheduleWindowsReplacement({
+            currentRoot,
+            nextRoot,
+            backupRoot,
+            stagingRoot,
+            transactionDir,
+            resultPath: tuiUpdateResultPath(currentRoot),
+            logPath: tuiUpdateLogPath(currentRoot),
+            lockPath: tuiUpdateLockPath(currentRoot),
+            previousVersion: check.current.version,
+            targetVersion: check.latest.version,
+            lockToken: lock.token,
+            ackPath: tuiUpdateUpdaterPath(currentRoot),
+            updaterStartedAt
+          })
+          await recordTuiUpdateUpdater(currentRoot, {
+            schemaVersion: 1 as const,
+            pid: updater.pid,
+            processIdentity: updater.processIdentity,
+            token: lock.token,
+            startedAt: updaterStartedAt
+          })
+          lockHandedOff = true
+        } catch (error) {
+          const lockTakenOver =
+            error instanceof WindowsReplacementHandoffError && error.lockTakenOver
+          if (lockTakenOver) {
+            // The updater owns the lock and will finish and clean up on its own.
+            lockHandedOff = true
+            retainStagingForWindows = true
+          } else {
+            await clearTuiUpdateTransaction(currentRoot)
+          }
+          throw error
+        }
         retainStagingForWindows = true
         io.stdout.write(
           `Kun ${check.latest.version} is staged. It replaces the current install after ` +
@@ -384,7 +423,9 @@ async function installStandaloneTuiUpdate(
       }
       io.stdout.write(`Kun ${check.latest.version} installed. Restart Kun to use the new release.\n`)
     } finally {
-      await lock.release().catch(() => undefined)
+      if (!lockHandedOff) {
+        await lock.release().catch(() => undefined)
+      }
     }
   } finally {
     if (!retainStagingForWindows) {

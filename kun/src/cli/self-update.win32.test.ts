@@ -7,8 +7,10 @@ import { execFileSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import { runSelfUpdateCommand, standaloneTuiTarget } from './self-update.js'
 import {
+  tuiUpdateLockPath,
   tuiUpdateLogPath,
-  tuiUpdateResultPath
+  tuiUpdateResultPath,
+  tuiUpdateUpdaterPath
 } from './self-update-transaction.js'
 import type { StandaloneTuiReleaseMetadata } from './self-update.js'
 
@@ -194,6 +196,76 @@ describe.runIf(process.platform === 'win32')('Windows standalone TUI replacement
     const attempts = log.match(/replacement attempt /g) ?? []
     expect(attempts.length).toBeGreaterThanOrEqual(1)
   }, 180_000)
+
+  it('keeps a second update busy while the PowerShell updater is stuck waiting', async () => {
+    const { parent, root } = await installFixture()
+    const { bytes } = await updateArchive(parent)
+    const manifest = latest()
+    const artifact = manifest.artifacts.find((candidate) => candidate.target === 'win32-x64')!
+    artifact.size = bytes.length
+    artifact.sha256 = createHash('sha256').update(bytes).digest('hex')
+
+    // Occupy the install root so the detached updater parks in its wait phase.
+    const occupant = spawn(join(root, 'runtime', 'node.exe'), ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore'
+    })
+    children.push(occupant)
+
+    let firstStdout = ''
+    const firstCode = await runSelfUpdateCommand(['--yes'], {
+      stdout: { write: (chunk) => { firstStdout += chunk } },
+      stderr: { write: () => undefined },
+      env: { KUN_STANDALONE_ROOT: root },
+      fetch: async (url) => String(url).endsWith('latest-tui.json')
+        ? Response.json(manifest)
+        : new Response(new Uint8Array(bytes))
+    })
+    expect(firstCode).toBe(0)
+    expect(firstStdout).toContain('is staged')
+
+    // The first command returns only after the updater confirmed the handoff.
+    expect(await waitForFile(tuiUpdateUpdaterPath(root), 120_000)).toBe(true)
+    const ack = JSON.parse(await readFile(tuiUpdateUpdaterPath(root), 'utf8'))
+    expect(ack).toMatchObject({ schemaVersion: 1 })
+    expect(ack.pid).toBeGreaterThan(0)
+
+    // The lock is now owned by the PowerShell updater, not this process.
+    const lockOwner = JSON.parse(await readFile(tuiUpdateLockPath(root), 'utf8'))
+    expect(lockOwner.pid).toBeGreaterThan(0)
+    expect(lockOwner.pid).not.toBe(process.pid)
+
+    // A second update while the occupant is still alive must be busy and must
+    // not download or touch the install directory.
+    let secondStderr = ''
+    let secondFetches = 0
+    const secondCode = await runSelfUpdateCommand(['--yes'], {
+      stdout: { write: () => undefined },
+      stderr: { write: (chunk) => { secondStderr += chunk } },
+      env: { KUN_STANDALONE_ROOT: root },
+      fetch: async () => {
+        secondFetches += 1
+        return Response.json(manifest)
+      }
+    })
+    expect(secondCode).toBe(70)
+    expect(secondStderr).toContain('another update is already in progress')
+    expect(secondFetches).toBe(0)
+    expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
+      .toMatchObject({ version: '1.2.3' })
+
+    // Release the occupant so the single detached updater can finish.
+    occupant.kill()
+    children.splice(children.indexOf(occupant), 1)
+    expect(await waitForFile(tuiUpdateResultPath(root), 120_000)).toBe(true)
+    const result = JSON.parse(await readFile(tuiUpdateResultPath(root), 'utf8'))
+    expect(result).toMatchObject({ status: 'succeeded', previousVersion: '1.2.3', targetVersion: '1.2.4' })
+    expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
+      .toMatchObject({ version: '1.2.4' })
+    expect(JSON.parse(await readFile(`${root}.previous/release.json`, 'utf8')))
+      .toMatchObject({ version: '1.2.3' })
+    const log = await readFile(tuiUpdateLogPath(root), 'utf8')
+    expect((log.match(/replacement succeeded/g) ?? []).length).toBe(1)
+  }, 240_000)
 })
 
 // Keep the import exercised on all platforms so unused-import checks do not

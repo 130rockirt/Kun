@@ -14,9 +14,11 @@ export const TUI_UPDATE_TRANSACTION_DIR_SUFFIX = '.kun-tui-update'
 export const TUI_UPDATE_TRANSACTION_FILE = 'transaction.json'
 export const TUI_UPDATE_RESULT_FILE = 'update-result.json'
 export const TUI_UPDATE_LOG_FILE = 'update.log'
+export const TUI_UPDATE_UPDATER_FILE = 'updater.json'
 
 export type TuiUpdateLock = {
   path: string
+  token: string
   release(): Promise<void>
 }
 
@@ -41,6 +43,14 @@ export type TuiUpdateResult = {
   previousVersion: string
   targetVersion: string
   finishedAt: string
+}
+
+export type TuiUpdateUpdater = {
+  schemaVersion: 1
+  pid: number
+  token: string
+  startedAt: string
+  processIdentity?: string
 }
 
 export type TuiUpdateReconcileReport =
@@ -82,6 +92,10 @@ export function tuiUpdateLogPath(installRoot: string): string {
   return join(tuiUpdateTransactionDir(installRoot), TUI_UPDATE_LOG_FILE)
 }
 
+export function tuiUpdateUpdaterPath(installRoot: string): string {
+  return join(tuiUpdateTransactionDir(installRoot), TUI_UPDATE_UPDATER_FILE)
+}
+
 export function parseTuiUpdateTransaction(raw: string): TuiUpdateTransaction | null {
   try {
     const parsed = JSON.parse(raw) as Partial<TuiUpdateTransaction>
@@ -116,6 +130,23 @@ export function parseTuiUpdateResult(raw: string): TuiUpdateResult | null {
       (parsed.stage === undefined || typeof parsed.stage === 'string') &&
       (parsed.error === undefined || typeof parsed.error === 'string')
       ? parsed as TuiUpdateResult
+      : null
+  } catch {
+    return null
+  }
+}
+
+export function parseTuiUpdateUpdater(raw: string): TuiUpdateUpdater | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<TuiUpdateUpdater>
+    return parsed.schemaVersion === 1 &&
+      Number.isSafeInteger(parsed.pid) &&
+      (parsed.pid ?? 0) > 0 &&
+      typeof parsed.token === 'string' &&
+      parsed.token.length > 0 &&
+      typeof parsed.startedAt === 'string' &&
+      isValidRuntimeProcessIdentity(parsed.processIdentity)
+      ? parsed as TuiUpdateUpdater
       : null
   } catch {
     return null
@@ -242,6 +273,7 @@ export async function acquireTuiUpdateLock(
   let released = false
   return {
     path,
+    token,
     release: async () => {
       if (released) return
       released = true
@@ -300,6 +332,16 @@ export async function writeTuiUpdateResult(
   await writeFileAtomically(path, `${JSON.stringify(record, null, 2)}\n`)
 }
 
+/** Persist the detached updater's identity after it confirmed the lock handoff. */
+export async function recordTuiUpdateUpdater(
+  installRoot: string,
+  updater: TuiUpdateUpdater
+): Promise<void> {
+  const path = tuiUpdateUpdaterPath(installRoot)
+  await mkdir(dirname(path), { recursive: true })
+  await writeFileAtomically(path, `${JSON.stringify(updater, null, 2)}\n`)
+}
+
 async function writeFileAtomically(path: string, content: string): Promise<void> {
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`
   const handle = await open(temporary, 'wx', 0o600)
@@ -313,9 +355,13 @@ async function writeFileAtomically(path: string, content: string): Promise<void>
 }
 
 /** Remove transaction metadata but keep the diagnostic log for inspection. */
-async function clearTuiUpdateTransaction(installRoot: string): Promise<void> {
+export async function clearTuiUpdateTransaction(installRoot: string): Promise<void> {
   const dir = tuiUpdateTransactionDir(installRoot)
-  for (const name of [TUI_UPDATE_TRANSACTION_FILE, TUI_UPDATE_RESULT_FILE]) {
+  for (const name of [
+    TUI_UPDATE_TRANSACTION_FILE,
+    TUI_UPDATE_RESULT_FILE,
+    TUI_UPDATE_UPDATER_FILE
+  ]) {
     await rm(join(dir, name), { force: true }).catch(() => undefined)
   }
   try {
@@ -432,6 +478,12 @@ export async function reconcilePendingTuiUpdate(
   )
   if (lockOwner && processIsAlive(lockOwner.pid, lockOwner)) {
     return { kind: 'busy', pid: lockOwner.pid }
+  }
+  const updater = parseTuiUpdateUpdater(
+    await readFile(tuiUpdateUpdaterPath(canonical), 'utf8').catch(() => '')
+  )
+  if (updater && processIsAlive(updater.pid, updater)) {
+    return { kind: 'busy', pid: updater.pid }
   }
   const staged = await readStagedRelease(transaction.stagingRoot)
   if (

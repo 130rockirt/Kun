@@ -1,6 +1,7 @@
-import { spawn } from 'node:child_process'
-import { writeFile } from 'node:fs/promises'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { parseTuiUpdateUpdater } from './self-update-transaction.js'
 
 export type WindowsReplacementInput = {
   currentRoot: string
@@ -14,6 +15,9 @@ export type WindowsReplacementInput = {
   scriptPath: string
   previousVersion: string
   targetVersion: string
+  lockToken: string
+  ackPath: string
+  updaterStartedAt: string
   waitTimeoutMs?: number
 }
 
@@ -21,6 +25,9 @@ const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000
 const WAIT_POLL_SECONDS = 2
 const SWAP_MAX_ATTEMPTS = 5
 const SWAP_RETRY_DELAY_SECONDS = 3
+const DEFAULT_ACK_TIMEOUT_MS = 30_000
+const ACK_POLL_MS = 200
+const KILL_GRACE_MS = 5_000
 
 function quote(value: string): string {
   return value.replaceAll("'", "''")
@@ -52,6 +59,9 @@ export function buildWindowsReplacementScript(input: WindowsReplacementInput): s
   const result = quote(input.resultPath)
   const log = quote(input.logPath)
   const lock = quote(input.lockPath)
+  const ack = quote(input.ackPath)
+  const lockToken = quote(input.lockToken)
+  const updaterStartedAt = quote(input.updaterStartedAt)
   const script = quote(input.scriptPath)
   const previousVersion = quote(input.previousVersion)
   const targetVersion = quote(input.targetVersion)
@@ -64,6 +74,9 @@ export function buildWindowsReplacementScript(input: WindowsReplacementInput): s
     `$result = '${result}'`,
     `$log = '${log}'`,
     `$lock = '${lock}'`,
+    `$ack = '${ack}'`,
+    `$lockToken = '${lockToken}'`,
+    `$updaterStartedAt = '${updaterStartedAt}'`,
     '$stage = "init"',
     'function Write-UpdateLog([string]$Message) {',
     '  $stamp = (Get-Date).ToUniversalTime().ToString("o")',
@@ -81,6 +94,34 @@ export function buildWindowsReplacementScript(input: WindowsReplacementInput): s
     '  }',
     '  $payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $result -Encoding utf8',
     '}',
+    "  $stage = 'handoff'",
+    '  $takeoverOk = $false',
+    '  try {',
+    '    $processIdentity = "win32-v1:" + (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").CreationDate.ToUniversalTime().ToString("O")',
+    '    $lockPayload = [ordered]@{',
+    '      schemaVersion = 1',
+    '      pid = $PID',
+    '      token = $lockToken',
+    '      startedAt = $updaterStartedAt',
+    '      processIdentity = $processIdentity',
+    '      root = $current',
+    '    }',
+    '    $lockTmp = $lock + ".tmp-" + $PID',
+    '    $lockPayload | ConvertTo-Json -Compress | Set-Content -LiteralPath $lockTmp -Encoding utf8',
+    '    Move-Item -LiteralPath $lockTmp -Destination $lock -Force -ErrorAction Stop',
+    '    $ackPayload = [ordered]@{',
+    '      schemaVersion = 1',
+    '      token = $lockToken',
+    '      pid = $PID',
+    '      processIdentity = $processIdentity',
+    '      startedAt = $updaterStartedAt',
+    '    }',
+    '    $ackPayload | ConvertTo-Json -Compress | Set-Content -LiteralPath $ack -Encoding utf8',
+    '    $takeoverOk = $true',
+    '  } catch {',
+    "    Write-UpdateLog ('lock handoff failed: ' + $_.Exception.GetType().Name + ': ' + $_.Exception.Message)",
+    '  }',
+    '  if (-not $takeoverOk) { exit 1 }',
     'try {',
     "  Write-UpdateLog ('update staged for ' + $current)",
     "  $stage = 'wait'",
@@ -145,17 +186,80 @@ export function buildWindowsReplacementScript(input: WindowsReplacementInput): s
   ].join('\r\n')
 }
 
-/** Launch the hidden detached replacement script after writing it to disk. */
+/** The detached updater did not confirm lock handoff within the ack window. */
+export class WindowsReplacementHandoffError extends Error {
+  readonly lockTakenOver: boolean
+  constructor(message: string, lockTakenOver: boolean) {
+    super(message)
+    this.name = 'WindowsReplacementHandoffError'
+    this.lockTakenOver = lockTakenOver
+  }
+}
+
+function childExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null
+}
+
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (!childExited(child)) {
+    if (Date.now() >= deadline) return false
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50))
+  }
+  return true
+}
+
+/**
+ * Launch the hidden detached replacement script, then wait for it to atomically
+ * take over the update lock and write its acknowledgement. The caller keeps the
+ * lock until this handoff completes: on success the lock is owned by the
+ * updater from here on, and on failure the caller decides whether it may still
+ * release the lock based on whether the updater survived.
+ */
 export async function scheduleWindowsReplacement(
-  input: Omit<WindowsReplacementInput, 'scriptPath'> & { scriptPath?: string }
-): Promise<void> {
+  input: Omit<WindowsReplacementInput, 'scriptPath'> & {
+    scriptPath?: string
+    ackTimeoutMs?: number
+    killGraceMs?: number
+  }
+): Promise<{ pid: number; processIdentity?: string; startedAt: string }> {
   const scriptPath = input.scriptPath ?? join(input.transactionDir, 'apply-update.ps1')
   const script = buildWindowsReplacementScript({ ...input, scriptPath })
   await writeFile(scriptPath, script, 'utf8')
+  let spawnFailed = false
   const child = spawn(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
     { detached: true, stdio: 'ignore', windowsHide: true }
   )
+  child.once('error', () => { spawnFailed = true })
   child.unref()
+  const deadline = Date.now() + (input.ackTimeoutMs ?? DEFAULT_ACK_TIMEOUT_MS)
+  for (;;) {
+    const raw = await readFile(input.ackPath, 'utf8').catch(() => '')
+    if (raw) {
+      const parsed = parseTuiUpdateUpdater(raw)
+      if (parsed && parsed.token === input.lockToken && parsed.pid === child.pid) {
+        return {
+          pid: child.pid as number,
+          processIdentity: parsed.processIdentity,
+          startedAt: input.updaterStartedAt
+        }
+      }
+    }
+    if (spawnFailed || Date.now() >= deadline) break
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, ACK_POLL_MS))
+  }
+  child.kill()
+  const stopped = await waitForChildExit(child, input.killGraceMs ?? KILL_GRACE_MS)
+  if (spawnFailed || stopped) {
+    throw new WindowsReplacementHandoffError(
+      'the detached updater did not confirm lock handoff and was stopped',
+      false
+    )
+  }
+  throw new WindowsReplacementHandoffError(
+    'the detached updater did not confirm lock handoff and could not be stopped',
+    true
+  )
 }

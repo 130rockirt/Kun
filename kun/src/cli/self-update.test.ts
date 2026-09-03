@@ -247,6 +247,45 @@ describe('standalone TUI self-update', () => {
     expect(stderr).toContain('kun update --yes')
   })
 
+  it('returns 70 and skips fetching while another update is busy', async () => {
+    const root = await standaloneRoot(release())
+    const transactionDir = join(dirname(root), '.kun.kun-tui-update')
+    await mkdir(transactionDir, { recursive: true })
+    await writeFile(join(transactionDir, 'transaction.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      previousVersion: '1.2.3',
+      targetVersion: '1.2.4',
+      buildId: BUILD_ID,
+      installRoot: root,
+      stagingRoot: join(dirname(root), '.kun-update-gone'),
+      backupRoot: `${root}.previous`,
+      pid: process.pid,
+      token: 'token',
+      startedAt: new Date().toISOString()
+    })}\n`, 'utf8')
+    await writeFile(join(transactionDir, 'updater.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      pid: process.pid,
+      token: 'token',
+      startedAt: new Date().toISOString()
+    })}\n`, 'utf8')
+    let stderr = ''
+    let fetches = 0
+    const code = await runSelfUpdateCommand(['--yes'], {
+      stdout: { write: () => undefined },
+      stderr: { write: (chunk) => { stderr += chunk } },
+      env: { KUN_STANDALONE_ROOT: root },
+      fetch: async () => {
+        fetches += 1
+        return Response.json(latest())
+      }
+    })
+    expect(code).toBe(70)
+    expect(stderr).toContain('another update is already in progress')
+    expect(stderr).toContain(`process ${process.pid}`)
+    expect(fetches).toBe(0)
+  })
+
   it('throttles startup checks for 24 hours', async () => {
     const root = await standaloneRoot(release())
     const dataDir = join(root, 'data')
