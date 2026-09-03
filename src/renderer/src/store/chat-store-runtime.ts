@@ -47,7 +47,8 @@ import {
   clearUnreadCompletion,
   completionOutcomeForTurnStatus,
   completionIsCurrentlyVisible,
-  markUnreadCompletion
+  markUnreadCompletion,
+  resolveUnreadCompletionForTurn
 } from './unread-completions'
 import { invalidateThreadSnapshot } from './thread-snapshot-cache'
 import {
@@ -217,9 +218,7 @@ export function syncTurnCompletionPoll(
         for (const { id } of accepted) {
           delete watchTurnCompletion[id]
           const outcome = completionOutcomeForTurnStatus(completedById.get(id)?.latestTurnStatus)
-          unreadThreadIds = !outcome || completionIsCurrentlyVisible(snapshot, id)
-            ? clearUnreadCompletion(unreadThreadIds, id)
-            : markUnreadCompletion(unreadThreadIds, id, outcome)
+          unreadThreadIds = resolveUnreadCompletionForTurn(unreadThreadIds, snapshot, id, completedById.get(id)?.latestTurnId, outcome)
         }
         return {
           watchTurnCompletion,
@@ -244,7 +243,8 @@ export function syncTurnCompletionPoll(
           id,
           notificationState,
           completionWatchKey ?? completionNotificationDedupeKeyForWatchedThread(id),
-          notificationSource
+          notificationSource,
+          latestTurnId
         )
         clearWatchedCompletionNotification(id)
         invalidateThreadSnapshot(id)
@@ -344,7 +344,7 @@ export function buildThreadEventSink(
           }
           break
         case 'notify_turn_complete':
-          notifyTurnComplete(effect.threadId, effect.state, effect.dedupeKey)
+          notifyTurnComplete(effect.threadId, effect.state, effect.dedupeKey, undefined, effect.turnId)
           break
         case 'mirror_sdd_transcript':
           notifySddChatTranscriptMirror(get)
@@ -597,9 +597,9 @@ export function buildThreadEventSink(
             state.awaitingUserInputThreadIds,
             completedThreadId
           ),
-          unreadThreadIds: status === 'aborted' || completionIsCurrentlyVisible(state, completedThreadId)
+          unreadThreadIds: status === 'aborted'
             ? clearUnreadCompletion(state.unreadThreadIds, completedThreadId)
-            : markUnreadCompletion(state.unreadThreadIds, completedThreadId)
+            : resolveUnreadCompletionForTurn(state.unreadThreadIds, state, completedThreadId, completedTurnId, 'completed')
         }
       })
       if (completedThreadId) clearWatchedCompletionNotification(completedThreadId)

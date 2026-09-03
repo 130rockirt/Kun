@@ -17,7 +17,8 @@ import {
   clearUnreadCompletion,
   completionOutcomeForTurnStatus,
   completionIsCurrentlyVisible,
-  markUnreadCompletion
+  markUnreadCompletion,
+  resolveUnreadCompletionForTurn
 } from './unread-completions'
 import { threadLooksRunning } from './chat-store-runtime-helpers'
 import {
@@ -282,9 +283,13 @@ async function runSync(
         clearWatchedCompletionNotification(thread.id)
         const outcome = completionOutcomeForTurnStatus(latestTurnStatus)
         if (outcome) {
-          unreadThreadIds = completionIsCurrentlyVisible(state, thread.id)
-            ? clearUnreadCompletion(unreadThreadIds, thread.id)
-            : markUnreadCompletion(unreadThreadIds, thread.id, outcome)
+          unreadThreadIds = resolveUnreadCompletionForTurn(
+            unreadThreadIds,
+            state,
+            thread.id,
+            runtimeState.latestTurnId,
+            outcome
+          )
         }
       }
       const updatedAt = summary.updatedAt

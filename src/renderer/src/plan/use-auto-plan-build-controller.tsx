@@ -7,6 +7,7 @@ import { loadThreadStates } from '../agent/thread-state-loader'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import { useChatStore } from '../store/chat-store'
 import type { SendMessageOverrides } from '../store/chat-store-types'
+import { clearUnreadCompletion } from '../store/unread-completions'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import { getRuntimeErrorCode } from '../lib/format-runtime-error'
 import { emitRendererSettingsChanged } from '../lib/keyboard-shortcut-settings'
@@ -133,6 +134,23 @@ function clearLegacyDuplicateError(intent: AutoPlanBuildIntentV1 | null): void {
 
 function pendingUserInput(blocks: readonly ChatBlock[]): boolean {
   return blocks.some((block) => block.kind === 'user_input' && block.status === 'pending')
+}
+
+/**
+ * Remove a stale plan-completion attention marker for the handoff thread when
+ * Automatic mode advances from the plan turn into the build turn. The unread
+ * policy already suppresses new intermediate markers, but an upgraded build or
+ * a race can leave one behind; without this, the Dock badge would point at a
+ * thread whose sidebar only shows "running".
+ */
+function clearAutoPlanHandoffUnread(threadId: string): void {
+  const normalized = threadId.trim()
+  if (!normalized) return
+  const state = useChatStore.getState()
+  const unreadThreadIds = clearUnreadCompletion(state.unreadThreadIds, normalized)
+  if (unreadThreadIds !== state.unreadThreadIds) {
+    useChatStore.setState({ unreadThreadIds })
+  }
 }
 
 function admittedPlanIdentity(
@@ -289,6 +307,7 @@ async function dispatchIntent(
   if (dispatchingIntentIds.has(intent.id)) return
   dispatchingIntentIds.add(intent.id)
   patchAutoPlanBuildIntent(intent.id, { status: 'dispatching', error: '' })
+  clearAutoPlanHandoffUnread(intent.threadId)
   try {
     if (intent.buildMode === 'scheduled') {
       const target = Date.parse(intent.scheduled?.schedule.atTime ?? '')

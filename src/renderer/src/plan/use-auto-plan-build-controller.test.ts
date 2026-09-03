@@ -480,4 +480,52 @@ describe('Automatic plan-build orchestration', () => {
     expect(provider.sendUserMessage).not.toHaveBeenCalled()
     expect(listAutoPlanBuildIntents()).toEqual([])
   })
+
+  it('clears the stale plan completion marker when handing off a direct build', async () => {
+    installWindow()
+    const intent = directIntent()
+    saveAutoPlanBuildIntent(intent)
+    useChatStore.setState({ unreadThreadIds: { 'thread-1': 'completed' } })
+
+    await autoPlanBuildControllerTestApi.dispatchIntent(intent, meta)
+
+    expect(useChatStore.getState().unreadThreadIds).toEqual({})
+    expect(listAutoPlanBuildIntents()).toEqual([])
+  })
+
+  it('clears the stale plan completion marker when scheduling a one-shot build', async () => {
+    const createScheduleTask = vi.fn(async (input) => ({
+      ok: true,
+      task: { id: 'scheduled-1', ...input }
+    }))
+    installWindow()
+    window.kunGui.createScheduleTask = createScheduleTask as never
+    const intent = createAutoPlanBuildIntent({
+      planId: meta.planId,
+      relativePath: meta.relativePath,
+      workspaceRoot: meta.workspaceRoot,
+      threadId: 'thread-1',
+      selection: {
+        buildMode: 'scheduled',
+        useWorktree: false,
+        scheduled: {
+          providerId: 'deepseek',
+          model: 'deepseek-chat',
+          reasoningEffort: 'high',
+          schedule: {
+            kind: 'at',
+            atTime: new Date(Date.now() + 3_600_000).toISOString(),
+            timeZone: 'Asia/Shanghai'
+          }
+        }
+      }
+    })
+    saveAutoPlanBuildIntent(intent)
+    useChatStore.setState({ unreadThreadIds: { 'thread-1': 'completed' } })
+
+    await autoPlanBuildControllerTestApi.dispatchIntent(intent, meta)
+
+    expect(useChatStore.getState().unreadThreadIds).toEqual({})
+    expect(listAutoPlanBuildIntents()).toEqual([])
+  })
 })

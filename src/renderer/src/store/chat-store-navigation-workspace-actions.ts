@@ -155,10 +155,8 @@ import {
   watchTurnCompletionNotification
 } from './chat-store-runtime'
 import {
-  clearUnreadCompletion,
   completionOutcomeForTurnStatus,
-  completionIsCurrentlyVisible,
-  markUnreadCompletion,
+  resolveUnreadCompletionForTurn,
   retainUnreadCompletions
 } from './unread-completions'
 import { threadRefreshSelection } from './chat-store-thread-refresh-selection'
@@ -572,7 +570,8 @@ export function createNavigationWorkspaceActions(
           id,
           notificationState,
           completionNotificationDedupeKeyForWatchedThread(id),
-          turnCompleteNotificationSource(id, notificationState)
+          turnCompleteNotificationSource(id, notificationState),
+          reconciledStateById.get(id)?.latestTurnId
         )
         clearWatchedCompletionNotification(id)
         invalidateThreadSnapshot(id)
@@ -597,10 +596,9 @@ export function createNavigationWorkspaceActions(
         }
         let u = retainUnreadCompletions(s.unreadThreadIds, validIds)
         for (const id of reconciledCompletedWatchIds) {
-          const outcome = completionOutcomeForTurnStatus(reconciledStateById.get(id)?.latestTurnStatus)
-          u = !outcome || completionIsCurrentlyVisible(s, id)
-            ? clearUnreadCompletion(u, id)
-            : markUnreadCompletion(u, id, outcome)
+          const stateById = reconciledStateById.get(id)
+          const outcome = completionOutcomeForTurnStatus(stateById?.latestTurnStatus)
+          u = resolveUnreadCompletionForTurn(u, s, id, stateById?.latestTurnId, outcome)
         }
         const pageMode = threadPageMode(s.showArchivedThreads)
         const workspacePaths = [

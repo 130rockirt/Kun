@@ -8,6 +8,11 @@ import {
   createSidebarActivityActions,
   scheduledThreadActivities
 } from './chat-store-sidebar-activity'
+import {
+  createAutoPlanBuildIntent,
+  patchAutoPlanBuildIntent,
+  saveAutoPlanBuildIntent
+} from '../plan/auto-plan-build-intents'
 
 let provider: Pick<
   AgentProvider,
@@ -104,6 +109,35 @@ describe('sidebar activity observer', () => {
 
     expect(h.get().threads[0]).toMatchObject({ latestSeq: 3, latestTurnId: 'turn-2', status: 'idle' })
     expect(h.get().unreadThreadIds).toEqual({ 'thread-1': 'completed' })
+  })
+
+  it('does not mark the intermediate auto-plan completion as unread', async () => {
+    const intent = createAutoPlanBuildIntent({
+      planId: '/repo:.kunsdd/plan/auto.md',
+      relativePath: '.kunsdd/plan/auto.md',
+      workspaceRoot: '/project',
+      threadId: 'thread-1',
+      selection: { buildMode: 'direct', useWorktree: false }
+    })
+    saveAutoPlanBuildIntent(intent)
+    patchAutoPlanBuildIntent(intent.id, { planTurnId: 'turn-2', status: 'planning' })
+
+    let listed = thread()
+    provider = {
+      listThreads: vi.fn(async () => [listed]),
+      listThreadsPage: vi.fn(async () => ({ threads: [listed], hasMore: false })),
+      getThreadState: vi.fn(async () => ({
+        status: 'idle', updatedAt: listed.updatedAt, latestSeq: listed.latestSeq ?? 0,
+        latestTurnId: 'turn-2', latestTurnStatus: 'completed'
+      }))
+    }
+    const h = harness()
+
+    await h.action()
+    listed = thread({ latestSeq: 3, updatedAt: '2026-08-20T00:01:00.000Z' })
+    await h.action()
+
+    expect(h.get().unreadThreadIds).toEqual({})
   })
 
   it('migrates a v1 baseline without a false unread and retains latestSeq detection', async () => {

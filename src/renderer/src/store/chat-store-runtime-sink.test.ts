@@ -31,6 +31,11 @@ import {
   markSddAssistantThread,
   normalizeSddThreadRegistry
 } from '../sdd/sdd-thread-registry'
+import {
+  createAutoPlanBuildIntent,
+  patchAutoPlanBuildIntent,
+  saveAutoPlanBuildIntent
+} from '../plan/auto-plan-build-intents'
 
 function makeSinkHarness(overrides: Partial<ChatState> = {}): {
   getState: () => ChatState
@@ -411,6 +416,50 @@ describe('thread event sink binding', () => {
     sink.onTurnComplete({ status: 'completed', turnId: 'turn-hidden' })
 
     expect(getState().unreadThreadIds).toEqual({ 'thread-hidden': 'completed' })
+    vi.unstubAllGlobals()
+  })
+
+  it('does not mark unread or notify for the intermediate auto-plan completion', () => {
+    const values = new Map<string, string>()
+    const showTurnCompleteNotification = vi.fn(async () => ({ ok: true }))
+    vi.stubGlobal('document', {
+      visibilityState: 'hidden',
+      hasFocus: () => false
+    })
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+        removeItem: (key: string) => values.delete(key)
+      },
+      kunGui: { showTurnCompleteNotification }
+    })
+    const intent = createAutoPlanBuildIntent({
+      planId: '/repo:.kunsdd/plan/a.md',
+      relativePath: '.kunsdd/plan/a.md',
+      workspaceRoot: '/repo',
+      threadId: 'thread-hidden-plan',
+      selection: { buildMode: 'direct', useWorktree: false }
+    })
+    saveAutoPlanBuildIntent(intent)
+    patchAutoPlanBuildIntent(intent.id, { planTurnId: 'turn-hidden-plan', status: 'planning' })
+
+    const { getState, set, get } = makeSinkHarness({
+      route: 'chat',
+      activeThreadId: 'thread-hidden-plan',
+      sideConversations: {},
+      sidePanel: { open: false, activeSideId: null },
+      busy: true,
+      currentTurnId: 'turn-hidden-plan',
+      currentTurnUserId: 'user-hidden-plan',
+      threads: [makeThread({ id: 'thread-hidden-plan' })]
+    })
+
+    const sink = buildThreadEventSink(set, get, { threadId: 'thread-hidden-plan' })
+    sink.onTurnComplete({ status: 'completed', turnId: 'turn-hidden-plan' })
+
+    expect(getState().unreadThreadIds).toEqual({})
+    expect(showTurnCompleteNotification).not.toHaveBeenCalled()
     vi.unstubAllGlobals()
   })
 

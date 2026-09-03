@@ -5,10 +5,12 @@ import {
   autoPlanBuildRequestFingerprint,
   clearAutoPlanBuildIntents,
   createAutoPlanBuildIntent,
+  isAutoPlanIntermediatePlanCompletion,
   listAutoPlanBuildIntents,
   normalizeAutoPlanBuildIntent,
   normalizeAutoPlanBuildRegistry,
   patchAutoPlanBuildIntent,
+  removeAutoPlanBuildIntent,
   saveAutoPlanBuildIntent
 } from './auto-plan-build-intents'
 
@@ -132,5 +134,69 @@ describe('Automatic plan-build intent registry', () => {
       selection: { buildMode: 'direct', useWorktree: true }
     })
     expect(saveAutoPlanBuildIntent(intent)).toBe(false)
+  })
+
+  it('recognizes only the exact intermediate plan turn of an automatic handoff', () => {
+    const intent = createAutoPlanBuildIntent({
+      planId: '/repo:.kunsdd/plan/a.md',
+      relativePath: '.kunsdd/plan/a.md',
+      workspaceRoot: '/repo',
+      threadId: 'thread-1',
+      selection: { buildMode: 'direct', useWorktree: false }
+    })
+    saveAutoPlanBuildIntent(intent)
+    patchAutoPlanBuildIntent(intent.id, { planTurnId: 'turn-plan', status: 'planning' })
+
+    expect(isAutoPlanIntermediatePlanCompletion('thread-1', 'turn-plan')).toBe(true)
+    expect(isAutoPlanIntermediatePlanCompletion('thread-1', 'turn-build')).toBe(false)
+    expect(isAutoPlanIntermediatePlanCompletion('thread-other', 'turn-plan')).toBe(false)
+    expect(isAutoPlanIntermediatePlanCompletion('thread-1', null)).toBe(false)
+    expect(isAutoPlanIntermediatePlanCompletion(null, 'turn-plan')).toBe(false)
+  })
+
+  it('keeps dispatching intents exempt only for their own plan turn', () => {
+    const intent = createAutoPlanBuildIntent({
+      planId: '/repo:.kunsdd/plan/b.md',
+      relativePath: '.kunsdd/plan/b.md',
+      workspaceRoot: '/repo',
+      threadId: 'thread-2',
+      selection: { buildMode: 'direct', useWorktree: true }
+    })
+    saveAutoPlanBuildIntent(intent)
+    patchAutoPlanBuildIntent(intent.id, { planTurnId: 'turn-plan-2', status: 'dispatching' })
+
+    expect(isAutoPlanIntermediatePlanCompletion('thread-2', 'turn-plan-2')).toBe(true)
+    expect(isAutoPlanIntermediatePlanCompletion('thread-2', 'turn-other')).toBe(false)
+  })
+
+  it('does not silently exempt a plan that already needs attention', () => {
+    const intent = createAutoPlanBuildIntent({
+      planId: '/repo:.kunsdd/plan/c.md',
+      relativePath: '.kunsdd/plan/c.md',
+      workspaceRoot: '/repo',
+      threadId: 'thread-3',
+      selection: { buildMode: 'direct', useWorktree: false }
+    })
+    saveAutoPlanBuildIntent(intent)
+    patchAutoPlanBuildIntent(intent.id, { planTurnId: 'turn-plan-3', status: 'needs_attention' })
+
+    expect(isAutoPlanIntermediatePlanCompletion('thread-3', 'turn-plan-3')).toBe(false)
+  })
+
+  it('provides limited thread-scoped compatibility for legacy intents without a plan turn id', () => {
+    const intent = createAutoPlanBuildIntent({
+      planId: '/repo:.kunsdd/plan/legacy.md',
+      relativePath: '.kunsdd/plan/legacy.md',
+      workspaceRoot: '/repo',
+      threadId: 'thread-legacy',
+      selection: { buildMode: 'direct', useWorktree: false }
+    })
+    saveAutoPlanBuildIntent(intent)
+
+    expect(isAutoPlanIntermediatePlanCompletion('thread-legacy', 'turn-plan')).toBe(true)
+    expect(isAutoPlanIntermediatePlanCompletion('thread-other', 'turn-plan')).toBe(false)
+
+    removeAutoPlanBuildIntent(intent.id)
+    expect(isAutoPlanIntermediatePlanCompletion('thread-legacy', 'turn-build')).toBe(false)
   })
 })

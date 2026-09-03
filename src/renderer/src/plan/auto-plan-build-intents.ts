@@ -160,6 +160,33 @@ export function activeAutoPlanBuildIntent(threadId: string): AutoPlanBuildIntent
   return listAutoPlanBuildIntents().find((intent) => intent.threadId === normalized) ?? null
 }
 
+/**
+ * True when a turn completion is the intermediate plan turn of an Automatic
+ * plan-and-build flow rather than the final user-facing outcome. The intent
+ * registry persists the exact admitted `planTurnId`; matching on it (rather
+ * than the thread alone) keeps the final build turn and ordinary turns from
+ * being treated as "still waiting for the build to start".
+ */
+export function isAutoPlanIntermediatePlanCompletion(
+  threadId: string | null | undefined,
+  turnId: string | null | undefined
+): boolean {
+  const normalizedThread = threadId?.trim() ?? ''
+  if (!normalizedThread) return false
+  const normalizedTurn = turnId?.trim() ?? ''
+  return listAutoPlanBuildIntents().some((intent) => {
+    if (intent.threadId !== normalizedThread) return false
+    // A plan that already needs attention must never be silently hidden as
+    // an "in progress" handoff.
+    if (intent.status === 'needs_attention') return false
+    if (intent.planTurnId) return intent.planTurnId === normalizedTurn
+    // Legacy intents persisted before plan-turn identity existed match by
+    // thread only while still dispatchable; they are removed as soon as the
+    // plan result is matched, so the final build turn is never caught here.
+    return true
+  })
+}
+
 export function createAutoPlanBuildIntent(input: {
   planId: string
   relativePath: string
