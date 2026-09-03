@@ -3,6 +3,7 @@ import type { AppSettingsV1 } from '@shared/app-settings'
 import { DEFAULT_GIT_BRANCH_PREFIX } from '@shared/app-settings'
 import type { ChatBlock } from '../agent/types'
 import { getProvider } from '../agent/registry'
+import { loadThreadStates } from '../agent/thread-state-loader'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import { useChatStore } from '../store/chat-store'
 import type { SendMessageOverrides } from '../store/chat-store-types'
@@ -21,6 +22,10 @@ import {
 import { preparePlanBuild } from './prepare-plan-build'
 import { usePlanWorktreePreferenceStore } from './plan-worktree-preference-store'
 import { useAutoPlanBuildSettingsState } from './use-auto-plan-build-settings'
+import {
+  AutoPlanBuildRecoveryCoordinator,
+  autoPlanBuildRecoveryThreadSignature
+} from './auto-plan-build-recovery-coordinator'
 import {
   activeAutoPlanBuildIntent,
   autoPlanBuildRequestFingerprint,
@@ -345,7 +350,9 @@ async function reconcileIntent(intent: AutoPlanBuildIntentV1): Promise<void> {
     clearRecoveryMismatch(intent)
     intent = { ...intent, status: 'planning', error: '' }
   }
-  const detail = await getProvider().getThreadDetail(intent.threadId)
+  const detail = await getProvider().getThreadDetail(intent.threadId, {
+    priority: 'background'
+  })
   if (pendingUserInput(detail.blocks) || detail.latestTurnStatus === 'running' || detail.threadStatus === 'running') {
     return
   }
@@ -385,6 +392,35 @@ async function reconcileIntent(intent: AutoPlanBuildIntentV1): Promise<void> {
   }
 }
 
+function automaticRecoveryErrorIsRetryable(error: unknown): boolean {
+  if ((error as { retryable?: unknown } | null)?.retryable === true) return true
+  return new Set([
+    'fetch_failed',
+    'internal_error',
+    'provider_unavailable',
+    'runtime_offline',
+    'runtime_unavailable',
+    'runtime_unhealthy',
+    'thread_read_overloaded'
+  ]).has(getRuntimeErrorCode(error) ?? '')
+}
+
+const automaticRecoveryCoordinator = new AutoPlanBuildRecoveryCoordinator({
+  listIntents: listAutoPlanBuildIntents,
+  intentIsEligible: (intent) =>
+    intent.status !== 'needs_attention' || recoverableMismatch(intent),
+  loadThreadStates: (threadIds) => loadThreadStates(getProvider(), threadIds),
+  inspectIntent: reconcileIntent,
+  errorIsRetryable: automaticRecoveryErrorIsRetryable,
+  onError: (error) => {
+    console.warn('[kun-gui] Automatic plan-build reconciliation will retry:', error)
+  }
+})
+
+function requestAutomaticRecovery(): void {
+  void automaticRecoveryCoordinator.request()
+}
+
 export function useAutoPlanBuildController({
   workspaceRoot,
   sendPlanTurn,
@@ -410,15 +446,20 @@ export function useAutoPlanBuildController({
   const [pendingDialog, setPendingDialog] = useState<PendingDialog | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [dialogError, setDialogError] = useState('')
-  const threadSignature = useChatStore((state) => state.threads
-    .map((thread) => `${thread.id}:${thread.status ?? ''}:${thread.updatedAt}`)
-    .join('|'))
-  const activeBlocks = useChatStore((state) => state.blocks)
+  const threads = useChatStore((state) => state.threads)
+  const threadLifecycleSignature = useMemo(
+    () => autoPlanBuildRecoveryThreadSignature(threads),
+    [threads]
+  )
   const activeThreadId = useChatStore((state) => state.activeThreadId)
+  const activeTurnId = useChatStore((state) => state.currentTurnId)
+  const activeBusy = useChatStore((state) => state.busy)
   const runtimeConnection = useChatStore((state) => state.runtimeConnection)
+  const activeLifecycleSignature = `${activeThreadId ?? ''}:${activeTurnId ?? ''}:${activeBusy}`
 
   useEffect(() => {
     if (!autoSettingsState.loaded || defaults.enabled) return
+    automaticRecoveryCoordinator.reset()
     clearAutoPlanBuildIntents()
     setPendingDialog(null)
     if (useChatStore.getState().composerMode === 'auto') {
@@ -428,13 +469,14 @@ export function useAutoPlanBuildController({
 
   useEffect(() => {
     if (!autoSettingsState.loaded || !defaults.enabled || runtimeConnection !== 'ready') return
-    for (const intent of listAutoPlanBuildIntents()) {
-      if (intent.status === 'needs_attention' && !recoverableMismatch(intent)) continue
-      void reconcileIntent(intent).catch((error) => {
-        console.warn('[kun-gui] Automatic plan-build reconciliation will retry:', error)
-      })
-    }
-  }, [activeBlocks, autoSettingsState.loaded, defaults.enabled, runtimeConnection, threadSignature])
+    requestAutomaticRecovery()
+  }, [
+    activeLifecycleSignature,
+    autoSettingsState.loaded,
+    defaults.enabled,
+    runtimeConnection,
+    threadLifecycleSignature
+  ])
 
   useEffect(() => {
     if (!activeThreadId) return
@@ -443,7 +485,7 @@ export function useAutoPlanBuildController({
     if (attention?.status === 'needs_attention' && attention.error && !recoverableMismatch(attention)) {
       setError(attention.error)
     }
-  }, [activeBlocks, activeThreadId, setError, threadSignature])
+  }, [activeLifecycleSignature, activeThreadId, setError, threadLifecycleSignature])
 
   const start = useCallback(async (
     pending: Omit<PendingDialog, 'settings'>,
@@ -520,6 +562,7 @@ export function useAutoPlanBuildController({
         status: 'planning',
         error: ''
       })
+      requestAutomaticRecovery()
       pending.onStarted()
       return true
     } finally {
@@ -619,10 +662,13 @@ export const autoPlanBuildControllerTestApi = {
   planMetaMatchesIntent,
   reconcileIntent,
   routeExistingAutomaticIntent,
-  scheduledTaskMatches
+  scheduledTaskMatches,
+  requestAutomaticRecovery,
+  automaticRecoveryDiagnostics: () => automaticRecoveryCoordinator.diagnostics()
 }
 
 export function resetAutoPlanBuildControllerForTests(): void {
+  automaticRecoveryCoordinator.reset()
   dispatchingIntentIds.clear()
   startingScopes.clear()
 }

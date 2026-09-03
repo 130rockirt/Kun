@@ -387,6 +387,24 @@ describe('Automatic plan-build orchestration', () => {
     expect(listAutoPlanBuildIntents()[0]?.status).toBe('planning')
   })
 
+  it('loads recovery timelines with background priority', async () => {
+    installWindow()
+    const intent = directIntent()
+    saveAutoPlanBuildIntent(intent)
+    provider.getThreadDetail.mockResolvedValue({
+      blocks: [],
+      latestSeq: 1,
+      threadStatus: 'idle'
+    })
+
+    await autoPlanBuildControllerTestApi.reconcileIntent(intent)
+
+    expect(provider.getThreadDetail).toHaveBeenCalledWith(
+      'thread-1',
+      { priority: 'background' }
+    )
+  })
+
   it('fails closed when a terminal plan turn has no matching plan result', async () => {
     installWindow()
     const intent = { ...directIntent(), planTurnId: 'turn-plan' }
