@@ -499,8 +499,10 @@ export const turnServiceQueueOperations = {
 
   /**
    * Reorder a queued turn relative to a queued sibling. Only queued turns
-   * may move; terminal/running records keep their history order. Returns
-   * false when the move is a no-op.
+   * may move; terminal/running records keep their history order. Requires
+   * exactly one of `beforeTurnId`/`afterTurnId`, and that target must not be
+   * the moving turn itself (self-reference would otherwise reorder the turn
+   * into an unintended position).
    */
   async moveQueuedTurn(this: TurnService, input: {
     threadId: string
@@ -508,6 +510,13 @@ export const turnServiceQueueOperations = {
     beforeTurnId?: string
     afterTurnId?: string
   }): Promise<{ threadId: string; turnId: string; queuedPosition: number }> {
+    if (Boolean(input.beforeTurnId) === Boolean(input.afterTurnId)) {
+      throw new Error('exactly one of beforeTurnId or afterTurnId is required')
+    }
+    const targetId = input.beforeTurnId ?? input.afterTurnId!
+    if (targetId === input.turnId) {
+      throw new TurnConflictError(`queue position target cannot be the moving turn: ${input.turnId}`)
+    }
     return this['withThreadMutation'](input.threadId, async () => {
       const thread = await this['deps'].threadStore.get(input.threadId)
       if (!thread) throw new Error(`thread not found: ${input.threadId}`)
@@ -516,7 +525,6 @@ export const turnServiceQueueOperations = {
       if (moving.status !== 'queued') {
         throw new TurnConflictError(`turn is not queued: ${input.turnId}`)
       }
-      const targetId = input.beforeTurnId ?? input.afterTurnId
       const target = thread.turns.find((candidate) => candidate.id === targetId)
       if (!target) throw new Error(`turn not found: ${targetId}`)
       if (target.status !== 'queued') {
@@ -524,6 +532,9 @@ export const turnServiceQueueOperations = {
       }
       const remaining = thread.turns.filter((candidate) => candidate.id !== moving.id)
       const targetIndex = remaining.findIndex((candidate) => candidate.id === target.id)
+      if (targetIndex < 0) {
+        throw new Error(`queue position target missing after filter: ${targetId}`)
+      }
       const insertionIndex = input.beforeTurnId ? targetIndex : targetIndex + 1
       const turns = [
         ...remaining.slice(0, insertionIndex),

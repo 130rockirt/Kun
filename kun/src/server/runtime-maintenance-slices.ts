@@ -85,40 +85,50 @@ export function createRuntimeMaintenanceSlices(input: {
   // only bounds how long a slice waits, never the underlying work; a timed-out
   // read keeps running. Scheduler retries (250ms) join the still-running read
   // instead of stacking duplicate full-file reads and scans on one thread.
-  const flights = new Map<string, Promise<unknown>>()
-  const flightStartedAt = new Map<string, number>()
+  type FlightEntry = {
+    promise: Promise<unknown>
+    startedAt: number
+    settledAt: number | undefined // undefined = still pending
+  }
+  const flights = new Map<string, FlightEntry>()
   const SINGLE_FLIGHT_RESULT_TTL_MS = 10 * 60_000
 
   const acquireFlight = <T>(key: string, start: () => Promise<T>): Promise<T> => {
-    const existing = flights.get(key)
-    if (existing) {
-      // TTL may only drop a settled entry: its underlying IO has finished, so
-      // restarting cannot stack concurrent work. A pending entry is never
-      // evicted, even past the TTL.
-      const startedAt = flightStartedAt.get(key) ?? 0
-      if (Date.now() - startedAt <= SINGLE_FLIGHT_RESULT_TTL_MS) return existing as Promise<T>
+    const entry = flights.get(key)
+    if (entry) {
+      if (entry.settledAt === undefined) {
+        // A pending entry is never evicted, even past the TTL: evicting it
+        // would let the next acquire restart the same still-running work and
+        // stack duplicate full-file reads/scans on one thread. Log a slow-flight
+        // warning so a stuck IO is observable without cancelling it.
+        if (Date.now() - entry.startedAt > SINGLE_FLIGHT_RESULT_TTL_MS) {
+          input.log?.(`[kun] single-flight still pending after ${SINGLE_FLIGHT_RESULT_TTL_MS}ms: ${key}`)
+        }
+        return entry.promise as Promise<T>
+      }
+      // Settled results are cached for RESULT_TTL measured from settlement.
+      if (Date.now() - entry.settledAt <= SINGLE_FLIGHT_RESULT_TTL_MS) {
+        return entry.promise as Promise<T>
+      }
       flights.delete(key)
-      flightStartedAt.delete(key)
     }
     const promise = start()
-    flights.set(key, promise)
-    flightStartedAt.set(key, Date.now())
-    // Rejections cannot be reused, so the entry self-evicts; the catch also
+    const record: FlightEntry = { promise, startedAt: Date.now(), settledAt: undefined }
+    flights.set(key, record)
+    // Fulfilment marks the entry settled so its result becomes TTL-eligible;
+    // rejections cannot be reused, so the entry self-evicts. The catch also
     // suppresses unhandled rejections while no slice is joining.
-    promise.catch(() => {
-      if (flights.get(key) === promise) {
-        flights.delete(key)
-        flightStartedAt.delete(key)
-      }
+    promise.then(() => {
+      record.settledAt = Date.now()
+    }).catch(() => {
+      if (flights.get(key) === record) flights.delete(key)
     })
     return promise
   }
 
   const consumeFlight = (key: string, promise: Promise<unknown>): void => {
-    if (flights.get(key) === promise) {
-      flights.delete(key)
-      flightStartedAt.delete(key)
-    }
+    const entry = flights.get(key)
+    if (entry?.promise === promise) flights.delete(key)
   }
 
   const freshState = (): ScanState => ({

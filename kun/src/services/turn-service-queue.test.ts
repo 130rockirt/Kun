@@ -333,6 +333,57 @@ describe('durable per-thread turn queue', () => {
       .toEqual([third.turnId, second.turnId])
   })
 
+  it('rejects a self-referential move and leaves the queue order unchanged', async () => {
+    const h = createHarness()
+    await createThread(h, 'thr_q')
+    await h.turns.startTurn({ threadId: 'thr_q', request: startRequest('first') })
+    const second = await h.turns.startTurn({
+      threadId: 'thr_q',
+      request: startRequest('second', { enqueueIfBusy: true })
+    })
+    const before = (await h.threadStore.get('thr_q'))!.turns.map((turn) => turn.id)
+
+    await expect(
+      h.turns.moveQueuedTurn({
+        threadId: 'thr_q',
+        turnId: second.turnId,
+        beforeTurnId: second.turnId
+      })
+    ).rejects.toBeInstanceOf(TurnConflictError)
+    await expect(
+      h.turns.moveQueuedTurn({
+        threadId: 'thr_q',
+        turnId: second.turnId,
+        afterTurnId: second.turnId
+      })
+    ).rejects.toBeInstanceOf(TurnConflictError)
+
+    const after = (await h.threadStore.get('thr_q'))!.turns.map((turn) => turn.id)
+    expect(after).toEqual(before)
+  })
+
+  it('requires exactly one move target at the service boundary', async () => {
+    const h = createHarness()
+    await createThread(h, 'thr_q')
+    await h.turns.startTurn({ threadId: 'thr_q', request: startRequest('first') })
+    const second = await h.turns.startTurn({
+      threadId: 'thr_q',
+      request: startRequest('second', { enqueueIfBusy: true })
+    })
+
+    await expect(
+      h.turns.moveQueuedTurn({
+        threadId: 'thr_q',
+        turnId: second.turnId,
+        beforeTurnId: second.turnId,
+        afterTurnId: second.turnId
+      })
+    ).rejects.toThrow(/exactly one/)
+    await expect(
+      h.turns.moveQueuedTurn({ threadId: 'thr_q', turnId: second.turnId })
+    ).rejects.toThrow(/exactly one/)
+  })
+
   it('fails a queued turn whose durable surface lock no longer applies and tries the next one', async () => {
     const h = createHarness()
     await createThread(h, 'thr_q')

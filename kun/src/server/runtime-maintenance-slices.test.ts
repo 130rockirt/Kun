@@ -14,6 +14,7 @@ import {
 const roots: string[] = []
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
@@ -353,6 +354,118 @@ describe('runtime maintenance slices', () => {
     await expect(maintenance.runAttachmentSlice()).resolves.toBe(true)
     expect(get).toHaveBeenCalledTimes(3)
     expect(maintenance.stats().processedThreads).toBe(2)
+  })
+
+  it('keeps a pending flight past the TTL instead of restarting it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-maintenance-flight-pending-ttl-'))
+    roots.push(root)
+    const ids = ['thread-0']
+    const listPage = vi.fn(async () => ({
+      threads: ids.map((id) => ({ id, status: 'idle', updatedAt: id })),
+      hasMore: false
+    }))
+    let now = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    let resolveGet!: (value: { id: string; turns: Array<{ attachmentIds: string[] }> }) => void
+    const get = vi.fn((id: string) => {
+      if (get.mock.calls.length === 1) {
+        return new Promise((resolve) => { resolveGet = resolve })
+      }
+      return Promise.resolve({ id, turns: [{ attachmentIds: [`a-${id}`] }] })
+    })
+    const maintenance = createRuntimeMaintenanceSlices({
+      dataDir: root,
+      threads: { listPage, get } as unknown as ThreadService,
+      attachments: () => ({ pruneExpiredLeases: vi.fn() }) as unknown as AttachmentStore,
+      guardian: { scanThread: vi.fn() } as unknown as SessionGuardian,
+      nowIso: () => '2026-09-03T00:00:00.000Z'
+    })
+
+    await expect(maintenance.runAttachmentSlice()).resolves.toBe(false)
+    expect(get).toHaveBeenCalledTimes(1)
+
+    // 11 minutes pass while the read is still pending. The still-pending
+    // flight must be joined, not evicted and restarted.
+    now = 11 * 60_000
+    await expect(maintenance.runAttachmentSlice()).resolves.toBe(false)
+    expect(get).toHaveBeenCalledTimes(1)
+
+    resolveGet({ id: 'thread-0', turns: [{ attachmentIds: ['a-thread-0'] }] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await expect(maintenance.runAttachmentSlice()).resolves.toBe(true)
+    expect(get).toHaveBeenCalledTimes(1)
+  })
+
+  it('reuses a settled flight within the TTL', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-maintenance-flight-settled-reuse-'))
+    roots.push(root)
+    const ids = ['thread-0']
+    const listPage = vi.fn(async () => ({
+      threads: ids.map((id) => ({ id, status: 'idle', updatedAt: id })),
+      hasMore: false
+    }))
+    let resolveGet!: (value: { id: string; turns: Array<{ attachmentIds: string[] }> }) => void
+    const get = vi.fn((id: string) => {
+      if (get.mock.calls.length === 1) {
+        return new Promise((resolve) => { resolveGet = resolve })
+      }
+      return Promise.resolve({ id, turns: [{ attachmentIds: [`a-${id}`] }] })
+    })
+    const maintenance = createRuntimeMaintenanceSlices({
+      dataDir: root,
+      threads: { listPage, get } as unknown as ThreadService,
+      attachments: () => ({ pruneExpiredLeases: vi.fn() }) as unknown as AttachmentStore,
+      guardian: { scanThread: vi.fn() } as unknown as SessionGuardian,
+      nowIso: () => '2026-09-03T00:00:00.000Z'
+    })
+
+    await expect(maintenance.runAttachmentSlice()).resolves.toBe(false)
+    expect(get).toHaveBeenCalledTimes(1)
+
+    // Settle the previously timed-out read; it stays cached as a settled
+    // flight and the next slice reuses it without a second read.
+    resolveGet({ id: 'thread-0', turns: [{ attachmentIds: ['a-thread-0'] }] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await expect(maintenance.runAttachmentSlice()).resolves.toBe(true)
+    expect(get).toHaveBeenCalledTimes(1)
+  })
+
+  it('evicts a settled flight after the TTL', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-maintenance-flight-settled-ttl-'))
+    roots.push(root)
+    const ids = ['thread-0']
+    const listPage = vi.fn(async () => ({
+      threads: ids.map((id) => ({ id, status: 'idle', updatedAt: id })),
+      hasMore: false
+    }))
+    let now = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    let resolveGet!: (value: { id: string; turns: Array<{ attachmentIds: string[] }> }) => void
+    const get = vi.fn((id: string) => {
+      if (get.mock.calls.length === 1) {
+        return new Promise((resolve) => { resolveGet = resolve })
+      }
+      return Promise.resolve({ id, turns: [{ attachmentIds: [`a-${id}`] }] })
+    })
+    const maintenance = createRuntimeMaintenanceSlices({
+      dataDir: root,
+      threads: { listPage, get } as unknown as ThreadService,
+      attachments: () => ({ pruneExpiredLeases: vi.fn() }) as unknown as AttachmentStore,
+      guardian: { scanThread: vi.fn() } as unknown as SessionGuardian,
+      nowIso: () => '2026-09-03T00:00:00.000Z'
+    })
+
+    await expect(maintenance.runAttachmentSlice()).resolves.toBe(false)
+    expect(get).toHaveBeenCalledTimes(1)
+
+    resolveGet({ id: 'thread-0', turns: [{ attachmentIds: ['a-thread-0'] }] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // 11 minutes pass since settlement: the settled flight is past its
+    // result TTL, so the next slice evicts it and starts a fresh read.
+    now = 11 * 60_000
+    await expect(maintenance.runAttachmentSlice()).resolves.toBe(true)
+    expect(get).toHaveBeenCalledTimes(2)
   })
 
   it('runs the event-index rebuild slice in the same low-priority lane', async () => {
