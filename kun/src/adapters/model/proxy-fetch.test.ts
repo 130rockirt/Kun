@@ -183,3 +183,15 @@ describe('proxy fetch streaming bodies', () => {
     }
   })
 })
+
+describe('proxy fetch pre-aborted signals', () => {
+  it('rejects a pre-aborted signal without creating or caching a ProxyAgent', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const proxied = createProxyFetch('http://127.0.0.1:9999')!
+    await expect(
+      proxied('http://example.test/aborted', { signal: controller.signal } as RequestInit)
+    ).rejects.toThrow('The operation was aborted.')
+    expect(cachedProxyAgentCountForTests()).toBe(0)
+  })
+})

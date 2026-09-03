@@ -119,6 +119,18 @@ export async function createRuntimeAgentComposition(
       } catch {
         // ignore missing/colliding removal
       }
+    },
+    replace: (provider) => {
+      try {
+        registryComposition.registry.replaceProvider(provider)
+      } catch {
+        // ignore missing/colliding replacement
+      }
+      try {
+        services.childRegistry.replaceProvider(provider)
+      } catch {
+        // ignore missing/colliding replacement
+      }
     }
   })
   // Provider-native subscription engines own whole turns and share the same

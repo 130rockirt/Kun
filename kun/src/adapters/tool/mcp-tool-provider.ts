@@ -30,6 +30,7 @@ import type {
 import {
   createMcpSearchProvider,
   mcpSearchDiagnostic,
+  McpSearchCatalogController,
   type McpSearchCatalogRecord,
   type McpSearchCatalogState,
   type McpSearchRuntimeDiagnostic
@@ -97,17 +98,20 @@ export type McpToolProviderBuildResult = {
   toolCount: number
   /**
    * Begin retrying servers that failed/timed out during the fast startup pass.
-   * Call once, after the tool registries exist, passing callbacks that add or remove a
-   * late-connected server's provider to them. Without this, a server that loses
-   * the startup race (e.g. an npx-based stdio server whose first cold start
-   * exceeds the connect timeout on Windows) stays "error" forever until the
-   * whole runtime restarts — exactly issue #342. Safe to call when there is
-   * nothing to retry (it no-ops). The returned promise resolves once every
-   * failed server has reconnected or exhausted its retries (used by tests).
+   * Call once, after the tool registries exist, passing callbacks that add,
+   * remove, or replace a late-connected server's provider in them. Without
+   * this, a server that loses the startup race (e.g. an npx-based stdio server
+   * whose first cold start exceeds the connect timeout on Windows) stays
+   * "error" forever until the whole runtime restarts — exactly issue #342.
+   * Safe to call when there is nothing to retry (it no-ops). The returned
+   * promise resolves once every failed server has reconnected or exhausted its
+   * retries (used by tests).
    */
   startBackgroundReconnect: (hooks: {
     register: (provider: CapabilityToolProvider) => void
     unregister: (providerId: string) => void
+    /** Replaces an already-exposed direct provider in place (schema/tool-set change). */
+    replace?: (provider: CapabilityToolProvider) => void
   }) => Promise<void>
   clearOAuthCredentials: (serverId?: string) => Promise<McpOAuthClearResult>
   /**
@@ -191,11 +195,16 @@ export async function buildMcpToolProviders(
   options: McpToolProviderOptions = {}
 ): Promise<McpToolProviderBuildResult> {
   const providers: CapabilityToolProvider[] = []
-  const directProviders: CapabilityToolProvider[] = []
   const diagnostics: McpServerDiagnostic[] = []
   const connected: McpConnectionState[] = []
   const catalogState: McpSearchCatalogState = { records: [] }
-  const directToolsByServer = new Map<string, CapabilityToolProvider['tools']>()
+  // Full direct provider wrappers keyed by serverId, so a schema/tool-set
+  // change can atomically replace a live provider instead of a startup snapshot.
+  const directToolsByServer = new Map<string, CapabilityToolProvider>()
+  // Last-known descriptors per connected server. This is the source of truth
+  // the unified commit rebuilds records, wrappers, and the index from.
+  const listedByServer = new Map<string, McpToolDescriptor[]>()
+  const searchCatalog = new McpSearchCatalogController([])
   const mcp = config
   const nowIso = options.nowIso ?? (() => new Date().toISOString())
   const clientFactory = options.clientFactory ?? ((serverId, server) =>
@@ -281,27 +290,16 @@ export async function buildMcpToolProviders(
     }
     const { state, listed } = outcome
     connected.push(state)
-    catalogState.records.push(...listed.map((tool) => createMcpSearchCatalogRecord(state, tool)))
-    const tools = listed.map((tool) => createMcpLocalTool(state, tool))
-    directToolsByServer.set(outcome.serverId, tools)
-    directProviders.push({
-      id: `mcp:${outcome.serverId}`,
-      kind: 'mcp',
-      enabled: true,
-      available: true,
-      tools
-    })
-    diagnostics.push(syncMcpDiagnostic(state, 'connected', tools.length))
+    listedByServer.set(outcome.serverId, listed)
+    diagnostics.push(syncMcpDiagnostic(state, 'connected', listed.length))
   }
 
   const connectedServers = diagnostics.filter((diagnostic) => diagnostic.status === 'connected').length
-  const toolCount = catalogState.records.length
+  const toolCount = [...listedByServer.values()].reduce((total, listed) => total + listed.length, 0)
   const oauthDiagnostics = await listMcpOAuthDiagnostics(mcp, {
     storageDir: options.oauthStorageDir,
     encryptor: options.oauthEncryptor
   })
-  catalogState.lastRefreshedAt = nowIso()
-  catalogState.catalogFingerprint = catalogFingerprint(catalogState.records.map((record) => record.toolId))
   const gatewayActive = Object.keys(mcp.servers).length > 0
   /**
    * Search mode is derived from the LIVE catalog size, not a startup snapshot.
@@ -312,41 +310,30 @@ export async function buildMcpToolProviders(
   const isSearchActive = (): boolean =>
     shouldUseMcpSearch(mcp.search, catalogState.records.length) &&
     connected.some((state) => state.status === 'connected')
-  if (gatewayActive) {
-    providers.push(createMcpSearchProvider({
-      config: mcp.search,
-      state: catalogState,
-      refreshCatalog: async () => {
-        try {
-          const records: McpSearchCatalogRecord[] = []
-          const previousFingerprint = catalogState.catalogFingerprint
-          for (const state of connected) {
-            const listed = await refreshMcpConnectionCatalog(state, 'refresh')
-            records.push(...listed.map((tool) => createMcpSearchCatalogRecord(state, tool)))
-          }
-          catalogState.records = records
-          catalogState.lastError = undefined
-          catalogState.lastRefreshedAt = nowIso()
-          catalogState.catalogFingerprint = catalogFingerprint(records.map((record) => record.toolId))
-          catalogState.catalogDrift = Boolean(previousFingerprint && previousFingerprint !== catalogState.catalogFingerprint)
-          return records
-        } catch (error) {
-          catalogState.lastError = redactSecretText(errorMessage(error))
-          throw error
-        }
-      },
-      isServerAvailable: canUseMcpServer
-    }))
+  const computeAdvertisedToolCount = (): number => {
+    const gatewayCount = providers
+      .filter((provider) => provider.id === 'mcp:search' || provider.id === 'mcp:facade')
+      .reduce((total, provider) => total + provider.tools.length, 0)
+    const directCount = isSearchActive()
+      ? 0
+      : [...directToolsByServer.values()].reduce((total, provider) => total + provider.tools.length, 0)
+    return gatewayCount + directCount
   }
-  if (!isSearchActive()) {
-    providers.push(...directProviders)
-  }
-  providers.push(createMcpFacadeProvider(connected))
-  const exposedDirectServerIds = new Set<string>()
-  if (!isSearchActive()) {
-    for (const provider of directProviders) {
-      exposedDirectServerIds.add(provider.id.slice('mcp:'.length))
-    }
+  const searchDiagnostic = mcpSearchDiagnostic({
+    config: mcp.search,
+    active: false,
+    indexedToolCount: 0,
+    advertisedToolCount: 0,
+    state: catalogState
+  })
+  const updateSearchDiagnostic = (): void => {
+    searchDiagnostic.active = isSearchActive()
+    searchDiagnostic.indexedToolCount = catalogState.records.length
+    searchDiagnostic.advertisedToolCount = computeAdvertisedToolCount()
+    searchDiagnostic.lastRefreshedAt = catalogState.lastRefreshedAt
+    searchDiagnostic.lastError = catalogState.lastError
+    searchDiagnostic.catalogFingerprint = catalogState.catalogFingerprint
+    searchDiagnostic.catalogDrift = catalogState.catalogDrift
   }
 
   // Servers that need OAuth authorization are NOT retried by the background
@@ -360,43 +347,29 @@ export async function buildMcpToolProviders(
   )
   let reconnectAborted = false
   let reconnectStarted = false
-  /** Captured from startBackgroundReconnect so authorizeOAuth/reconnect can register/unregister live. */
+  /** Captured from startBackgroundReconnect so authorizeOAuth/reconnect can register/unregister/replace live. */
   let liveRegister: ((provider: CapabilityToolProvider) => void) | null = null
   let liveUnregister: ((providerId: string) => void) | null = null
+  let liveReplace: ((provider: CapabilityToolProvider) => void) | null = null
   /** Per-serverId authorization single-flight: concurrent clicks share one run. */
   const authorizeInFlight = new Map<string, Promise<McpOAuthAuthorizeResult>>()
 
-  const computeAdvertisedToolCount = (): number => {
-    const gatewayCount = providers
-      .filter((provider) => provider.id === 'mcp:search' || provider.id === 'mcp:facade')
-      .reduce((total, provider) => total + provider.tools.length, 0)
-    const directCount = isSearchActive()
-      ? 0
-      : directProviders.reduce((total, provider) => total + provider.tools.length, 0)
-    return gatewayCount + directCount
-  }
-
-  const searchDiagnostic = mcpSearchDiagnostic({
-    config: mcp.search,
-    active: isSearchActive(),
-    indexedToolCount: catalogState.records.length,
-    advertisedToolCount: computeAdvertisedToolCount(),
-    state: catalogState
-  })
-
-  const updateSearchDiagnostic = (): void => {
-    searchDiagnostic.active = isSearchActive()
-    searchDiagnostic.indexedToolCount = catalogState.records.length
-    searchDiagnostic.advertisedToolCount = computeAdvertisedToolCount()
-  }
+  /**
+   * Which direct per-server providers are currently exposed in the live
+   * registries. Starts empty and is reconciled once the initial catalog is
+   * committed (the startup `providers` array is registered by the composition
+   * layer, not through these live hooks).
+   */
+  const exposedDirectServerIds = new Set<string>()
 
   /**
    * Atomically reconcile which direct per-server providers are exposed against
-   * the live search-active decision. When the auto threshold is crossed, every
-   * exposed `mcp:<serverId>` provider is unregistered from both registries while
-   * `mcp:search`/`mcp:facade` stay. When it falls back below the threshold (or a
-   * late server connects while still below), the missing direct providers are
-   * registered again.
+   * the live search-active decision:
+   * - new catalog reaches the auto threshold: unregister every exposed direct
+   *   provider, keep only search/facade;
+   * - new catalog falls below the threshold: register the current wrappers;
+   * - still direct mode but a schema/tool set changed: replace the already
+   *   exposed provider in place instead of skipping it.
    */
   const syncExposure = (): void => {
     if (isSearchActive()) {
@@ -414,12 +387,21 @@ export async function buildMcpToolProviders(
     } else {
       for (const state of connected) {
         if (state.status !== 'connected') continue
-        if (exposedDirectServerIds.has(state.serverId)) continue
-        const tools = directToolsByServer.get(state.serverId)
-        if (!tools) continue
+        const provider = directToolsByServer.get(state.serverId)
+        if (!provider) continue
+        if (exposedDirectServerIds.has(state.serverId)) {
+          if (liveReplace) {
+            try {
+              liveReplace(provider)
+            } catch {
+              // ignore duplicate/colliding replacement
+            }
+          }
+          continue
+        }
         if (liveRegister) {
           try {
-            liveRegister({ id: `mcp:${state.serverId}`, kind: 'mcp', enabled: true, available: true, tools })
+            liveRegister(provider)
           } catch {
             // ignore duplicate/colliding registration
           }
@@ -428,6 +410,78 @@ export async function buildMcpToolProviders(
       }
     }
     updateSearchDiagnostic()
+  }
+
+  /**
+   * The single catalog commit path. Given the latest descriptors per connected
+   * server, it rebuilds records, direct wrappers, the search index, exposure,
+   * fingerprint, and refresh/error diagnostics together — never partially.
+   */
+  const commitCatalog = (nextListed: Map<string, McpToolDescriptor[]>): void => {
+    const records: McpSearchCatalogRecord[] = []
+    const nextDirect = new Map<string, CapabilityToolProvider>()
+    for (const state of connected) {
+      const listed = nextListed.get(state.serverId)
+      if (!listed) continue
+      records.push(...listed.map((tool) => createMcpSearchCatalogRecord(state, tool)))
+      nextDirect.set(state.serverId, {
+        id: `mcp:${state.serverId}`,
+        kind: 'mcp',
+        enabled: true,
+        available: true,
+        tools: listed.map((tool) => createMcpLocalTool(state, tool))
+      })
+    }
+    const previousFingerprint = catalogState.catalogFingerprint
+    catalogState.records = records
+    catalogState.lastRefreshedAt = nowIso()
+    catalogState.catalogFingerprint = catalogFingerprint(records.map((record) => record.toolId))
+    catalogState.catalogDrift = Boolean(previousFingerprint && previousFingerprint !== catalogState.catalogFingerprint)
+    catalogState.lastError = undefined
+    directToolsByServer.clear()
+    for (const [serverId, provider] of nextDirect) directToolsByServer.set(serverId, provider)
+    searchCatalog.replaceAll(records)
+    syncExposure()
+  }
+
+  /**
+   * Full manual refresh: re-list every connected server first, then commit the
+   * whole catalog once. If any listing fails the previous records, wrappers,
+   * index, exposure, and fingerprint stay intact and only the redacted
+   * `lastError` is published.
+   */
+  const refreshCatalog = async (): Promise<McpSearchCatalogRecord[]> => {
+    try {
+      const nextListed = new Map<string, McpToolDescriptor[]>()
+      for (const state of connected) {
+        const listed = await refreshMcpConnectionCatalog(state, 'refresh')
+        nextListed.set(state.serverId, listed)
+      }
+      for (const [serverId, listed] of nextListed) listedByServer.set(serverId, listed)
+      commitCatalog(listedByServer)
+      return catalogState.records
+    } catch (error) {
+      catalogState.lastError = redactSecretText(errorMessage(error))
+      updateSearchDiagnostic()
+      throw error
+    }
+  }
+
+  if (gatewayActive) {
+    providers.push(createMcpSearchProvider({
+      config: mcp.search,
+      state: catalogState,
+      catalog: searchCatalog,
+      refreshCatalog,
+      isServerAvailable: canUseMcpServer
+    }))
+  }
+  providers.push(createMcpFacadeProvider(connected))
+  // Commit the startup catalog before deciding direct exposure so `isSearchActive`
+  // and `computeAdvertisedToolCount` see the real initial size.
+  commitCatalog(listedByServer)
+  if (!isSearchActive()) {
+    providers.push(...directToolsByServer.values())
   }
 
   const refreshOAuthDiagnostics = async (): Promise<void> => {
@@ -446,13 +500,9 @@ export async function buildMcpToolProviders(
   const connectAndRegisterServer = async (serverId: string, server: McpServerConfig): Promise<void> => {
     const { state, listed } = await connectAndLoadCatalog(serverId, server, clientFactory, nowIso)
     connected.push(state)
-    catalogState.records.push(...listed.map((tool) => createMcpSearchCatalogRecord(state, tool)))
-    catalogState.catalogFingerprint = catalogFingerprint(catalogState.records.map((record) => record.toolId))
-    catalogState.lastRefreshedAt = nowIso()
-    const tools = listed.map((tool) => createMcpLocalTool(state, tool))
-    directToolsByServer.set(serverId, tools)
-    syncExposure()
-    const diagnostic = syncMcpDiagnostic(state, 'connected', tools.length)
+    listedByServer.set(serverId, listed)
+    commitCatalog(listedByServer)
+    const diagnostic = syncMcpDiagnostic(state, 'connected', listed.length)
     const index = diagnostics.findIndex((entry) => entry.id === serverId)
     if (index >= 0) diagnostics[index] = diagnostic
     else diagnostics.push(diagnostic)
@@ -502,6 +552,10 @@ export async function buildMcpToolProviders(
     startBackgroundReconnect: (hooks) => {
       liveRegister = hooks.register
       liveUnregister = hooks.unregister
+      liveReplace = hooks.replace ?? null
+      // Reconcile exposure as soon as the live hooks exist, covering the
+      // window where a catalog was committed before the registries were wired.
+      syncExposure()
       if (reconnectStarted) return Promise.resolve()
       reconnectStarted = true
       if (failedServers.length === 0) return Promise.resolve()
@@ -511,14 +565,10 @@ export async function buildMcpToolProviders(
         clientFactory,
         nowIso,
         onServerConnected: (state, listed) => {
-          const tools = listed.map((tool) => createMcpLocalTool(state, tool))
           connected.push(state)
-          catalogState.records.push(...listed.map((tool) => createMcpSearchCatalogRecord(state, tool)))
-          catalogState.catalogFingerprint = catalogFingerprint(catalogState.records.map((record) => record.toolId))
-          catalogState.lastRefreshedAt = nowIso()
-          directToolsByServer.set(state.serverId, tools)
-          syncExposure()
-          const diagnostic = syncMcpDiagnostic(state, 'connected', tools.length)
+          listedByServer.set(state.serverId, listed)
+          commitCatalog(listedByServer)
+          const diagnostic = syncMcpDiagnostic(state, 'connected', listed.length)
           const index = diagnostics.findIndex((entry) => entry.id === state.serverId)
           if (index >= 0) diagnostics[index] = diagnostic
           else diagnostics.push(diagnostic)

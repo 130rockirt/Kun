@@ -98,4 +98,13 @@ describe('proxy fetch agent caching', () => {
       await close()
     }
   })
+
+  it('rejects a pre-aborted signal without creating or caching a ProxyAgent', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      fetchWithOptionalProxy('http://example.test/aborted', { signal: controller.signal }, 'http://127.0.0.1:9999')
+    ).rejects.toThrow('The operation was aborted.')
+    expect(cachedProxyAgentCountForTests()).toBe(0)
+  })
 })

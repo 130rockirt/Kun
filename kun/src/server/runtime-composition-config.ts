@@ -656,6 +656,10 @@ export function createRuntimeConfigController(
 	        } catch {
 	          // ignore missing/colliding removal
 	        }
+	      },
+	      replace: (provider) => {
+	        try { registry.replaceProvider(provider) } catch { /* ignore missing/colliding replacement */ }
+	        try { childRegistry.replaceProvider(provider) } catch { /* ignore missing/colliding replacement */ }
 	      }
 	    }).catch((error) => {
 	      console.warn('[kun] MCP background reconnect failed after config apply:', error)

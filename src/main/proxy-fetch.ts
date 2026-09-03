@@ -1,51 +1,12 @@
-import { request as httpRequest } from 'node:http'
-import { request as httpsRequest } from 'node:https'
 import { Readable } from 'node:stream'
 import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web'
-import { ProxyAgent } from 'proxy-agent'
+import {
+  disposeProxyAgents,
+  cachedProxyAgentCountForTests,
+  proxyTransportRequest
+} from '../../kun/src/adapters/model/proxy-transport.js'
 
-const MAX_CACHED_PROXY_AGENTS = 4
-// Insertion order is used as a simple LRU: the oldest entry is evicted first
-// once the cache exceeds its bound. Agents are disposed on Electron quit (or
-// eviction), closing their pooled sockets so keep-alive connections never leak.
-const proxyAgentCache = new Map<string, ProxyAgent>()
-
-function getProxyAgent(normalizedProxyUrl: string): ProxyAgent {
-  const cached = proxyAgentCache.get(normalizedProxyUrl)
-  if (cached) {
-    proxyAgentCache.delete(normalizedProxyUrl)
-    proxyAgentCache.set(normalizedProxyUrl, cached)
-    return cached
-  }
-  const agent = new ProxyAgent({
-    getProxyForUrl: () => normalizedProxyUrl,
-    keepAlive: true
-  })
-  proxyAgentCache.set(normalizedProxyUrl, agent)
-  while (proxyAgentCache.size > MAX_CACHED_PROXY_AGENTS) {
-    const oldestKey = proxyAgentCache.keys().next().value
-    if (oldestKey === undefined) break
-    const evicted = proxyAgentCache.get(oldestKey)
-    proxyAgentCache.delete(oldestKey)
-    evicted?.destroy()
-  }
-  return agent
-}
-
-export function disposeProxyAgents(): void {
-  for (const agent of proxyAgentCache.values()) {
-    try {
-      agent.destroy()
-    } catch {
-      // A partially-closed agent must never block process shutdown.
-    }
-  }
-  proxyAgentCache.clear()
-}
-
-export function cachedProxyAgentCountForTests(): number {
-  return proxyAgentCache.size
-}
+export { disposeProxyAgents, cachedProxyAgentCountForTests } from '../../kun/src/adapters/model/proxy-transport.js'
 
 export async function fetchWithOptionalProxy(
   input: string | URL,
@@ -72,59 +33,13 @@ async function fetchViaProxy(input: string | URL, init: RequestInit | undefined,
     headers['content-length'] = String(body.buffer.byteLength)
   }
 
-  return new Promise<Response>((resolve, reject) => {
-    const agent = getProxyAgent(proxyUrl)
-    const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(
-      url,
-      {
-        method: init?.method ?? 'GET',
-        headers,
-        agent
-      },
-      (response) => {
-        const responseHeaders = new Headers()
-        for (const [key, value] of Object.entries(response.headers)) {
-          if (Array.isArray(value)) {
-            for (const item of value) responseHeaders.append(key, item)
-          } else if (value !== undefined) {
-            responseHeaders.set(key, String(value))
-          }
-        }
-        const webBody = Readable.toWeb(response) as ReadableStream<Uint8Array>
-        resolve(new Response(webBody, {
-          status: response.statusCode ?? 0,
-          statusText: response.statusMessage ?? '',
-          headers: responseHeaders
-        }))
-      }
-    )
-
-    const signal = init?.signal
-    const abort = (): void => {
-      body.stream?.destroy()
-      request.destroy(new Error('The operation was aborted.'))
-    }
-    if (signal?.aborted) {
-      abort()
-      return
-    }
-    signal?.addEventListener('abort', abort, { once: true })
-    request.on('error', (error) => {
-      body.stream?.destroy()
-      reject(error)
-    })
-    request.on('close', () => signal?.removeEventListener('abort', abort))
-    if (body.stream) {
-      body.stream.on('error', (error) => {
-        request.destroy(error)
-      })
-      body.stream.pipe(request)
-    } else if (body.buffer) {
-      request.write(body.buffer)
-      request.end()
-    } else {
-      request.end()
-    }
+  return proxyTransportRequest({
+    url,
+    method: init?.method ?? 'GET',
+    headers,
+    proxyUrl,
+    body: { buffer: body.buffer, stream: body.stream },
+    signal: init?.signal ?? undefined
   })
 }
 

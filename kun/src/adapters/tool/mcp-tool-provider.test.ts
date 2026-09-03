@@ -23,6 +23,10 @@ class MockMcpClient implements McpClientLike {
   listResourceTemplates?: McpClientLike['listResourceTemplates']
   listPrompts?: McpClientLike['listPrompts']
   getPrompt?: McpClientLike['getPrompt']
+  listTools = vi.fn(async (): Promise<{ tools: McpToolDescriptor[] }> => {
+    if (this.listToolsOverride) return this.listToolsOverride()
+    return { tools: this.tools }
+  })
 
   constructor(
     private readonly tools: McpToolDescriptor[],
@@ -31,11 +35,6 @@ class MockMcpClient implements McpClientLike {
     private readonly listToolsOverride?: () => Promise<{ tools: McpToolDescriptor[] }>
   ) {
     Object.assign(this, extras)
-  }
-
-  async listTools(): Promise<{ tools: McpToolDescriptor[] }> {
-    if (this.listToolsOverride) return this.listToolsOverride()
-    return { tools: this.tools }
   }
 
   setLifecycleHandlers(handlers: McpClientLifecycleHandlers): void {
