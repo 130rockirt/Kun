@@ -19,6 +19,11 @@ type RecoveryFlight = {
   startedAt: number
 }
 
+type CatchingUpEntry = {
+  generation: number
+  timer: ReturnType<typeof setTimeout>
+}
+
 export type ThreadRecoveryDiagnostics = {
   started: number
   joined: number
@@ -27,10 +32,23 @@ export type ThreadRecoveryDiagnostics = {
   forcedHydrations: number
 }
 
+const SSE_CATCH_UP_DEADLINE_MS = 30_000
+
+// Reasons that must be allowed to replace a stuck catching-up stream. Passive
+// reasons (`selection`, `sse_disconnect`, `send_reconcile`) keep joining so a
+// normal in-flight synchronization is not needlessly torn down.
+const RECOVERY_PREEMPTIVE_REASONS = new Set<ThreadRecoveryReason>([
+  'manual_retry',
+  'watchdog',
+  'replay_reset',
+  'runtime_restart'
+])
+
 const flights = new Map<string, RecoveryFlight>()
 const attempts = new Map<string, number>()
 const forcedHydration = new Set<string>()
-const catchingUp = new Set<string>()
+const catchingUp = new Map<string, CatchingUpEntry>()
+const generations = new Map<string, number>()
 const activityListeners = new Set<() => void>()
 let started = 0
 let joined = 0
@@ -38,6 +56,16 @@ let cancelled = 0
 
 function notifyActivity(): void {
   for (const listener of activityListeners) listener()
+}
+
+function nextGeneration(threadId: string): number {
+  const generation = (generations.get(threadId) ?? 0) + 1
+  generations.set(threadId, generation)
+  return generation
+}
+
+function isCurrentGeneration(threadId: string, generation?: number): boolean {
+  return generation === undefined || generations.get(threadId) === generation
 }
 
 export function runThreadRecovery(
@@ -50,9 +78,18 @@ export function runThreadRecovery(
     joined += 1
     return existing.promise
   }
-  if (catchingUp.has(threadId)) {
-    joined += 1
-    return Promise.resolve(true)
+  const catching = catchingUp.get(threadId)
+  if (catching) {
+    if (!RECOVERY_PREEMPTIVE_REASONS.has(reason)) {
+      joined += 1
+      return Promise.resolve(true)
+    }
+    // A forced recovery supersedes a stuck catching-up stream. Cancel its
+    // deadline and advance the generation so any late events from the old
+    // stream are fenced off before the new physical task starts.
+    clearTimeout(catching.timer)
+    nextGeneration(threadId)
+    catchingUp.delete(threadId)
   }
   const controller = new AbortController()
   started += 1
@@ -71,6 +108,8 @@ export function runThreadRecovery(
 
 export function cancelThreadRecovery(threadId: string): void {
   const flight = flights.get(threadId)
+  const catching = catchingUp.get(threadId)
+  if (catching?.timer) clearTimeout(catching.timer)
   const wasCatchingUp = catchingUp.delete(threadId)
   if (flight) {
     cancelled += 1
@@ -81,7 +120,7 @@ export function cancelThreadRecovery(threadId: string): void {
 }
 
 export function cancelThreadRecoveriesExcept(threadId?: string): void {
-  for (const candidate of new Set([...flights.keys(), ...catchingUp])) {
+  for (const candidate of new Set([...flights.keys(), ...catchingUp.keys()])) {
     if (candidate !== threadId) cancelThreadRecovery(candidate)
   }
 }
@@ -99,14 +138,31 @@ export function requireThreadTimelineHydration(threadId: string): void {
   forcedHydration.add(threadId)
 }
 
-export function markThreadRecoveryCatchingUp(threadId: string): void {
-  if (catchingUp.has(threadId)) return
-  catchingUp.add(threadId)
+export function markThreadRecoveryCatchingUp(
+  threadId: string,
+  onDeadline?: () => void
+): number {
+  const generation = nextGeneration(threadId)
+  const previous = catchingUp.get(threadId)
+  if (previous?.timer) clearTimeout(previous.timer)
+  const timer = setTimeout(() => {
+    const current = catchingUp.get(threadId)
+    if (!current || current.generation !== generation) return
+    catchingUp.delete(threadId)
+    notifyActivity()
+    onDeadline?.()
+  }, SSE_CATCH_UP_DEADLINE_MS)
+  catchingUp.set(threadId, { generation, timer })
   notifyActivity()
+  return generation
 }
 
-export function releaseThreadRecoveryCatchup(threadId: string): void {
-  if (!catchingUp.delete(threadId)) return
+export function releaseThreadRecoveryCatchup(threadId: string, generation?: number): void {
+  if (!isCurrentGeneration(threadId, generation)) return
+  const entry = catchingUp.get(threadId)
+  if (!entry) return
+  if (entry.timer) clearTimeout(entry.timer)
+  catchingUp.delete(threadId)
   notifyActivity()
 }
 
@@ -114,9 +170,10 @@ export function consumeThreadTimelineHydration(threadId: string): boolean {
   return forcedHydration.delete(threadId)
 }
 
-export function noteThreadRecoveryEvidence(threadId: string): void {
+export function noteThreadRecoveryEvidence(threadId: string, generation?: number): void {
+  if (!isCurrentGeneration(threadId, generation)) return
   attempts.delete(threadId)
-  releaseThreadRecoveryCatchup(threadId)
+  releaseThreadRecoveryCatchup(threadId, generation)
 }
 
 export function threadRecoveryBackoffMs(
@@ -144,7 +201,11 @@ export function resetThreadRecoveryCoordinator(): void {
   flights.clear()
   attempts.clear()
   forcedHydration.clear()
+  for (const entry of catchingUp.values()) {
+    if (entry.timer) clearTimeout(entry.timer)
+  }
   catchingUp.clear()
+  generations.clear()
   started = 0
   joined = 0
   cancelled = 0

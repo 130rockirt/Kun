@@ -29,17 +29,54 @@ function harness() {
     turnStartedAtByUserId: {},
     watchTurnCompletion: {}
   } as unknown as ChatState
-  const get: ChatStoreGet = () => state
+  const sseAbortRef = { current: null as AbortController | null }
+  const actionsHolder: { current: ReturnType<typeof createThreadActions> | null } = { current: null }
+  // The deadline callback resolves recovery through the store, so `get()` must
+  // expose the actions in addition to state. Spreading keeps a fresh snapshot
+  // per call, matching the real store's snapshot semantics.
+  const get: ChatStoreGet = () => ({ ...state, ...(actionsHolder.current ?? {}) }) as unknown as ChatState
   const set: ChatStoreSet = (patch) => {
     state = { ...state, ...(typeof patch === 'function' ? patch(state) : patch) }
   }
-  return { state: () => state, actions: createThreadActions({ set, get, sseAbortRef: { current: null } }) }
+  const actions = createThreadActions({ set, get, sseAbortRef })
+  actionsHolder.current = actions
+  return { state: () => state, actions }
 }
 
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((done) => { resolve = done })
   return { promise, resolve }
+}
+
+function runningDetail() {
+  return {
+    blocks: [{ id: 'u1', kind: 'user', text: 'recover once' }],
+    latestSeq: 4,
+    threadStatus: 'running',
+    latestTurnId: 'turn_1',
+    latestTurnStatus: 'running',
+    latestTurnOrchestration: 'direct',
+    latestUserMessageId: 'u1'
+  }
+}
+
+// A stream that stays open but never emits a sync barrier, completion, or
+// error, and never disconnects: the half-open state this suite targets.
+function halfOpenProvider() {
+  return {
+    getThreadState: vi.fn(async () => ({
+      status: 'idle',
+      updatedAt: '2026-09-03T00:00:00.000Z',
+      latestSeq: 0,
+      replayFloorSeq: 0,
+      latestTurnId: null,
+      latestTurnStatus: 'idle',
+      latestTurnOrchestration: 'direct'
+    })),
+    getThreadDetail: vi.fn(async () => runningDetail()),
+    subscribeThreadEvents: vi.fn(async () => new Promise<never>(() => undefined))
+  }
 }
 
 describe('coordinated active-thread recovery', () => {
@@ -61,15 +98,7 @@ describe('coordinated active-thread recovery', () => {
     const second = actions.recoverActiveTurn({ reason: 'manual_retry' })
     await Promise.resolve()
     expect(provider.getThreadDetail).toHaveBeenCalledOnce()
-    detail.resolve({
-      blocks: [{ id: 'u1', kind: 'user', text: 'recover once' }],
-      latestSeq: 4,
-      threadStatus: 'running',
-      latestTurnId: 'turn_1',
-      latestTurnStatus: 'running',
-      latestTurnOrchestration: 'direct',
-      latestUserMessageId: 'u1'
-    })
+    detail.resolve(runningDetail())
     await expect(Promise.all([first, second])).resolves.toEqual([true, true])
     expect(provider.subscribeThreadEvents).toHaveBeenCalledOnce()
   })
@@ -97,5 +126,43 @@ describe('coordinated active-thread recovery', () => {
     expect(provider.subscribeThreadEvents).toHaveBeenCalledWith(
       'thread-recovery', 10, expect.any(Object), expect.any(AbortSignal)
     )
+  })
+
+  it('starts exactly one new physical recovery when manual_retry supersedes a half-open stream', async () => {
+    const provider = halfOpenProvider()
+    registryMock.getProvider.mockReturnValue(provider)
+    const { actions } = harness()
+
+    await expect(actions.recoverActiveTurn({ reason: 'watchdog' })).resolves.toBe(true)
+    expect(provider.getThreadDetail).toHaveBeenCalledOnce()
+    expect(provider.subscribeThreadEvents).toHaveBeenCalledOnce()
+
+    await expect(actions.recoverActiveTurn({ reason: 'manual_retry' })).resolves.toBe(true)
+    expect(provider.getThreadDetail).toHaveBeenCalledTimes(2)
+    expect(provider.subscribeThreadEvents).toHaveBeenCalledTimes(2)
+  })
+
+  it('forces a timeline hydration when the catch-up deadline expires on a half-open stream', async () => {
+    vi.useFakeTimers()
+    try {
+      const provider = halfOpenProvider()
+      registryMock.getProvider.mockReturnValue(provider)
+      const { actions } = harness()
+
+      await actions.recoverActiveTurn({ reason: 'watchdog' })
+      expect(provider.getThreadDetail).toHaveBeenCalledOnce()
+      expect(provider.subscribeThreadEvents).toHaveBeenCalledOnce()
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      await Promise.resolve()
+
+      // The deadline recovery forces a full timeline read and skips the
+      // lightweight state probe, then establishes a fresh subscription.
+      expect(provider.getThreadDetail).toHaveBeenCalledTimes(2)
+      expect(provider.getThreadState).not.toHaveBeenCalled()
+      expect(provider.subscribeThreadEvents).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -39,7 +39,6 @@ export function subscribeThreadEventsWithRecovery(
   signal: AbortSignal,
   get: ChatStoreGet
 ): void {
-  markThreadRecoveryCatchingUp(threadId)
   const subscription = Symbol(`sse:${threadId}`)
   const pendingRecovery = sseRecoveries.get(threadId)
   if (pendingRecovery?.timer) {
@@ -47,6 +46,11 @@ export function subscribeThreadEventsWithRecovery(
     pendingRecovery.timer = undefined
   }
   let terminalError: Error | undefined
+  const onCatchupDeadline = (): void => {
+    if (get().activeThreadId !== threadId) return
+    void get().recoverActiveTurn({ reason: 'watchdog', forceTimeline: true })
+  }
+  const generation = markThreadRecoveryCatchingUp(threadId, onCatchupDeadline)
   const recoverySink: ThreadEventSink = {
     ...sink,
     onSeq: (seq) => {
@@ -54,17 +58,17 @@ export function subscribeThreadEventsWithRecovery(
       sink.onSeq(seq)
     },
     onReplaySynchronized: (cursor) => {
-      noteThreadRecoveryEvidence(threadId)
+      noteThreadRecoveryEvidence(threadId, generation)
       resetSseRecovery(threadId, subscription)
       sink.onReplaySynchronized?.(cursor)
     },
     onTurnComplete: (event) => {
-      noteThreadRecoveryEvidence(threadId)
+      noteThreadRecoveryEvidence(threadId, generation)
       sink.onTurnComplete(event)
     },
     onError: (error, options) => {
       terminalError = error
-      releaseThreadRecoveryCatchup(threadId)
+      releaseThreadRecoveryCatchup(threadId, generation)
       if (isReplayReset(error, threadId)) requireThreadTimelineHydration(threadId)
       if (!isReplayReset(error, threadId)) sink.onError(error, options)
     }
@@ -75,7 +79,7 @@ export function subscribeThreadEventsWithRecovery(
     })
     .then(() => {
       if (signal.aborted) return
-      releaseThreadRecoveryCatchup(threadId)
+      releaseThreadRecoveryCatchup(threadId, generation)
       const state = get()
       // The selected thread must remain subscribed even after its parent turn
       // settles. Runtime restart reconciliation can publish child
