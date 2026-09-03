@@ -72,17 +72,39 @@ export class HybridThreadBackfillCoordinator<TUsage> {
     }]))
     this.filesystemThreadIds = await this.deps.filesystemThreadIds()
     if (this.stopped) return
+    const unreadableThreadIds = new Set<string>()
+    const writeFailures = new Set<string>()
     for (const threadId of this.filesystemThreadIds) {
       if (this.stopped) return
       if (this.indexed.has(threadId)) continue
       const readable = await this.deps.readMissingThread(threadId)
       if (this.stopped) return
-      if (!readable) continue
-      await this.deps.upsertMissing(threadId, 0)
+      if (!readable) {
+        unreadableThreadIds.add(threadId)
+        continue
+      }
+      try {
+        await this.deps.upsertMissing(threadId, 0)
+      } catch (error) {
+        writeFailures.add(threadId)
+        this.deps.warn(`index backfill upsert for ${threadId}`, error)
+        await this.deps.yieldToEventLoop()
+        continue
+      }
       if (this.stopped) return
       this.readableMissingThreadIds.add(threadId)
       this.indexed.set(threadId, { completed: false, highWater: 0 })
       await this.deps.yieldToEventLoop()
+    }
+    if (this.stopped) return
+    const rowIds = new Set(this.deps.indexedRows().map((row) => row.id))
+    const uncovered = this.filesystemThreadIds.filter(
+      (threadId) => !rowIds.has(threadId) && !unreadableThreadIds.has(threadId)
+    )
+    if (writeFailures.size > 0 || uncovered.length > 0) {
+      throw new Error(
+        `index backfill incomplete: ${writeFailures.size} write failures, ${uncovered.length} uncovered threads`
+      )
     }
   }
 

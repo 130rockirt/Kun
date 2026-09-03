@@ -15,6 +15,7 @@ import { HybridSqliteDegradedState } from './hybrid-sqlite-degraded-state.js'
 import { type ThreadIndexRecord, type ThreadRow } from './hybrid-thread-index-mapping.js'
 import { requiresLegacyWorkThreadHydration } from './hybrid-thread-legacy-surface.js'
 import { HybridThreadIndexRepository } from './hybrid-thread-index.js'
+import { HybridThreadIndexDirtyTracker } from './hybrid-thread-index-dirty.js'
 import { hybridThreadStoreListPage, summariesFromRows } from './hybrid-thread-list-page.js'
 import { HybridThreadBackfillCoordinator } from './hybrid-thread-backfill.js'
 import { insertUsageEventsChunked, markUsageBackfilled } from './hybrid-usage-backfill-sqlite.js'
@@ -69,6 +70,7 @@ export class HybridThreadStore implements ThreadStore {
   private readonly sqliteState = new HybridSqliteDegradedState()
   private readonly fileAccess: JsonlFileAccessCoordinator
   private readonly usageQueries: UsageQueryExecutor
+  private readonly dirtyIndex: HybridThreadIndexDirtyTracker
   constructor(options: {
     dataDir: string
     sqlitePath?: string
@@ -81,6 +83,7 @@ export class HybridThreadStore implements ThreadStore {
       fileAccess: this.fileAccess
     })
     this.sqlitePath = resolve(options.sqlitePath ?? join(options.dataDir, 'index.sqlite3'))
+    this.dirtyIndex = new HybridThreadIndexDirtyTracker(this.sqlitePath, warnSqlite)
     this.usageQueries = new UsageQueryExecutor(this.sqlitePath)
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
     this.filesystemSummaries = new HybridFilesystemSummaryCache({
@@ -136,13 +139,14 @@ export class HybridThreadStore implements ThreadStore {
 
   async list(options: ThreadStoreListOptions = {}): Promise<ThreadSummary[]> {
     await this.ready()
+    await this.repairDirtyIndexThreads()
     // Missing or intentionally discarded SQLite indexes are rebuilt from the
     // canonical JSONL metadata before the first list response. Usage/event
     // backfill remains in the background so large histories stay responsive.
     // A backfill that fails mid-startup leaves a partial index, so the list
     // falls back to the canonical filesystem scan until the index is ready.
     await this.backfill?.waitForIndex()
-    if (this.hasDb() && this.isIndexReady()) {
+    if (this.hasDb() && this.isIndexReady() && !this.hasDirtyIndexThreads()) {
       try {
         const summaries = await summariesFromRows(this, this.queryThreadRows(options))
         this.markSqliteHealthy()
@@ -156,6 +160,7 @@ export class HybridThreadStore implements ThreadStore {
 
   async listPage(options: ThreadStoreListOptions = {}): Promise<ThreadStoreListPage> {
     await this.ready()
+    await this.repairDirtyIndexThreads()
     await this.backfill?.waitForIndex()
     return hybridThreadStoreListPage(this, options)
   }
@@ -172,7 +177,7 @@ export class HybridThreadStore implements ThreadStore {
 
     const thread = await this.readThreadFromDisk(threadId)
     if (thread && this.db) {
-      this.upsertIndexBestEffort(this.indexRecordForThread(thread))
+      this.upsertIndexTrackingFailure(this.indexRecordForThread(thread))
     }
     return thread
   }
@@ -204,6 +209,8 @@ export class HybridThreadStore implements ThreadStore {
         })
       } catch (error) {
         warnSqlite('touch thread metadata', error)
+        this.markSqliteDegraded('touch thread metadata', error)
+        this.dirtyIndex.add(threadId)
       }
     }
     return true
@@ -229,7 +236,7 @@ export class HybridThreadStore implements ThreadStore {
     const stored = ThreadSchema.parse({ ...thread, revision: revision + 1 })
     await this.appendMetadataNow(stored)
     this.invalidateFilesystemCache()
-    this.upsertIndexBestEffort(this.indexRecordForThread(stored))
+    this.upsertIndexTrackingFailure(this.indexRecordForThread(stored))
     return stored
   }
 
@@ -387,6 +394,7 @@ export class HybridThreadStore implements ThreadStore {
         metadataPath: this.metadataPath(threadId), messagesPath: this.messagesPath(threadId),
         eventsPath: this.eventsPath(threadId)
       }), warnSqlite)
+      await this.dirtyIndex.load()
       this.backfill = new HybridThreadBackfillCoordinator({
         indexedRows: () => this.db!.prepare(`
           SELECT id, usage_backfilled, usage_backfill_high_water FROM threads
@@ -400,7 +408,9 @@ export class HybridThreadStore implements ThreadStore {
         scanEvents: (threadId) => this.scanEventsForBackfill(threadId),
         upsertMissing: async (threadId, highWater) => {
           const thread = await this.readThreadMetadataFromDisk(threadId)
-          if (thread) this.upsertIndexBestEffort({ ...this.indexRecordForThread(thread), eventSeqHighWater: highWater })
+          if (!thread) return
+          if (!this.index) throw new Error('sqlite index unavailable during backfill')
+          this.index.upsert({ ...this.indexRecordForThread(thread), eventSeqHighWater: highWater })
         },
         noteExistingHighWater: (threadId, highWater) => this.noteEventHighWaterSync(threadId, highWater),
         insertUsage: (threadId, usage, resumeAfterSeq) => insertUsageEventsChunked(
@@ -472,8 +482,40 @@ export class HybridThreadStore implements ThreadStore {
     return { ...row, agent_surface: agentSurface }
   }
 
-  private upsertIndexBestEffort(record: ThreadIndexRecord): void {
-    this.index?.upsert(record)
+  private upsertIndexTrackingFailure(record: ThreadIndexRecord): void {
+    if (!this.index) return
+    try {
+      this.index.upsert(record)
+    } catch (error) {
+      warnSqlite('upsert index', error)
+      this.markSqliteDegraded('upsert index', error)
+      this.dirtyIndex.add(record.thread.id)
+    }
+  }
+
+  private hasDirtyIndexThreads(): boolean {
+    return this.dirtyIndex.size > 0
+  }
+
+  private async repairDirtyIndexThreads(): Promise<void> {
+    if (!this.db || !this.index || this.dirtyIndex.size === 0) return
+    for (const threadId of this.dirtyIndex.ids()) {
+      if (!this.db || !this.index) return
+      try {
+        const thread = await this.readThreadFromDisk(threadId)
+        if (!thread) {
+          this.deleteIndexRow(threadId)
+          this.dirtyIndex.remove(threadId)
+          continue
+        }
+        this.index.upsert(this.indexRecordForThread(thread))
+        this.dirtyIndex.remove(threadId)
+      } catch (error) {
+        warnSqlite('repair dirty index thread', error)
+        this.markSqliteDegraded('repair dirty index thread', error)
+        return
+      }
+    }
   }
 
   private deleteIndexRow(threadId: string): void {

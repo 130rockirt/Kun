@@ -35,7 +35,12 @@ function makeDeps(
 describe('HybridThreadBackfillCoordinator shutdown', () => {
   it('indexes every readable thread before waiting for slow event replay', async () => {
     const scan = deferred<{ highWater: number; usage: Usage[] }>()
-    const deps = makeDeps({ indexedRows: vi.fn(() => []), scanEvents: vi.fn(() => scan.promise) })
+    const deps = makeDeps({
+      indexedRows: vi.fn()
+        .mockReturnValueOnce([])
+        .mockReturnValue([{ id: 'thread_1', usage_backfilled: 0 }]),
+      scanEvents: vi.fn(() => scan.promise)
+    })
     const coordinator = new HybridThreadBackfillCoordinator(deps)
 
     coordinator.start()
@@ -222,5 +227,55 @@ describe('HybridThreadBackfillCoordinator index status', () => {
     await coordinator.wait()
     expect(coordinator.isIndexReady()).toBe(true)
     expect(filesystemThreadIds).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('HybridThreadBackfillCoordinator index write failures', () => {
+  it('keeps processing other threads and stays not ready when an upsert fails', async () => {
+    const failure = new Error('SQLITE_BUSY: database is locked')
+    const deps = makeDeps({
+      indexedRows: vi.fn(() => [{ id: 'thread_1', usage_backfilled: 0 }]),
+      filesystemThreadIds: vi.fn(async () => ['thread_1', 'thread_2']),
+      upsertMissing: vi.fn(async (threadId: string) => {
+        if (threadId === 'thread_2') throw failure
+      })
+    })
+    const coordinator = new HybridThreadBackfillCoordinator(deps)
+
+    coordinator.start()
+    await coordinator.wait()
+
+    expect(deps.upsertMissing).toHaveBeenCalledWith('thread_2', 0)
+    expect(deps.warn).toHaveBeenCalledWith('index backfill upsert for thread_2', failure)
+    expect(coordinator.isIndexReady()).toBe(false)
+    expect(coordinator.isUsageReady()).toBe(false)
+  })
+
+  it('stays not ready when a re-query shows the index missing a thread', async () => {
+    const deps = makeDeps({
+      indexedRows: vi.fn(() => [{ id: 'thread_1', usage_backfilled: 0 }]),
+      filesystemThreadIds: vi.fn(async () => ['thread_1', 'thread_2'])
+    })
+    const coordinator = new HybridThreadBackfillCoordinator(deps)
+
+    coordinator.start()
+    await coordinator.wait()
+
+    expect(deps.upsertMissing).toHaveBeenCalledWith('thread_2', 0)
+    expect(coordinator.isIndexReady()).toBe(false)
+  })
+
+  it('allows ready when the only missing thread is unreadable', async () => {
+    const deps = makeDeps({
+      indexedRows: vi.fn(() => [{ id: 'thread_1', usage_backfilled: 0 }]),
+      filesystemThreadIds: vi.fn(async () => ['thread_1', 'thread_unreadable']),
+      readMissingThread: vi.fn(async (threadId: string) => threadId !== 'thread_unreadable')
+    })
+    const coordinator = new HybridThreadBackfillCoordinator(deps)
+
+    coordinator.start()
+    await coordinator.waitForIndex()
+
+    expect(coordinator.isIndexReady()).toBe(true)
   })
 })
