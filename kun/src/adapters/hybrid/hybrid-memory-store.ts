@@ -310,9 +310,10 @@ export class HybridMemoryStore implements MemoryStore {
   }
 
   private async projectCanonicalIds(ids: readonly string[]): Promise<void> {
-    const wanted = new Set(ids)
-    const records = await this.canonical.list({ all: true, includeDeleted: true })
-    for (const record of records) if (wanted.has(record.id)) await this.projectRecord(record)
+    for (const id of new Set(ids)) {
+      const record = await this.canonical.get(id)
+      if (record) await this.projectRecord(record)
+    }
   }
 
   private async projectRecord(record: MemoryRecord): Promise<void> {

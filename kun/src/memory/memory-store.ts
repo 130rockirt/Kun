@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import type { MemoryCapabilityConfig } from '../contracts/capabilities.js'
 import {
   MemoryDiagnostics,
@@ -8,6 +9,7 @@ import {
 } from '../contracts/memory.js'
 import {
   MEMORY_MAX_FALLBACK_FILES,
+  memoryRecordPath,
   purgeCanonicalMemoryRecord,
   readCanonicalMemoryDirectory,
   writeCanonicalMemoryRecord
@@ -17,6 +19,7 @@ import {
   defaultMemoryConfidence,
   defaultProvenance,
   normalizeCreateSources,
+  normalizeMemoryRecord,
   normalizeUpdateSources
 } from './memory-record-normalizer.js'
 import {
@@ -68,7 +71,7 @@ export class FileMemoryStore implements MemoryStore {
   }
 
   async createWithId(id: string, input: MemoryCreateRequest): Promise<MemoryRecord> {
-    const existing = (await this.list({ includeDeleted: true, all: true })).find((record) => record.id === id)
+    const existing = await this.get(id)
     if (existing) {
       if (input.supersedes && existing.supersedes === input.supersedes) {
         const older = await this.mustGet(input.supersedes, {
@@ -83,6 +86,20 @@ export class FileMemoryStore implements MemoryStore {
       return existing
     }
     return this.createRecord(id, input)
+  }
+
+  async get(id: string): Promise<MemoryRecord | undefined> {
+    // memoryRecordPath rejects invalid IDs with 'invalid memory id', preserving
+    // createWithId('../escape') rejection semantics while reading by ID in O(1).
+    const path = memoryRecordPath(this.options.rootDir, id)
+    let value: unknown
+    try {
+      value = JSON.parse(await readFile(path, 'utf8'))
+    } catch {
+      return undefined // missing file or malformed JSON — matches full-list malformed exclusion
+    }
+    const result = normalizeMemoryRecord(value, id)
+    return result.ok ? result.record : undefined
   }
 
   private async createRecord(id: string, input: MemoryCreateRequest): Promise<MemoryRecord> {
@@ -242,8 +259,7 @@ export class FileMemoryStore implements MemoryStore {
   }
 
   private async mustGet(id: string, access?: MemoryAccess): Promise<MemoryRecord> {
-    const record = (await readCanonicalMemoryDirectory(this.options.rootDir)).records
-      .find((candidate) => candidate.id === id)
+    const record = await this.get(id)
     if (!record || (access && !memoryInScope(record, access))) throw new Error(`memory not found: ${id}`)
     return record
   }

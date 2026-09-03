@@ -1,8 +1,9 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MemoryCapabilityConfig } from '../../contracts/capabilities.js'
+import { FileMemoryStore } from '../../memory/memory-store.js'
 import { HybridMemoryStore } from './hybrid-memory-store.js'
 
 const roots: string[] = []
@@ -337,6 +338,29 @@ describe('HybridMemoryStore', () => {
     expect(first).toHaveLength(8)
     expect(await store.diagnostics()).toMatchObject({ canonicalCount: 16, indexedCount: 16, staleCount: 0 })
     await store.shutdown()
+  })
+
+  it('projects create and supersede by id without a full canonical list scan', async () => {
+    const { store } = await createStore()
+    const listSpy = vi.spyOn(FileMemoryStore.prototype, 'list')
+    try {
+      await store.createWithId('mem_supersede_source', {
+        content: 'Superseded source memory', scope: 'workspace', workspace: '/workspace-a'
+      })
+      await store.createWithId('mem_supersede_dest', {
+        content: 'Superseding memory', scope: 'workspace', workspace: '/workspace-a',
+        supersedes: 'mem_supersede_source'
+      })
+      await store.waitForBackfill()
+
+      expect(listSpy).not.toHaveBeenCalled()
+      await expect(store.retrieve({ query: 'superseding memory', workspace: '/workspace-a', limit: 3 }))
+        .resolves.toMatchObject([{ id: 'mem_supersede_dest' }])
+      expect(await store.diagnostics()).toMatchObject({ canonicalCount: 2, indexedCount: 2, staleCount: 0 })
+    } finally {
+      listSpy.mockRestore()
+      await store.shutdown()
+    }
   })
 })
 
