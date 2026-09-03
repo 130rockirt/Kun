@@ -125,9 +125,9 @@ export async function reconcileRuntimeAfterRestart(
     : 0
   // Durable queued turns survive restart verbatim; no interrupted-turn
   // checkpointing applies to them. Drain every thread that still owns one.
-  if (runtime.queuedTurnDispatcher && runtime.threadStore) {
+  if (runtime.queuedTurnDispatcher) {
     const queuedThreads = await runtime.queuedTurnDispatcher
-      .drainAllQueued(runtime.threadStore)
+      .drainAllQueued()
       .catch((error) => {
         console.warn('[kun] queued-turn restart sweep failed:', error)
         return 0

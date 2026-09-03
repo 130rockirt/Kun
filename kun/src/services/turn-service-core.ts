@@ -344,23 +344,28 @@ export class TurnService {
   private readonly executionAdmissionIdleWaiters = new Set<() => void>()
   private maxConcurrentTurns: number
   /** Late-bound queue drain trigger; the serve runtime installs it once its
-   * agent-loop dispatcher exists. */
-  private onTurnSettledHook: ((threadId: string) => void | Promise<void>) | null = null
+   * agent-loop dispatcher exists. Receives the terminal status so the
+   * dispatcher can distinguish capacity wake-ups from queue pauses. */
+  private onTurnSettledHook:
+    | ((threadId: string, status: TerminalTurnStatus) => void | Promise<void>)
+    | null = null
   /** Late-bound hook fired after a queued turn record is durably committed;
    * lets the dispatcher promote it (or start it directly when the thread went
    * idle between the busy decision and the queue write). */
   private onTurnQueuedHook: ((threadId: string) => void | Promise<void>) | null = null
 
   /** Installed by the serve runtime; invoked after terminal settlement. */
-  setTurnSettledHook(hook: (threadId: string) => void | Promise<void>): void {
+  setTurnSettledHook(
+    hook: (threadId: string, status: TerminalTurnStatus) => void | Promise<void>
+  ): void {
     this.onTurnSettledHook = hook
   }
 
-  notifyTurnSettled(threadId: string): void {
+  notifyTurnSettled(threadId: string, status: TerminalTurnStatus): void {
     const hook = this.onTurnSettledHook
     if (!hook) return
     Promise.resolve()
-      .then(() => hook(threadId))
+      .then(() => hook(threadId, status))
       .catch((error) => {
         console.warn(
           `[kun] queued-turn drain failed for ${threadId}: ` +
