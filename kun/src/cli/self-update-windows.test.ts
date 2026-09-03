@@ -59,6 +59,31 @@ describe('Windows replacement script', () => {
     expect(script).toContain('Move-Item -LiteralPath $backup -Destination $current -ErrorAction Stop')
     expect(script).toContain('Start-Sleep -Seconds 3')
     expect(script).toContain('replacement failed after 5 attempts')
+    expect(script).toContain('Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction Stop')
+    expect(script).toContain('install root is missing; restoring the backup before retrying')
+    expect(script).toContain('the staged release is missing')
+    expect(script).toContain('activated release.json does not match the target version')
+  })
+
+  it('marks each swap phase as a diagnostic stage', () => {
+    const script = buildWindowsReplacementScript(input())
+    expect(script).toContain("$stage = 'swap-prepare'")
+    expect(script).toContain("$stage = 'swap-backup'")
+    expect(script).toContain("$stage = 'swap-restore'")
+    expect(script).toContain("$stage = 'swap-activate'")
+    expect(script).toContain("$stage = 'swap-verify'")
+  })
+
+  it('removes the backup only after confirming the install root exists', () => {
+    const script = buildWindowsReplacementScript(input())
+    const backupRemoval = script.indexOf('Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction Stop')
+    const currentCheck = script.indexOf('if (Test-Path -LiteralPath $current) {')
+    const stagedGuard = script.indexOf('the staged release is missing')
+    expect(backupRemoval).toBeGreaterThan(-1)
+    expect(currentCheck).toBeGreaterThan(-1)
+    expect(stagedGuard).toBeGreaterThan(-1)
+    expect(stagedGuard).toBeLessThan(backupRemoval)
+    expect(currentCheck).toBeLessThan(backupRemoval)
   })
 
   it('writes update-result.json in both outcomes and appends a diagnostic log', () => {

@@ -45,6 +45,11 @@ function quote(value: string): string {
  * - The swap retries Move-Item a bounded number of times so brief antivirus
  *   or indexer locks do not kill the update, and always restores the backup
  *   when the staged tree cannot be moved into place.
+ * - The backup is only removed inside the branch where the current install
+ *   root exists and is about to be moved into the backup slot, so a missing
+ *   install root never causes the last healthy backup to be deleted.
+ * - Activation verifies the staged release.json version before the success
+ *   state is written; the backup is never cleaned before that verification.
  * - The terminal state is written to update-result.json in every outcome.
  */
 export function buildWindowsReplacementScript(input: WindowsReplacementInput): string {
@@ -77,6 +82,7 @@ export function buildWindowsReplacementScript(input: WindowsReplacementInput): s
     `$ack = '${ack}'`,
     `$lockToken = '${lockToken}'`,
     `$updaterStartedAt = '${updaterStartedAt}'`,
+    `$targetVersion = '${targetVersion}'`,
     '$stage = "init"',
     'function Write-UpdateLog([string]$Message) {',
     '  $stamp = (Get-Date).ToUniversalTime().ToString("o")',
@@ -148,17 +154,38 @@ export function buildWindowsReplacementScript(input: WindowsReplacementInput): s
     '    $attempt += 1',
     "    Write-UpdateLog ('replacement attempt ' + $attempt)",
     '    try {',
-    '      if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }',
-    '      Move-Item -LiteralPath $current -Destination $backup -ErrorAction Stop',
+    "      $stage = 'swap-prepare'",
+    "      if (-not (Test-Path -LiteralPath $next)) { throw 'the staged release is missing' }",
+    '      if (Test-Path -LiteralPath $current) {',
+    "        $stage = 'swap-backup'",
+    '        if (Test-Path -LiteralPath $backup) {',
+    '          Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction Stop',
+    '        }',
+    '        Move-Item -LiteralPath $current -Destination $backup -ErrorAction Stop',
+    '      } elseif (Test-Path -LiteralPath $backup) {',
+    "        $stage = 'swap-restore'",
+    "        Write-UpdateLog 'install root is missing; restoring the backup before retrying'",
+    '        Move-Item -LiteralPath $backup -Destination $current -ErrorAction Stop',
+    "        throw 'backup restored; retrying activation'",
+    '      }',
+    "      $stage = 'swap-activate'",
     '      try {',
     '        Move-Item -LiteralPath $next -Destination $current -ErrorAction Stop',
-    '        $swapped = $true',
+    "        $stage = 'swap-verify'",
+    "        $release = Get-Content -LiteralPath (Join-Path $current 'release.json') -Raw | ConvertFrom-Json",
+    '        if ($release.version -ne $targetVersion) {',
+    "          throw 'activated release.json does not match the target version'",
+    '        }',
     '      } catch {',
-    "        Write-UpdateLog ('staged move failed; restoring backup: ' + $_.Exception.GetType().Name)",
-    '        if (Test-Path -LiteralPath $current) { Remove-Item -LiteralPath $current -Recurse -Force }',
-    '        Move-Item -LiteralPath $backup -Destination $current -ErrorAction Stop',
+    '        if (Test-Path -LiteralPath $backup) {',
+    '          if (Test-Path -LiteralPath $current) {',
+    '            Remove-Item -LiteralPath $current -Recurse -Force -ErrorAction Stop',
+    '          }',
+    '          Move-Item -LiteralPath $backup -Destination $current -ErrorAction Stop',
+    '        }',
     '        throw',
     '      }',
+    '      $swapped = $true',
     '    } catch {',
     '      if (-not $swapped -and -not (Test-Path -LiteralPath $current) -and (Test-Path -LiteralPath $backup)) {',
     '        Move-Item -LiteralPath $backup -Destination $current -ErrorAction SilentlyContinue',
