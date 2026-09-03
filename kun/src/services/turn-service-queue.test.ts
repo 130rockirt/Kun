@@ -3,11 +3,14 @@ import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
 import { createThreadRecord } from '../domain/thread.js'
+import { makeUserItem } from '../domain/item.js'
+import { appendTurnItem, createTurnRecord } from '../domain/turn.js'
 import { ContextCompactor } from '../loop/context-compactor.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
 import { SteeringQueue } from '../loop/steering-queue.js'
 import { SequentialIdGenerator } from '../ports/id-generator.js'
 import type { RuntimeEvent } from '../contracts/events.js'
+import type { TurnItem } from '../contracts/items.js'
 import type { StartTurnRequest } from '../contracts/turns.js'
 import { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import { TurnConflictError, TurnService } from './turn-service.js'
@@ -26,9 +29,12 @@ type Harness = {
   settled: string[]
 }
 
-function createHarness(options: { maxConcurrentTurns?: number } = {}): Harness {
+function createHarness(options: {
+  maxConcurrentTurns?: number
+  sessionStore?: InMemorySessionStore
+} = {}): Harness {
   const threadStore = new InMemoryThreadStore()
-  const sessionStore = new InMemorySessionStore()
+  const sessionStore = options.sessionStore ?? new InMemorySessionStore()
   const eventBus = new InMemoryEventBus()
   const nowIso = () => new Date().toISOString()
   const settled: string[] = []
@@ -81,6 +87,57 @@ function startRequest(prompt: string, extras: Partial<StartTurnRequest> = {}): S
 
 function eventsOfKind(h: Harness, kind: RuntimeEvent['kind']): RuntimeEvent[] {
   return h.published.filter((event) => event.kind === kind)
+}
+
+class FailOnceAppendSessionStore extends InMemorySessionStore {
+  failNextAppend = false
+
+  override async appendItem(threadId: string, item: TurnItem): Promise<void> {
+    if (this.failNextAppend) {
+      this.failNextAppend = false
+      throw new Error('append item failed')
+    }
+    await super.appendItem(threadId, item)
+  }
+}
+
+/**
+ * Manually persist a queued turn still inside its two-phase admission window
+ * (admissionPending set, user item embedded in metadata but not yet in session).
+ * Returns the user item so callers can optionally write it to the session to
+ * simulate the "append succeeded but commit marker was lost" crash window.
+ */
+async function appendPendingQueuedTurn(
+  h: Harness,
+  threadId: string,
+  turnId: string,
+  prompt: string,
+  clientRequestId?: string
+): Promise<TurnItem> {
+  const thread = await h.threadStore.get(threadId)
+  if (!thread) throw new Error(`thread not found: ${threadId}`)
+  const userItem = makeUserItem({
+    id: `item_${turnId}_user`,
+    turnId,
+    threadId,
+    text: prompt
+  })
+  const pendingTurn = appendTurnItem(
+    createTurnRecord({
+      id: turnId,
+      threadId,
+      admissionPending: true,
+      prompt,
+      ...(clientRequestId ? { clientRequestId } : {})
+    }),
+    userItem
+  )
+  await h.threadStore.upsert({
+    ...thread,
+    turns: [...thread.turns, pendingTurn],
+    status: 'running'
+  })
+  return userItem
 }
 
 describe('durable per-thread turn queue', () => {
@@ -365,5 +422,107 @@ describe('durable per-thread turn queue', () => {
     await h.turns.reconcileOrphanedTurns()
     const after = await h.threadStore.get('thr_q')
     expect(after?.turns.find((turn) => turn.id === queued.turnId)?.status).toBe('queued')
+  })
+
+  it('rolls back a queued admission when the session append fails', async () => {
+    const sessionStore = new FailOnceAppendSessionStore()
+    const h = createHarness({ sessionStore })
+    await createThread(h, 'thr_q')
+    await h.turns.startTurn({ threadId: 'thr_q', request: startRequest('first') })
+    sessionStore.failNextAppend = true
+    await expect(
+      h.turns.startTurn({
+        threadId: 'thr_q',
+        request: startRequest('second', { enqueueIfBusy: true, clientRequestId: 'req-2' })
+      })
+    ).rejects.toThrow('append item failed')
+    // The half-written queued record must be removed, leaving only the running turn.
+    const thread = await h.threadStore.get('thr_q')
+    expect(thread?.turns.map((turn) => turn.status)).toEqual(['running'])
+    const items = await h.sessionStore.loadItems('thr_q')
+    expect(items.filter((item) => item.kind === 'user_message')).toHaveLength(1)
+    expect(eventsOfKind(h, 'turn_queued')).toHaveLength(0)
+  })
+
+  it('re-enqueues cleanly on a same-clientRequestId retry after a rolled-back append', async () => {
+    const sessionStore = new FailOnceAppendSessionStore()
+    const h = createHarness({ sessionStore })
+    await createThread(h, 'thr_q')
+    await h.turns.startTurn({ threadId: 'thr_q', request: startRequest('first') })
+    sessionStore.failNextAppend = true
+    await expect(
+      h.turns.startTurn({
+        threadId: 'thr_q',
+        request: startRequest('second', { enqueueIfBusy: true, clientRequestId: 'req-2' })
+      })
+    ).rejects.toThrow('append item failed')
+    // The rollback removed the ghost, so the identical retry re-enqueues once.
+    const retried = await h.turns.startTurn({
+      threadId: 'thr_q',
+      request: startRequest('second', { enqueueIfBusy: true, clientRequestId: 'req-2' })
+    })
+    expect(retried.status).toBe('queued')
+    const thread = await h.threadStore.get('thr_q')
+    expect(thread?.turns.filter((turn) => turn.status === 'queued')).toHaveLength(1)
+    const items = await h.sessionStore.loadItems('thr_q')
+    expect(items.filter((item) => item.kind === 'user_message')).toHaveLength(2)
+    expect(eventsOfKind(h, 'turn_queued')).toHaveLength(1)
+  })
+
+  it('rolls back a pending queued admission whose user item is missing on restart', async () => {
+    const h = createHarness()
+    await createThread(h, 'thr_q')
+    const first = await h.turns.startTurn({ threadId: 'thr_q', request: startRequest('first') })
+    await appendPendingQueuedTurn(h, 'thr_q', 'turn_pending', 'pending', 'req-pending')
+    await h.turns.finishTurn({ threadId: 'thr_q', turnId: first.turnId, status: 'completed' })
+    await h.turns.reconcileOrphanedTurns()
+    const thread = await h.threadStore.get('thr_q')
+    expect(thread?.turns.map((turn) => turn.id)).toEqual([first.turnId])
+    // The ghost is gone, so a retry with the same clientRequestId starts fresh.
+    const retried = await h.turns.startTurn({
+      threadId: 'thr_q',
+      request: startRequest('pending', { clientRequestId: 'req-pending' })
+    })
+    expect(retried.turnId).toBeTruthy()
+    expect(retried.turnId).not.toBe('turn_pending')
+  })
+
+  it('commits a pending queued admission whose user item exists on restart', async () => {
+    const h = createHarness()
+    await createThread(h, 'thr_q')
+    const first = await h.turns.startTurn({ threadId: 'thr_q', request: startRequest('first') })
+    const userItem = await appendPendingQueuedTurn(h, 'thr_q', 'turn_pending', 'pending')
+    await h.sessionStore.appendItem('thr_q', userItem)
+    await h.turns.finishTurn({ threadId: 'thr_q', turnId: first.turnId, status: 'completed' })
+    await h.turns.reconcileOrphanedTurns()
+    const thread = await h.threadStore.get('thr_q')
+    const record = thread?.turns.find((turn) => turn.id === 'turn_pending')
+    expect(record?.status).toBe('queued')
+    expect(record?.admissionCompletedAt).toBeTruthy()
+    expect(record?.admissionPending).toBeUndefined()
+    // The committed queued turn promotes normally afterwards.
+    expect(await h.turns.startNextQueuedTurn('thr_q')).toEqual({ turnId: 'turn_pending' })
+    const promoted = await h.threadStore.get('thr_q')
+    expect(promoted?.turns.find((turn) => turn.id === 'turn_pending')?.status).toBe('running')
+  })
+
+  it('defends promotion of a pending queued admission before restart reconciliation', async () => {
+    const h = createHarness()
+    await createThread(h, 'thr_q')
+    const first = await h.turns.startTurn({ threadId: 'thr_q', request: startRequest('first') })
+    await appendPendingQueuedTurn(h, 'thr_q', 'turn_missing', 'missing')
+    const okItem = await appendPendingQueuedTurn(h, 'thr_q', 'turn_ok', 'ok')
+    await h.sessionStore.appendItem('thr_q', okItem)
+    await h.turns.finishTurn({ threadId: 'thr_q', turnId: first.turnId, status: 'completed' })
+    const started = await h.turns.startNextQueuedTurn('thr_q')
+    const after = await h.threadStore.get('thr_q')
+    const missing = after?.turns.find((turn) => turn.id === 'turn_missing')
+    expect(missing?.status).toBe('failed')
+    expect(missing?.terminalCode).toBe(QUEUE_ADMISSION_FAILED_CODE)
+    const ok = after?.turns.find((turn) => turn.id === 'turn_ok')
+    expect(started).toEqual({ turnId: 'turn_ok' })
+    expect(ok?.status).toBe('running')
+    expect(ok?.admissionCompletedAt).toBeTruthy()
+    expect(ok?.admissionPending).toBeUndefined()
   })
 })

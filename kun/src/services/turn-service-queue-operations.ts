@@ -68,11 +68,13 @@ export const turnServiceQueueOperations = {
     request: StartTurnRequest
   }): Promise<StartTurnResponse> {
     const finishAdmission = this['beginExecutionAdmission']()
+    let attemptedTurnId: string | undefined
+    let admissionAccepted = false
     try {
       if (this['deps'].migrationMaintenance?.isLocked()) {
         throw new TurnConflictError('runtime migration maintenance is in progress')
       }
-      return await withManagerDataMutex(`thread:${input.threadId}`, () =>
+      const started = await withManagerDataMutex(`thread:${input.threadId}`, () =>
         this['withThreadMutation'](input.threadId, async () => {
           if (this['deps'].lifecycleFence?.isClosing(input.threadId)) {
             throw new ThreadClosingError(input.threadId)
@@ -132,6 +134,7 @@ export const turnServiceQueueOperations = {
             threadId: input.threadId,
             clientRequestId: input.request.clientRequestId,
             clientRequestFingerprint: fingerprintStartTurnRequest(input.request),
+            admissionPending: true,
             prompt: input.request.prompt,
             messageSource: input.request.messageSource,
             subagentResume: input.request.subagentResume,
@@ -182,42 +185,65 @@ export const turnServiceQueueOperations = {
             designImagePlacementTarget: input.request.designImagePlacementTarget
           })
           const now = this['deps'].nowIso()
-          // A queued turn crosses the admission boundary durably at enqueue
-          // time: restart reconciliation must not treat it as debris.
-          const queuedTurn = { ...appendTurnItem(turn, userItem), admissionCompletedAt: now }
+          // Phase 1: persist the queued turn as a pending admission. Its user
+          // item has not crossed the durable commit boundary yet.
+          const queuedTurn = appendTurnItem(turn, userItem)
           const next: ThreadRecord = {
             ...touchThread(thread, now),
             status: 'running',
             turns: [...thread.turns, queuedTurn],
             updatedAt: now
           }
+          attemptedTurnId = turnId
           await this['deps'].threadStore.upsert(next)
+          // Phase 2: persist the session user item, the commit boundary.
           await this['deps'].sessionStore.appendItem(input.threadId, userItem)
-          const committed = next.turns.find((candidate) => candidate.id === turnId)
-          if (!committed) throw new Error(`queued turn not found after commit: ${turnId}`)
-          await this['deps'].events.record({
-            kind: 'turn_queued',
-            threadId: input.threadId,
-            turnId,
-            text: input.request.prompt,
-            ...(input.request.displayText ? { displayText: input.request.displayText } : {}),
-            ...(committed.model ? { model: committed.model } : {}),
-            ...(committed.providerId ? { providerId: committed.providerId } : {}),
-            ...(committed.accountId ? { accountId: committed.accountId } : {}),
-            ...(committed.mode ? { mode: committed.mode } : {}),
-            threadAgentSurface: resolveThreadAgentSurface(next),
-            ...(committed.agentSurface ? { agentSurface: committed.agentSurface } : {})
-          }).catch(() => undefined)
-          await this['deps'].events.record({
-            kind: 'item_created',
-            threadId: input.threadId,
-            turnId,
-            itemId: userItem.id,
-            item: userItem
-          }).catch(() => undefined)
-          return queuedResponse(next, committed)
+          return { turnId, userItem }
         })
       )
+      // Commit phase (outside the thread mutation lock): once the user item is
+      // durable the queued admission is final and a retry becomes an idempotent
+      // replay. If append failed above, the catch below rolls the turn back.
+      const committedThread = await this['markTurnAdmissionCompleted'](input.threadId, started.turnId, {})
+      admissionAccepted = true
+      const committed = committedThread.turns.find((candidate) => candidate.id === started.turnId)
+      if (!committed) throw new Error(`queued turn not found after commit: ${started.turnId}`)
+      await this['deps'].events.record({
+        kind: 'turn_queued',
+        threadId: input.threadId,
+        turnId: started.turnId,
+        text: input.request.prompt,
+        ...(input.request.displayText ? { displayText: input.request.displayText } : {}),
+        ...(committed.model ? { model: committed.model } : {}),
+        ...(committed.providerId ? { providerId: committed.providerId } : {}),
+        ...(committed.accountId ? { accountId: committed.accountId } : {}),
+        ...(committed.mode ? { mode: committed.mode } : {}),
+        threadAgentSurface: resolveThreadAgentSurface(committedThread),
+        ...(committed.agentSurface ? { agentSurface: committed.agentSurface } : {})
+      }).catch(() => undefined)
+      await this['deps'].events.record({
+        kind: 'item_created',
+        threadId: input.threadId,
+        turnId: started.turnId,
+        itemId: started.userItem.id,
+        item: started.userItem
+      }).catch(() => undefined)
+      return queuedResponse(committedThread, committed)
+    } catch (error) {
+      if (attemptedTurnId && !admissionAccepted) {
+        const rolledBack = await this['rollbackPendingAdmission'](
+          input.threadId,
+          attemptedTurnId
+        ).catch(() => false)
+        if (!rolledBack) {
+          await this.interruptTurn({
+            threadId: input.threadId,
+            turnId: attemptedTurnId
+          }).catch(() => undefined)
+        }
+        this['clearRuntimeTurnState'](input.threadId, attemptedTurnId, { abort: true, releaseLease: false })
+      }
+      throw error
     } finally {
       finishAdmission()
     }
@@ -239,6 +265,37 @@ export const turnServiceQueueOperations = {
     try {
       return await withManagerDataMutex(`thread:${input.threadId}`, () =>
         this['withThreadMutation'](input.threadId, async () => {
+          const failCandidateInPlace = async (
+            thread: ThreadRecord,
+            candidate: Turn,
+            message: string
+          ): Promise<void> => {
+            const now = this['deps'].nowIso()
+            const failedTurn = finishTurn(candidate, 'failed', now)
+            const turns = thread.turns.map((turn) =>
+              turn.id === candidate.id
+                ? {
+                    ...this['finalizeOpenItems'](failedTurn, 'failed'),
+                    error: message,
+                    terminalCode: QUEUE_ADMISSION_FAILED_CODE
+                  }
+                : turn
+            )
+            await this['deps'].threadStore.upsert({
+              ...touchThread(thread, now),
+              turns,
+              status: threadStatusAfterTurnTransition(thread.status, turns),
+              updatedAt: now
+            })
+            await this['deps'].events.record({
+              kind: 'turn_failed',
+              threadId: input.threadId,
+              turnId: candidate.id,
+              message,
+              code: QUEUE_ADMISSION_FAILED_CODE,
+              severity: 'warning'
+            }).catch(() => undefined)
+          }
           while (true) {
             if (this['deps'].lifecycleFence?.isClosing(input.threadId)) return null
             const thread = await this['deps'].threadStore.get(input.threadId)
@@ -247,6 +304,22 @@ export const turnServiceQueueOperations = {
             if (await this['deps'].executionLeases?.owner(input.threadId)) return null
             const candidate = queuedTurns(thread)[0]
             if (!candidate) return null
+            if (candidate.admissionPending) {
+              // The queued admission never reached its commit boundary before
+              // this promotion was reached (e.g. a manual start before restart
+              // reconciliation finished). The session user item is the commit
+              // boundary: commit it inline, or fail the candidate in place.
+              const sessionItems = await this['deps'].sessionStore
+                .loadItems(input.threadId)
+                .catch(() => null)
+              const hasUserItem = Boolean(
+                sessionItems?.some((item) => item.turnId === candidate.id && item.kind === 'user_message')
+              )
+              if (!hasUserItem) {
+                await failCandidateInPlace(thread, candidate, 'queued admission never crossed the durable boundary')
+                continue
+              }
+            }
             const requestSnapshot: StartTurnRequest = {
               prompt: candidate.prompt,
               orchestration: candidate.orchestration ?? 'direct',
@@ -271,31 +344,7 @@ export const turnServiceQueueOperations = {
                 error instanceof TaskSurfaceLockedError ||
                 error instanceof DesignProfileLockedError
               ) {
-                const now = this['deps'].nowIso()
-                const failedTurn = finishTurn(candidate, 'failed', now)
-                const turns = thread.turns.map((turn) =>
-                  turn.id === candidate.id
-                    ? {
-                        ...this['finalizeOpenItems'](failedTurn, 'failed'),
-                        error: error.message,
-                        terminalCode: QUEUE_ADMISSION_FAILED_CODE
-                      }
-                    : turn
-                )
-                await this['deps'].threadStore.upsert({
-                  ...touchThread(thread, now),
-                  turns,
-                  status: threadStatusAfterTurnTransition(thread.status, turns),
-                  updatedAt: now
-                })
-                await this['deps'].events.record({
-                  kind: 'turn_failed',
-                  threadId: input.threadId,
-                  turnId: candidate.id,
-                  message: error.message,
-                  code: QUEUE_ADMISSION_FAILED_CODE,
-                  severity: 'warning'
-                }).catch(() => undefined)
+                await failCandidateInPlace(thread, candidate, error.message)
                 continue
               }
               throw error
@@ -309,7 +358,12 @@ export const turnServiceQueueOperations = {
                 this['leasedTurns'].set(candidate.id, lease)
               }
               const now = this['deps'].nowIso()
-              const startedTurn = startTurnRecord(candidate, now)
+              const startedTurn = candidate.admissionPending
+                ? (() => {
+                    const { admissionPending: _pending, ...committed } = startTurnRecord(candidate, now)
+                    return { ...committed, admissionCompletedAt: now }
+                  })()
+                : startTurnRecord(candidate, now)
               const next: ThreadRecord = {
                 ...touchThread(thread, now),
                 ...(designAdmission.locksSurface && designAdmission.effectiveSurface

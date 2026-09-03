@@ -423,6 +423,18 @@ export function isActiveTurn(turn: Turn): turn is Turn & { status: 'queued' | 'r
   return turn.status === 'queued' || turn.status === 'running'
 }
 
+/**
+ * A queued turn still in its two-phase admission window: its metadata has
+ * been persisted but the session user item (the commit boundary) has not.
+ * Idempotency must not replay this half-written record as an already-accepted
+ * start, because restart reconciliation will either commit or roll it back.
+ */
+export function isPendingQueuedAdmission(
+  turn: Pick<Turn, 'status' | 'admissionPending'>
+): boolean {
+  return turn.status === 'queued' && turn.admissionPending === true
+}
+
 export function terminalStatus(status: TurnStatus): TerminalTurnStatus {
   switch (status) {
     case 'completed':

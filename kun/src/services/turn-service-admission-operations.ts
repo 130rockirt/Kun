@@ -56,7 +56,7 @@ import {
   goalContextInstruction,
   goalContextKey
 } from '../loop/continuation-instructions.js'
-import { type TurnService, type TurnServiceDeps, TurnConflictError, TurnInProgressError, ThreadClosingError, TurnCapacityError, type TerminalTurnStatus, type TurnSettlement, type GraphLeadSuspensionResult, type GraphLeadResumeResult, HOST_SHUTDOWN_TURN_SUSPENSION_CODE, hostShutdownTurnSuspensionReason, isHostShutdownTurnSuspension, DEFAULT_MAX_CONCURRENT_TURNS, fingerprintStartTurnRequest, canonicalizeFingerprintValue, isActiveTurn, terminalStatus, threadStatusFromTurns, threadStatusAfterTurnTransition, normalizeMaxConcurrentTurns, firstNonBlank, modelForManualCompaction } from './turn-service-core.js'
+import { type TurnService, type TurnServiceDeps, TurnConflictError, TurnInProgressError, ThreadClosingError, TurnCapacityError, type TerminalTurnStatus, type TurnSettlement, type GraphLeadSuspensionResult, type GraphLeadResumeResult, HOST_SHUTDOWN_TURN_SUSPENSION_CODE, hostShutdownTurnSuspensionReason, isHostShutdownTurnSuspension, DEFAULT_MAX_CONCURRENT_TURNS, fingerprintStartTurnRequest, canonicalizeFingerprintValue, isActiveTurn, terminalStatus, threadStatusFromTurns, threadStatusAfterTurnTransition, normalizeMaxConcurrentTurns, firstNonBlank, modelForManualCompaction, isPendingQueuedAdmission } from './turn-service-core.js'
 import { resolveDesignTurnAdmission } from './turn-service-design-admission.js'
 import {
   InternalTurnRuntimeContext,
@@ -445,7 +445,7 @@ async findIdempotentStart(this: TurnService, input: {
       ? await this['deps'].threadStore.getMetadata(input.threadId)
       : await this['deps'].threadStore.get(input.threadId)
     const projectedTurn = projection?.turns.find((turn) =>
-      turn.clientRequestId === clientRequestId && !this['isRetryableFailedAdmission'](turn)
+      turn.clientRequestId === clientRequestId && !this['isRetryableFailedAdmission'](turn) && !isPendingQueuedAdmission(turn)
     )
     if (!projectedTurn) return null
     if (projectedTurn.prompt) {
@@ -458,7 +458,7 @@ async findIdempotentStart(this: TurnService, input: {
     }
     const hydrated = await this['deps'].threadStore.get(input.threadId)
     const turn = hydrated?.turns.find((candidate) =>
-      candidate.clientRequestId === clientRequestId && !this['isRetryableFailedAdmission'](candidate)
+      candidate.clientRequestId === clientRequestId && !this['isRetryableFailedAdmission'](candidate) && !isPendingQueuedAdmission(candidate)
     )
     return turn
       ? this['idempotentStartFromTurn'](
@@ -478,7 +478,7 @@ idempotentStartFromThread(this: TurnService,
     const clientRequestId = request.clientRequestId?.trim()
     if (!clientRequestId) return null
     const turn = thread.turns.find((candidate) =>
-      candidate.clientRequestId === clientRequestId && !this['isRetryableFailedAdmission'](candidate)
+      candidate.clientRequestId === clientRequestId && !this['isRetryableFailedAdmission'](candidate) && !isPendingQueuedAdmission(candidate)
     )
     return turn
       ? this['idempotentStartFromTurn'](

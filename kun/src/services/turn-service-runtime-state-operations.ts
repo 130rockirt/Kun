@@ -164,9 +164,27 @@ async reconcileOrphanedTurns(this: TurnService): Promise<RestartRecoverySource[]
         if (turn.status !== 'running' && turn.status !== 'queued') continue
         if (this['inflightTurns'].has(turn.id)) continue
         if (turn.status === 'queued') {
-          // Durable queue entries never execute in-process, so they cannot
-          // be orphaned. The queued-turn dispatcher drains them after
-          // reconciliation.
+          if (!turn.admissionPending) {
+            // Committed durable queue entries never execute in-process, so
+            // they cannot be orphaned. The queued-turn dispatcher drains
+            // them after reconciliation.
+            continue
+          }
+          // Crash window: metadata was written but the session user item
+          // (the commit boundary) or the commit marker is missing. If the
+          // user item exists, finish the admission commit; otherwise roll
+          // back so a retry with the same clientRequestId re-enqueues cleanly.
+          const hasUserItem = sessionItems.some((item) =>
+            item.turnId === turn.id && item.kind === 'user_message'
+          )
+          if (hasUserItem) {
+            await this['markTurnAdmissionCompleted'](thread.id, turn.id, {}).catch(() => undefined)
+          } else {
+            const rolledBack = await this['rollbackPendingAdmission'](thread.id, turn.id).catch(() => false)
+            if (!rolledBack) {
+              await this.interruptTurn({ threadId: thread.id, turnId: turn.id }).catch(() => undefined)
+            }
+          }
           continue
         }
         if (
