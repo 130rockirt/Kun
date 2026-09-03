@@ -75,13 +75,31 @@ function normalizeWriteContext(
   const documentEpoch = source.documentEpoch
   const contentRevision = source.contentRevision
   const threadId = normalizedString(source.threadId)
+  const whiteboardId = normalizedString(source.whiteboardId)
+  const whiteboardRevision = source.whiteboardRevision
+  const expectedSha256 = normalizedString(source.expectedSha256)
   if (
     !workspaceRoot || !threadId ||
     (activeFilePath !== null && !activeFilePath) ||
     typeof documentEpoch !== 'number' || !Number.isInteger(documentEpoch) || documentEpoch < 0 ||
-    typeof contentRevision !== 'number' || !Number.isInteger(contentRevision) || contentRevision < 0
+    typeof contentRevision !== 'number' || !Number.isInteger(contentRevision) || contentRevision < 0 ||
+    (whiteboardId && (
+      typeof whiteboardRevision !== 'number' || !Number.isInteger(whiteboardRevision) || whiteboardRevision < 0
+    )) ||
+    (expectedSha256 && !/^[a-f0-9]{64}$/.test(expectedSha256))
   ) return undefined
-  return { workspaceRoot, activeFilePath, documentEpoch, contentRevision, threadId }
+  return {
+    workspaceRoot,
+    activeFilePath,
+    documentEpoch,
+    contentRevision,
+    threadId,
+    ...(whiteboardId ? { whiteboardId } : {}),
+    ...(whiteboardId && Number.isInteger(whiteboardRevision)
+      ? { whiteboardRevision: whiteboardRevision as number }
+      : {}),
+    ...(expectedSha256 ? { expectedSha256 } : {})
+  }
 }
 
 function normalizeQueuedMessage(value: unknown): QueuedUserMessage | null {

@@ -17,6 +17,7 @@ import { TurnConflictError, TurnService } from './turn-service.js'
 import {
   QUEUE_ADMISSION_FAILED_CODE,
   QUEUE_CANCELLED_TURN_CODE,
+  WRITE_CONTEXT_STALE_CODE,
   MAX_QUEUED_TURNS_PER_THREAD
 } from './turn-service-queue-operations.js'
 
@@ -29,10 +30,17 @@ type Harness = {
   settled: string[]
 }
 
-function createHarness(options: {
-  maxConcurrentTurns?: number
-  sessionStore?: InMemorySessionStore
-} = {}): Harness {
+function createHarness(
+  options: {
+    maxConcurrentTurns?: number
+    sessionStore?: InMemorySessionStore
+    writeDocumentGuard?: (context: {
+      workspaceRoot: string
+      documentPath: string | null
+      expectedSha256?: string
+    }) => Promise<string | null>
+  } = {}
+): Harness {
   const threadStore = new InMemoryThreadStore()
   const sessionStore = options.sessionStore ?? new InMemorySessionStore()
   const eventBus = new InMemoryEventBus()
@@ -54,7 +62,10 @@ function createHarness(options: {
       ? { maxConcurrentTurns: options.maxConcurrentTurns }
       : {}),
     ids: new SequentialIdGenerator(),
-    nowIso
+    nowIso,
+    ...(options.writeDocumentGuard
+      ? { writeDocumentGuard: options.writeDocumentGuard }
+      : {})
   })
   turns.setTurnSettledHook((threadId) => {
     settled.push(threadId)
@@ -349,6 +360,72 @@ describe('durable per-thread turn queue', () => {
     const poisonedTurn = after?.turns.find((turn) => turn.id === poisoned.turnId)
     expect(poisonedTurn?.status).toBe('failed')
     expect(poisonedTurn?.terminalCode).toBe(QUEUE_ADMISSION_FAILED_CODE)
+    expect(started).toEqual({ turnId: healthy.turnId })
+  })
+
+  it('freezes a Write document reference at enqueue and verifies it at promotion', async () => {
+    const guardCalls: Array<string | null> = []
+    const h = createHarness({
+      writeDocumentGuard: async (context) => {
+        guardCalls.push(context.documentPath)
+        return null
+      }
+    })
+    await createThread(h, 'thr_q')
+    const first = await h.turns.startTurn({ threadId: 'thr_q', request: startRequest('first') })
+    const queued = await h.turns.startTurn({
+      threadId: 'thr_q',
+      request: startRequest('second', {
+        enqueueIfBusy: true,
+        writeContext: {
+          workspaceRoot: '/tmp/workspace',
+          documentPath: 'draft.md',
+          expectedSha256: 'a'.repeat(64)
+        }
+      })
+    })
+    const before = await h.threadStore.get('thr_q')
+    const queuedTurn = before?.turns.find((turn) => turn.id === queued.turnId)
+    expect(queuedTurn?.writeContext).toEqual({
+      workspaceRoot: '/tmp/workspace',
+      documentPath: 'draft.md',
+      expectedSha256: 'a'.repeat(64)
+    })
+    await h.turns.finishTurn({ threadId: 'thr_q', turnId: first.turnId, status: 'completed' })
+    const started = await h.turns.startNextQueuedTurn('thr_q')
+    expect(started).toEqual({ turnId: queued.turnId })
+    expect(guardCalls).toEqual(['draft.md'])
+  })
+
+  it('fails a queued Write turn whose document changed and tries the next one', async () => {
+    const h = createHarness({
+      writeDocumentGuard: async (context) =>
+        context.documentPath === 'stale.md'
+          ? 'write document changed after the request was queued'
+          : null
+    })
+    await createThread(h, 'thr_q')
+    const first = await h.turns.startTurn({ threadId: 'thr_q', request: startRequest('first') })
+    const poisoned = await h.turns.startTurn({
+      threadId: 'thr_q',
+      request: startRequest('poisoned', {
+        enqueueIfBusy: true,
+        writeContext: { workspaceRoot: '/tmp/workspace', documentPath: 'stale.md' }
+      })
+    })
+    const healthy = await h.turns.startTurn({
+      threadId: 'thr_q',
+      request: startRequest('healthy', {
+        enqueueIfBusy: true,
+        writeContext: { workspaceRoot: '/tmp/workspace', documentPath: 'healthy.md' }
+      })
+    })
+    await h.turns.finishTurn({ threadId: 'thr_q', turnId: first.turnId, status: 'completed' })
+    const started = await h.turns.startNextQueuedTurn('thr_q')
+    const after = await h.threadStore.get('thr_q')
+    const poisonedTurn = after?.turns.find((turn) => turn.id === poisoned.turnId)
+    expect(poisonedTurn?.status).toBe('failed')
+    expect(poisonedTurn?.terminalCode).toBe(WRITE_CONTEXT_STALE_CODE)
     expect(started).toEqual({ turnId: healthy.turnId })
   })
 

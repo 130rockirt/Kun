@@ -415,9 +415,9 @@ export async function sendThreadMessage(
           : 'direct')
       // Runtime-owned queue: submit the follow-up directly with
       // enqueueIfBusy so it executes even when this conversation is never
-      // opened again. Write sends stay on the local queue: their writeContext
-      // identity is a composer-side contract the runtime queue lacks.
-      if (activeThreadId && !shouldWaitForRuntimeAdmission && !writeContext) {
+      // opened again. Write sends now carry a durable `writeContext` reference
+      // so they can join the runtime queue too.
+      if (activeThreadId && !shouldWaitForRuntimeAdmission) {
         const submitted = await submitToRuntimeQueue({
           provider: p,
           activeThreadId,

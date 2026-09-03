@@ -24,6 +24,7 @@ import { resolveDesignTurnAdmission } from './turn-service-design-admission.js'
 
 export const QUEUE_CANCELLED_TURN_CODE = 'queue_cancelled'
 export const QUEUE_ADMISSION_FAILED_CODE = 'queue_admission_failed'
+export const WRITE_CONTEXT_STALE_CODE = 'write_context_stale'
 /** Backstop against unbounded per-thread queue growth. */
 export const MAX_QUEUED_TURNS_PER_THREAD = 50
 
@@ -46,7 +47,8 @@ function queuedResponse(thread: ThreadRecord, turn: Turn): StartTurnResponse {
     threadAgentSurface: resolveThreadAgentSurface(thread),
     ...(turn.agentSurface ? { agentSurface: turn.agentSurface } : {}),
     ...(turn.designProfile ? { designProfile: turn.designProfile } : {}),
-    ...(turn.designDocumentTarget ? { designDocumentTarget: turn.designDocumentTarget } : {})
+    ...(turn.designDocumentTarget ? { designDocumentTarget: turn.designDocumentTarget } : {}),
+    ...(turn.writeContext ? { writeContext: turn.writeContext } : {})
   }
 }
 
@@ -155,6 +157,7 @@ export const turnServiceQueueOperations = {
             agentSurface: designAdmission.effectiveSurface,
             designProfile: designAdmission.effectiveProfile,
             designDocumentTarget: designAdmission.effectiveDocumentTarget,
+            writeContext: input.request.writeContext,
             persona: input.request.persona,
             guiDesignArtifact: input.request.guiDesignArtifact,
             mode: input.request.mode,
@@ -330,7 +333,8 @@ export const turnServiceQueueOperations = {
               ...(candidate.designProfile ? { designProfile: candidate.designProfile } : {}),
               ...(candidate.designDocumentTarget
                 ? { designDocumentTarget: candidate.designDocumentTarget }
-                : {})
+                : {}),
+              ...(candidate.writeContext ? { writeContext: candidate.writeContext } : {})
             }
             let designAdmission
             try {
@@ -348,6 +352,37 @@ export const turnServiceQueueOperations = {
                 continue
               }
               throw error
+            }
+            if (candidate.writeContext && this['deps'].writeDocumentGuard) {
+              const staleReason = await this['deps'].writeDocumentGuard(candidate.writeContext)
+              if (staleReason) {
+                const now = this['deps'].nowIso()
+                const failedTurn = finishTurn(candidate, 'failed', now)
+                const turns = thread.turns.map((turn) =>
+                  turn.id === candidate.id
+                    ? {
+                        ...this['finalizeOpenItems'](failedTurn, 'failed'),
+                        error: staleReason,
+                        terminalCode: WRITE_CONTEXT_STALE_CODE
+                      }
+                    : turn
+                )
+                await this['deps'].threadStore.upsert({
+                  ...touchThread(thread, now),
+                  turns,
+                  status: threadStatusAfterTurnTransition(thread.status, turns),
+                  updatedAt: now
+                })
+                await this['deps'].events.record({
+                  kind: 'turn_failed',
+                  threadId: input.threadId,
+                  turnId: candidate.id,
+                  message: staleReason,
+                  code: WRITE_CONTEXT_STALE_CODE,
+                  severity: 'warning'
+                }).catch(() => undefined)
+                continue
+              }
             }
             if (!this['tryAdmitTurn'](candidate.id, input.threadId)) {
               return null

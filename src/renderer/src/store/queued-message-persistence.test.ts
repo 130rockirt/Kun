@@ -94,6 +94,9 @@ describe('queued-message-persistence', () => {
           activeFilePath: '/workspace/deepseek-gui/draft.md',
           documentEpoch: 4,
           contentRevision: 2,
+          whiteboardId: 'wb_1',
+          whiteboardRevision: 3,
+          expectedSha256: 'a'.repeat(64),
           threadId: 'thread-b'
         }
       }
@@ -122,10 +125,33 @@ describe('queued-message-persistence', () => {
           activeFilePath: '/workspace/deepseek-gui/draft.md',
           documentEpoch: 4,
           contentRevision: 2,
+          whiteboardId: 'wb_1',
+          whiteboardRevision: 3,
+          expectedSha256: 'a'.repeat(64),
           threadId: 'thread-b'
         }
       })
     ])
+  })
+
+  it('rejects a writeContext whose expectedSha256 is not a 64-char hex digest', () => {
+    const storage = new MemoryStorage()
+    saveQueuedMessagesForThread('thread-a', [
+      {
+        id: 'q-badsha',
+        text: 'stale write send',
+        deliveryState: 'pending',
+        writeContext: {
+          workspaceRoot: '/workspace/deepseek-gui',
+          activeFilePath: '/workspace/deepseek-gui/draft.md',
+          documentEpoch: 4,
+          contentRevision: 2,
+          expectedSha256: 'not-a-sha',
+          threadId: 'thread-a'
+        }
+      }
+    ], storage)
+    expect(queuedMessagesForThread('thread-a', storage)).toEqual([])
   })
 
   it('keeps in-flight work while running and removes it only after the turn settles', () => {

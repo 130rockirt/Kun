@@ -13,6 +13,7 @@ import type {
   TurnStatus
 } from '../contracts/turns.js'
 import type { TurnItem, UserMessageSource } from '../contracts/items.js'
+import type { WriteTurnContext } from '../contracts/write-turn-context.js'
 import type { RuntimeErrorSeverity } from '../contracts/errors.js'
 import type { ThreadExecutionLease } from '../contracts/runtime-flavor.js'
 import type { SessionStore } from '../ports/session-store.js'
@@ -79,6 +80,8 @@ export type TurnServiceDeps = {
   usage?: UsageService
   prefix?: ImmutablePrefix
   attachmentStore?: () => AttachmentStore | undefined
+  /** Verify a durable Write document reference at promotion; null means valid. */
+  writeDocumentGuard?: (context: WriteTurnContext) => Promise<string | null>
   defaultModel?: string
   contextCompaction?: ContextCompactionConfig
   /** Maximum number of active turns this in-process runtime may admit. */

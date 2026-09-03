@@ -7,7 +7,8 @@ import { startWorkspaceCheckpointSnapshot } from './chat-store-thread-send-check
 import { rememberPendingClawFeishuMirror } from './chat-store-runtime-notifications'
 import {
   activeClawChannel,
-  rememberTurnModel
+  rememberTurnModel,
+  toWriteTurnContext
 } from './chat-store-helpers'
 import {
   ensureRuntimeProviderForSend
@@ -106,6 +107,7 @@ export async function submitToRuntimeQueue(input: RuntimeQueueSendInput): Promis
       ...(designProfile ? { designProfile } : {}),
       ...(designDocumentTarget ? { designDocumentTarget } : {}),
       ...(designImagePlacementTarget ? { designImagePlacementTarget } : {}),
+      ...(writeContext ? { writeContext: toWriteTurnContext(writeContext) } : {}),
       ...(persona ? { persona } : {}),
       ...((queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact)
         ? { guiDesignArtifact: queued?.guiDesignArtifact ?? overrides?.guiDesignArtifact }
@@ -139,6 +141,7 @@ export async function submitToRuntimeQueue(input: RuntimeQueueSendInput): Promis
       ...(designProfile ? { designProfile } : {}),
       ...(designDocumentTarget ? { designDocumentTarget } : {}),
       ...(designImagePlacementTarget ? { designImagePlacementTarget } : {}),
+      ...(writeContext ? { writeContext } : {}),
       ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
       ...(displayText ? { displayText } : {}),
       ...(mode ? { mode } : {}),

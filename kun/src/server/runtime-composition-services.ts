@@ -64,6 +64,7 @@ import { createRuntimeMaintenanceSlices } from './runtime-maintenance-slices.js'
 import { ThreadStoreGuardian } from '../services/thread-store-guardian.js'
 import { ThreadSnapshotStore } from '../services/thread-snapshot-store.js'
 import { SessionGuardian } from '../services/session-guardian.js'
+import { createWriteDocumentGuard } from './runtime-write-document-guard.js'
 
 export async function createRuntimeServices(
   model: Awaited<ReturnType<typeof createRuntimeModelComposition>>
@@ -143,6 +144,7 @@ export async function createRuntimeServices(
     usage: usageService,
     prefix,
     attachmentStore: () => attachmentStore,
+    writeDocumentGuard: createWriteDocumentGuard(),
     defaultModel: options.model,
     contextCompaction: options.contextCompaction,
     maxConcurrentTurns: core.activeOptions.runtime?.turnLimits?.maxConcurrentTurns,

@@ -21,6 +21,7 @@ import {
   DesignTaskProfileInputSchema,
   DesignTaskProfileSchema
 } from './design-task-profile.js'
+import { WriteTurnContextSchema } from './write-turn-context.js'
 
 export { TurnReasoningEffortSchema } from './turn-reasoning.js'
 export type { TurnReasoningEffort } from './turn-reasoning.js'
@@ -253,6 +254,8 @@ export const TurnSchema = z.object({
   designProfile: DesignTaskProfileSchema.optional(),
   /** Explicit replay target duplicated from the effective Design profile. */
   designDocumentTarget: DesignDocumentTargetSchema.optional(),
+  /** Durable document reference for Write turns; verified again at promotion. */
+  writeContext: WriteTurnContextSchema.optional(),
   /**
    * Turn-scoped persona text chosen by the user in the composer. Rendered as
    * a `user`-authority dynamic context block after history, so it never
@@ -371,6 +374,8 @@ export const StartTurnRequest = z.object({
   designProfile: DesignTaskProfileInputSchema.optional(),
   /** Canvas routing target; when supplied it must match designProfile.documentTarget. */
   designDocumentTarget: DesignDocumentTargetSchema.optional(),
+  /** Durable document reference for Write turns. */
+  writeContext: WriteTurnContextSchema.optional(),
   /** Frozen target for durable placement of a generated primary image. */
   designImagePlacementTarget: DesignImagePlacementTargetSchema.optional(),
   /** Reserved first-class SVG artifact for structured SVG tools. */
@@ -445,7 +450,8 @@ export const StartTurnResponse = z.object({
   /** Effective surface for this turn. */
   agentSurface: z.enum(['code', 'write', 'design']).optional(),
   designProfile: DesignTaskProfileSchema.optional(),
-  designDocumentTarget: DesignDocumentTargetSchema.optional()
+  designDocumentTarget: DesignDocumentTargetSchema.optional(),
+  writeContext: WriteTurnContextSchema.optional()
 })
 export type StartTurnResponse = z.infer<typeof StartTurnResponse>
 

@@ -147,6 +147,8 @@ export type WriteAssistantMessageContext = {
   whiteboardRevision?: number
   /** Filled after the first explicit ensure; queued sends keep this identity. */
   threadId?: string
+  /** SHA-256 of the saved document bytes; the runtime recomputes this at promotion. */
+  expectedSha256?: string
 }
 
 export type SendMessageOverrides = {

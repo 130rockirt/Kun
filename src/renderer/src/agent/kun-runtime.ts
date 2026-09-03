@@ -8,6 +8,7 @@ import type {
   ThreadUsageSnapshot,
   UserInputAnswer
 } from './types'
+import type { WriteTurnContext } from './write-turn-context'
 import type { ThreadListOptions, ThreadListPage } from './provider-types'
 import { getKunRuntimeSettings } from '@shared/app-settings-kun-defaults'
 import type {
@@ -546,6 +547,7 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       workspaceCheckpointRequestId?: string
       fileReferences?: Array<{ path: string; relativePath: string; name: string; kind?: 'file' | 'directory' }>
       composerContexts?: ComposerContextAttachment[]
+      writeContext?: WriteTurnContext
     }
   ): Promise<{
     turnId: string
@@ -648,6 +650,9 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
     }
     if (options?.composerContexts?.length) {
       body.composerContexts = options.composerContexts
+    }
+    if (options?.writeContext) {
+      body.writeContext = options.writeContext
     }
     const response = await rendererRuntimeClient.runtimeRequest(
       kunThreadTurnsPath(threadId),

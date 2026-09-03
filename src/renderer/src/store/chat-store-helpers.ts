@@ -13,7 +13,11 @@ import {
   type ClawImProvider,
   type ModelReasoningEffort
 } from '@shared/app-settings'
-import type { ChatState } from './chat-store-types'
+import type {
+  ChatState,
+  WriteAssistantMessageContext
+} from './chat-store-types'
+import type { WriteTurnContext } from '../agent/write-turn-context'
 import {
   isClawWorkspacePath,
   isInternalDeepSeekGuiWorkspace,
@@ -34,6 +38,28 @@ import {
 } from './chat-store-helper-storage'
 
 export { normalizeTurnModelMap } from './chat-store-helper-storage'
+
+/**
+ * Map the renderer-only Write routing context to the runtime-persistable
+ * reference. `threadId` is intentionally dropped: the turn already owns the
+ * thread, and the runtime has no renderer thread registry.
+ */
+export function toWriteTurnContext(
+  context: WriteAssistantMessageContext | undefined
+): WriteTurnContext | undefined {
+  if (!context) return undefined
+  return {
+    workspaceRoot: context.workspaceRoot,
+    documentPath: context.activeFilePath,
+    ...(Number.isInteger(context.documentEpoch) ? { documentEpoch: context.documentEpoch } : {}),
+    ...(Number.isInteger(context.contentRevision) ? { contentRevision: context.contentRevision } : {}),
+    ...(context.whiteboardId ? { whiteboardId: context.whiteboardId } : {}),
+    ...(Number.isInteger(context.whiteboardRevision)
+      ? { whiteboardRevision: context.whiteboardRevision }
+      : {}),
+    ...(context.expectedSha256 ? { expectedSha256: context.expectedSha256 } : {})
+  }
+}
 
 const COMPOSER_MODEL_STORAGE_KEY = 'kun.composerModel'
 const COMPOSER_PROVIDER_STORAGE_KEY = 'kun.composerProviderId'

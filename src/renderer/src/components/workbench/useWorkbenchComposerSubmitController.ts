@@ -46,6 +46,7 @@ import { restoreWorkbenchWritePrompt } from './workbench-write-prompt-state'
 import { workbenchWriteSourceContext } from './workbench-write-source-reference'
 import { submitWorkbenchPlanIntent } from './workbench-plan-submit'
 import { buildWorkbenchClawHelpText } from './workbench-claw-help'
+import { readWriteDocumentSha256 } from './read-write-document-sha256'
 export type { WorkbenchComposerSubmitController } from './workbench-composer-submit-types'
 import {
   listClawComposerModelOptions,
@@ -342,6 +343,9 @@ export function useWorkbenchComposerSubmitController({
         restorePrompt()
         return
       }
+      const expectedSha256 = writeActiveDocument?.kind === 'office'
+        ? writeActiveDocument.officePreview?.sourceSha256
+        : await readWriteDocumentSha256(writeWorkspaceRoot, writeActiveFilePath)
       const sent = await sendMessage(
         messageText,
         writeActiveDocument?.kind === 'office' ? 'agent' : composerMode === 'plan' ? 'plan' : 'agent',
@@ -366,7 +370,8 @@ export function useWorkbenchComposerSubmitController({
             activeFilePath: writeActiveFilePath,
             documentEpoch: writeDocumentEpoch,
             contentRevision: writeContentRevision,
-            ...workWhiteboardMessageFence(activeWhiteboard)
+            ...workWhiteboardMessageFence(activeWhiteboard),
+            ...(expectedSha256 ? { expectedSha256 } : {})
           }
         }
       )

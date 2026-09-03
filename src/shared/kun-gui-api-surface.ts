@@ -145,6 +145,7 @@ import type {
   WriteRetrievalRequest,
   WriteRetrievalResult
 } from './write-retrieval'
+import type { WriteDocumentSha256Request, WriteDocumentSha256Result } from './write-document-sha256'
 import type {
   WriteExportPayload,
   WriteExportResult,
@@ -583,6 +584,9 @@ export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & ProviderAuthApi & Runti
   retrieveWriteContext: (
     payload: WriteRetrievalRequest
   ) => Promise<WriteRetrievalResult>
+  readWriteDocumentSha256: (
+    payload: WriteDocumentSha256Request
+  ) => Promise<WriteDocumentSha256Result>
   generateWriteInfographic: (
     payload: WriteInfographicRequest
   ) => Promise<WriteInfographicResult>

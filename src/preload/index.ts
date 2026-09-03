@@ -376,6 +376,7 @@ const api = {
     ipcRenderer.invoke('write:inline-completion', payload),
   retrieveWriteContext: (payload) =>
     ipcRenderer.invoke('write:retrieve-context', payload),
+  readWriteDocumentSha256: (payload) => ipcRenderer.invoke('write:read-document-sha256', payload),
   generateWriteInfographic: (payload) =>
     ipcRenderer.invoke('write:generate-infographic', payload),
   authorizeWritePrototype: (payload) =>

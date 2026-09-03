@@ -35,6 +35,7 @@ import {
   DesignDocumentTargetSchema,
   DesignTaskProfileSchema
 } from './design-task-profile.js'
+import { WriteTurnContextSchema } from './write-turn-context.js'
 import { ModelRequestFailureContextSchema } from './model-request-failure.js'
 
 /**
@@ -266,7 +267,8 @@ export const TurnLifecycleEvent = RuntimeEventBase.extend({
   threadAgentSurface: ThreadAgentSurface.optional(),
   agentSurface: ThreadAgentSurface.optional(),
   designProfile: DesignTaskProfileSchema.optional(),
-  designDocumentTarget: DesignDocumentTargetSchema.optional()
+  designDocumentTarget: DesignDocumentTargetSchema.optional(),
+  writeContext: WriteTurnContextSchema.optional()
 })
 export type TurnLifecycleEvent = z.infer<typeof TurnLifecycleEvent>
 

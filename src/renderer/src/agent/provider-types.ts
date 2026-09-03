@@ -57,6 +57,7 @@ import type {
   UserInputStatusPayload,
   UserMessageEventPayload
 } from './types'
+import type { WriteTurnContext } from './write-turn-context'
 
 export type ThreadListOptions = {
   limit?: number
@@ -252,6 +253,7 @@ export interface AgentProvider {
       workspaceCheckpointRequestId?: string
       fileReferences?: UserFileReference[]
       composerContexts?: ComposerContextAttachment[]
+      writeContext?: WriteTurnContext
     }
   ): Promise<{
     turnId: string

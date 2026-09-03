@@ -453,6 +453,13 @@ export const writeRetrievalPayloadSchema = z
   })
   .strict()
 
+export const writeDocumentSha256PayloadSchema = z
+  .object({
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    filePath: trimmedString(MAX_PATH_LENGTH)
+  })
+  .strict()
+
 export const writeExportPayloadSchema = z
   .object({
     path: optionalTrimmedString(MAX_PATH_LENGTH),
