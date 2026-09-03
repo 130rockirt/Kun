@@ -78,6 +78,12 @@ export const localOfficeDocumentTargetPayloadSchema = z
 export const deepseekConfigContentSchema = z.string().max(MAX_CONFIG_FILE_BYTES)
 
 export const workspaceRootSchema = trimmedString(MAX_PATH_LENGTH)
+export const workspaceCreationTimesPayloadSchema = z
+  .object({
+    // A sidebar surfaces a few dozen roots at most; the cap is defensive only.
+    workspaceRoots: z.array(workspaceRootSchema).max(256)
+  })
+  .strict()
 export const kunProjectConfigWorkspacePayloadSchema = z
   .object({
     workspaceRoot: workspaceRootSchema.refine(isAbsolutePath, {

@@ -19,6 +19,7 @@ import {
 } from 'node:events'
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -108,6 +109,31 @@ describe('registerAppIpcHandlers workspace and MCP', () => {
         mimeType: 'image/png'
       })).resolves.toEqual({ ok: true, path: target })
       expect(readFileSync(target, 'utf8')).toBe('generated-image')
+    } finally {
+      rmSync(temp, { recursive: true, force: true })
+    }
+  })
+
+  it('returns workspace folder creation times for sidebar ordering', async () => {
+    const temp = mkdtempSync(join(tmpdir(), 'kun-creation-times-'))
+    const existing = join(temp, 'existing-project')
+    mkdirSync(existing)
+    const missing = join(temp, 'missing-project')
+    try {
+      registerAppIpcHandlers(registerOptions())
+
+      const handler = handlers.get('workspace:creation-times')
+      const result = await handler?.({}, { workspaceRoots: [existing, missing] }) as Array<{
+        path: string
+        createdAtMs: number | null
+      }>
+      expect(result).toHaveLength(2)
+      expect(result[0]?.path).toBe(existing)
+      expect(result[0]?.createdAtMs).toBeGreaterThan(0)
+      expect(result[1]).toEqual({ path: missing, createdAtMs: null })
+
+      await expect(handler?.({}, { workspaceRoots: [42] })).rejects.toThrow()
+      await expect(handler?.({}, { workspaceRoots: [existing], extra: true })).rejects.toThrow()
     } finally {
       rmSync(temp, { recursive: true, force: true })
     }
