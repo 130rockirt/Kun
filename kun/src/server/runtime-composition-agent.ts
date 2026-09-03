@@ -400,6 +400,9 @@ export async function createRuntimeAgentComposition(
 	    runTurn: runAgentTurn
 	  })
 	  turnService.setTurnSettledHook((threadId) => queuedTurnDispatcher.drain(threadId))
+	  // A queue commit may race the running turn's settlement; this trigger
+	  // covers the window where settle fired before the record was durable.
+	  turnService.setTurnQueuedHook((threadId) => queuedTurnDispatcher.drain(threadId))
 	  const extensionProfiles = new ExtensionAgentProfileRegistry()
 	  const extensionAgent = new ExtensionAgentService({
 	    threads: threadService,

@@ -9,6 +9,7 @@ import { ContextCompactor } from '../loop/context-compactor.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
 import { SteeringQueue } from '../loop/steering-queue.js'
 import { SequentialIdGenerator } from '../ports/id-generator.js'
+import type { ThreadExecutionLeasePort } from '../ports/thread-execution-lease.js'
 import type { RuntimeEvent } from '../contracts/events.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { StartTurnRequest } from '../contracts/turns.js'
@@ -34,6 +35,7 @@ function createHarness(
   options: {
     maxConcurrentTurns?: number
     sessionStore?: InMemorySessionStore
+    executionLeases?: ThreadExecutionLeasePort
     writeDocumentGuard?: (context: {
       workspaceRoot: string
       documentPath: string | null
@@ -63,6 +65,7 @@ function createHarness(
       : {}),
     ids: new SequentialIdGenerator(),
     nowIso,
+    ...(options.executionLeases ? { executionLeases: options.executionLeases } : {}),
     ...(options.writeDocumentGuard
       ? { writeDocumentGuard: options.writeDocumentGuard }
       : {})

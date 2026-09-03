@@ -126,7 +126,25 @@ async startTurn(this: TurnService, input: {
             !options.expectedLatestFailedTurnId &&
             input.request.enqueueIfBusy === true
           ) {
-            return { kind: 'enqueue' as const }
+            // Busy decision and durable queue commit share this critical
+            // section: a turn settling right after the check must not make
+            // the follow-up fail — it queues and the dispatcher promotes it
+            // (a direct start when the thread is already idle by then).
+            try {
+              const queuedStart = await this['persistQueuedTurnRecord'](thread, input)
+              return { kind: 'queued' as const, start: queuedStart }
+            } catch (error) {
+              // Phase 1 failed (limit, append failure, ...): surface the
+              // half-written record so the rollback below (outside the
+              // mutation lock) mirrors enqueueTurn's rollback.
+              const halfWritten = await this['deps'].threadStore.get(input.threadId)
+              const pendingTurn = halfWritten?.turns.find((turn) => turn.admissionPending === true)
+              return {
+                kind: 'enqueueFailed' as const,
+                error,
+                pendingTurnId: pendingTurn?.id
+              }
+            }
           }
         }
         if (options.expectedLatestFailedTurnId) {
@@ -318,7 +336,59 @@ async startTurn(this: TurnService, input: {
       })
       )
       if (started.kind === 'replay') return started.response
-      if (started.kind === 'enqueue') return this.enqueueTurn(input)
+      if (started.kind === 'enqueueFailed') {
+        // Phase 1 of the atomic queue write failed; roll the half-written
+        // pending record back exactly like a failed enqueueTurn.
+        if (started.pendingTurnId) {
+          const rolledBack = await this['rollbackPendingAdmission'](
+            input.threadId,
+            started.pendingTurnId
+          ).catch(() => false)
+          if (!rolledBack) {
+            await this.interruptTurn({
+              threadId: input.threadId,
+              turnId: started.pendingTurnId
+            }).catch(() => undefined)
+          }
+          this['clearRuntimeTurnState'](input.threadId, started.pendingTurnId, {
+            abort: true,
+            releaseLease: false
+          })
+        }
+        throw started.error
+      }
+      if (started.kind === 'queued') {
+        // Phase 1 is durable inside the same critical section as the busy
+        // decision. Complete the admission here (rollback on failure), then
+        // wake the dispatcher so promotion — or a direct start on an idle
+        // thread — can begin.
+        let queuedResponseResult: StartTurnResponse
+        try {
+          queuedResponseResult = await this['completeQueuedTurnAdmission']({
+            ...input,
+            attemptedTurnId: started.start.turnId,
+            userItem: started.start.userItem
+          })
+        } catch (error) {
+          const rolledBack = await this['rollbackPendingAdmission'](
+            input.threadId,
+            started.start.turnId
+          ).catch(() => false)
+          if (!rolledBack) {
+            await this.interruptTurn({
+              threadId: input.threadId,
+              turnId: started.start.turnId
+            }).catch(() => undefined)
+          }
+          this['clearRuntimeTurnState'](input.threadId, started.start.turnId, {
+            abort: true,
+            releaseLease: false
+          })
+          throw error
+        }
+        this['notifyTurnQueued'](input.threadId)
+        return queuedResponseResult
+      }
       const committedThread = await this['markTurnAdmissionCompleted'](
         input.threadId,
         started.turnId,

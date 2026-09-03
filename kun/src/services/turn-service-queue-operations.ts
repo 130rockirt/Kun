@@ -1,4 +1,5 @@
 import type { ThreadRecord } from '../contracts/threads.js'
+import type { TurnItem } from '../contracts/items.js'
 import type {
   StartTurnRequest,
   StartTurnResponse,
@@ -47,8 +48,7 @@ function queuedResponse(thread: ThreadRecord, turn: Turn): StartTurnResponse {
     threadAgentSurface: resolveThreadAgentSurface(thread),
     ...(turn.agentSurface ? { agentSurface: turn.agentSurface } : {}),
     ...(turn.designProfile ? { designProfile: turn.designProfile } : {}),
-    ...(turn.designDocumentTarget ? { designDocumentTarget: turn.designDocumentTarget } : {}),
-    ...(turn.writeContext ? { writeContext: turn.writeContext } : {})
+    ...(turn.designDocumentTarget ? { designDocumentTarget: turn.designDocumentTarget } : {})
   }
 }
 
@@ -58,6 +58,166 @@ function queuedResponse(thread: ThreadRecord, turn: Turn): StartTurnResponse {
  * until `startNextQueuedTurn` promotes the oldest one to running.
  */
 export const turnServiceQueueOperations = {
+  /**
+   * Shared queue-write core. MUST run inside the caller's `withThreadMutation`
+   * so the busy decision and the durable queue commit are one atomic section;
+   * otherwise a turn settling in between makes the follow-up fail instead of
+   * queueing. Performs Phase 1 of the two-phase admission (pending record +
+   * session user item); the caller completes the commit phase.
+   */
+  async persistQueuedTurnRecord(this: TurnService, thread: ThreadRecord, input: {
+    threadId: string
+    request: StartTurnRequest
+  }): Promise<{ turnId: string; userItem: TurnItem }> {
+    if (queuedTurns(thread).length >= MAX_QUEUED_TURNS_PER_THREAD) {
+      throw new TurnConflictError(
+        `queued turn limit reached (${MAX_QUEUED_TURNS_PER_THREAD}) for thread ${input.threadId}`
+      )
+    }
+    const turnId = this['deps'].ids.next('turn')
+    const designAdmission = resolveDesignTurnAdmission({
+      thread,
+      request: input.request,
+      turnId
+    })
+    const composerContexts = ComposerContextAttachmentSchema.array().parse(
+      input.request.composerContexts ?? []
+    )
+    const attachmentIds = [...new Set(
+      (input.request.attachmentIds ?? []).map((id) => id.trim()).filter(Boolean)
+    )]
+    if (attachmentIds.length > 0) {
+      const attachmentStore = this['deps'].attachmentStore?.()
+      if (!attachmentStore) throw new Error('attachment store is unavailable')
+      await attachmentStore.bindScopes(attachmentIds, {
+        threadId: input.threadId,
+        ...(thread.workspace ? { workspace: thread.workspace } : {})
+      })
+    }
+    const turnModel = firstNonBlank(
+      input.request.model,
+      thread.model,
+      this['deps'].defaultModel,
+      this['deps'].model?.model
+    )
+    const requestedProviderId = firstNonBlank(input.request.providerId)
+    const threadProviderId = firstNonBlank(thread.providerId)
+    const turnProviderId = requestedProviderId ?? threadProviderId ?? 'default'
+    const turnAccountId = firstNonBlank(input.request.accountId) ?? (
+      !requestedProviderId || requestedProviderId === threadProviderId
+        ? firstNonBlank(thread.accountId)
+        : undefined
+    )
+    const turn = createTurnRecord({
+      id: turnId,
+      threadId: input.threadId,
+      clientRequestId: input.request.clientRequestId,
+      clientRequestFingerprint: fingerprintStartTurnRequest(input.request),
+      admissionPending: true,
+      prompt: input.request.prompt,
+      messageSource: input.request.messageSource,
+      subagentResume: input.request.subagentResume,
+      model: turnModel,
+      providerId: turnProviderId,
+      accountId: turnAccountId,
+      reasoningEffort: input.request.reasoningEffort,
+      serviceTier: input.request.serviceTier,
+      clientSurface: input.request.clientSurface,
+      approvalPolicy: input.request.approvalPolicy ?? thread.approvalPolicy,
+      sandboxMode: input.request.sandboxMode ?? thread.sandboxMode,
+      approvalReviewer: input.request.approvalReviewer ?? thread.approvalReviewer,
+      attachmentIds,
+      composerContexts,
+      guiPlan: input.request.guiPlan,
+      guiDesignCanvas: input.request.guiDesignCanvas,
+      guiDesignMode: input.request.guiDesignMode,
+      agentSurface: designAdmission.effectiveSurface,
+      designProfile: designAdmission.effectiveProfile,
+      designDocumentTarget: designAdmission.effectiveDocumentTarget,
+      writeContext: input.request.writeContext,
+      persona: input.request.persona,
+      guiDesignArtifact: input.request.guiDesignArtifact,
+      mode: input.request.mode,
+      orchestration: input.request.orchestration,
+      disableUserInput: input.request.disableUserInput,
+      imContext: input.request.imContext,
+      workspaceCheckpointId: input.request.workspaceCheckpointId,
+      workspaceCheckpointRequestId: input.request.workspaceCheckpointRequestId
+    })
+    const userItem = makeUserItem({
+      id: userItemId(turnId),
+      turnId,
+      threadId: input.threadId,
+      text: input.request.prompt,
+      displayText: input.request.displayText,
+      messageSource: input.request.messageSource,
+      attachmentIds,
+      composerContexts,
+      fileReferences: input.request.fileReferences ?? [],
+      workspaceCheckpointId: input.request.workspaceCheckpointId,
+      workspace: thread.workspace,
+      threadAgentSurface: designAdmission.locksSurface && designAdmission.effectiveSurface
+        ? designAdmission.effectiveSurface
+        : resolveThreadAgentSurface(thread),
+      agentSurface: designAdmission.effectiveSurface,
+      designProfile: designAdmission.effectiveProfile,
+      designDocumentTarget: designAdmission.effectiveDocumentTarget,
+      designImagePlacementTarget: input.request.designImagePlacementTarget
+    })
+    const now = this['deps'].nowIso()
+    // Phase 1: persist the queued turn as a pending admission. Its user
+    // item has not crossed the durable commit boundary yet.
+    const queuedTurn = appendTurnItem(turn, userItem)
+    const next: ThreadRecord = {
+      ...touchThread(thread, now),
+      status: 'running',
+      turns: [...thread.turns, queuedTurn],
+      updatedAt: now
+    }
+    await this['deps'].threadStore.upsert(next)
+    // Phase 2: persist the session user item, the commit boundary.
+    await this['deps'].sessionStore.appendItem(input.threadId, userItem)
+    return { turnId, userItem }
+  },
+
+  /**
+   * Complete the two-phase queued admission after `persistQueuedTurnRecord`
+   * committed its durable record: mark the admission completed, record the
+   * turn_queued/item_created events, and fire the dispatcher hook. Runs the
+   * same rollback as a failed enqueueTurn on error.
+   */
+  async completeQueuedTurnAdmission(this: TurnService, input: {
+    threadId: string
+    request: StartTurnRequest
+    attemptedTurnId: string
+    userItem: TurnItem
+  }): Promise<StartTurnResponse> {
+    const committedThread = await this['markTurnAdmissionCompleted'](input.threadId, input.attemptedTurnId, {})
+    const committed = committedThread.turns.find((candidate) => candidate.id === input.attemptedTurnId)
+    if (!committed) throw new Error(`queued turn not found after commit: ${input.attemptedTurnId}`)
+    await this['deps'].events.record({
+      kind: 'turn_queued',
+      threadId: input.threadId,
+      turnId: input.attemptedTurnId,
+      text: input.request.prompt,
+      ...(input.request.displayText ? { displayText: input.request.displayText } : {}),
+      ...(committed.model ? { model: committed.model } : {}),
+      ...(committed.providerId ? { providerId: committed.providerId } : {}),
+      ...(committed.accountId ? { accountId: committed.accountId } : {}),
+      ...(committed.mode ? { mode: committed.mode } : {}),
+      threadAgentSurface: resolveThreadAgentSurface(committedThread),
+      ...(committed.agentSurface ? { agentSurface: committed.agentSurface } : {})
+    }).catch(() => undefined)
+    await this['deps'].events.record({
+      kind: 'item_created',
+      threadId: input.threadId,
+      turnId: input.attemptedTurnId,
+      itemId: input.userItem.id,
+      item: input.userItem
+    }).catch(() => undefined)
+    return queuedResponse(committedThread, committed)
+  },
+
   /**
    * Persist a start request as a queued turn. Used when the thread already
    * has an active turn and the caller passed `enqueueIfBusy`. The durable
@@ -76,6 +236,10 @@ export const turnServiceQueueOperations = {
       if (this['deps'].migrationMaintenance?.isLocked()) {
         throw new TurnConflictError('runtime migration maintenance is in progress')
       }
+      // Deliberately no "no active turn" rejection here: the thread may have
+      // gone idle between the busy decision and this critical section. The
+      // record still commits durably; the dispatcher promotion turns it into
+      // a direct start when the thread is idle.
       const started = await withManagerDataMutex(`thread:${input.threadId}`, () =>
         this['withThreadMutation'](input.threadId, async () => {
           if (this['deps'].lifecycleFence?.isClosing(input.threadId)) {
@@ -86,152 +250,18 @@ export const turnServiceQueueOperations = {
           if (thread.status === 'archived') {
             throw new TurnConflictError(`thread is archived: ${input.threadId}`)
           }
-          const running = thread.turns.filter((turn) => turn.status === 'running').length
-          if (running === 0 && !await this['deps'].executionLeases?.owner(input.threadId)) {
-            throw new TurnConflictError(
-              `cannot enqueue: no active turn on thread ${input.threadId}`
-            )
-          }
-          if (queuedTurns(thread).length >= MAX_QUEUED_TURNS_PER_THREAD) {
-            throw new TurnConflictError(
-              `queued turn limit reached (${MAX_QUEUED_TURNS_PER_THREAD}) for thread ${input.threadId}`
-            )
-          }
-          const turnId = this['deps'].ids.next('turn')
-          const designAdmission = resolveDesignTurnAdmission({
-            thread,
-            request: input.request,
-            turnId
-          })
-          const composerContexts = ComposerContextAttachmentSchema.array().parse(
-            input.request.composerContexts ?? []
-          )
-          const attachmentIds = [...new Set(
-            (input.request.attachmentIds ?? []).map((id) => id.trim()).filter(Boolean)
-          )]
-          if (attachmentIds.length > 0) {
-            const attachmentStore = this['deps'].attachmentStore?.()
-            if (!attachmentStore) throw new Error('attachment store is unavailable')
-            await attachmentStore.bindScopes(attachmentIds, {
-              threadId: input.threadId,
-              ...(thread.workspace ? { workspace: thread.workspace } : {})
-            })
-          }
-          const turnModel = firstNonBlank(
-            input.request.model,
-            thread.model,
-            this['deps'].defaultModel,
-            this['deps'].model?.model
-          )
-          const requestedProviderId = firstNonBlank(input.request.providerId)
-          const threadProviderId = firstNonBlank(thread.providerId)
-          const turnProviderId = requestedProviderId ?? threadProviderId ?? 'default'
-          const turnAccountId = firstNonBlank(input.request.accountId) ?? (
-            !requestedProviderId || requestedProviderId === threadProviderId
-              ? firstNonBlank(thread.accountId)
-              : undefined
-          )
-          const turn = createTurnRecord({
-            id: turnId,
-            threadId: input.threadId,
-            clientRequestId: input.request.clientRequestId,
-            clientRequestFingerprint: fingerprintStartTurnRequest(input.request),
-            admissionPending: true,
-            prompt: input.request.prompt,
-            messageSource: input.request.messageSource,
-            subagentResume: input.request.subagentResume,
-            model: turnModel,
-            providerId: turnProviderId,
-            accountId: turnAccountId,
-            reasoningEffort: input.request.reasoningEffort,
-            serviceTier: input.request.serviceTier,
-            clientSurface: input.request.clientSurface,
-            approvalPolicy: input.request.approvalPolicy ?? thread.approvalPolicy,
-            sandboxMode: input.request.sandboxMode ?? thread.sandboxMode,
-            approvalReviewer: input.request.approvalReviewer ?? thread.approvalReviewer,
-            attachmentIds,
-            composerContexts,
-            guiPlan: input.request.guiPlan,
-            guiDesignCanvas: input.request.guiDesignCanvas,
-            guiDesignMode: input.request.guiDesignMode,
-            agentSurface: designAdmission.effectiveSurface,
-            designProfile: designAdmission.effectiveProfile,
-            designDocumentTarget: designAdmission.effectiveDocumentTarget,
-            writeContext: input.request.writeContext,
-            persona: input.request.persona,
-            guiDesignArtifact: input.request.guiDesignArtifact,
-            mode: input.request.mode,
-            orchestration: input.request.orchestration,
-            disableUserInput: input.request.disableUserInput,
-            imContext: input.request.imContext,
-            workspaceCheckpointId: input.request.workspaceCheckpointId,
-            workspaceCheckpointRequestId: input.request.workspaceCheckpointRequestId
-          })
-          const userItem = makeUserItem({
-            id: userItemId(turnId),
-            turnId,
-            threadId: input.threadId,
-            text: input.request.prompt,
-            displayText: input.request.displayText,
-            messageSource: input.request.messageSource,
-            attachmentIds,
-            composerContexts,
-            fileReferences: input.request.fileReferences ?? [],
-            workspaceCheckpointId: input.request.workspaceCheckpointId,
-            workspace: thread.workspace,
-            threadAgentSurface: designAdmission.locksSurface && designAdmission.effectiveSurface
-              ? designAdmission.effectiveSurface
-              : resolveThreadAgentSurface(thread),
-            agentSurface: designAdmission.effectiveSurface,
-            designProfile: designAdmission.effectiveProfile,
-            designDocumentTarget: designAdmission.effectiveDocumentTarget,
-            designImagePlacementTarget: input.request.designImagePlacementTarget
-          })
-          const now = this['deps'].nowIso()
-          // Phase 1: persist the queued turn as a pending admission. Its user
-          // item has not crossed the durable commit boundary yet.
-          const queuedTurn = appendTurnItem(turn, userItem)
-          const next: ThreadRecord = {
-            ...touchThread(thread, now),
-            status: 'running',
-            turns: [...thread.turns, queuedTurn],
-            updatedAt: now
-          }
-          attemptedTurnId = turnId
-          await this['deps'].threadStore.upsert(next)
-          // Phase 2: persist the session user item, the commit boundary.
-          await this['deps'].sessionStore.appendItem(input.threadId, userItem)
-          return { turnId, userItem }
+          return this['persistQueuedTurnRecord'](thread, input)
         })
       )
-      // Commit phase (outside the thread mutation lock): once the user item is
-      // durable the queued admission is final and a retry becomes an idempotent
-      // replay. If append failed above, the catch below rolls the turn back.
-      const committedThread = await this['markTurnAdmissionCompleted'](input.threadId, started.turnId, {})
+      attemptedTurnId = started.turnId
+      const response = await this['completeQueuedTurnAdmission']({
+        ...input,
+        attemptedTurnId: started.turnId,
+        userItem: started.userItem
+      })
       admissionAccepted = true
-      const committed = committedThread.turns.find((candidate) => candidate.id === started.turnId)
-      if (!committed) throw new Error(`queued turn not found after commit: ${started.turnId}`)
-      await this['deps'].events.record({
-        kind: 'turn_queued',
-        threadId: input.threadId,
-        turnId: started.turnId,
-        text: input.request.prompt,
-        ...(input.request.displayText ? { displayText: input.request.displayText } : {}),
-        ...(committed.model ? { model: committed.model } : {}),
-        ...(committed.providerId ? { providerId: committed.providerId } : {}),
-        ...(committed.accountId ? { accountId: committed.accountId } : {}),
-        ...(committed.mode ? { mode: committed.mode } : {}),
-        threadAgentSurface: resolveThreadAgentSurface(committedThread),
-        ...(committed.agentSurface ? { agentSurface: committed.agentSurface } : {})
-      }).catch(() => undefined)
-      await this['deps'].events.record({
-        kind: 'item_created',
-        threadId: input.threadId,
-        turnId: started.turnId,
-        itemId: started.userItem.id,
-        item: started.userItem
-      }).catch(() => undefined)
-      return queuedResponse(committedThread, committed)
+      this['notifyTurnQueued'](input.threadId)
+      return response
     } catch (error) {
       if (attemptedTurnId && !admissionAccepted) {
         const rolledBack = await this['rollbackPendingAdmission'](
@@ -271,7 +301,8 @@ export const turnServiceQueueOperations = {
           const failCandidateInPlace = async (
             thread: ThreadRecord,
             candidate: Turn,
-            message: string
+            message: string,
+            code: string = QUEUE_ADMISSION_FAILED_CODE
           ): Promise<void> => {
             const now = this['deps'].nowIso()
             const failedTurn = finishTurn(candidate, 'failed', now)
@@ -280,7 +311,7 @@ export const turnServiceQueueOperations = {
                 ? {
                     ...this['finalizeOpenItems'](failedTurn, 'failed'),
                     error: message,
-                    terminalCode: QUEUE_ADMISSION_FAILED_CODE
+                    terminalCode: code
                   }
                 : turn
             )
@@ -295,7 +326,7 @@ export const turnServiceQueueOperations = {
               threadId: input.threadId,
               turnId: candidate.id,
               message,
-              code: QUEUE_ADMISSION_FAILED_CODE,
+              code,
               severity: 'warning'
             }).catch(() => undefined)
           }
@@ -356,31 +387,7 @@ export const turnServiceQueueOperations = {
             if (candidate.writeContext && this['deps'].writeDocumentGuard) {
               const staleReason = await this['deps'].writeDocumentGuard(candidate.writeContext)
               if (staleReason) {
-                const now = this['deps'].nowIso()
-                const failedTurn = finishTurn(candidate, 'failed', now)
-                const turns = thread.turns.map((turn) =>
-                  turn.id === candidate.id
-                    ? {
-                        ...this['finalizeOpenItems'](failedTurn, 'failed'),
-                        error: staleReason,
-                        terminalCode: WRITE_CONTEXT_STALE_CODE
-                      }
-                    : turn
-                )
-                await this['deps'].threadStore.upsert({
-                  ...touchThread(thread, now),
-                  turns,
-                  status: threadStatusAfterTurnTransition(thread.status, turns),
-                  updatedAt: now
-                })
-                await this['deps'].events.record({
-                  kind: 'turn_failed',
-                  threadId: input.threadId,
-                  turnId: candidate.id,
-                  message: staleReason,
-                  code: WRITE_CONTEXT_STALE_CODE,
-                  severity: 'warning'
-                }).catch(() => undefined)
+                await failCandidateInPlace(thread, candidate, staleReason, WRITE_CONTEXT_STALE_CODE)
                 continue
               }
             }

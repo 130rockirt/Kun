@@ -315,6 +315,16 @@ export class TurnService {
     >>
   ) => Promise<ThreadRecord>
   declare private rollbackPendingAdmission: (threadId: string, turnId: string) => Promise<boolean>
+  declare private persistQueuedTurnRecord: (
+    thread: ThreadRecord,
+    input: { threadId: string; request: StartTurnRequest }
+  ) => Promise<{ turnId: string; userItem: TurnItem }>
+  declare private completeQueuedTurnAdmission: (input: {
+    threadId: string
+    request: StartTurnRequest
+    attemptedTurnId: string
+    userItem: TurnItem
+  }) => Promise<StartTurnResponse>
   declare private tryAdmitTurn: (turnId: string, threadId: string) => boolean
   declare private clearRuntimeTurnState: (threadId: string, turnId: string, options?: { abort?: boolean; releaseLease?: boolean } ) => void
   declare private releaseRuntimeTurnExecution: (threadId: string, turnId: string, options?: { abort?: boolean; releaseLease?: boolean } ) => void
@@ -334,6 +344,10 @@ export class TurnService {
   /** Late-bound queue drain trigger; the serve runtime installs it once its
    * agent-loop dispatcher exists. */
   private onTurnSettledHook: ((threadId: string) => void | Promise<void>) | null = null
+  /** Late-bound hook fired after a queued turn record is durably committed;
+   * lets the dispatcher promote it (or start it directly when the thread went
+   * idle between the busy decision and the queue write). */
+  private onTurnQueuedHook: ((threadId: string) => void | Promise<void>) | null = null
 
   /** Installed by the serve runtime; invoked after terminal settlement. */
   setTurnSettledHook(hook: (threadId: string) => void | Promise<void>): void {
@@ -348,6 +362,24 @@ export class TurnService {
       .catch((error) => {
         console.warn(
           `[kun] queued-turn drain failed for ${threadId}: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+        )
+      })
+  }
+
+  /** Installed by the serve runtime; invoked after a durable queue commit. */
+  setTurnQueuedHook(hook: (threadId: string) => void | Promise<void>): void {
+    this.onTurnQueuedHook = hook
+  }
+
+  notifyTurnQueued(threadId: string): void {
+    const hook = this.onTurnQueuedHook
+    if (!hook) return
+    Promise.resolve()
+      .then(() => hook(threadId))
+      .catch((error) => {
+        console.warn(
+          `[kun] queued-turn promotion failed for ${threadId}: ` +
           `${error instanceof Error ? error.message : String(error)}`
         )
       })
