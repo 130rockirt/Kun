@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, readdir, rename, rm, stat, unlink } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, rename, rm, unlink } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import semver from 'semver'
 import {
@@ -8,6 +8,16 @@ import {
   runtimeProcessIsAlive,
   type RuntimeProcessIsAlive
 } from '../server/runtime-process-identity.js'
+import { fsyncDirectory } from './self-update-layout.js'
+
+export const KUN_TUI_UPDATE_KILL_POINT_ENV = 'KUN_TUI_UPDATE_KILL_POINT'
+
+/** SIGKILL self when KUN_TUI_UPDATE_KILL_POINT names this point (fault injection). */
+export function checkTuiUpdateKillPoint(point: string): void {
+  if (process.env[KUN_TUI_UPDATE_KILL_POINT_ENV] === point) {
+    process.kill(process.pid, 'SIGKILL')
+  }
+}
 
 export const TUI_UPDATE_LOCK_SUFFIX = '.kun-tui-update.lock'
 export const TUI_UPDATE_TRANSACTION_DIR_SUFFIX = '.kun-tui-update'
@@ -33,6 +43,10 @@ export type TuiUpdateTransaction = {
   pid: number
   token: string
   startedAt: string
+  // Optional pointer-layout fields (schemaVersion stays 1).
+  fromReleaseDir?: string
+  toReleaseDir?: string
+  pointerPath?: string
 }
 
 export type TuiUpdateResult = {
@@ -57,11 +71,6 @@ export type TuiUpdateReconcileReport =
   | { kind: 'activated'; previousVersion: string; targetVersion: string }
   | { kind: 'failed'; message: string; stage?: string }
   | { kind: 'busy'; pid: number }
-
-type ReconcileOptions = {
-  now?: () => Date
-  processIsAlive?: RuntimeProcessIsAlive
-}
 
 function isErrno(error: unknown, code: string): boolean {
   return typeof error === 'object' &&
@@ -111,7 +120,10 @@ export function parseTuiUpdateTransaction(raw: string): TuiUpdateTransaction | n
       (parsed.pid ?? 0) > 0 &&
       typeof parsed.token === 'string' &&
       parsed.token.length > 0 &&
-      typeof parsed.startedAt === 'string'
+      typeof parsed.startedAt === 'string' &&
+      (parsed.fromReleaseDir === undefined || typeof parsed.fromReleaseDir === 'string') &&
+      (parsed.toReleaseDir === undefined || typeof parsed.toReleaseDir === 'string') &&
+      (parsed.pointerPath === undefined || typeof parsed.pointerPath === 'string')
       ? parsed as TuiUpdateTransaction
       : null
   } catch {
@@ -153,7 +165,7 @@ export function parseTuiUpdateUpdater(raw: string): TuiUpdateUpdater | null {
   }
 }
 
-function parseLockOwner(raw: string): {
+export function parseLockOwner(raw: string): {
   schemaVersion: 1
   pid: number
   token: string
@@ -296,6 +308,9 @@ export async function writeTuiUpdateTransaction(
     buildId: string
     stagingRoot: string
     backupRoot: string
+    fromReleaseDir?: string
+    toReleaseDir?: string
+    pointerPath?: string
   }
 ): Promise<TuiUpdateTransaction> {
   const canonical = resolve(installRoot)
@@ -310,7 +325,10 @@ export async function writeTuiUpdateTransaction(
     backupRoot: resolve(input.backupRoot),
     pid: process.pid,
     token: randomUUID(),
-    startedAt: new Date().toISOString()
+    startedAt: new Date().toISOString(),
+    ...(input.fromReleaseDir ? { fromReleaseDir: resolve(input.fromReleaseDir) } : {}),
+    ...(input.toReleaseDir ? { toReleaseDir: resolve(input.toReleaseDir) } : {}),
+    ...(input.pointerPath ? { pointerPath: resolve(input.pointerPath) } : {})
   }
   await mkdir(dir, { recursive: true, mode: 0o700 })
   const path = join(dir, TUI_UPDATE_TRANSACTION_FILE)
@@ -352,6 +370,7 @@ async function writeFileAtomically(path: string, content: string): Promise<void>
     await handle.close()
   }
   await rename(temporary, path)
+  await fsyncDirectory(dirname(path))
 }
 
 /** Remove transaction metadata but keep the diagnostic log for inspection. */
@@ -369,283 +388,6 @@ export async function clearTuiUpdateTransaction(installRoot: string): Promise<vo
     if (!entries.length) await rm(dir, { recursive: true, force: true })
   } catch {
     // Directory already gone.
-  }
-}
-
-type ReleaseMetadata = { version: string; buildId: string }
-
-async function readReleaseFile(path: string): Promise<ReleaseMetadata | null> {
-  try {
-    const parsed = JSON.parse(await readFile(path, 'utf8')) as {
-      version?: unknown
-      buildId?: unknown
-    }
-    if (typeof parsed.version !== 'string' || typeof parsed.buildId !== 'string') return null
-    return { version: parsed.version, buildId: parsed.buildId }
-  } catch {
-    return null
-  }
-}
-
-async function readStagedRelease(stagingRoot: string): Promise<ReleaseMetadata | null> {
-  return readReleaseFile(join(stagingRoot, 'kun', 'release.json'))
-}
-
-async function readInstalledRelease(installRoot: string): Promise<ReleaseMetadata | null> {
-  return readReleaseFile(join(installRoot, 'release.json'))
-}
-
-/**
- * Complete a replacement whose detached script never finished. The staged tree
- * already passed size/hash/entry validation plus a version smoke test, so
- * finishing the same rename swap in-process is safe.
- */
-async function rollForwardTuiUpdate(transaction: TuiUpdateTransaction): Promise<void> {
-  const { installRoot, stagingRoot, backupRoot } = transaction
-  const nextRoot = join(stagingRoot, 'kun')
-  const currentExists = await stat(installRoot).then(() => true).catch(() => false)
-  const backupExists = await stat(backupRoot).then(() => true).catch(() => false)
-  // Only clear an existing backup while the current install is healthy: when
-  // the install root is gone, the backup is the only copy of the previous
-  // release and must survive a failed activation below.
-  if (currentExists && backupExists) {
-    await rm(backupRoot, { recursive: true, force: true })
-  }
-  if (currentExists) await rename(installRoot, backupRoot)
-  try {
-    await rename(nextRoot, installRoot)
-  } catch (error) {
-    if (currentExists) await rename(backupRoot, installRoot).catch(() => undefined)
-    throw error
-  }
-  await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined)
-}
-
-type InstallRecovery = 'present' | 'restored' | 'gone' | 'restore-failed'
-
-/**
- * Ensure the install root exists before a failed update is reported. The
- * backup is only promoted back into place when the install root is missing;
- * it is never deleted here, so a failed recovery can be retried on the next
- * launch without losing the only copy of the previous release.
- */
-async function restoreMissingInstall(
-  transaction: TuiUpdateTransaction,
-  canonical: string
-): Promise<InstallRecovery> {
-  const installExists = await stat(canonical).then(() => true).catch(() => false)
-  if (installExists) return 'present'
-  const backupExists = await stat(transaction.backupRoot).then(() => true).catch(() => false)
-  if (!backupExists) return 'gone'
-  try {
-    await rename(transaction.backupRoot, canonical)
-    return 'restored'
-  } catch {
-    return 'restore-failed'
-  }
-}
-
-function installRecoveryMessage(recovery: InstallRecovery): string {
-  if (recovery === 'present') {
-    return 'The previous installation was kept; run `kun update --yes` to retry.'
-  }
-  if (recovery === 'restored') {
-    return 'The previous installation was restored from its backup; run `kun update --yes` to retry.'
-  }
-  if (recovery === 'gone') {
-    return 'No usable installation remains; reinstall Kun.'
-  }
-  return (
-    'The previous installation could not be restored; its backup is still in ' +
-    'place and recovery will be retried on the next launch.'
-  )
-}
-
-/**
- * Inspect a pending self-update transaction at launch and reconcile it:
- * report a recorded outcome, finish a staged replacement whose detached
- * script died, or restore the previous install. Returns null when there is
- * nothing pending, and `busy` while a live process still owns the update.
- */
-export async function reconcilePendingTuiUpdate(
-  installRoot: string,
-  options: ReconcileOptions = {}
-): Promise<TuiUpdateReconcileReport | null> {
-  const canonical = resolve(installRoot)
-  const processIsAlive = options.processIsAlive ?? runtimeProcessIsAlive
-  let transaction: TuiUpdateTransaction | null = null
-  try {
-    transaction = parseTuiUpdateTransaction(
-      await readFile(tuiUpdateTransactionPath(canonical), 'utf8')
-    )
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return null
-    throw error
-  }
-  if (!transaction) {
-    // Corrupt transaction metadata: never touch the install automatically.
-    await clearTuiUpdateTransaction(canonical)
-    return {
-      kind: 'failed',
-      stage: 'transaction',
-      message: 'the pending update record was unreadable; the installation was left unchanged'
-    }
-  }
-  const resultRaw = await readFile(tuiUpdateResultPath(canonical), 'utf8')
-    .catch((error: unknown) => {
-      if (isErrno(error, 'ENOENT')) return null
-      throw error
-    })
-  if (resultRaw !== null) {
-    const result = parseTuiUpdateResult(resultRaw)
-    if (!result) {
-      await clearTuiUpdateTransaction(canonical)
-      return {
-        kind: 'failed',
-        stage: 'result',
-        message: 'the update result record was unreadable; check update.log next to the install'
-      }
-    }
-    if (result.status === 'succeeded') {
-      await clearTuiUpdateTransaction(canonical)
-      await rm(transaction.stagingRoot, { recursive: true, force: true }).catch(() => undefined)
-      return {
-        kind: 'activated',
-        previousVersion: result.previousVersion,
-        targetVersion: result.targetVersion
-      }
-    }
-    const recovery = await restoreMissingInstall(transaction, canonical)
-    if (recovery === 'restore-failed') {
-      return {
-        kind: 'failed',
-        stage: result.stage,
-        message:
-          `the staged update to Kun ${result.targetVersion} failed` +
-          `${result.stage ? ` during ${result.stage}` : ''}` +
-          `${result.error ? `: ${result.error}` : ''}. ` +
-          installRecoveryMessage(recovery) +
-          ` Details: ${tuiUpdateLogPath(canonical)}`
-      }
-    }
-    await clearTuiUpdateTransaction(canonical)
-    return {
-      kind: 'failed',
-      stage: result.stage,
-      message:
-        `the staged update to Kun ${result.targetVersion} failed` +
-        `${result.stage ? ` during ${result.stage}` : ''}` +
-        `${result.error ? `: ${result.error}` : ''}. ` +
-        installRecoveryMessage(recovery) +
-        ` Details: ${tuiUpdateLogPath(canonical)}`
-    }
-  }
-  // No result yet: either the replacement is still running or it died.
-  const lockOwner = parseLockOwner(
-    await readFile(tuiUpdateLockPath(canonical), 'utf8').catch(() => '')
-  )
-  if (lockOwner && processIsAlive(lockOwner.pid, lockOwner)) {
-    return { kind: 'busy', pid: lockOwner.pid }
-  }
-  const updater = parseTuiUpdateUpdater(
-    await readFile(tuiUpdateUpdaterPath(canonical), 'utf8').catch(() => '')
-  )
-  if (updater && processIsAlive(updater.pid, updater)) {
-    return { kind: 'busy', pid: updater.pid }
-  }
-  // The detached swap may have completed but lost its result write (for
-  // example a torn write after a successful activation). If the installed
-  // release already matches the transaction, report the activation instead of
-  // an interruption.
-  const installed = await readInstalledRelease(canonical)
-  if (
-    installed &&
-    installed.version === transaction.targetVersion &&
-    installed.buildId === transaction.buildId
-  ) {
-    await clearTuiUpdateTransaction(canonical)
-    await rm(transaction.stagingRoot, { recursive: true, force: true }).catch(() => undefined)
-    return {
-      kind: 'activated',
-      previousVersion: transaction.previousVersion,
-      targetVersion: transaction.targetVersion
-    }
-  }
-  const staged = await readStagedRelease(transaction.stagingRoot)
-  if (
-    staged &&
-    staged.version === transaction.targetVersion &&
-    staged.buildId === transaction.buildId
-  ) {
-    try {
-      await rollForwardTuiUpdate(transaction)
-      await writeTuiUpdateResult(canonical, {
-        status: 'succeeded',
-        previousVersion: transaction.previousVersion,
-        targetVersion: transaction.targetVersion
-      })
-      await clearTuiUpdateTransaction(canonical)
-      return {
-        kind: 'activated',
-        previousVersion: transaction.previousVersion,
-        targetVersion: transaction.targetVersion
-      }
-    } catch (error) {
-      const recovery = await restoreMissingInstall(transaction, canonical)
-      if (recovery === 'restore-failed') {
-        return {
-          kind: 'failed',
-          stage: 'replace',
-          message:
-            `the staged update to Kun ${transaction.targetVersion} could not be activated ` +
-            `(${error instanceof Error ? error.message : String(error)}). ` +
-            installRecoveryMessage(recovery)
-        }
-      }
-      await writeTuiUpdateResult(canonical, {
-        status: 'failed',
-        stage: 'replace',
-        error: 'could not move the staged release into place',
-        previousVersion: transaction.previousVersion,
-        targetVersion: transaction.targetVersion
-      }).catch(() => undefined)
-      await clearTuiUpdateTransaction(canonical)
-      return {
-        kind: 'failed',
-        stage: 'replace',
-        message:
-          `the staged update to Kun ${transaction.targetVersion} could not be activated ` +
-          `(${error instanceof Error ? error.message : String(error)}). ` +
-          installRecoveryMessage(recovery)
-      }
-    }
-  }
-  // Staging is gone or does not match: restore the backup when the install root
-  // itself is missing, then report the failure.
-  const recovery = await restoreMissingInstall(transaction, canonical)
-  if (recovery === 'restore-failed') {
-    return {
-      kind: 'failed',
-      stage: 'staging',
-      message:
-        `the staged update to Kun ${transaction.targetVersion} was interrupted before it could run. ` +
-        installRecoveryMessage(recovery)
-    }
-  }
-  await clearTuiUpdateTransaction(canonical)
-  const stagingMessage =
-    recovery === 'restored'
-      ? 'The previous installation was restored from its backup. '
-      : recovery === 'present'
-        ? 'The current installation was left unchanged. '
-        : 'No usable installation remains; reinstall Kun. '
-  return {
-    kind: 'failed',
-    stage: 'staging',
-    message:
-      `the staged update to Kun ${transaction.targetVersion} was interrupted before it could run. ` +
-      stagingMessage +
-      'Run `kun update --yes` to retry.'
   }
 }
 

@@ -152,6 +152,24 @@ kun exec --data-dir ~/.kun/data --workspace "$PWD" read --args '{"path":"README.
 - `kun exec --list-tools` prints the effective dynamic tool registry for the chosen config/workspace.
 - `kun exec <tool> --args <json>` invokes one tool directly. Use `--json` on `run` or `exec` for machine-readable output.
 
+### Standalone archive layout and self-update
+
+The packaged standalone archive installs to a stable base directory that is
+never moved by an update. Add `<base>/bin` to your `PATH`, then run `kun`:
+
+```text
+kun/
+  bin/kun          # stable launcher: reads the `current` pointer, never moved
+  current          # pointer file: releases/<buildId>
+  releases/
+    <buildId>/     # immutable version directory (runtime, app, release.json)
+```
+
+`kun update --yes` moves a new release into `releases/<buildId>` and switches
+the `current` pointer with a single atomic rename. A crash or power loss at any
+point cannot remove the install path, so the next `kun` invocation always
+starts; the previous version is kept until a later update garbage-collects it.
+
 ## Environment variables
 
 The runtime reads these from `process.env` when not set via CLI flags.

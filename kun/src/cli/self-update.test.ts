@@ -25,6 +25,7 @@ import { acquireRuntimeDataDirMigrationLock } from '../server/runtime-data-dir-m
 
 const roots: string[] = []
 const BUILD_ID = 'a'.repeat(64)
+const NEW_BUILD_ID = 'c'.repeat(64)
 const COMMIT = 'b'.repeat(40)
 const HOST_TARGET = standaloneTuiTarget() ?? 'linux-x64'
 
@@ -157,9 +158,13 @@ describe('standalone TUI self-update', () => {
       })
       expect(code).toBe(0)
       expect(output).toContain('1.2.4 installed')
-      expect(JSON.parse(await readFile(join(currentRoot, 'release.json'), 'utf8')))
+      // The new release is referenced by the pointer and immutable under releases/.
+      expect((await readFile(join(currentRoot, 'current'), 'utf8')).trim())
+        .toBe(`releases/${NEW_BUILD_ID}`)
+      expect(JSON.parse(await readFile(join(currentRoot, 'releases', NEW_BUILD_ID, 'release.json'), 'utf8')))
         .toMatchObject({ version: '1.2.4', target })
-      expect(JSON.parse(await readFile(`${currentRoot}.previous/release.json`, 'utf8')))
+      // The previous release was migrated into its own immutable directory.
+      expect(JSON.parse(await readFile(join(currentRoot, 'releases', BUILD_ID, 'release.json'), 'utf8')))
         .toMatchObject({ version: '1.2.3', target })
       // The cross-process update lock is always released after a swap.
       await expect(stat(join(parent, '.kun.kun-tui-update.lock')))
@@ -343,7 +348,7 @@ function latest() {
     tag: 'v1.2.4',
     channel: 'stable',
     commit: COMMIT,
-    buildId: BUILD_ID,
+    buildId: NEW_BUILD_ID,
     releaseDate: '2026-07-29T00:00:00.000Z',
     generatedAt: '2026-07-29T00:00:00.000Z',
     githubReleaseUrl: 'https://github.com/KunAgent/Kun/releases/tag/v1.2.4',
@@ -384,7 +389,7 @@ async function standaloneRoot(metadata: StandaloneTuiReleaseMetadata): Promise<s
 
 async function updateArchive(parent: string, target: string): Promise<string> {
   const stage = join(parent, 'next')
-  const root = join(stage, 'kun')
+  const root = join(stage, 'kun', 'releases', NEW_BUILD_ID)
   const node = join(root, 'runtime', 'node')
   const entry = join(root, 'app', 'kun', 'dist', 'cli', 'serve-entry.js')
   await mkdir(join(entry, '..'), { recursive: true })
@@ -403,7 +408,7 @@ async function updateArchive(parent: string, target: string): Promise<string> {
       artifactVersion: '1.2.4',
       tag: 'v1.2.4',
       target,
-      buildId: BUILD_ID,
+      buildId: NEW_BUILD_ID,
       commit: COMMIT
     }))}\n`,
     'utf8'

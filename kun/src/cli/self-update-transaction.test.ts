@@ -6,7 +6,6 @@ import {
   acquireTuiUpdateLock,
   clearTuiUpdateTransaction,
   parseTuiUpdateUpdater,
-  reconcilePendingTuiUpdate,
   recordTuiUpdateUpdater,
   tuiUpdateLockPath,
   tuiUpdateLogPath,
@@ -18,6 +17,7 @@ import {
   writeTuiUpdateTransaction,
   type TuiUpdateTransaction
 } from './self-update-transaction.js'
+import { reconcilePendingTuiUpdate } from './self-update-reconcile.js'
 
 const renameFailure = vi.hoisted(() => ({
   source: '' as string,

@@ -148,13 +148,14 @@ async function packageTui(options) {
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'kun-tui-package-'))
   const archiveRoot = join(temporaryRoot, 'archive')
   const productRoot = join(archiveRoot, 'kun')
-  const appRoot = join(productRoot, 'app')
+  const releaseDir = join(productRoot, 'releases', releaseMetadata.buildId)
+  const appRoot = join(releaseDir, 'app')
   const packagedKun = join(appRoot, 'kun')
   const outputDirectory = resolve(options.output)
   try {
     await Promise.all([
       mkdir(join(productRoot, 'bin'), { recursive: true }),
-      mkdir(join(productRoot, 'runtime'), { recursive: true }),
+      mkdir(join(releaseDir, 'runtime'), { recursive: true }),
       mkdir(packagedKun, { recursive: true }),
       mkdir(join(appRoot, 'packages'), { recursive: true }),
       mkdir(outputDirectory, { recursive: true })
@@ -175,12 +176,12 @@ async function packageTui(options) {
         recursive: true,
         filter: releasePackageFilter
       }),
-      copyFile(await realpath(process.execPath), join(productRoot, 'runtime', target.platform === 'win32' ? 'node.exe' : 'node')),
-      copyOptionalFile(join(ROOT, 'THIRD_PARTY_NOTICES.md'), join(productRoot, 'THIRD_PARTY_NOTICES.md')),
-      copyOptionalFile(join(ROOT, 'kun', 'README.md'), join(productRoot, 'README.md'))
+      copyFile(await realpath(process.execPath), join(releaseDir, 'runtime', target.platform === 'win32' ? 'node.exe' : 'node')),
+      copyOptionalFile(join(ROOT, 'THIRD_PARTY_NOTICES.md'), join(releaseDir, 'THIRD_PARTY_NOTICES.md')),
+      copyOptionalFile(join(ROOT, 'kun', 'README.md'), join(releaseDir, 'README.md'))
     ])
     if (target.platform !== 'win32') {
-      await chmod(join(productRoot, 'runtime', 'node'), 0o755)
+      await chmod(join(releaseDir, 'runtime', 'node'), 0o755)
     }
     runNpmInstall(packagedKun)
     await materializeWorkspaceDependencies(appRoot, packagedKun)
@@ -188,7 +189,12 @@ async function packageTui(options) {
     await patchPackagedKunManifest(packagedKun, options.version)
     await writeLaunchers(productRoot, target.platform)
     await writeFile(
-      join(productRoot, 'release.json'),
+      join(productRoot, 'current'),
+      `releases/${releaseMetadata.buildId}\n`,
+      'utf8'
+    )
+    await writeFile(
+      join(releaseDir, 'release.json'),
       `${JSON.stringify(releaseMetadata, null, 2)}\n`,
       { encoding: 'utf8', mode: 0o644 }
     )
@@ -291,10 +297,22 @@ async function writeLaunchers(productRoot, platform) {
   if (platform === 'win32') {
     await writeFile(
       join(productRoot, 'bin', 'kun.cmd'),
-      '@echo off\r\n' +
-      'setlocal\r\n' +
-      'set "KUN_STANDALONE_ROOT=%~dp0.."\r\n' +
-      '"%~dp0..\\runtime\\node.exe" "%~dp0..\\app\\kun\\dist\\cli\\serve-entry.js" %*\r\n',
+      [
+        '@echo off',
+        'setlocal',
+        'set "KUN_STANDALONE_ROOT=%~dp0.."',
+        'set "RELEASE="',
+        'if exist "%~dp0..\\current" set /p RELEASE=<"%~dp0..\\current"',
+        'if not defined RELEASE goto fallback',
+        'if exist "%~dp0..\\%RELEASE%\\release.json" goto run',
+        ':fallback',
+        'set "RELEASE="',
+        'for /d %%D in ("%~dp0..\\releases\\*") do if exist "%%D\\release.json" set "RELEASE=releases\\%%~nxD"',
+        ':run',
+        'if not defined RELEASE (echo kun: no usable release found under "%~dp0.." 1>&2 & exit /b 1)',
+        '"%~dp0..\\%RELEASE%\\runtime\\node.exe" "%~dp0..\\%RELEASE%\\app\\kun\\dist\\cli\\serve-entry.js" %*',
+        ''
+      ].join('\r\n'),
       'utf8'
     )
     return
@@ -302,12 +320,33 @@ async function writeLaunchers(productRoot, platform) {
   const launcher = join(productRoot, 'bin', 'kun')
   await writeFile(
     launcher,
-    '#!/bin/sh\n' +
-    'set -eu\n' +
-    'self_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd -P)\n' +
-    'root=$(CDPATH= cd -P "$self_dir/.." && pwd -P)\n' +
-    'export KUN_STANDALONE_ROOT="$root"\n' +
-    'exec "$root/runtime/node" "$root/app/kun/dist/cli/serve-entry.js" "$@"\n',
+    [
+      '#!/bin/sh',
+      'set -eu',
+      'self_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd -P)',
+      'root=$(CDPATH= cd -P "$self_dir/.." && pwd -P)',
+      'export KUN_STANDALONE_ROOT="$root"',
+      '',
+      'release=""',
+      'if [ -f "$root/current" ]; then',
+      "  candidate=$(tr -d '[:space:]' < \"$root/current\")",
+      '  [ -f "$root/$candidate/release.json" ] && release="$candidate"',
+      'fi',
+      'if [ -z "$release" ]; then',
+      '  for release_json in "$root"/releases/*/release.json; do',
+      '    [ -f "$release_json" ] || continue',
+      '    dir=$(CDPATH= cd -P "$(dirname "$release_json")" && pwd -P)',
+      '    release="releases/${dir##*/}"',
+      '    break',
+      '  done',
+      'fi',
+      'if [ -z "$release" ]; then',
+      '  echo "kun: no usable release found under $root" >&2',
+      '  exit 1',
+      'fi',
+      'exec "$root/$release/runtime/node" "$root/$release/app/kun/dist/cli/serve-entry.js" "$@"',
+      ''
+    ].join('\n'),
     { encoding: 'utf8', mode: 0o755 }
   )
   await chmod(launcher, 0o755)

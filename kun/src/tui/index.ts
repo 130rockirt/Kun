@@ -14,7 +14,7 @@ import {
 import { importGuiProviderCatalogForTui } from './gui-catalog-startup.js'
 import type { TerminalInput, TerminalOutput } from './pi-terminal.js'
 import { checkStandaloneTuiUpdateOnce, readStandaloneTuiRelease } from '../cli/self-update.js'
-import { reconcilePendingTuiUpdate } from '../cli/self-update-transaction.js'
+import { reconcilePendingTuiUpdate } from '../cli/self-update-reconcile.js'
 import type { ClientOwnedRuntimeHandle } from '../cli/client-owned-runtime.js'
 import type { TuiOptions } from './options.js'
 

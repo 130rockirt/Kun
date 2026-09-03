@@ -54,16 +54,18 @@ async function main() {
   try {
     await extractArchive(artifact, temporary)
     const root = join(temporary, 'kun')
-    const release = JSON.parse(await readFile(join(root, 'release.json'), 'utf8'))
+    const pointer = (await readFile(join(root, 'current'), 'utf8')).trim()
+    const releaseDir = join(root, pointer)
+    const release = JSON.parse(await readFile(join(releaseDir, 'release.json'), 'utf8'))
     if (release.version !== expectedVersion || release.target !== expectedTarget) {
       throw new Error(
         `release metadata mismatch: ${release.version}/${release.target}, ` +
         `expected ${expectedVersion}/${expectedTarget}`
       )
     }
-    const node = join(root, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node')
-    const entry = join(root, 'app', 'kun', 'dist', 'cli', 'serve-entry.js')
-    const geminiRoot = join(root, 'app', 'kun', 'node_modules', '@google', 'gemini-cli')
+    const node = join(releaseDir, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node')
+    const entry = join(releaseDir, 'app', 'kun', 'dist', 'cli', 'serve-entry.js')
+    const geminiRoot = join(releaseDir, 'app', 'kun', 'node_modules', '@google', 'gemini-cli')
     const geminiEntry = join(geminiRoot, 'bundle', 'gemini.js')
     const geminiManifest = JSON.parse(await readFile(join(geminiRoot, 'package.json'), 'utf8'))
     await stat(node)
@@ -82,6 +84,12 @@ async function main() {
     }
     expectOutput(node, ['-p', 'process.versions.node'], environment, release.nodeVersion)
     expectOutput(node, [entry, '--version'], environment, `kun ${expectedVersion}`)
+    // The stable pointer launcher resolves the same release end-to-end.
+    const launcher = join(root, 'bin', process.platform === 'win32' ? 'kun.cmd' : 'kun')
+    await stat(launcher)
+    if (process.platform !== 'win32') {
+      expectOutput(launcher, ['--version'], environment, `kun ${expectedVersion}`)
+    }
     expectOutput(node, [geminiEntry, '--version'], environment, geminiManifest.version)
     expectContains(node, [entry, '--help'], environment, 'kun <command> [options]')
     expectContains(node, [entry, 'tui', '--help'], environment, 'kun [tui options]')
@@ -101,7 +109,7 @@ async function main() {
       node,
       ['--input-type=module', '-e', "await import('better-sqlite3'); process.stdout.write('sqlite-ok')"],
       {
-        cwd: join(root, 'app', 'kun'),
+        cwd: join(releaseDir, 'app', 'kun'),
         env: environment,
         encoding: 'utf8',
         timeout: 15_000,

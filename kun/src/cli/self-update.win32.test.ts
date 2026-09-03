@@ -1,33 +1,19 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFile, mkdtemp, mkdir, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { execFileSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import { runSelfUpdateCommand, standaloneTuiTarget } from './self-update.js'
-import {
-  tuiUpdateLockPath,
-  tuiUpdateLogPath,
-  tuiUpdateResultPath,
-  tuiUpdateUpdaterPath
-} from './self-update-transaction.js'
+import { tuiUpdateResultPath } from './self-update-transaction.js'
 import type { StandaloneTuiReleaseMetadata } from './self-update.js'
 
 const BUILD_ID = 'a'.repeat(64)
 const COMMIT = 'b'.repeat(40)
 
-const children: ChildProcess[] = []
 const roots: string[] = []
 
 afterEach(async () => {
-  for (const child of children.splice(0)) {
-    try {
-      child.kill()
-    } catch {
-      // Already exited.
-    }
-  }
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
@@ -73,63 +59,40 @@ async function installFixture(): Promise<{ parent: string; root: string }> {
   const root = join(parent, 'kun')
   await mkdir(root, { recursive: true })
   await writeFile(join(root, 'release.json'), `${JSON.stringify(release())}\n`, 'utf8')
-  const node = join(root, 'runtime', 'node.exe')
-  await mkdir(join(root, 'runtime'), { recursive: true })
-  await copyFile(process.execPath, node)
   return { parent, root }
 }
 
 async function updateArchive(parent: string): Promise<{ archive: string; bytes: Buffer }> {
   const stage = join(parent, 'next')
-  const root = join(stage, 'kun')
-  const entry = join(root, 'app', 'kun', 'dist', 'cli')
+  const releaseDir = join(stage, 'kun', 'releases', BUILD_ID)
+  const entry = join(releaseDir, 'app', 'kun', 'dist', 'cli')
   await mkdir(entry, { recursive: true })
-  await mkdir(join(root, 'runtime'), { recursive: true })
-  await copyFile(process.execPath, join(root, 'runtime', 'node.exe'))
+  await mkdir(join(releaseDir, 'runtime'), { recursive: true })
+  await copyFile(process.execPath, join(releaseDir, 'runtime', 'node.exe'))
   await writeFile(
     join(entry, 'serve-entry.js'),
     "if (process.argv.includes('--version')) process.stdout.write('kun 1.2.4\\n')\n",
     'utf8'
   )
   await writeFile(
-    join(root, 'release.json'),
-    `${JSON.stringify(release({
-      version: '1.2.4',
-      artifactVersion: '1.2.4',
-      tag: 'v1.2.4'
-    }))}\n`,
+    join(releaseDir, 'release.json'),
+    `${JSON.stringify(release({ version: '1.2.4', artifactVersion: '1.2.4', tag: 'v1.2.4' }))}\n`,
     'utf8'
   )
   const archive = join(parent, 'Kun-TUI-1.2.4-win-x64.zip')
-  execFileSync('tar', ['-czf', archive, '-C', stage, 'kun'])
+  execFileSync('tar', ['-cf', archive, '-C', stage, 'kun'])
   const bytes = await readFile(archive)
   return { archive, bytes }
 }
 
-async function waitForFile(path: string, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const exists = await stat(path).then(() => true).catch(() => false)
-    if (exists) return true
-    if (Date.now() >= deadline) return false
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 500))
-  }
-}
-
-describe.runIf(process.platform === 'win32')('Windows standalone TUI replacement', () => {
-  it('waits for a running instance, replaces the install, and records the result', async () => {
+describe.runIf(process.platform === 'win32')('Windows standalone TUI update', () => {
+  it('switches the pointer immediately and activates the new release', async () => {
     const { parent, root } = await installFixture()
     const { bytes } = await updateArchive(parent)
     const manifest = latest()
     const artifact = manifest.artifacts.find((candidate) => candidate.target === 'win32-x64')!
     artifact.size = bytes.length
     artifact.sha256 = createHash('sha256').update(bytes).digest('hex')
-
-    // Occupy the install root with a long-lived process running from it.
-    const occupant = spawn(join(root, 'runtime', 'node.exe'), ['-e', 'setInterval(() => {}, 1000)'], {
-      stdio: 'ignore'
-    })
-    children.push(occupant)
 
     let stdout = ''
     let stderr = ''
@@ -141,131 +104,17 @@ describe.runIf(process.platform === 'win32')('Windows standalone TUI replacement
         ? Response.json(manifest)
         : new Response(new Uint8Array(bytes))
     })
+
     expect(code).toBe(0)
-    expect(stdout).toContain('is staged')
-    expect(stdout).toContain('result is reported on next launch')
+    expect(stdout).toContain('1.2.4 installed')
     expect(stderr).toBe('')
-    // Not yet replaced: the occupant still runs from the install root.
-    expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
-      .toMatchObject({ version: '1.2.3' })
-
-    occupant.kill()
-    children.splice(children.indexOf(occupant), 1)
-    expect(await waitForFile(tuiUpdateResultPath(root), 120_000)).toBe(true)
-    const result = JSON.parse(await readFile(tuiUpdateResultPath(root), 'utf8'))
-    expect(result).toMatchObject({ status: 'succeeded', previousVersion: '1.2.3', targetVersion: '1.2.4' })
-    expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
+    // The pointer is switched in-process; no second launch is required.
+    expect((await readFile(join(root, 'current'), 'utf8')).trim()).toBe(`releases/${BUILD_ID}`)
+    expect(JSON.parse(await readFile(join(root, 'releases', BUILD_ID, 'release.json'), 'utf8')))
       .toMatchObject({ version: '1.2.4' })
-    expect(JSON.parse(await readFile(`${root}.previous/release.json`, 'utf8')))
-      .toMatchObject({ version: '1.2.3' })
-    const log = await readFile(tuiUpdateLogPath(root), 'utf8')
-    expect(log).toContain('waiting for')
-    expect(log).toContain('replacement succeeded')
+    // The update result is written and cleared in-process (no detached swap).
+    await expect(stat(tuiUpdateResultPath(root))).rejects.toMatchObject({ code: 'ENOENT' })
   }, 180_000)
-
-  it('retries the swap through a transient file lock', async () => {
-    const { parent, root } = await installFixture()
-    const { bytes } = await updateArchive(parent)
-    const manifest = latest()
-    const artifact = manifest.artifacts.find((candidate) => candidate.target === 'win32-x64')!
-    artifact.size = bytes.length
-    artifact.sha256 = createHash('sha256').update(bytes).digest('hex')
-
-    let stdout = ''
-    const code = await runSelfUpdateCommand(['--yes'], {
-      stdout: { write: (chunk) => { stdout += chunk } },
-      stderr: { write: () => undefined },
-      env: { KUN_STANDALONE_ROOT: root },
-      fetch: async (url) => String(url).endsWith('latest-tui.json')
-        ? Response.json(manifest)
-        : new Response(new Uint8Array(bytes))
-    })
-    expect(code).toBe(0)
-
-    // Hold a handle inside the install root so the first Move-Item fails, then
-    // release it so a retry succeeds.
-    const handle = await open(join(root, 'release.json'), 'r')
-    setTimeout(() => {
-      void handle.close()
-    }, 6_000)
-
-    expect(await waitForFile(tuiUpdateResultPath(root), 120_000)).toBe(true)
-    const result = JSON.parse(await readFile(tuiUpdateResultPath(root), 'utf8'))
-    expect(result.status).toBe('succeeded')
-    const log = await readFile(tuiUpdateLogPath(root), 'utf8')
-    const attempts = log.match(/replacement attempt /g) ?? []
-    expect(attempts.length).toBeGreaterThanOrEqual(1)
-  }, 180_000)
-
-  it('keeps a second update busy while the PowerShell updater is stuck waiting', async () => {
-    const { parent, root } = await installFixture()
-    const { bytes } = await updateArchive(parent)
-    const manifest = latest()
-    const artifact = manifest.artifacts.find((candidate) => candidate.target === 'win32-x64')!
-    artifact.size = bytes.length
-    artifact.sha256 = createHash('sha256').update(bytes).digest('hex')
-
-    // Occupy the install root so the detached updater parks in its wait phase.
-    const occupant = spawn(join(root, 'runtime', 'node.exe'), ['-e', 'setInterval(() => {}, 1000)'], {
-      stdio: 'ignore'
-    })
-    children.push(occupant)
-
-    let firstStdout = ''
-    const firstCode = await runSelfUpdateCommand(['--yes'], {
-      stdout: { write: (chunk) => { firstStdout += chunk } },
-      stderr: { write: () => undefined },
-      env: { KUN_STANDALONE_ROOT: root },
-      fetch: async (url) => String(url).endsWith('latest-tui.json')
-        ? Response.json(manifest)
-        : new Response(new Uint8Array(bytes))
-    })
-    expect(firstCode).toBe(0)
-    expect(firstStdout).toContain('is staged')
-
-    // The first command returns only after the updater confirmed the handoff.
-    expect(await waitForFile(tuiUpdateUpdaterPath(root), 120_000)).toBe(true)
-    const ack = JSON.parse(await readFile(tuiUpdateUpdaterPath(root), 'utf8'))
-    expect(ack).toMatchObject({ schemaVersion: 1 })
-    expect(ack.pid).toBeGreaterThan(0)
-
-    // The lock is now owned by the PowerShell updater, not this process.
-    const lockOwner = JSON.parse(await readFile(tuiUpdateLockPath(root), 'utf8'))
-    expect(lockOwner.pid).toBeGreaterThan(0)
-    expect(lockOwner.pid).not.toBe(process.pid)
-
-    // A second update while the occupant is still alive must be busy and must
-    // not download or touch the install directory.
-    let secondStderr = ''
-    let secondFetches = 0
-    const secondCode = await runSelfUpdateCommand(['--yes'], {
-      stdout: { write: () => undefined },
-      stderr: { write: (chunk) => { secondStderr += chunk } },
-      env: { KUN_STANDALONE_ROOT: root },
-      fetch: async () => {
-        secondFetches += 1
-        return Response.json(manifest)
-      }
-    })
-    expect(secondCode).toBe(70)
-    expect(secondStderr).toContain('another update is already in progress')
-    expect(secondFetches).toBe(0)
-    expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
-      .toMatchObject({ version: '1.2.3' })
-
-    // Release the occupant so the single detached updater can finish.
-    occupant.kill()
-    children.splice(children.indexOf(occupant), 1)
-    expect(await waitForFile(tuiUpdateResultPath(root), 120_000)).toBe(true)
-    const result = JSON.parse(await readFile(tuiUpdateResultPath(root), 'utf8'))
-    expect(result).toMatchObject({ status: 'succeeded', previousVersion: '1.2.3', targetVersion: '1.2.4' })
-    expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
-      .toMatchObject({ version: '1.2.4' })
-    expect(JSON.parse(await readFile(`${root}.previous/release.json`, 'utf8')))
-      .toMatchObject({ version: '1.2.3' })
-    const log = await readFile(tuiUpdateLogPath(root), 'utf8')
-    expect((log.match(/replacement succeeded/g) ?? []).length).toBe(1)
-  }, 240_000)
 })
 
 // Keep the import exercised on all platforms so unused-import checks do not

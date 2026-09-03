@@ -3,37 +3,43 @@ import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import {
   access,
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rename,
   rm,
   stat,
   writeFile
 } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import semver from 'semver'
 import { withRuntimeDataDirAncillaryWriter } from '../server/runtime-data-dir-lease.js'
 import {
   acquireTuiUpdateLock,
+  checkTuiUpdateKillPoint,
   clearTuiUpdateTransaction,
-  reconcilePendingTuiUpdate,
-  recordTuiUpdateUpdater,
   tuiUpdateLogPath,
-  tuiUpdateResultPath,
-  tuiUpdateLockPath,
   tuiUpdateTransactionDir,
-  tuiUpdateUpdaterPath,
+  writeTuiUpdateResult,
   writeTuiUpdateTransaction
 } from './self-update-transaction.js'
+import { reconcilePendingTuiUpdate } from './self-update-reconcile.js'
 import {
-  scheduleWindowsReplacement,
-  WindowsReplacementHandoffError
-} from './self-update-windows.js'
-
-const RELEASE_METADATA_FILENAME = 'release.json'
+  garbageCollectReleases,
+  listReleaseBuildIds,
+  pointerLauncherScript,
+  resolveStandaloneTuiLayout,
+  TUI_RELEASE_METADATA_FILENAME,
+  tuiPointerPath,
+  tuiReleaseDirForBuildId,
+  tuiReleasesDir,
+  writeStandaloneReleasePointer
+} from './self-update-layout.js'
+import { scheduleWindowsGarbageCollection } from './self-update-windows.js'
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1_000
 const FETCH_TIMEOUT_MS = 15_000
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1_000
@@ -161,12 +167,14 @@ export async function readStandaloneTuiRelease(
 ): Promise<{ root: string; metadata: StandaloneTuiReleaseMetadata } | null> {
   const configuredRoot = env.KUN_STANDALONE_ROOT?.trim()
   if (!configuredRoot) return null
-  const root = resolve(configuredRoot)
+  const base = resolve(configuredRoot)
+  const layout = await resolveStandaloneTuiLayout(base)
+  if (!layout) return null
   try {
     const metadata = parseStandaloneRelease(
-      JSON.parse(await readFile(join(root, RELEASE_METADATA_FILENAME), 'utf8')) as unknown
+      JSON.parse(await readFile(join(layout.releaseDir, TUI_RELEASE_METADATA_FILENAME), 'utf8')) as unknown
     )
-    return { root, metadata }
+    return { root: base, metadata }
   } catch {
     return null
   }
@@ -326,7 +334,6 @@ async function installStandaloneTuiUpdate(
   await access(dirname(currentRoot))
   const stagingRoot = await mkdtemp(join(dirname(currentRoot), '.kun-update-'))
   const archivePath = join(stagingRoot, check.artifact.fileName)
-  let retainStagingForWindows = false
   try {
     await downloadFile(check.artifact.url, archivePath, io.fetch ?? fetch)
     const details = await stat(archivePath)
@@ -335,9 +342,10 @@ async function installStandaloneTuiUpdate(
     if (digest !== check.artifact.sha256) throw new Error('downloaded update SHA-256 does not match manifest')
     validateArchiveEntries(archivePath)
     execFileSync('tar', ['-xf', archivePath, '-C', stagingRoot], { stdio: 'ignore' })
-    const nextRoot = join(stagingRoot, 'kun')
+    const nextBase = join(stagingRoot, 'kun')
+    const nextReleaseDir = join(nextBase, 'releases', check.latest.buildId)
     const nextRelease = parseStandaloneRelease(
-      JSON.parse(await readFile(join(nextRoot, RELEASE_METADATA_FILENAME), 'utf8')) as unknown
+      JSON.parse(await readFile(join(nextReleaseDir, TUI_RELEASE_METADATA_FILENAME), 'utf8')) as unknown
     )
     if (
       nextRelease.version !== check.latest.version ||
@@ -346,110 +354,118 @@ async function installStandaloneTuiUpdate(
     ) {
       throw new Error('downloaded update metadata does not match latest-tui.json')
     }
-    await smokeNewRelease(nextRoot, check.latest.version)
+    await smokeNewRelease(nextReleaseDir, check.latest.version)
+    checkTuiUpdateKillPoint('after-stage-verify')
+
     const lock = await acquireTuiUpdateLock(currentRoot)
-    let lockHandedOff = false
     try {
       // A concurrent updater may have finished while we downloaded; do not
-      // swap twice.
-      const installed = parseStandaloneRelease(
-        JSON.parse(await readFile(join(currentRoot, RELEASE_METADATA_FILENAME), 'utf8')) as unknown
-      )
-      if (semver.gte(installed.version, check.latest.version)) {
-        io.stdout.write(`Kun ${installed.version} is up to date.\n`)
+      // activate twice.
+      const installed = await readStandaloneTuiRelease({ KUN_STANDALONE_ROOT: currentRoot })
+      if (installed && semver.gte(installed.metadata.version, check.latest.version)) {
+        io.stdout.write(`Kun ${installed.metadata.version} is up to date.\n`)
         return
       }
-      const backupRoot = `${currentRoot}.previous`
+      const base = resolve(currentRoot)
+      const layout = await resolveStandaloneTuiLayout(base)
+      const newBuildId = check.latest.buildId
+      const fromBuildId = layout?.kind === 'legacy'
+        ? (installed?.metadata.buildId ?? check.current.buildId)
+        : basename(layout?.releaseDir ?? base)
+      const fromReleaseDir = tuiReleaseDirForBuildId(base, fromBuildId)
+      const toReleaseDir = tuiReleaseDirForBuildId(base, newBuildId)
+
+      // A legacy install needs the stable pointer launcher before any move, so
+      // the base directory (and therefore the PATH entry) never disappears.
+      if (layout?.kind === 'legacy') {
+        await migrateLegacyLauncher(base, process.platform)
+      }
+
+      // The immutable release directory is moved into place before the
+      // transaction is written; the pointer still points at the previous
+      // release, so a crash here leaves a working install.
+      await mkdir(tuiReleasesDir(base), { recursive: true })
+      await rm(toReleaseDir, { recursive: true, force: true })
+      await rename(nextReleaseDir, toReleaseDir)
+      checkTuiUpdateKillPoint('after-release-move')
+
+      await writeTuiUpdateTransaction(base, {
+        previousVersion: check.current.version,
+        targetVersion: check.latest.version,
+        buildId: newBuildId,
+        stagingRoot,
+        backupRoot: `${base}.previous`,
+        fromReleaseDir,
+        toReleaseDir,
+        pointerPath: tuiPointerPath(base)
+      })
+      checkTuiUpdateKillPoint('after-transaction')
+
+      // The single atomic step that changes which version `kun` runs.
+      await writeStandaloneReleasePointer(base, newBuildId)
+      checkTuiUpdateKillPoint('after-pointer-swap')
+
+      await writeTuiUpdateResult(base, {
+        status: 'succeeded',
+        previousVersion: check.current.version,
+        targetVersion: check.latest.version
+      })
+      await clearTuiUpdateTransaction(base)
+
+      if (layout?.kind === 'legacy') {
+        await moveLegacyScatteredEntries(base, fromReleaseDir)
+        checkTuiUpdateKillPoint('after-legacy-move')
+      }
+
+      const keep = [newBuildId, fromBuildId]
       if (process.platform === 'win32') {
-        await writeTuiUpdateTransaction(currentRoot, {
-          previousVersion: check.current.version,
-          targetVersion: check.latest.version,
-          buildId: check.latest.buildId,
-          stagingRoot,
-          backupRoot
-        })
-        const transactionDir = tuiUpdateTransactionDir(currentRoot)
-        const updaterStartedAt = new Date().toISOString()
-        let updater: Awaited<ReturnType<typeof scheduleWindowsReplacement>>
-        try {
-          updater = await scheduleWindowsReplacement({
-            currentRoot,
-            nextRoot,
-            backupRoot,
-            stagingRoot,
-            transactionDir,
-            resultPath: tuiUpdateResultPath(currentRoot),
-            logPath: tuiUpdateLogPath(currentRoot),
-            lockPath: tuiUpdateLockPath(currentRoot),
-            previousVersion: check.current.version,
-            targetVersion: check.latest.version,
-            buildId: check.latest.buildId,
-            target: check.current.target,
-            channel: 'stable',
-            lockToken: lock.token,
-            ackPath: tuiUpdateUpdaterPath(currentRoot),
-            updaterStartedAt
-          })
-        } catch (error) {
-          const lockTakenOver =
-            error instanceof WindowsReplacementHandoffError && error.lockTakenOver
-          if (lockTakenOver) {
-            // The updater owns the lock and will finish and clean up on its own.
-            lockHandedOff = true
-            retainStagingForWindows = true
-          } else {
-            await clearTuiUpdateTransaction(currentRoot)
-          }
-          throw error
-        }
-        // The ack was verified (lock token + pid match): the detached updater now
-        // owns the lock and will finish the replacement on its own. Nothing after
-        // this point may release the lock, clear the transaction, or delete staging.
-        lockHandedOff = true
-        retainStagingForWindows = true
-        try {
-          await recordTuiUpdateUpdater(currentRoot, {
-            schemaVersion: 1 as const,
-            pid: updater.pid,
-            processIdentity: updater.processIdentity,
-            token: lock.token,
-            startedAt: updaterStartedAt
-          })
-        } catch (recordError) {
-          // The updater's own acknowledgement at the same path is already a valid
-          // TuiUpdateUpdater record; this rewrite is enrichment and its failure must
-          // not roll back the completed ownership handoff.
-          io.stderr.write(
-            `kun update: warning: could not persist updater identity (` +
-            `${recordError instanceof Error ? recordError.message : String(recordError)}); ` +
-            `the updater acknowledgement remains in place\n`
-          )
-        }
-        io.stdout.write(
-          `Kun ${check.latest.version} is staged. It replaces the current install after ` +
-          'other Kun TUI processes exit; the result is reported on next launch.\n'
-        )
-        return
+        const obsolete = await obsoleteReleaseDirs(base, keep)
+        await scheduleWindowsGarbageCollection({
+          base,
+          obsoleteReleaseDirs: obsolete,
+          transactionDir: tuiUpdateTransactionDir(base),
+          logPath: tuiUpdateLogPath(base)
+        }).catch(() => undefined)
+      } else {
+        await garbageCollectReleases(base, keep).catch(() => undefined)
       }
-      await rm(backupRoot, { recursive: true, force: true })
-      await rename(currentRoot, backupRoot)
-      try {
-        await rename(nextRoot, currentRoot)
-      } catch (error) {
-        await rename(backupRoot, currentRoot).catch(() => undefined)
-        throw error
-      }
-      io.stdout.write(`Kun ${check.latest.version} installed. Restart Kun to use the new release.\n`)
+
+      io.stdout.write(`Kun ${check.latest.version} installed. The next \`kun\` invocation uses it.\n`)
     } finally {
-      if (!lockHandedOff) {
-        await lock.release().catch(() => undefined)
-      }
+      await lock.release().catch(() => undefined)
     }
   } finally {
-    if (!retainStagingForWindows) {
-      await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined)
-    }
+    await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined)
   }
+}
+
+/** Replace a legacy-layout launcher with the stable pointer-following launcher. */
+async function migrateLegacyLauncher(base: string, platform: NodeJS.Platform): Promise<void> {
+  const binDir = join(base, 'bin')
+  await mkdir(binDir, { recursive: true })
+  const launcherPath = join(binDir, platform === 'win32' ? 'kun.cmd' : 'kun')
+  const temporary = `${launcherPath}.tmp-${process.pid}`
+  await writeFile(temporary, pointerLauncherScript(platform), { mode: 0o755 })
+  if (platform !== 'win32') await chmod(temporary, 0o755)
+  await rename(temporary, launcherPath)
+  checkTuiUpdateKillPoint('after-launcher-swap')
+}
+
+/** Move a legacy install's scattered top-level files into its immutable release dir. */
+async function moveLegacyScatteredEntries(base: string, fromReleaseDir: string): Promise<void> {
+  await mkdir(fromReleaseDir, { recursive: true })
+  const reserved = new Set(['bin', 'current', 'releases'])
+  for (const entry of await readdir(base, { withFileTypes: true })) {
+    if (reserved.has(entry.name)) continue
+    await rename(join(base, entry.name), join(fromReleaseDir, entry.name)).catch(() => undefined)
+  }
+}
+
+async function obsoleteReleaseDirs(base: string, keep: readonly string[]): Promise<string[]> {
+  const keepSet = new Set(keep)
+  return (await listReleaseBuildIds(base))
+    .filter((buildId) => !keepSet.has(buildId))
+    .map((buildId) => tuiReleaseDirForBuildId(base, buildId))
 }
 
 function parseStandaloneRelease(value: unknown): StandaloneTuiReleaseMetadata {
