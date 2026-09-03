@@ -119,6 +119,13 @@ export class HybridThreadStore implements ThreadStore {
   }
   private hasDb(): boolean { return this.sqliteState.available(this.db !== null) }
 
+  // SQLite is only a complete list source once startup backfill has finished;
+  // a partially populated index must fall back to the canonical JSONL scan
+  // instead of silently dropping threads that have not been indexed yet.
+  private isIndexReady(): boolean {
+    return this.backfill?.isIndexReady() === true
+  }
+
   private markSqliteDegraded(action: string, error: unknown): void {
     this.sqliteState.fail(action, error)
   }
@@ -132,8 +139,10 @@ export class HybridThreadStore implements ThreadStore {
     // Missing or intentionally discarded SQLite indexes are rebuilt from the
     // canonical JSONL metadata before the first list response. Usage/event
     // backfill remains in the background so large histories stay responsive.
+    // A backfill that fails mid-startup leaves a partial index, so the list
+    // falls back to the canonical filesystem scan until the index is ready.
     await this.backfill?.waitForIndex()
-    if (this.hasDb()) {
+    if (this.hasDb() && this.isIndexReady()) {
       try {
         const summaries = await summariesFromRows(this, this.queryThreadRows(options))
         this.markSqliteHealthy()

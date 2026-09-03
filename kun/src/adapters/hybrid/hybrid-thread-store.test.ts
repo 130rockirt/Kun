@@ -32,7 +32,7 @@ function backfillInternals(store: HybridThreadStore): {
       all(...args: unknown[]): unknown[]
     }
   } | null
-  backfill: { wait(): Promise<void> } | null
+  backfill: { wait(): Promise<void>; isIndexReady(): boolean } | null
 } {
   return store as unknown as {
     db: {
@@ -41,7 +41,7 @@ function backfillInternals(store: HybridThreadStore): {
         all(...args: unknown[]): unknown[]
       }
     } | null
-    backfill: { wait(): Promise<void> } | null
+    backfill: { wait(): Promise<void>; isIndexReady(): boolean } | null
   }
 }
 
@@ -383,3 +383,50 @@ async function writeThreadDocument(root: string, thread: ThreadRecord): Promise<
       .map((item) => JSON.stringify(item)).join('\n').concat('\n'))
   ])
 }
+
+describe('HybridThreadStore index backfill failure fallback', () => {
+  it('falls back to the filesystem when startup index backfill fails mid-startup', async () => {
+    const { root, store: first } = await createStore()
+    const indexed = createThreadRecord({
+      id: 'thread_indexed',
+      title: 'Indexed',
+      workspace: '/tmp/workspace',
+      model: 'test-model'
+    })
+    await first.upsert(indexed)
+    await first.shutdown()
+
+    const diskOnly = legacyWorkThread('thread_on_disk_only', 'Disk only')
+    await writeThreadDocument(root, diskOnly)
+
+    const store = new HybridThreadStore({ dataDir: root })
+    const source = store as unknown as { threadIdsFromFilesystem(): Promise<string[]> }
+    const real = source.threadIdsFromFilesystem.bind(source)
+    let failNext = true
+    const enumeration = vi.spyOn(source, 'threadIdsFromFilesystem').mockImplementation(async () => {
+      if (failNext) { failNext = false; throw new Error('simulated enumeration failure') }
+      return real()
+    })
+
+    try {
+      await store.ready()
+      const internals = backfillInternals(store)
+      expect(internals.db).not.toBeNull()
+      expect(internals.backfill?.isIndexReady()).toBe(false)
+
+      const summaries = await store.list({ includeArchived: true })
+      expect(summaries.map((summary) => summary.id).sort()).toEqual(
+        ['thread_indexed', 'thread_on_disk_only'].sort()
+      )
+
+      const page = await store.listPage({ includeArchived: true })
+      expect(page.total).toBe(2)
+      expect(page.threads.map((summary) => summary.id).sort()).toEqual(
+        ['thread_indexed', 'thread_on_disk_only'].sort()
+      )
+    } finally {
+      enumeration.mockRestore()
+      store.close()
+    }
+  })
+})

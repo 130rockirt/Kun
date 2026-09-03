@@ -3,6 +3,8 @@ export type BackfillScan<TUsage> = { highWater: number; usage: TUsage[] }
 type UsageBackfillState = { completed: boolean; highWater: number }
 type IndexedRow = { id: string; usage_backfilled?: number; usage_backfill_high_water?: number }
 
+export type HybridThreadIndexStatus = 'not_started' | 'running' | 'ready' | 'failed'
+
 export type HybridThreadBackfillDeps<TUsage> = {
   indexedRows: () => IndexedRow[]
   filesystemThreadIds: () => Promise<string[]>
@@ -23,7 +25,7 @@ export class HybridThreadBackfillCoordinator<TUsage> {
   private indexPromise: Promise<void> | null = null
   private promise: Promise<void> | null = null
   private stopped = false
-  private indexReady = false
+  private indexStatus: HybridThreadIndexStatus = 'not_started'
   private usageReady = false
   private rows: IndexedRow[] = []
   private filesystemThreadIds: string[] = []
@@ -34,11 +36,15 @@ export class HybridThreadBackfillCoordinator<TUsage> {
 
   start(): void {
     if (this.promise || this.stopped || this.usageReady) return
+    this.indexStatus = 'running'
     this.indexPromise = this.indexMissingThreads()
-      .then(() => { this.indexReady = !this.stopped })
-      .catch((error) => this.deps.warn('background index backfill', error))
+      .then(() => { this.indexStatus = this.stopped ? 'failed' : 'ready' })
+      .catch((error) => {
+        this.indexStatus = 'failed'
+        this.deps.warn('background index backfill', error)
+      })
     this.promise = this.indexPromise
-      .then(() => this.indexReady ? this.backfillUsageAndCleanStaleRows() : false)
+      .then(() => this.indexStatus === 'ready' ? this.backfillUsageAndCleanStaleRows() : false)
       .then((complete) => { this.usageReady = complete })
       .catch((error) => this.deps.warn('background backfill', error))
       .finally(() => { this.promise = null })
@@ -47,9 +53,10 @@ export class HybridThreadBackfillCoordinator<TUsage> {
   stop(): void { this.stopped = true }
   async waitForIndex(): Promise<void> { await this.indexPromise }
   async wait(): Promise<void> { await this.promise }
+  isIndexReady(): boolean { return this.indexStatus === 'ready' }
   isUsageReady(threadIds?: string[]): boolean {
     if (!threadIds || threadIds.length === 0) return this.usageReady
-    if (!this.indexReady) return false
+    if (this.indexStatus !== 'ready') return false
     return threadIds.every((threadId) => {
       if (!this.filesystemThreadIds.includes(threadId)) return true
       return this.indexed.get(threadId)?.completed === true

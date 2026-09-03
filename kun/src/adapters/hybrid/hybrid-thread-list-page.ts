@@ -15,6 +15,7 @@ import { summaryFromRow } from './hybrid-thread-index-mapping.js'
  */
 export interface HybridThreadListPageSource {
   hasDb(): boolean
+  isIndexReady(): boolean
   queryThreadRows(options: ThreadStoreListOptions): ThreadRow[]
   rowHasReadableJsonl(row: ThreadRow): Promise<boolean>
   ensureRowAgentSurface(row: ThreadRow): Promise<ThreadRow>
@@ -66,7 +67,7 @@ export async function hybridThreadStoreListPage(
   options: ThreadStoreListOptions
 ): Promise<ThreadStoreListPage> {
   const source = asSource(store)
-  if (source.hasDb()) {
+  if (source.hasDb() && source.isIndexReady()) {
     try {
       const pageSize = typeof options.limit === 'number' ? Math.max(1, Math.floor(options.limit)) : 0
       const wanted = pageSize > 0 ? pageSize + 1 : 0

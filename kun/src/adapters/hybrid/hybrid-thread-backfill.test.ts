@@ -63,6 +63,7 @@ describe('HybridThreadBackfillCoordinator shutdown', () => {
     ids.resolve(['thread_1'])
     await coordinator.wait()
     expect(coordinator.isUsageReady()).toBe(false)
+    expect(coordinator.isIndexReady()).toBe(false)
 
     expect(deps.scanEvents).not.toHaveBeenCalled()
     expect(deps.insertUsage).not.toHaveBeenCalled()
@@ -179,5 +180,47 @@ describe('HybridThreadBackfillCoordinator failures', () => {
     expect(deps.noteExistingHighWater).toHaveBeenCalledWith('thread_1', 0)
     expect(deps.insertUsage).toHaveBeenCalledWith('thread_1', [], 0)
     expect(deps.markUsageBackfilled).toHaveBeenCalledWith('thread_1')
+  })
+})
+
+describe('HybridThreadBackfillCoordinator index status', () => {
+  it('is ready after a successful startup index', async () => {
+    const deps = makeDeps()
+    const coordinator = new HybridThreadBackfillCoordinator(deps)
+
+    coordinator.start()
+    await coordinator.waitForIndex()
+
+    expect(coordinator.isIndexReady()).toBe(true)
+  })
+
+  it('resolves waitForIndex but stays not ready when discovery fails', async () => {
+    const failure = new Error('cannot enumerate threads')
+    const deps = makeDeps({ filesystemThreadIds: vi.fn(async () => { throw failure }) })
+    const coordinator = new HybridThreadBackfillCoordinator(deps)
+
+    coordinator.start()
+    await coordinator.waitForIndex()
+
+    expect(coordinator.isIndexReady()).toBe(false)
+    expect(coordinator.isUsageReady()).toBe(false)
+    expect(deps.warn).toHaveBeenCalledWith('background index backfill', failure)
+  })
+
+  it('becomes ready again after a failed index backfill is retried', async () => {
+    const filesystemThreadIds = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary enumeration failure'))
+      .mockResolvedValue(['thread_1'])
+    const deps = makeDeps({ filesystemThreadIds })
+    const coordinator = new HybridThreadBackfillCoordinator(deps)
+
+    coordinator.start()
+    await coordinator.wait()
+    expect(coordinator.isIndexReady()).toBe(false)
+
+    coordinator.start()
+    await coordinator.wait()
+    expect(coordinator.isIndexReady()).toBe(true)
+    expect(filesystemThreadIds).toHaveBeenCalledTimes(2)
   })
 })
