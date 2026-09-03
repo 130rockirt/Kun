@@ -408,4 +408,36 @@ describe('FileSessionEventIndex', () => {
     expect(stateAfterHeal.lastIndexedSeq).toBe(301)
     expect(stateAfterHeal.generation).toBe(2)
   })
+
+  it('accepts a zero-entry fully-scanned index and seeds it on the next append', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-event-index-zero-'))
+    roots.push(root)
+    const threadId = 'thread-zero'
+    const { sourcePath, size, dev, ino } = await buildSource(root, threadId, 5)
+    const index = new FileSessionEventIndex()
+    await writeState(root, v2State({
+      dev, ino, entryCount: 0, lastIndexedSeq: 0, lastIndexedOffset: 0, generation: 5, indexedBytes: size
+    }))
+    await writeBin(root, Buffer.alloc(0))
+
+    // startOffset treats a zero-entry state as a valid degradation and keeps sidecars.
+    expect(await index.startOffset(threadId, sourcePath, 1)).toBe(0)
+    await expect(stat(join(root, 'events-index.bin'))).resolves.toBeTruthy()
+    await expect(stat(join(root, 'events-index.state.json'))).resolves.toBeTruthy()
+
+    // The first subsequent append seeds the sparse index without losing monotonicity.
+    const extra = `${JSON.stringify({
+      kind: 'heartbeat', seq: 300, threadId, timestamp: '2026-09-03T00:00:00.000Z'
+    })}\n`
+    await appendFile(sourcePath, extra)
+    const info = await stat(sourcePath)
+    await index.recordAppend({
+      threadId, sourcePath, seq: 300, recordOffset: size, sourceSize: info.size, dev, ino
+    })
+    expect(await readEntries(root)).toEqual([{ seq: 300, offset: size }])
+    const state = await readStateJson(root)
+    expect(state.entryCount).toBe(1)
+    expect(state.generation).toBe(5)
+    expect(state.lastIndexedSeq).toBe(300)
+  })
 })

@@ -193,24 +193,25 @@ export class FileSessionStore implements SessionStore {
     const path = this.eventsPath(threadId)
     const record = `${JSON.stringify(event)}\n`
     let usageCompactionDue = false
-    await this.fileAccess.withRead(path, () => this.withThreadWrite(threadId, async () => {
-      await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
-      await ensureEventTailReady({
-        verified: this.verifiedEventTails, threadId, path,
-        evidencePath: join(this.threadDir(threadId), 'events.torn-tail.json')
-      })
-      await appendFile(path, record, { encoding: 'utf-8', mode: 0o600 })
-      this.verifiedEventTails.add(threadId)
-      this.bumpEventHistoryRevision(threadId)
-      const info = await stat(path)
-      await this.eventHistory.recordAppend(threadId, event.seq, Buffer.byteLength(record), info).catch(() => undefined)
-      this.cacheHighestSeq(threadId, event.seq, info, { preserveHigher: true })
-      if (this.eventRetention.shouldSchedule(info.size)) this.compactionScheduler.schedule(threadId, 'events')
-      if (event.kind === 'usage') {
-        await this.usageIndex.recordUsage(threadId, event)
-        usageCompactionDue = this.usageCompactionDebt.record(threadId, event, Buffer.byteLength(record), info.size)
-      }
-    }))
+    await this.eventHistory.withEventIndexMutation(threadId, () =>
+      this.fileAccess.withRead(path, () => this.withThreadWrite(threadId, async () => {
+        await mkdir(this.threadDir(threadId), { recursive: true, mode: 0o700 })
+        await ensureEventTailReady({
+          verified: this.verifiedEventTails, threadId, path,
+          evidencePath: join(this.threadDir(threadId), 'events.torn-tail.json')
+        })
+        await appendFile(path, record, { encoding: 'utf-8', mode: 0o600 })
+        this.verifiedEventTails.add(threadId)
+        this.bumpEventHistoryRevision(threadId)
+        const info = await stat(path)
+        await this.eventHistory.recordAppend(threadId, event.seq, Buffer.byteLength(record), info).catch(() => undefined)
+        this.cacheHighestSeq(threadId, event.seq, info, { preserveHigher: true })
+        if (this.eventRetention.shouldSchedule(info.size)) this.compactionScheduler.schedule(threadId, 'events')
+        if (event.kind === 'usage') {
+          await this.usageIndex.recordUsage(threadId, event)
+          usageCompactionDue = this.usageCompactionDebt.record(threadId, event, Buffer.byteLength(record), info.size)
+        }
+      })))
     // Never await usage compaction on the live append path — a multi-hundred-MB
     // events.jsonl rewrite would starve lease heartbeats (#621 family).
     if (usageCompactionDue) this.scheduleUsageEventCompaction(threadId)

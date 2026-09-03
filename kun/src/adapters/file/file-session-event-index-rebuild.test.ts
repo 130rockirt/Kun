@@ -2,8 +2,9 @@ import { appendFile, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } fro
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { FileSessionEventIndex, eventIndexPaths } from './file-session-event-index.js'
+import { FileSessionEventIndex, eventIndexPaths, eventIndexPublishConflict } from './file-session-event-index.js'
 import { FileSessionEventIndexRebuild } from './file-session-event-index-rebuild.js'
+import { EVENT_INDEX_REBUILD_TORN_TAIL_STABLE_MS, readEventIndexRebuildDiagnostic } from './file-session-event-index-diagnostic.js'
 import { iterateRuntimeEventsJsonl } from './file-session-jsonl.js'
 import { JsonlFileAccessCoordinator } from './jsonl-file-access.js'
 
@@ -29,17 +30,20 @@ async function writeEvents(threadDir: string, threadId: string, count: number): 
   return path
 }
 
-async function newRebuild(threadsDir: string, index: FileSessionEventIndex, limits: {
-  maxBytes?: number
-  maxEvents?: number
-}): Promise<FileSessionEventIndexRebuild> {
+async function newRebuild(
+  threadsDir: string,
+  index: FileSessionEventIndex,
+  limits: { maxBytes?: number; maxEvents?: number; maxMs?: number } = {},
+  options: { maxRecordBytes?: number; now?: () => number } = {}
+): Promise<FileSessionEventIndexRebuild> {
   return new FileSessionEventIndexRebuild({
     threadsDir,
     eventsPathFor: (threadId) => join(threadsDir, threadId, 'events.jsonl'),
     fileAccess: new JsonlFileAccessCoordinator(),
     index,
-    maxRecordBytes: 4 * 1024 * 1024,
-    limits
+    maxRecordBytes: options.maxRecordBytes ?? 4 * 1024 * 1024,
+    limits,
+    now: options.now
   })
 }
 
@@ -257,7 +261,7 @@ describe('FileSessionEventIndexRebuild', () => {
     await rebuild.runSlice()
 
     const sweep = JSON.parse(await readFile(join(threadsDir, 'event-index-rebuild.sweep.json'), 'utf8'))
-    expect(sweep.inProgress).toBe(threadId)
+    expect(sweep.inProgress.threadId).toBe(threadId)
     expect(sweep.inProgressSource).toBe('priority')
     expect(sweep.cursor).toBeUndefined()
 
@@ -297,4 +301,164 @@ describe('FileSessionEventIndexRebuild', () => {
     expect(await index.startOffset(threadC, pathC, 290)).toBeGreaterThan(0)
     expect(rebuild.stats()).toMatchObject({ published: 2, skippedValid: 1 })
   }, 30000)
+
+  it('quarantines a stable torn tail and keeps the index over complete records', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-event-rebuild-torntail-'))
+    roots.push(root)
+    const threadsDir = join(root, 'threads')
+    const threadId = 'thread-torntail'
+    const threadDir = join(threadsDir, threadId)
+    await mkdir(threadDir, { recursive: true, mode: 0o700 })
+    const eventsPath = join(threadDir, 'events.jsonl')
+    await writeFile(eventsPath, '')
+    for (let seq = 1; seq <= 300; seq += 1) await appendFile(eventsPath, record(threadId, seq))
+    // Unterminated final record with no trailing newline.
+    await appendFile(eventsPath, '{"kind":"heartbeat","seq":301,"threadId":"thread-torntail","timestamp":"2026-09-03T00:00:00.000Z"}')
+
+    const index = new FileSessionEventIndex()
+    let now = 1_000_000
+    const rebuild = await newRebuild(threadsDir, index, {}, { now: () => now })
+
+    // First slice scans complete records and stalls on the torn tail.
+    expect(await rebuild.runSlice()).toBe(false)
+    expect(rebuild.stats().published).toBe(0)
+    expect(await index.startOffset(threadId, eventsPath, 290)).toBe(0)
+
+    // Advancing the clock past the stability window quarantines the tail.
+    now += EVENT_INDEX_REBUILD_TORN_TAIL_STABLE_MS + 1
+    expect(await rebuild.runSlice()).toBe(true)
+
+    expect(await index.startOffset(threadId, eventsPath, 290)).toBeGreaterThan(0)
+    const state = JSON.parse(await readFile(eventIndexPaths(eventsPath).state, 'utf8'))
+    expect(state.entryCount).toBeGreaterThan(0)
+    expect(state.indexedBytes).toBe((await stat(eventsPath)).size)
+    const diagnostic = await readEventIndexRebuildDiagnostic(eventIndexPaths(eventsPath).diagnostic)
+    expect(diagnostic).toMatchObject({ reason: 'torn_tail' })
+  })
+
+  it('publishes a zero-entry index when every line is invalid', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-event-rebuild-all-invalid-'))
+    roots.push(root)
+    const threadsDir = join(root, 'threads')
+    const threadId = 'thread-all-invalid'
+    const threadDir = join(threadsDir, threadId)
+    const eventsPath = join(threadDir, 'events.jsonl')
+    await mkdir(threadDir, { recursive: true, mode: 0o700 })
+    await writeFile(eventsPath, '')
+    for (let i = 0; i < 5; i += 1) await appendFile(eventsPath, 'not-json\n')
+
+    const index = new FileSessionEventIndex()
+    const rebuild = await newRebuild(threadsDir, index, {})
+    await runToCompletion(rebuild)
+
+    const paths = eventIndexPaths(eventsPath)
+    expect((await stat(paths.bin)).size).toBe(0)
+    const state = JSON.parse(await readFile(paths.state, 'utf8'))
+    expect(state.entryCount).toBe(0)
+    expect(state.indexedBytes).toBe((await stat(eventsPath)).size)
+    expect(rebuild.stats().published).toBe(1)
+
+    // The next sweep recognizes the zero-entry index and does not re-publish.
+    const again = await newRebuild(threadsDir, index, {})
+    await runToCompletion(again)
+    expect(again.stats()).toMatchObject({ published: 0, skippedValid: 1 })
+
+    const diagnostic = await readEventIndexRebuildDiagnostic(paths.diagnostic)
+    expect(diagnostic).toMatchObject({ reason: 'invalid_record' })
+    expect(typeof diagnostic?.byteOffset).toBe('number')
+  })
+
+  it('publishes a zero-entry index when every line is oversized', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-event-rebuild-all-oversized-'))
+    roots.push(root)
+    const threadsDir = join(root, 'threads')
+    const threadId = 'thread-all-oversized'
+    const threadDir = join(threadsDir, threadId)
+    const eventsPath = join(threadDir, 'events.jsonl')
+    await mkdir(threadDir, { recursive: true, mode: 0o700 })
+    const big = 'x'.repeat(256)
+    await writeFile(eventsPath, '')
+    for (let i = 0; i < 5; i += 1) await appendFile(eventsPath, `${big}\n`)
+
+    const index = new FileSessionEventIndex()
+    const rebuild = await newRebuild(threadsDir, index, {}, { maxRecordBytes: 64 })
+    await runToCompletion(rebuild)
+
+    const paths = eventIndexPaths(eventsPath)
+    expect((await stat(paths.bin)).size).toBe(0)
+    const state = JSON.parse(await readFile(paths.state, 'utf8'))
+    expect(state.entryCount).toBe(0)
+    const diagnostic = await readEventIndexRebuildDiagnostic(paths.diagnostic)
+    expect(diagnostic).toMatchObject({ reason: 'oversized_record' })
+  })
+
+  it('detects publish conflicts from source or generation drift', () => {
+    const snapshot = { dev: 1, ino: 2, size: 100, mtimeMs: 5, generation: undefined }
+    expect(eventIndexPublishConflict(snapshot, { dev: 1, ino: 2, size: 100, mtimeMs: 5 }, undefined)).toBe(false)
+    expect(eventIndexPublishConflict(snapshot, { dev: 1, ino: 2, size: 101, mtimeMs: 5 }, undefined)).toBe(true)
+    expect(eventIndexPublishConflict(snapshot, { dev: 1, ino: 2, size: 100, mtimeMs: 6 }, undefined)).toBe(true)
+    expect(eventIndexPublishConflict(snapshot, { dev: 1, ino: 2, size: 100, mtimeMs: 5 }, 3)).toBe(true)
+  })
+
+  it('keeps replay lossless when an append lands mid-rebuild', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-event-rebuild-race-'))
+    roots.push(root)
+    const threadsDir = join(root, 'threads')
+    const threadId = 'thread-race'
+    const threadDir = join(threadsDir, threadId)
+    const eventsPath = await writeEvents(threadDir, threadId, 600)
+
+    const index = new FileSessionEventIndex()
+    const rebuild = await newRebuild(threadsDir, index, { maxEvents: 50 })
+    await rebuild.runSlice() // partial scan
+
+    // A live append commits a fresh formal index during the scan.
+    await appendFile(eventsPath, record(threadId, 601))
+    const info = await stat(eventsPath)
+    await index.recordAppend({
+      threadId,
+      sourcePath: eventsPath,
+      seq: 601,
+      recordOffset: info.size - Buffer.byteLength(record(threadId, 601)),
+      sourceSize: info.size,
+      dev: info.dev,
+      ino: info.ino
+    })
+
+    await runToCompletion(rebuild)
+
+    // The canonical log is authoritative regardless of index state.
+    const events: number[] = []
+    for await (const event of iterateRuntimeEventsJsonl(eventsPath, 0, 1024 * 1024, 0)) {
+      events.push(event.seq)
+    }
+    expect(events).toEqual(Array.from({ length: 601 }, (_, i) => i + 1))
+  })
+
+  it('quarantines a persistently failing source and continues the sweep', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-event-rebuild-blocked-'))
+    roots.push(root)
+    const threadsDir = join(root, 'threads')
+    const failingPath = join(threadsDir, 'thread-a', 'events.jsonl')
+    await writeEvents(join(threadsDir, 'thread-a'), 'thread-a', 40)
+    await writeEvents(join(threadsDir, 'thread-b'), 'thread-b', 40)
+
+    const index = {
+      withIndexMutation: async (sourcePath: string, operation: () => Promise<unknown>) => {
+        if (sourcePath === failingPath) throw new Error('injected publish failure')
+        return operation()
+      },
+      clearMemory: () => undefined
+    } as unknown as FileSessionEventIndex
+    const rebuild = await newRebuild(threadsDir, index, {})
+
+    expect(await rebuild.runSlice()).toBe(false) // failure 1
+    expect(await rebuild.runSlice()).toBe(false) // failure 2
+    expect(await rebuild.runSlice()).toBe(true)  // failure 3 -> quarantine, then thread-b
+
+    const sweep = JSON.parse(await readFile(join(threadsDir, 'event-index-rebuild.sweep.json'), 'utf8'))
+    expect(sweep.blocked['thread-a']).toBeTruthy()
+    expect(sweep.blocked['thread-a'].sourceFingerprint).toBeTruthy()
+    expect(rebuild.stats()).toMatchObject({ blocked: 1 })
+  })
 })

@@ -1,5 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFile, mkdir, open, readFile, rm, stat, truncate, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { z } from 'zod'
 import { atomicWriteFile } from './atomic-write.js'
 
@@ -33,8 +34,12 @@ export type EventIndexStats = {
   repairs: number
 }
 
+type MutationScope = Map<string, { active: boolean }>
+
 export class FileSessionEventIndex {
   private readonly stateCache = new Map<string, EventIndexState>()
+  private readonly mutationTail = new Map<string, Promise<void>>()
+  private readonly mutationScopes = new AsyncLocalStorage<MutationScope>()
   private readonly onFallback?: (threadId: string) => void
   private seeks = 0
   private fallbacks = 0
@@ -46,7 +51,44 @@ export class FileSessionEventIndex {
     this.onFallback = options.onFallback
   }
 
+  /**
+   * Serialize index mutations per canonical source path so a background
+   * rebuild publish and a live append can never interleave the bin/state
+   * pair. Calls for the same source are reentrant (a nested mutation from
+   * inside an outer mutation bypasses the queue) mirroring the JSONL read
+   * scope, so existing single-call `recordAppend` users stay correct.
+   */
+  async withIndexMutation<T>(sourcePath: string, operation: () => Promise<T>): Promise<T> {
+    const key = resolve(sourcePath)
+    const inherited = this.mutationScopes.getStore()
+    if (inherited?.get(key)?.active) return operation()
+    const prior = this.mutationTail.get(key) ?? Promise.resolve()
+    const token = { active: true }
+    const scope = new Map(inherited)
+    scope.set(key, token)
+    const run = prior.then(() => this.mutationScopes.run(scope, operation))
+    const tail = run.then(() => undefined, () => undefined)
+    this.mutationTail.set(key, tail)
+    try {
+      return await run
+    } finally {
+      if (this.mutationTail.get(key) === tail) this.mutationTail.delete(key)
+    }
+  }
+
   async recordAppend(input: {
+    threadId: string
+    sourcePath: string
+    seq: number
+    recordOffset: number
+    sourceSize: number
+    dev: number
+    ino: number
+  }): Promise<void> {
+    await this.withIndexMutation(input.sourcePath, () => this.recordAppendUnlocked(input))
+  }
+
+  private async recordAppendUnlocked(input: {
     threadId: string
     sourcePath: string
     seq: number
@@ -60,7 +102,8 @@ export class FileSessionEventIndex {
     let validState = state && state.dev === input.dev && state.ino === input.ino &&
       state.indexedBytes <= input.recordOffset && state.lastIndexedOffset <= input.recordOffset &&
       state.lastIndexedSeq <= input.seq ? state : undefined
-    const due = !validState || input.seq - validState.lastIndexedSeq >= EVENT_INDEX_SEQ_STEP ||
+    const due = !validState || validState.entryCount === 0 ||
+      input.seq - validState.lastIndexedSeq >= EVENT_INDEX_SEQ_STEP ||
       input.recordOffset - validState.lastIndexedOffset >= EVENT_INDEX_BYTE_STEP
     if (!due) return
 
@@ -108,6 +151,17 @@ export class FileSessionEventIndex {
     maxLineBytes = DEFAULT_MAX_LINE_BYTES
   ): Promise<number> {
     if (sinceSeq <= 0) return 0
+    return this.withIndexMutation(sourcePath, () =>
+      this.startOffsetLocked(threadId, sourcePath, sinceSeq, maxLineBytes)
+    )
+  }
+
+  private async startOffsetLocked(
+    threadId: string,
+    sourcePath: string,
+    sinceSeq: number,
+    maxLineBytes: number
+  ): Promise<number> {
     try {
       const [source, state, bytes] = await Promise.all([
         stat(sourcePath),
@@ -115,9 +169,20 @@ export class FileSessionEventIndex {
         readFile(eventIndexPath(sourcePath))
       ])
       if (!state || state.dev !== source.dev || state.ino !== source.ino ||
-        state.indexedBytes > source.size || state.entryCount <= 0 ||
+        state.indexedBytes > source.size ||
         bytes.length !== state.entryCount * EVENT_INDEX_RECORD_BYTES) {
         return this.failRebuild(threadId, sourcePath)
+      }
+      // A fully-scanned zero-entry index is a valid performance degradation,
+      // not corruption: replay from the top and keep the sidecars so the next
+      // append can seed the sparse index without an extra rebuild.
+      if (state.entryCount === 0) {
+        if (state.lastIndexedSeq !== 0 || state.lastIndexedOffset !== 0) {
+          return this.failRebuild(threadId, sourcePath)
+        }
+        this.seeks += 1
+        this.lastStartOffset = 0
+        return 0
       }
       if (!validEntries(bytes, state.entryCount)) {
         return this.failRebuild(threadId, sourcePath)
@@ -149,6 +214,10 @@ export class FileSessionEventIndex {
   }
 
   async invalidate(threadId: string, sourcePath: string): Promise<void> {
+    await this.withIndexMutation(sourcePath, () => this.invalidateUnlocked(threadId, sourcePath))
+  }
+
+  private async invalidateUnlocked(threadId: string, sourcePath: string): Promise<void> {
     this.stateCache.delete(threadId)
     const paths = eventIndexPaths(sourcePath)
     await Promise.all([
@@ -229,12 +298,14 @@ export function eventIndexPaths(sourcePath: string): {
   state: string
   rebuildBin: string
   rebuildState: string
+  diagnostic: string
 } {
   return {
     bin: eventIndexPath(sourcePath),
     state: eventIndexStatePath(sourcePath),
     rebuildBin: join(dirname(sourcePath), 'events-index.rebuild.bin'),
-    rebuildState: join(dirname(sourcePath), 'events-index.rebuild.state.json')
+    rebuildState: join(dirname(sourcePath), 'events-index.rebuild.state.json'),
+    diagnostic: join(dirname(sourcePath), 'events-index.rebuild-diagnostic.json')
   }
 }
 
@@ -261,14 +332,45 @@ export function eventIndexIsValid(
   source: { dev: number; ino: number; size: number },
   binBytes: number
 ): state is EventIndexState {
-  return Boolean(
-    state &&
-    state.dev === source.dev &&
-    state.ino === source.ino &&
-    state.indexedBytes <= source.size &&
-    state.entryCount > 0 &&
-    binBytes === state.entryCount * EVENT_INDEX_RECORD_BYTES
-  )
+  if (!state || state.dev !== source.dev || state.ino !== source.ino) return false
+  if (state.indexedBytes > source.size) return false
+  // A fully-scanned source with no indexable events publishes a zero-length
+  // bin. This is a valid performance degradation (replay from byte zero), not
+  // corruption, so the rebuild sweep must not keep retrying it.
+  if (state.entryCount === 0) {
+    return binBytes === 0 &&
+      state.indexedBytes === source.size &&
+      state.lastIndexedSeq === 0 &&
+      state.lastIndexedOffset === 0
+  }
+  return binBytes === state.entryCount * EVENT_INDEX_RECORD_BYTES
+}
+
+/**
+ * Snapshot of the source file and the formal index generation captured when a
+ * rebuild scan finished. Publish compares this against a fresh stat/state read
+ * inside the index mutation critical section; any drift means a concurrent
+ * append or external rewrite advanced the source and the stale rebuild must be
+ * discarded instead of overwriting newer index entries.
+ */
+export type EventIndexPublishSnapshot = {
+  dev: number
+  ino: number
+  size: number
+  mtimeMs: number
+  generation: number | undefined
+}
+
+export function eventIndexPublishConflict(
+  snapshot: EventIndexPublishSnapshot,
+  source: { dev: number; ino: number; size: number; mtimeMs: number },
+  generation: number | undefined
+): boolean {
+  return snapshot.dev !== source.dev ||
+    snapshot.ino !== source.ino ||
+    snapshot.size !== source.size ||
+    snapshot.mtimeMs !== source.mtimeMs ||
+    snapshot.generation !== generation
 }
 
 export function encodeEventIndexEntry(seq: number, offset: number): Buffer {

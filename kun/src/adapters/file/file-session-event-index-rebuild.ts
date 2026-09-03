@@ -1,7 +1,7 @@
+import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { appendFile, mkdir, readFile, rm, stat } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { z } from 'zod'
 import { isSafeThreadId } from '../../contracts/thread-id.js'
 import {
   EVENT_INDEX_BYTE_STEP,
@@ -10,11 +10,30 @@ import {
   encodeEventIndexEntry,
   eventIndexIsValid,
   eventIndexPaths,
+  eventIndexPublishConflict,
   readEventIndexState,
+  type EventIndexPublishSnapshot,
   type FileSessionEventIndex
 } from './file-session-event-index.js'
 import { atomicWriteFile, renameFileWithRetry } from './atomic-write.js'
-import { parseReplayEventRecord } from './file-session-jsonl.js'
+import {
+  EVENT_INDEX_REBUILD_FAILURE_LIMIT,
+  EVENT_INDEX_REBUILD_TORN_TAIL_STABLE_MS,
+  eventIndexSourceFingerprint,
+  writeEventIndexRebuildDiagnostic
+} from './file-session-event-index-diagnostic.js'
+import {
+  binBytes,
+  classifyLine,
+  freshSweep,
+  nextAfter,
+  parseSweep,
+  readRebuildState,
+  type GrindResult,
+  type ProcessOutcome,
+  type RebuildState,
+  type SweepState
+} from './file-session-event-index-rebuild-support.js'
 import { listThreadDirs } from './file-session-usage-read.js'
 import type { JsonlFileAccessCoordinator } from './jsonl-file-access.js'
 
@@ -28,28 +47,6 @@ export const EVENT_INDEX_REBUILD_SLICE_MAX_EVENTS = 4096
 const DEFAULT_REBUILD_SLICE_MAX_MS = 50
 const SCAN_CHUNK_BYTES = 64 * 1024
 
-const RebuildStateSchema = z.object({
-  version: z.literal(1),
-  dev: z.number().int().nonnegative(),
-  ino: z.number().int().nonnegative(),
-  byteCursor: z.number().int().nonnegative(),
-  entryCount: z.number().int().nonnegative(),
-  lastSeq: z.number().int().nonnegative(),
-  lastOffset: z.number().int().nonnegative()
-}).strict()
-
-type RebuildState = z.infer<typeof RebuildStateSchema>
-
-const SweepStateSchema = z.object({
-  version: z.literal(1),
-  generation: z.number().int().nonnegative(),
-  cursor: z.string().optional(),
-  inProgress: z.string().optional(),
-  inProgressSource: z.enum(['priority', 'sequential']).optional()
-}).strict()
-
-type SweepState = z.infer<typeof SweepStateSchema>
-
 export type EventIndexRebuildStats = {
   slices: number
   published: number
@@ -57,6 +54,8 @@ export type EventIndexRebuildStats = {
   abandoned: number
   eventsScanned: number
   bytesScanned: number
+  corruptRecords: number
+  blocked: number
   lastError?: string
 }
 
@@ -76,6 +75,8 @@ export class FileSessionEventIndexRebuild {
   private abandoned = 0
   private eventsScanned = 0
   private bytesScanned = 0
+  private corruptRecords = 0
+  private blocked = 0
   private lastError: string | undefined
 
   constructor(private readonly options: {
@@ -85,6 +86,7 @@ export class FileSessionEventIndexRebuild {
     index: FileSessionEventIndex
     maxRecordBytes: number
     limits?: { maxBytes?: number; maxEvents?: number; maxMs?: number }
+    now?: () => number
   }) {}
 
   /** Hint that a thread should be rebuilt first; fires the idle wake when set. */
@@ -105,55 +107,103 @@ export class FileSessionEventIndexRebuild {
    */
   async runSlice(): Promise<boolean> {
     this.slices += 1
-    const startedAt = Date.now()
-    try {
-      const sweep = await this.readSweep()
-      const threads = await listThreadDirs(this.options.threadsDir)
+    const startedAt = this.now()
+    const sweep = await this.readSweep()
+    const threads = await listThreadDirs(this.options.threadsDir)
+    if (sweep.blocked) {
+      for (const id of Object.keys(sweep.blocked)) {
+        if (!threads.includes(id)) delete sweep.blocked[id]
+      }
+    }
 
-      for (;;) {
-        if (Date.now() - startedAt >= this.maxMs()) {
-          await this.saveSweep(sweep)
-          return false
-        }
-        let target: string | undefined
-        let source: 'priority' | 'sequential'
-        if (sweep.inProgress) {
-          target = sweep.inProgress
-          source = sweep.inProgressSource ?? 'priority'
+    for (;;) {
+      if (this.now() - startedAt >= this.maxMs()) {
+        await this.saveSweep(sweep)
+        return false
+      }
+
+      let target: string | undefined
+      let source: 'priority' | 'sequential'
+      if (sweep.inProgress) {
+        target = sweep.inProgress.threadId
+        source = sweep.inProgressSource ?? 'priority'
+      } else {
+        target = this.takePriority(threads)
+        if (target) {
+          source = 'priority'
         } else {
-          target = this.takePriority(threads)
-          if (target) {
-            source = 'priority'
-          } else {
-            target = nextAfter(threads, sweep.cursor)
-            source = 'sequential'
-          }
+          target = nextAfter(threads, sweep.cursor)
+          source = 'sequential'
         }
-        if (!target) {
-          sweep.generation += 1
-          sweep.cursor = undefined
-          sweep.inProgress = undefined
-          sweep.inProgressSource = undefined
+      }
+
+      if (!target) {
+        sweep.generation += 1
+        sweep.cursor = undefined
+        sweep.inProgress = undefined
+        sweep.inProgressSource = undefined
+        await this.saveSweep(sweep)
+        return true
+      }
+
+      // Skip a quarantined source with an unchanged fingerprint.
+      const blocked = sweep.blocked?.[target]
+      if (blocked && source === 'sequential') {
+        const info = await stat(this.options.eventsPathFor(target)).catch(() => null)
+        const fingerprint = info ? eventIndexSourceFingerprint(info) : null
+        if (fingerprint === null || fingerprint === blocked.sourceFingerprint) {
+          if (!sweep.cursor || target > sweep.cursor) sweep.cursor = target
           await this.saveSweep(sweep)
-          return true
+          continue
         }
-        const outcome = await this.processThread(target, startedAt)
-        if (outcome === 'pending') {
-          sweep.inProgress = target
+        if (sweep.blocked) delete sweep.blocked[target]
+      }
+
+      let outcome: ProcessOutcome
+      try {
+        outcome = await this.processThread(target, startedAt)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const info = await stat(this.options.eventsPathFor(target)).catch(() => null)
+        const fingerprint = info ? eventIndexSourceFingerprint(info) : `missing:${target}`
+        const prev = sweep.inProgress?.threadId === target ? sweep.inProgress : undefined
+        const sameSource = prev?.sourceFingerprint === fingerprint
+        const failureCount = (sameSource ? prev.failureCount : 0) + 1
+        if (failureCount < EVENT_INDEX_REBUILD_FAILURE_LIMIT) {
+          sweep.inProgress = { threadId: target, failureCount, blockedReason: message, sourceFingerprint: fingerprint }
           sweep.inProgressSource = source
           await this.saveSweep(sweep)
           return false
         }
+        // Limit reached: quarantine this unchanged source and keep sweeping.
+        await this.writeBlockedDiagnostic(target, fingerprint, failureCount)
+        sweep.blocked = sweep.blocked ?? {}
+        sweep.blocked[target] = { sourceFingerprint: fingerprint, blockedReason: message, blockedAt: new Date().toISOString() }
         sweep.inProgress = undefined
         sweep.inProgressSource = undefined
-        if (source === 'sequential' && (!sweep.cursor || target > sweep.cursor)) {
-          sweep.cursor = target
-        }
+        if (source === 'sequential' && (!sweep.cursor || target > sweep.cursor)) sweep.cursor = target
+        this.blocked += 1
         await this.saveSweep(sweep)
+        continue
       }
-    } catch (error) {
-      this.lastError = error instanceof Error ? error.message : String(error)
-      return false
+
+      sweep.inProgress = undefined
+      sweep.inProgressSource = undefined
+
+      if (outcome.status === 'pending') {
+        sweep.inProgress = { threadId: target, failureCount: 0, sourceFingerprint: outcome.fingerprint }
+        sweep.inProgressSource = source
+        await this.saveSweep(sweep)
+        return false
+      }
+
+      if (sweep.blocked?.[target]) {
+        if (sweep.blocked) delete sweep.blocked[target]
+      }
+      if (source === 'sequential' && (!sweep.cursor || target > sweep.cursor)) {
+        sweep.cursor = target
+      }
+      await this.saveSweep(sweep)
     }
   }
 
@@ -165,8 +215,14 @@ export class FileSessionEventIndexRebuild {
       abandoned: this.abandoned,
       eventsScanned: this.eventsScanned,
       bytesScanned: this.bytesScanned,
+      corruptRecords: this.corruptRecords,
+      blocked: this.blocked,
       ...(this.lastError ? { lastError: this.lastError } : {})
     }
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now()
   }
 
   private maxMs(): number {
@@ -185,6 +241,12 @@ export class FileSessionEventIndexRebuild {
     ))
   }
 
+  private budgetExceeded(startedAt: number, events: number, bytes: number): boolean {
+    return bytes >= this.maxBytes() ||
+      events >= this.maxEvents() ||
+      (this.now() - startedAt >= this.maxMs() && events > 0)
+  }
+
   private takePriority(threads: string[]): string | undefined {
     if (this.priority.size === 0) return undefined
     for (const id of [...this.priority]) {
@@ -201,7 +263,7 @@ export class FileSessionEventIndexRebuild {
   private async processThread(
     threadId: string,
     startedAt: number
-  ): Promise<'pending' | 'done' | 'skipped'> {
+  ): Promise<ProcessOutcome> {
     const eventsPath = this.options.eventsPathFor(threadId)
     const release = await this.options.fileAccess.acquireRead(eventsPath)
     try {
@@ -211,32 +273,63 @@ export class FileSessionEventIndexRebuild {
       if (!info || info.size === 0) {
         await this.discardStaging(eventsPath)
         if (info) this.abandoned += 1
-        return 'done'
+        return { status: 'done', fingerprint: info ? eventIndexSourceFingerprint(info) : `missing:${threadId}` }
       }
 
       const existingBinBytes = await binBytes(eventsPath)
-      if (eventIndexIsValid(await readEventIndexState(eventsPath), info, existingBinBytes)) {
+      const existingState = await readEventIndexState(eventsPath)
+      const existingGeneration = existingState?.generation
+      if (eventIndexIsValid(existingState, info, existingBinBytes)) {
         await this.discardStaging(eventsPath)
         this.skippedValid += 1
-        return 'skipped'
+        return { status: 'skipped', fingerprint: eventIndexSourceFingerprint(info) }
+      }
+
+      // Pre-scan snapshot: any append/rewrite during the scan changes size,
+      // mtime or generation, so the publish CAS will discard a stale result.
+      const snapshot: EventIndexPublishSnapshot = {
+        dev: info.dev,
+        ino: info.ino,
+        size: info.size,
+        mtimeMs: info.mtimeMs,
+        generation: existingGeneration
       }
 
       const staging = await this.loadOrResetStaging(eventsPath, info)
       const result = await this.grind(eventsPath, staging, startedAt)
+
+      if (result.tail) {
+        const current = await stat(eventsPath).catch(() => null)
+        if (!current || current.size !== result.tail.offset + result.tail.length) {
+          // Source changed while scanning: reset the stability clock and wait.
+          result.staging.tail = { ...result.tail, firstSeenMs: this.now() }
+          await this.persistStaging(eventsPath, result.staging)
+          return { status: 'pending', fingerprint: eventIndexSourceFingerprint(info) }
+        }
+        const tailDecision = this.reconcileTail(result.staging, result.tail)
+        if (tailDecision === 'pending') {
+          await this.persistStaging(eventsPath, result.staging)
+          return { status: 'pending', fingerprint: eventIndexSourceFingerprint(info) }
+        }
+        // Quarantine the stable torn tail from the index projection only.
+        result.staging.byteCursor = result.tail.offset + result.tail.length
+        result.staging.tail = undefined
+      }
+
       if (!result.streamEnded) {
         await this.persistStaging(eventsPath, result.staging)
-        return 'pending'
+        return { status: 'pending', fingerprint: eventIndexSourceFingerprint(info) }
       }
 
-      const after = await stat(eventsPath).catch(() => null)
-      const identityChanged = !after || after.dev !== staging.dev || after.ino !== staging.ino
-      if (identityChanged || result.staging.byteCursor < (after?.size ?? 0)) {
-        await this.persistStaging(eventsPath, result.staging)
-        return 'pending'
+      const outcome = await this.publish(threadId, eventsPath, result.staging, snapshot)
+      if (outcome === 'conflict') {
+        await this.discardStaging(eventsPath)
+        return { status: 'done', fingerprint: eventIndexSourceFingerprint(info) }
       }
 
-      await this.publish(threadId, eventsPath, result.staging)
-      return 'done'
+      this.corruptRecords += result.staging.invalidRecords + result.staging.oversizedRecords
+      await this.finalizeDiagnostic(threadId, eventsPath, result.staging, info, result.tail)
+      return { status: 'done', fingerprint: eventIndexSourceFingerprint(info) }
     } finally {
       release()
     }
@@ -246,7 +339,7 @@ export class FileSessionEventIndexRebuild {
     eventsPath: string,
     staging: RebuildState,
     startedAt: number
-  ): Promise<{ staging: RebuildState; streamEnded: boolean }> {
+  ): Promise<GrindResult> {
     const entries: Buffer[] = []
     let remainder = Buffer.alloc(0)
     let nextOffset = staging.byteCursor
@@ -254,47 +347,155 @@ export class FileSessionEventIndexRebuild {
     let scannedBytes = 0
     let streamEnded = false
 
-    const stream = createReadStream(eventsPath, { start: staging.byteCursor, highWaterMark: SCAN_CHUNK_BYTES })
+    let skipping = false
+    let skipStart = 0
+    let skippedBytes = 0
+    if (staging.skip) {
+      skipping = true
+      skipStart = staging.skip.offset
+      skippedBytes = staging.skip.bytesSkipped
+      nextOffset = skipStart + skippedBytes
+    }
+
+    let invalidRecords = staging.invalidRecords
+    let oversizedRecords = staging.oversizedRecords
+    let firstCorruptOffset = staging.firstCorruptOffset
+
+    const stream = createReadStream(eventsPath, {
+      start: nextOffset,
+      highWaterMark: SCAN_CHUNK_BYTES
+    })
     for await (const chunk of stream) {
-      remainder = remainder.length === 0 ? chunk : Buffer.concat([remainder, chunk])
-      let newline = remainder.indexOf(0x0a)
-      while (newline >= 0) {
+      if (skipping) {
+        const newline = chunk.indexOf(0x0a)
+        if (newline < 0) {
+          skippedBytes += chunk.length
+          if (this.budgetExceeded(startedAt, scannedEvents, scannedBytes + skippedBytes)) {
+            staging.byteCursor = skipStart + skippedBytes
+            staging.invalidRecords = invalidRecords
+            staging.oversizedRecords = oversizedRecords
+            staging.firstCorruptOffset = firstCorruptOffset
+            staging.skip = { offset: skipStart, bytesSkipped: skippedBytes }
+            await this.appendEntries(eventsPath, entries)
+            this.eventsScanned += scannedEvents
+            this.bytesScanned += scannedBytes + skippedBytes
+            return { staging, streamEnded: false }
+          }
+          continue
+        }
+        skippedBytes += newline
+        nextOffset = skipStart + skippedBytes + 1
+        scannedBytes += skippedBytes + 1
+        skipping = false
+        staging.skip = undefined
+        remainder = chunk.subarray(newline + 1)
+        if (this.budgetExceeded(startedAt, scannedEvents, scannedBytes)) {
+          staging.byteCursor = nextOffset
+          staging.invalidRecords = invalidRecords
+          staging.oversizedRecords = oversizedRecords
+          staging.firstCorruptOffset = firstCorruptOffset
+          await this.appendEntries(eventsPath, entries)
+          this.eventsScanned += scannedEvents
+          this.bytesScanned += scannedBytes
+          return { staging, streamEnded: false }
+        }
+      } else {
+        remainder = remainder.length === 0 ? chunk : Buffer.concat([remainder, chunk])
+      }
+
+      for (;;) {
+        const newline = remainder.indexOf(0x0a)
+        if (newline < 0) break
         const line = remainder.subarray(0, newline)
         const recordOffset = nextOffset
         nextOffset += newline + 1
         remainder = remainder.subarray(newline + 1)
         scannedBytes += newline + 1
         scannedEvents += 1
-        const seq = extractSeq(line, this.options.maxRecordBytes)
-        if (seq !== null && seq >= staging.lastSeq) {
+
+        const classified = classifyLine(line, this.options.maxRecordBytes)
+        if (classified.reason === 'oversized') {
+          oversizedRecords += 1
+          if (firstCorruptOffset === undefined) firstCorruptOffset = recordOffset
+        } else if (classified.seq === null) {
+          invalidRecords += 1
+          if (firstCorruptOffset === undefined) firstCorruptOffset = recordOffset
+        } else if (classified.seq >= staging.lastSeq) {
           const due = staging.entryCount === 0 ||
-            seq - staging.lastSeq >= EVENT_INDEX_SEQ_STEP ||
+            classified.seq - staging.lastSeq >= EVENT_INDEX_SEQ_STEP ||
             recordOffset - staging.lastOffset >= EVENT_INDEX_BYTE_STEP
           if (due) {
-            entries.push(encodeEventIndexEntry(seq, recordOffset))
-            staging.lastSeq = seq
+            entries.push(encodeEventIndexEntry(classified.seq, recordOffset))
+            staging.lastSeq = classified.seq
             staging.lastOffset = recordOffset
             staging.entryCount += 1
           }
         }
-        newline = remainder.indexOf(0x0a)
-        if (scannedBytes >= this.maxBytes() ||
-          scannedEvents >= this.maxEvents() ||
-          (Date.now() - startedAt >= this.maxMs() && scannedEvents > 0)) {
+
+        if (this.budgetExceeded(startedAt, scannedEvents, scannedBytes)) {
           staging.byteCursor = nextOffset
+          staging.invalidRecords = invalidRecords
+          staging.oversizedRecords = oversizedRecords
+          staging.firstCorruptOffset = firstCorruptOffset
           await this.appendEntries(eventsPath, entries)
           this.eventsScanned += scannedEvents
           this.bytesScanned += scannedBytes
           return { staging, streamEnded: false }
         }
       }
+
+      if (remainder.length > this.options.maxRecordBytes) {
+        oversizedRecords += 1
+        if (firstCorruptOffset === undefined) firstCorruptOffset = nextOffset
+        skipping = true
+        skipStart = nextOffset
+        skippedBytes = remainder.length
+        remainder = Buffer.alloc(0)
+      }
     }
+
     streamEnded = true
-    staging.byteCursor = nextOffset
+    staging.invalidRecords = invalidRecords
+    staging.oversizedRecords = oversizedRecords
+    staging.firstCorruptOffset = firstCorruptOffset
+
+    let tail: GrindResult['tail']
+    if (skipping) {
+      // Unterminated oversized record: cursor is already past it (EOF).
+      staging.skip = undefined
+      staging.byteCursor = skipStart + skippedBytes
+    } else if (remainder.length > 0) {
+      tail = {
+        offset: nextOffset,
+        length: remainder.length,
+        sampleSha256: createHash('sha256').update(remainder).digest('hex')
+      }
+      staging.byteCursor = nextOffset
+    } else {
+      staging.byteCursor = nextOffset
+    }
+
     await this.appendEntries(eventsPath, entries)
     this.eventsScanned += scannedEvents
     this.bytesScanned += scannedBytes
-    return { staging, streamEnded }
+    return { staging, streamEnded, tail }
+  }
+
+  private reconcileTail(
+    staging: RebuildState,
+    tail: { offset: number; length: number; sampleSha256: string }
+  ): 'pending' | 'quarantine' {
+    const existing = staging.tail
+    const now = this.now()
+    if (existing && existing.offset === tail.offset && existing.length === tail.length &&
+        existing.sampleSha256 === tail.sampleSha256) {
+      staging.tail = { ...tail, firstSeenMs: existing.firstSeenMs }
+      return now - existing.firstSeenMs >= EVENT_INDEX_REBUILD_TORN_TAIL_STABLE_MS
+        ? 'quarantine'
+        : 'pending'
+    }
+    staging.tail = { ...tail, firstSeenMs: now }
+    return 'pending'
   }
 
   private async appendEntries(eventsPath: string, entries: Buffer[]): Promise<void> {
@@ -316,13 +517,15 @@ export class FileSessionEventIndexRebuild {
     if (valid) return state
     await this.discardStaging(eventsPath)
     return {
-      version: 1,
+      version: 2,
       dev: info.dev,
       ino: info.ino,
       byteCursor: 0,
       entryCount: 0,
       lastSeq: 0,
-      lastOffset: 0
+      lastOffset: 0,
+      invalidRecords: 0,
+      oversizedRecords: 0
     }
   }
 
@@ -343,31 +546,99 @@ export class FileSessionEventIndexRebuild {
   private async publish(
     threadId: string,
     eventsPath: string,
-    staging: RebuildState
-  ): Promise<void> {
+    staging: RebuildState,
+    snapshot: EventIndexPublishSnapshot
+  ): Promise<'published' | 'conflict'> {
     const paths = eventIndexPaths(eventsPath)
     await mkdir(dirname(paths.bin), { recursive: true, mode: 0o700 })
-    await renameFileWithRetry(paths.rebuildBin, paths.bin)
-    const prior = await readEventIndexState(eventsPath)
-    await atomicWriteFile(paths.state, JSON.stringify({
-      version: 2,
-      generation: (prior?.generation ?? 0) + 1,
-      dev: staging.dev,
-      ino: staging.ino,
-      indexedBytes: staging.byteCursor,
-      entryCount: staging.entryCount,
-      lastIndexedSeq: staging.lastSeq,
-      lastIndexedOffset: staging.lastOffset
-    }))
-    await rm(paths.rebuildState, { force: true }).catch(() => undefined)
-    this.options.index.clearMemory(threadId)
-    this.published += 1
+    await mkdir(dirname(paths.rebuildBin), { recursive: true, mode: 0o700 })
+    // Ensure the rebuild bin exists even for a zero-entry result.
+    await (await open(paths.rebuildBin, 'a', 0o600)).close()
+
+    return this.options.index.withIndexMutation(eventsPath, async () => {
+      const source = await stat(eventsPath).catch(() => null)
+      const current = await readEventIndexState(eventsPath)
+      if (!source || eventIndexPublishConflict(snapshot, source, current?.generation)) {
+        return 'conflict'
+      }
+      await renameFileWithRetry(paths.rebuildBin, paths.bin)
+      await atomicWriteFile(paths.state, JSON.stringify({
+        version: 2,
+        generation: (current?.generation ?? 0) + 1,
+        dev: staging.dev,
+        ino: staging.ino,
+        indexedBytes: staging.byteCursor,
+        entryCount: staging.entryCount,
+        lastIndexedSeq: staging.lastSeq,
+        lastIndexedOffset: staging.lastOffset
+      }))
+      await rm(paths.rebuildState, { force: true }).catch(() => undefined)
+      this.options.index.clearMemory(threadId)
+      this.published += 1
+      return 'published'
+    })
+  }
+
+  private async finalizeDiagnostic(
+    threadId: string,
+    eventsPath: string,
+    staging: RebuildState,
+    info: { dev: number; ino: number; size: number; mtimeMs: number },
+    tail: { offset: number; length: number; sampleSha256: string } | undefined
+  ): Promise<void> {
+    const paths = eventIndexPaths(eventsPath)
+    const fingerprint = eventIndexSourceFingerprint(info)
+    if (tail) {
+      await writeEventIndexRebuildDiagnostic(paths.diagnostic, {
+        version: 1,
+        recordedAt: new Date().toISOString(),
+        threadId,
+        sourceFingerprint: fingerprint,
+        reason: 'torn_tail',
+        byteOffset: tail.offset,
+        length: tail.length,
+        sampleSha256: tail.sampleSha256
+      }).catch(() => undefined)
+      return
+    }
+    const corrupt = staging.invalidRecords + staging.oversizedRecords
+    if (corrupt > 0) {
+      await writeEventIndexRebuildDiagnostic(paths.diagnostic, {
+        version: 1,
+        recordedAt: new Date().toISOString(),
+        threadId,
+        sourceFingerprint: fingerprint,
+        reason: staging.oversizedRecords > 0 ? 'oversized_record' : 'invalid_record',
+        byteOffset: staging.firstCorruptOffset,
+        count: corrupt
+      }).catch(() => undefined)
+      return
+    }
+    await rm(paths.diagnostic, { force: true }).catch(() => undefined)
+  }
+
+  private async writeBlockedDiagnostic(
+    threadId: string,
+    fingerprint: string,
+    failureCount: number
+  ): Promise<void> {
+    await writeEventIndexRebuildDiagnostic(
+      eventIndexPaths(this.options.eventsPathFor(threadId)).diagnostic,
+      {
+        version: 1,
+        recordedAt: new Date().toISOString(),
+        threadId,
+        sourceFingerprint: fingerprint,
+        reason: 'rebuild_failure',
+        failureCount
+      }
+    ).catch(() => undefined)
   }
 
   private async readSweep(): Promise<SweepState> {
     if (!this.sweepPromise) {
       this.sweepPromise = readFile(this.sweepPath(), 'utf8')
-        .then((text) => SweepStateSchema.parse(JSON.parse(text)))
+        .then((text) => parseSweep(text))
         .catch(() => freshSweep())
     }
     return this.sweepPromise
@@ -381,39 +652,5 @@ export class FileSessionEventIndexRebuild {
 
   private sweepPath(): string {
     return join(this.options.threadsDir, 'event-index-rebuild.sweep.json')
-  }
-}
-
-function freshSweep(): SweepState {
-  return { version: 1, generation: 0 }
-}
-
-function nextAfter(threads: string[], cursor: string | undefined): string | undefined {
-  if (!cursor) return threads[0]
-  return threads.find((id) => id > cursor)
-}
-
-function extractSeq(line: Buffer, maxRecordBytes: number): number | null {
-  if (line.length === 0 || line.length > maxRecordBytes) return null
-  const event = parseReplayEventRecord(line.toString('utf8'), maxRecordBytes)
-  return event ? event.seq : null
-}
-
-async function readRebuildState(path: string): Promise<RebuildState | undefined> {
-  try {
-    const parsed = RebuildStateSchema.safeParse(JSON.parse(await readFile(path, 'utf8')))
-    return parsed.success ? parsed.data : undefined
-  } catch {
-    return undefined
-  }
-}
-
-async function binBytes(eventsPath: string, explicitPath?: string): Promise<number> {
-  const path = explicitPath ?? eventIndexPaths(eventsPath).bin
-  try {
-    return (await stat(path)).size
-  } catch (error) {
-    if ((error as { code?: string }).code === 'ENOENT') return 0
-    throw error
   }
 }

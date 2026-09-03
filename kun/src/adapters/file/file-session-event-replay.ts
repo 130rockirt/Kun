@@ -137,6 +137,15 @@ export class FileSessionEventHistory {
       ino: info.ino
     })
   }
+
+  /**
+   * Hold the per-source index mutation critical section around a caller's
+   * whole write transaction so a rebuild publish cannot replace the index
+   * between the canonical append and its `recordAppend` update.
+   */
+  withEventIndexMutation<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
+    return this.eventIndex.withIndexMutation(this.options.pathFor(threadId), operation)
+  }
 }
 
 export interface FileSessionEventSubsystemHost {
