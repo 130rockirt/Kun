@@ -306,6 +306,8 @@ export class TurnService {
   declare private appendItem: (threadId: string, item: TurnItem) => Promise<void>
   declare private upsertThread: (threadId: string, mutator: (current: ThreadRecord) => ThreadRecord) => Promise<void>
   declare private withThreadMutation: <T>(threadId: string, operation: () => Promise<T>) => Promise<T>
+  declare private withQueueDataMutation: <T>(threadId: string, operation: () => Promise<T>) => Promise<T>
+  declare private commitThreadRecordCAS: (next: ThreadRecord, expectedRevision: number) => Promise<{ applied: boolean }>
   declare private markTurnAdmissionCompleted: (
     threadId: string,
     turnId: string,
