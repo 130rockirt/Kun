@@ -101,7 +101,8 @@ export async function listThreads(
     threads,
     ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
     ...(page.hasMore ? { hasMore: page.hasMore } : {}),
-    ...(page.total != null ? { total: page.total } : {})
+    ...(page.total != null ? { total: page.total } : {}),
+    ...(page.indexStatus ? { indexStatus: page.indexStatus } : {})
   }
   return jsonResponse(payload)
 }

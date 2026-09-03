@@ -430,6 +430,11 @@ Kun 包按 ports & adapters 组织：
   ApprovalGate、EventBus、WorkspaceInspector、Clock。
 - `adapters/`：DeepSeek-compatible model client、local tool host、
   file/in-memory stores、workspace inspector。
+
+线程存储采用「原子 JSON 元数据 + 可重建 SQLite 索引」混合实现。`list()`/`listPage()`
+不再阻塞等待冷启动补索引：索引缺失时首屏从 SQLite 已索引行与 dirty filesystem delta
+合并立即返回；补索引在后台分批并行读取 metadata 并单事务批量写回，进度通过响应中的
+`indexStatus`（status/indexed/total）暴露，避免 GUI 陷入无期限 loading。
 - `loop/`：AgentLoop、InflightTracker、SteeringQueue、ContextCompactor。
 - `cache/`：ImmutablePrefix、LRU、TTL-LRU。
 - `server/`：Router、auth、SSE、routes。

@@ -1,3 +1,6 @@
+import type { ThreadIndexStatusInfo } from '../../contracts/thread-index-status.js'
+import type { ThreadIndexRecord } from './hybrid-thread-index-mapping.js'
+
 export type BackfillScan<TUsage> = { highWater: number; usage: TUsage[] }
 
 type UsageBackfillState = { completed: boolean; highWater: number }
@@ -5,12 +8,16 @@ type IndexedRow = { id: string; usage_backfilled?: number; usage_backfill_high_w
 
 export type HybridThreadIndexStatus = 'not_started' | 'running' | 'ready' | 'failed'
 
+const DEFAULT_INDEX_BATCH_SIZE = 200
+
 export type HybridThreadBackfillDeps<TUsage> = {
   indexedRows: () => IndexedRow[]
   filesystemThreadIds: () => Promise<string[]>
-  readMissingThread: (threadId: string) => Promise<boolean>
+  /** Batch-read metadata for the given ids (single read per thread, aligned with ids). */
+  readMissingThreads: (ids: string[]) => Promise<Array<ThreadIndexRecord | null>>
+  /** Persist a whole batch of freshly read index records in one transaction. */
+  upsertMissingRecords: (records: ThreadIndexRecord[], highWater: number) => Promise<void>
   scanEvents: (threadId: string) => Promise<BackfillScan<TUsage>>
-  upsertMissing: (threadId: string, highWater: number) => Promise<void>
   noteExistingHighWater: (threadId: string, highWater: number) => void
   insertUsage: (threadId: string, usage: TUsage[], resumeAfterSeq: number) => Promise<void>
   markUsageBackfilled: (threadId: string) => void
@@ -31,14 +38,25 @@ export class HybridThreadBackfillCoordinator<TUsage> {
   private filesystemThreadIds: string[] = []
   private indexed = new Map<string, UsageBackfillState>()
   private readonly readableMissingThreadIds = new Set<string>()
+  private indexedCount = 0
+  private total = 0
+  private readonly batchSize: number
 
-  constructor(private readonly deps: HybridThreadBackfillDeps<TUsage>) {}
+  constructor(
+    private readonly deps: HybridThreadBackfillDeps<TUsage>,
+    options: { batchSize?: number } = {}
+  ) {
+    this.batchSize = Math.max(1, Math.floor(options.batchSize ?? DEFAULT_INDEX_BATCH_SIZE))
+  }
 
   start(): void {
     if (this.promise || this.stopped || this.usageReady) return
     this.indexStatus = 'running'
     this.indexPromise = this.indexMissingThreads()
-      .then(() => { this.indexStatus = this.stopped ? 'failed' : 'ready' })
+      .then(() => {
+        this.indexedCount = this.total
+        this.indexStatus = this.stopped ? 'failed' : 'ready'
+      })
       .catch((error) => {
         this.indexStatus = 'failed'
         this.deps.warn('background index backfill', error)
@@ -54,6 +72,9 @@ export class HybridThreadBackfillCoordinator<TUsage> {
   async waitForIndex(): Promise<void> { await this.indexPromise }
   async wait(): Promise<void> { await this.promise }
   isIndexReady(): boolean { return this.indexStatus === 'ready' }
+  progress(): ThreadIndexStatusInfo {
+    return { status: this.indexStatus, indexed: this.indexedCount, total: this.total }
+  }
   isUsageReady(threadIds?: string[]): boolean {
     if (!threadIds || threadIds.length === 0) return this.usageReady
     if (this.indexStatus !== 'ready') return false
@@ -72,28 +93,38 @@ export class HybridThreadBackfillCoordinator<TUsage> {
     }]))
     this.filesystemThreadIds = await this.deps.filesystemThreadIds()
     if (this.stopped) return
+    this.total = this.filesystemThreadIds.length
+    this.indexedCount = this.filesystemThreadIds.filter((id) => this.indexed.has(id)).length
     const unreadableThreadIds = new Set<string>()
     const writeFailures = new Set<string>()
-    for (const threadId of this.filesystemThreadIds) {
+    const missingIds = this.filesystemThreadIds.filter((id) => !this.indexed.has(id))
+    for (let offset = 0; offset < missingIds.length; offset += this.batchSize) {
       if (this.stopped) return
-      if (this.indexed.has(threadId)) continue
-      const readable = await this.deps.readMissingThread(threadId)
+      const batch = missingIds.slice(offset, offset + this.batchSize)
+      const records = await this.deps.readMissingThreads(batch)
       if (this.stopped) return
-      if (!readable) {
-        unreadableThreadIds.add(threadId)
-        continue
+      const writable: ThreadIndexRecord[] = []
+      for (let index = 0; index < batch.length; index += 1) {
+        const threadId = batch[index]
+        const record = records[index]
+        if (!record) {
+          unreadableThreadIds.add(threadId)
+          this.deps.warn('index missing thread', threadId)
+          continue
+        }
+        writable.push(record)
+        this.readableMissingThreadIds.add(threadId)
+        this.indexed.set(threadId, { completed: false, highWater: 0 })
       }
-      try {
-        await this.deps.upsertMissing(threadId, 0)
-      } catch (error) {
-        writeFailures.add(threadId)
-        this.deps.warn(`index backfill upsert for ${threadId}`, error)
-        await this.deps.yieldToEventLoop()
-        continue
+      if (writable.length > 0) {
+        try {
+          await this.deps.upsertMissingRecords(writable, 0)
+        } catch (error) {
+          for (const record of writable) writeFailures.add(record.thread.id)
+          this.deps.warn('index backfill upsert batch', error)
+        }
       }
-      if (this.stopped) return
-      this.readableMissingThreadIds.add(threadId)
-      this.indexed.set(threadId, { completed: false, highWater: 0 })
+      this.indexedCount += batch.length
       await this.deps.yieldToEventLoop()
     }
     if (this.stopped) return

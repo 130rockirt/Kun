@@ -3,8 +3,18 @@ import {
   HybridThreadBackfillCoordinator,
   type HybridThreadBackfillDeps
 } from './hybrid-thread-backfill.js'
+import type { ThreadIndexRecord } from './hybrid-thread-index-mapping.js'
 
 type Usage = { seq: number }
+
+function makeRecord(id: string): ThreadIndexRecord {
+  return {
+    thread: { id } as ThreadIndexRecord['thread'],
+    messageCount: 0,
+    eventSeqHighWater: 0,
+    preview: ''
+  }
+}
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void
@@ -18,9 +28,9 @@ function makeDeps(
   return {
     indexedRows: vi.fn(() => [{ id: 'thread_1', usage_backfilled: 0 }]),
     filesystemThreadIds: vi.fn(async () => ['thread_1']),
-    readMissingThread: vi.fn(async () => true),
+    readMissingThreads: vi.fn(async (ids: string[]) => ids.map((id) => makeRecord(id))),
     scanEvents: vi.fn(async () => ({ highWater: 1, usage: [{ seq: 1 }] })),
-    upsertMissing: vi.fn(async () => undefined),
+    upsertMissingRecords: vi.fn(async () => undefined),
     noteExistingHighWater: vi.fn(),
     insertUsage: vi.fn(async () => undefined),
     markUsageBackfilled: vi.fn(),
@@ -46,8 +56,8 @@ describe('HybridThreadBackfillCoordinator shutdown', () => {
     coordinator.start()
     await coordinator.waitForIndex()
 
-    expect(deps.readMissingThread).toHaveBeenCalledWith('thread_1')
-    expect(deps.upsertMissing).toHaveBeenCalledWith('thread_1', 0)
+    expect(deps.readMissingThreads).toHaveBeenCalledWith(['thread_1'])
+    expect(deps.upsertMissingRecords).toHaveBeenCalledWith([makeRecord('thread_1')], 0)
     expect(deps.scanEvents).toHaveBeenCalledTimes(1)
     expect(deps.markUsageBackfilled).not.toHaveBeenCalled()
 
@@ -188,6 +198,74 @@ describe('HybridThreadBackfillCoordinator failures', () => {
   })
 })
 
+describe('HybridThreadBackfillCoordinator batching and progress', () => {
+  function statefulIndex(): {
+    indexedRows: () => Array<{ id: string; usage_backfilled?: number }>
+    upsertMissingRecords: (records: ThreadIndexRecord[]) => Promise<void>
+  } {
+    const rows: Array<{ id: string; usage_backfilled?: number }> = []
+    return {
+      indexedRows: () => rows.map((row) => ({ ...row })),
+      upsertMissingRecords: async (records) => {
+        for (const record of records) rows.push({ id: record.thread.id, usage_backfilled: 0 })
+      }
+    }
+  }
+
+  it('skips an unreadable thread and warns while continuing the batch', async () => {
+    const index = statefulIndex()
+    const deps = makeDeps({
+      indexedRows: vi.fn(index.indexedRows),
+      filesystemThreadIds: vi.fn(async () => ['thread_1', 'thread_2']),
+      readMissingThreads: vi.fn(async () => [null, makeRecord('thread_2')]),
+      upsertMissingRecords: vi.fn(index.upsertMissingRecords)
+    })
+    const coordinator = new HybridThreadBackfillCoordinator(deps)
+
+    coordinator.start()
+    await coordinator.waitForIndex()
+
+    expect(deps.warn).toHaveBeenCalledWith('index missing thread', 'thread_1')
+    expect(deps.upsertMissingRecords).toHaveBeenCalledWith([makeRecord('thread_2')], 0)
+    expect(coordinator.isIndexReady()).toBe(true)
+  })
+
+  it('writes missing threads in bounded batches', async () => {
+    const ids = ['a', 'b', 'c', 'd', 'e']
+    const index = statefulIndex()
+    const deps = makeDeps({
+      indexedRows: vi.fn(index.indexedRows),
+      filesystemThreadIds: vi.fn(async () => ids),
+      upsertMissingRecords: vi.fn(index.upsertMissingRecords)
+    })
+    const coordinator = new HybridThreadBackfillCoordinator(deps, { batchSize: 2 })
+
+    coordinator.start()
+    await coordinator.waitForIndex()
+
+    expect(deps.upsertMissingRecords).toHaveBeenCalledTimes(3)
+    expect(deps.upsertMissingRecords).toHaveBeenNthCalledWith(1, [makeRecord('a'), makeRecord('b')], 0)
+    expect(deps.upsertMissingRecords).toHaveBeenNthCalledWith(2, [makeRecord('c'), makeRecord('d')], 0)
+    expect(deps.upsertMissingRecords).toHaveBeenNthCalledWith(3, [makeRecord('e')], 0)
+    expect(coordinator.isIndexReady()).toBe(true)
+  })
+
+  it('reports indexed/total progress once ready', async () => {
+    const index = statefulIndex()
+    const deps = makeDeps({
+      indexedRows: vi.fn(index.indexedRows),
+      filesystemThreadIds: vi.fn(async () => ['a', 'b', 'c']),
+      upsertMissingRecords: vi.fn(index.upsertMissingRecords)
+    })
+    const coordinator = new HybridThreadBackfillCoordinator(deps)
+
+    coordinator.start()
+    await coordinator.waitForIndex()
+
+    expect(coordinator.progress()).toEqual({ status: 'ready', indexed: 3, total: 3 })
+  })
+})
+
 describe('HybridThreadBackfillCoordinator index status', () => {
   it('is ready after a successful startup index', async () => {
     const deps = makeDeps()
@@ -231,22 +309,20 @@ describe('HybridThreadBackfillCoordinator index status', () => {
 })
 
 describe('HybridThreadBackfillCoordinator index write failures', () => {
-  it('keeps processing other threads and stays not ready when an upsert fails', async () => {
+  it('keeps processing other threads and stays not ready when an upsert batch fails', async () => {
     const failure = new Error('SQLITE_BUSY: database is locked')
     const deps = makeDeps({
       indexedRows: vi.fn(() => [{ id: 'thread_1', usage_backfilled: 0 }]),
       filesystemThreadIds: vi.fn(async () => ['thread_1', 'thread_2']),
-      upsertMissing: vi.fn(async (threadId: string) => {
-        if (threadId === 'thread_2') throw failure
-      })
+      upsertMissingRecords: vi.fn(async () => { throw failure })
     })
     const coordinator = new HybridThreadBackfillCoordinator(deps)
 
     coordinator.start()
     await coordinator.wait()
 
-    expect(deps.upsertMissing).toHaveBeenCalledWith('thread_2', 0)
-    expect(deps.warn).toHaveBeenCalledWith('index backfill upsert for thread_2', failure)
+    expect(deps.upsertMissingRecords).toHaveBeenCalledWith([makeRecord('thread_2')], 0)
+    expect(deps.warn).toHaveBeenCalledWith('index backfill upsert batch', failure)
     expect(coordinator.isIndexReady()).toBe(false)
     expect(coordinator.isUsageReady()).toBe(false)
   })
@@ -261,7 +337,7 @@ describe('HybridThreadBackfillCoordinator index write failures', () => {
     coordinator.start()
     await coordinator.wait()
 
-    expect(deps.upsertMissing).toHaveBeenCalledWith('thread_2', 0)
+    expect(deps.upsertMissingRecords).toHaveBeenCalledWith([makeRecord('thread_2')], 0)
     expect(coordinator.isIndexReady()).toBe(false)
   })
 
@@ -269,7 +345,9 @@ describe('HybridThreadBackfillCoordinator index write failures', () => {
     const deps = makeDeps({
       indexedRows: vi.fn(() => [{ id: 'thread_1', usage_backfilled: 0 }]),
       filesystemThreadIds: vi.fn(async () => ['thread_1', 'thread_unreadable']),
-      readMissingThread: vi.fn(async (threadId: string) => threadId !== 'thread_unreadable')
+      readMissingThreads: vi.fn(async (ids: string[]) =>
+        ids.map((id) => (id === 'thread_unreadable' ? null : makeRecord(id)))
+      )
     })
     const coordinator = new HybridThreadBackfillCoordinator(deps)
 

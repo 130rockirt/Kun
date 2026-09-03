@@ -174,6 +174,8 @@ export function createNavigationWorkspaceActions(
 ): Pick<ChatState, 'chooseWorkspace' | 'selectWorkspaceRoot' | 'clearWorkspace' | 'removeWorkspace' | 'refreshThreads' | 'loadMoreThreads' | 'setThreadSearch' | 'setShowArchivedThreads'> {
   let refreshInFlight = false
   let refreshQueued = false
+  let indexRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  let latestIndexStatus: import('../agent/provider-types').ThreadIndexStatusInfo | undefined
   return {
   loadMoreThreads: (workspacePath) => loadMoreThreadsAction(workspacePath, set, get),
   chooseWorkspace: async ({ createThreadAfter = false, selectThreadAfter = true } = {}) => {
@@ -336,6 +338,7 @@ export function createNavigationWorkspaceActions(
       const p = getProvider()
       let rawThreads: NormalizedThread[]
       let firstPageHasMore = false
+      let firstPageIndexStatus: import('../agent/provider-types').ThreadIndexStatusInfo | undefined
       try {
         if (typeof p.listThreadsPage === 'function') {
           const page = await p.listThreadsPage({
@@ -346,6 +349,7 @@ export function createNavigationWorkspaceActions(
           })
           rawThreads = page.threads
           firstPageHasMore = page.hasMore
+          firstPageIndexStatus = page.indexStatus
         } else {
           rawThreads = await p.listThreads({
             includeArchived: true,
@@ -624,6 +628,19 @@ export function createNavigationWorkspaceActions(
         }
       })
       syncTurnCompletionPoll(set, get)
+      // While the rebuildable thread index is still running, poll a trailing
+      // refresh so the sidebar settles on the final indexed inventory as soon
+      // as the background backfill reaches `ready`.
+      latestIndexStatus = firstPageIndexStatus
+      if (indexRefreshTimer) clearTimeout(indexRefreshTimer)
+      if (firstPageIndexStatus?.status === 'running') {
+        indexRefreshTimer = setTimeout(() => {
+          indexRefreshTimer = null
+          if (get().runtimeConnection === 'ready' && latestIndexStatus?.status === 'running') {
+            void get().refreshThreads()
+          }
+        }, 1500)
+      }
       // Persist a lean summary cache after each successful refresh so the next
       // startup can paint the sidebar from local storage before the runtime
       // inventory arrives.

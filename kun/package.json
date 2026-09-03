@@ -74,6 +74,7 @@
     "benchmark:replay": "npm run build && node ./dist/cli/replay-entry.js",
     "benchmark:item-index-pagination": "npm run build && node ./dist/cli/item-index-pagination-entry.js",
     "benchmark:manager-lease-renewal": "npm run build && node ./dist/cli/manager-lease-renewal-entry.js",
+    "bench:cold-index": "KUN_BENCH=1 vitest run src/adapters/hybrid/hybrid-thread-store-cold-index.bench.ts --reporter=verbose",
     "serve": "node ./dist/cli/serve-entry.js",
     "dev": "tsc -p tsconfig.build.json --watch"
   },

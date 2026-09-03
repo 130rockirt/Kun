@@ -280,6 +280,7 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       nextCursor?: string
       hasMore?: boolean
       total?: number
+      indexStatus?: { status: 'not_started' | 'running' | 'ready' | 'failed' | 'unavailable'; indexed: number; total: number }
     }>(
       response.body,
       'runtime returned an invalid thread list response'
@@ -288,7 +289,8 @@ export class KunRuntimeProvider extends KunRuntimeThreadServices implements Agen
       threads: body.threads.map(threadFromCore),
       nextCursor: body.nextCursor,
       hasMore: body.hasMore === true,
-      total: body.total
+      total: body.total,
+      ...(body.indexStatus ? { indexStatus: body.indexStatus } : {})
     }
   }
 

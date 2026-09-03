@@ -2,6 +2,7 @@ import { mkdir, open, readdir, rm, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { Database as BetterSqliteDatabase, Statement } from 'better-sqlite3'
 import { ThreadSchema, type ThreadRecord, type ThreadSummary } from '../../contracts/threads.js'
+import type { ThreadIndexStatusInfo } from '../../contracts/thread-index-status.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
 import type { ThreadStore, ThreadStoreConditionalWrite, ThreadStoreListOptions, ThreadStoreListPage } from '../../ports/thread-store.js'
 import type { SessionLatestUsageSnapshot, SessionUsageQueryOptions, SessionUsageRecord } from '../../ports/session-store.js'
@@ -18,6 +19,7 @@ import { HybridThreadIndexRepository } from './hybrid-thread-index.js'
 import { HybridThreadIndexDirtyTracker } from './hybrid-thread-index-dirty.js'
 import { hybridThreadStoreListPage, summariesFromRows } from './hybrid-thread-list-page.js'
 import { HybridThreadBackfillCoordinator } from './hybrid-thread-backfill.js'
+import { readMissingIndexRecords } from './hybrid-thread-backfill-read.js'
 import { insertUsageEventsChunked, markUsageBackfilled } from './hybrid-usage-backfill-sqlite.js'
 import { scanEventsForUsageBackfill } from './hybrid-thread-usage-scan.js'
 import {
@@ -140,12 +142,10 @@ export class HybridThreadStore implements ThreadStore {
   async list(options: ThreadStoreListOptions = {}): Promise<ThreadSummary[]> {
     await this.ready()
     await this.repairDirtyIndexThreads()
-    // Missing or intentionally discarded SQLite indexes are rebuilt from the
-    // canonical JSONL metadata before the first list response. Usage/event
-    // backfill remains in the background so large histories stay responsive.
-    // A backfill that fails mid-startup leaves a partial index, so the list
-    // falls back to the canonical filesystem scan until the index is ready.
-    await this.backfill?.waitForIndex()
+    // SQLite is only a complete list source once startup backfill has finished.
+    // Until then (or when backfill fails mid-startup), the canonical JSONL scan
+    // answers immediately so the first sidebar request is never blocked on a
+    // full sequential reindex of large histories.
     if (this.hasDb() && this.isIndexReady() && !this.hasDirtyIndexThreads()) {
       try {
         const summaries = await summariesFromRows(this, this.queryThreadRows(options))
@@ -161,7 +161,6 @@ export class HybridThreadStore implements ThreadStore {
   async listPage(options: ThreadStoreListOptions = {}): Promise<ThreadStoreListPage> {
     await this.ready()
     await this.repairDirtyIndexThreads()
-    await this.backfill?.waitForIndex()
     return hybridThreadStoreListPage(this, options)
   }
 
@@ -404,13 +403,16 @@ export class HybridThreadStore implements ThreadStore {
           usage_backfill_high_water?: number
         }>,
         filesystemThreadIds: () => this.threadIdsFromFilesystem(),
-        readMissingThread: async (threadId) => Boolean(await this.readThreadMetadataFromDisk(threadId)),
+        readMissingThreads: (ids) => readMissingIndexRecords(
+          ids,
+          (threadId) => this.readThreadMetadataFromDisk(threadId),
+          (thread) => this.indexRecordForThread(thread)
+        ),
         scanEvents: (threadId) => this.scanEventsForBackfill(threadId),
-        upsertMissing: async (threadId, highWater) => {
-          const thread = await this.readThreadMetadataFromDisk(threadId)
-          if (!thread) return
+        upsertMissingRecords: async (records, highWater) => {
+          if (records.length === 0) return
           if (!this.index) throw new Error('sqlite index unavailable during backfill')
-          this.index.upsert({ ...this.indexRecordForThread(thread), eventSeqHighWater: highWater })
+          this.index.upsertMany(records.map((record) => ({ ...record, eventSeqHighWater: highWater })))
         },
         noteExistingHighWater: (threadId, highWater) => this.noteEventHighWaterSync(threadId, highWater),
         insertUsage: (threadId, usage, resumeAfterSeq) => insertUsageEventsChunked(
@@ -631,6 +633,19 @@ export class HybridThreadStore implements ThreadStore {
     return this.filesystemSummaries.list()
   }
 
+  indexStatus(): ThreadIndexStatusInfo {
+    return this.hasDb() && this.backfill
+      ? this.backfill.progress()
+      : { status: 'unavailable', indexed: 0, total: 0 }
+  }
+
+  filesystemThreadIds(): Promise<string[]> {
+    return this.threadIdsFromFilesystem()
+  }
+
+  readDeltaSummaries(ids: string[]): Promise<ThreadSummary[]> {
+    return this.filesystemSummaries.readByIds(ids)
+  }
   private async threadIdsFromFilesystem(): Promise<string[]> {
     try {
       const entries = await readdir(this.dataDir, { withFileTypes: true })

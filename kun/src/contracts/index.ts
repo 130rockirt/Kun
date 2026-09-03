@@ -1,4 +1,5 @@
 export * from './threads.js'
+export * from './thread-index-status.js'
 export * from './turns.js'
 export * from './items.js'
 export * from './review.js'

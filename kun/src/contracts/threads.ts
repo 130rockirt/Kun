@@ -13,6 +13,7 @@ import {
   DesignTaskProfileSchema
 } from './design-task-profile.js'
 import { ThreadRetentionPolicySchema } from './thread-retention.js'
+import { ThreadIndexStatusInfoSchema } from './thread-index-status.js'
 
 export const ThreadStatus = z.enum(['idle', 'running', 'archived', 'deleted'])
 export type ThreadStatus = z.infer<typeof ThreadStatus>
@@ -684,7 +685,8 @@ export const ListThreadsResponse = z.object({
   threads: z.array(ThreadSummarySchema),
   nextCursor: z.string().optional(),
   hasMore: z.boolean().optional(),
-  total: z.number().int().nonnegative().optional()
+  total: z.number().int().nonnegative().optional(),
+  indexStatus: ThreadIndexStatusInfoSchema.optional()
 })
 export type ListThreadsResponse = z.infer<typeof ListThreadsResponse>
 

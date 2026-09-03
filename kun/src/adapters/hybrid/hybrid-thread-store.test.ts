@@ -430,3 +430,63 @@ describe('HybridThreadStore index backfill failure fallback', () => {
     }
   })
 })
+
+describe('HybridThreadStore cold-index transition', () => {
+  async function createColdStore(): Promise<{ root: string; store: HybridThreadStore }> {
+    const root = await mkdtemp(join(tmpdir(), 'kun-hybrid-cold-'))
+    roots.push(root)
+    return { root, store: new HybridThreadStore({ dataDir: root }) }
+  }
+
+  it('serves the first page from the transition merge without waiting for backfill', async () => {
+    const { root, store } = await createColdStore()
+    const records = [
+      legacyWorkThread('thread_cold_a', 'Cold A'),
+      legacyWorkThread('thread_cold_b', 'Cold B'),
+      legacyWorkThread('thread_cold_c', 'Cold C')
+    ]
+    await Promise.all(records.map((record) => writeThreadDocument(root, record)))
+
+    try {
+      const first = await store.listPage({ includeArchived: true, limit: 2 })
+      expect(first).toMatchObject({ hasMore: true, total: 3 })
+      expect(first.threads).toHaveLength(2)
+
+      const collected = [...first.threads.map((thread) => thread.id)]
+      let cursor = first.nextCursor
+      while (cursor) {
+        const next = await store.listPage({ includeArchived: true, limit: 2, cursor })
+        collected.push(...next.threads.map((thread) => thread.id))
+        cursor = next.hasMore ? next.nextCursor : undefined
+      }
+      expect(collected).toHaveLength(3)
+      expect(new Set(collected)).toEqual(new Set(['thread_cold_a', 'thread_cold_b', 'thread_cold_c']))
+
+      await store.waitForBackfill()
+      const ready = await store.listPage({ includeArchived: true })
+      expect(ready.total).toBe(3)
+    } finally {
+      store.close()
+    }
+  })
+
+  it('shows threads created through live upsert during a cold index', async () => {
+    const { root, store } = await createColdStore()
+    await writeThreadDocument(root, legacyWorkThread('thread_on_disk', 'On disk'))
+
+    try {
+      await store.upsert(createThreadRecord({
+        id: 'thread_live',
+        title: 'Live',
+        workspace: '/tmp/workspace',
+        model: 'test-model'
+      }))
+      const page = await store.listPage({ includeArchived: true })
+      expect(page.threads.map((thread) => thread.id).sort()).toEqual(
+        ['thread_live', 'thread_on_disk'].sort()
+      )
+    } finally {
+      store.close()
+    }
+  })
+})

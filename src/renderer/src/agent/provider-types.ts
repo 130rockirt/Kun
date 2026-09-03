@@ -71,12 +71,21 @@ export type ThreadListOptions = {
   lean?: boolean
 }
 
+/** Rebuildable thread-index lifecycle exposed by the runtime. */
+export type ThreadIndexStatus = 'not_started' | 'running' | 'ready' | 'failed' | 'unavailable'
+export type ThreadIndexStatusInfo = {
+  status: ThreadIndexStatus
+  indexed: number
+  total: number
+}
+
 /** Paginated sidebar thread listing result. */
 export type ThreadListPage = {
   threads: NormalizedThread[]
   nextCursor?: string
   hasMore: boolean
   total?: number
+  indexStatus?: ThreadIndexStatusInfo
 }
 
 export type ThreadRuntimeState = {
