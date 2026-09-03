@@ -26,6 +26,7 @@ import {
 import {
   ensureKunServeFreshOnStartup,
   ensureRuntime,
+  prepareGuiRuntimeForStartupRetry,
   reconcileBundledRuntimeAfterInstall,
   restartRuntime
 } from './main-runtime-startup'
@@ -96,6 +97,7 @@ export function startMainApp(): Promise<void> {
       mainState.logDir,
       {
         ...(recoverHandoff ? { recoverHandoff } : {}),
+        recoverRetry: prepareGuiRuntimeForStartupRetry,
         replaceWindow: earlyWindow
       }
     )

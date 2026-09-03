@@ -1,4 +1,6 @@
+import { randomBytes } from 'node:crypto'
 import {
+  applyKunRuntimePatch,
   getKunRuntimeSettings,
   type AppSettingsV1
 } from '../shared/app-settings'
@@ -51,15 +53,75 @@ async function ensureRuntimeOnce(settings: AppSettingsV1): Promise<AppSettingsV1
 
 export async function resolveManagedKunLaunchSettings(
   settings: AppSettingsV1,
-  _source: string
+  source: string
 ): Promise<AppSettingsV1> {
-  // The GUI owns one supervised child on its configured loopback port. The
-  // data-directory/Manager election still prevents a foreign GUI/TUI owner.
+  const token = await ensureManagedKunRuntimeToken(settings, source)
+  return resolveManagedKunPort(token.settings, source, 0)
+}
+
+function generateKunRuntimeToken(): string {
+  return randomBytes(32).toString('base64url')
+}
+
+export async function ensureManagedKunRuntimeToken(
+  settings: AppSettingsV1,
+  source: string
+): Promise<{ settings: AppSettingsV1; generated: boolean }> {
+  if (getKunRuntimeSettings(settings).runtimeToken.trim()) {
+    return { settings, generated: false }
+  }
+  const candidate = generateKunRuntimeToken()
+  const result = await mainState.store.updateIf(
+    (current) => !getKunRuntimeSettings(current).runtimeToken.trim(),
+    (current) => applyKunRuntimePatch(current, { runtimeToken: candidate })
+  )
+  runtimeSupervisor.noteLatest(result.settings)
+  if (result.applied) {
+    logWarn(source, 'Generated a local access token for the GUI-owned Kun Runtime.')
+  }
+  return { settings: result.settings, generated: result.applied }
+}
+
+async function resolveManagedKunPort(
+  settings: AppSettingsV1,
+  source: string,
+  retry: number
+): Promise<AppSettingsV1> {
+  const runtime = getKunRuntimeSettings(settings)
+  const resolved = await kunRuntimeAdapter.resolveAvailablePort(runtime.port)
+  if (!resolved.changed) return settings
+  const result = await mainState.store.updateIf(
+    (current) => getKunRuntimeSettings(current).port === runtime.port,
+    (current) => applyKunRuntimePatch(current, { port: resolved.port })
+  )
+  runtimeSupervisor.noteLatest(result.settings)
+  if (result.applied) {
+    logWarn(source, `Kun port ${runtime.port} is unavailable; using ${resolved.port}.`, {
+      previousPort: runtime.port,
+      port: resolved.port,
+      message: resolved.message
+    })
+    return result.settings
+  }
+  return retry === 0
+    ? resolveManagedKunPort(result.settings, source, 1)
+    : result.settings
+}
+
+function noteSuccessfulRuntimeSettings(source: string, settings: AppSettingsV1): AppSettingsV1 {
+  mainState.settledRuntimeSettings = settings
+  runtimeSupervisor.noteLatest(settings)
+  noteRuntimeHealthy(source, settings)
   return settings
 }
 
 export async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1> {
-  const currentSettings = settings
+  const token = await ensureManagedKunRuntimeToken(settings, 'runtime-start')
+  const currentSettings = token.settings
+  if (token.generated && kunRuntimeAdapter.isChildRunning()) {
+    // Only stop the controller-held child that inherited the old empty token.
+    await kunRuntimeAdapter.stopAndWait()
+  }
   const connectionResolved = await kunRuntimeAdapter.resolveConnection(currentSettings)
 
   const runtime = getKunRuntimeSettings(currentSettings)
@@ -72,8 +134,7 @@ export async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSett
   if (healthy) {
     const runtimeApi = await probeRuntimeApi(currentSettings)
     if (runtimeApi.ok) {
-      noteRuntimeHealthy('ensure', currentSettings)
-      return currentSettings
+      return noteSuccessfulRuntimeSettings('ensure', currentSettings)
     }
     throw runtimeJsonError(runtimeApi.error, runtimeApi.message)
   }
@@ -98,8 +159,7 @@ export async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSett
       if (recovered) {
         const runtimeApi = await probeRuntimeApi(currentSettings)
         if (runtimeApi.ok) {
-          noteRuntimeHealthy('ensure', currentSettings)
-          return currentSettings
+          return noteSuccessfulRuntimeSettings('ensure', currentSettings)
         }
         throw runtimeJsonError(runtimeApi.error, runtimeApi.message)
       }
@@ -118,13 +178,29 @@ export async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSett
     }
   }
 
-  const launchSettings = await resolveManagedKunLaunchSettings(currentSettings, 'runtime-start')
+  let launchSettings = await resolveManagedKunLaunchSettings(currentSettings, 'runtime-start')
   const adapter = kunRuntimeAdapter
   try {
     await adapter.ensureRunning(launchSettings)
-  } catch (e) {
-    console.error('[kun-gui] failed to start kun:', e)
-    throw e
+  } catch (error) {
+    if (!isRuntimePortConflict(error)) {
+      if (isClientRuntimeOwnerConflict(error)) {
+        runtimeSupervisor.setManagedRuntimeExpected(false)
+      }
+      console.error('[kun-gui] failed to start kun:', error)
+      throw error
+    }
+    launchSettings = await resolveManagedKunPort(
+      runtimeSupervisor.latestOr(launchSettings),
+      'runtime-start-retry',
+      1
+    )
+    try {
+      await adapter.ensureRunning(launchSettings)
+    } catch (retryError) {
+      console.error('[kun-gui] failed to start kun after selecting another port:', retryError)
+      throw retryError
+    }
   }
   const started = await kunRuntimeHealthMonitor.waitForHealthy(launchSettings, 20_000)
   if (!started) {
@@ -138,8 +214,28 @@ export async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSett
   if (!runtimeApi.ok) {
     throw runtimeJsonError(runtimeApi.error, runtimeApi.message)
   }
-  noteRuntimeHealthy('ensure', launchSettings)
-  return launchSettings
+  return noteSuccessfulRuntimeSettings('ensure', launchSettings)
+}
+
+function isRuntimePortConflict(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const code = String((error as Error & { code?: unknown }).code ?? '')
+  return code === 'EADDRINUSE' ||
+    code === 'runtime_port_conflict' ||
+    /(?:EADDRINUSE|address already in use|port \d+ is in use)/i.test(error.message)
+}
+
+function isClientRuntimeOwnerConflict(error: unknown): boolean {
+  return error instanceof Error &&
+    String((error as Error & { code?: unknown }).code ?? '') === 'client_runtime_owner_busy'
+}
+
+export async function prepareGuiRuntimeForStartupRetry(): Promise<void> {
+  // Fence the watchdog before cleanup so it cannot launch a replacement while
+  // the recovery window is preparing a new Electron instance.
+  runtimeSupervisor.setManagedRuntimeExpected(false)
+  await runtimeSupervisor.waitForIdle()
+  await kunRuntimeAdapter.stopAndWait()
 }
 
 /**
@@ -321,5 +417,5 @@ async function restartRuntimeAfterStopping(
   if (!runtimeApi.ok) {
     throw runtimeJsonError(runtimeApi.error, runtimeApi.message)
   }
-  noteRuntimeHealthy('restart', launchSettings)
+  noteSuccessfulRuntimeSettings('restart', launchSettings)
 }

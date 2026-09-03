@@ -109,7 +109,26 @@ describe('startup failure recovery helpers', () => {
     expect(message).toContain('[redacted]')
   })
 
-  it('presents a typed handoff failure with safe owner details and task continuity', () => {
+  it('explains Runtime authentication failures without exposing the JSON envelope', () => {
+const presentation = startupFailurePresentation(
+new Error('{"code":"unauthorized","message":"unauthorized"}')
+)
+
+expect(presentation.message).toContain('rejected the desktop access credential')
+expect(presentation.message).not.toContain('{"code"')
+})
+
+it('gives a client owner conflict an actionable, non-destructive recovery', () => {
+const presentation = startupFailurePresentation(Object.assign(
+new Error('Kun Runtime is already owned by tui process 4313'),
+{ code: 'client_runtime_owner_busy' }
+))
+
+expect(presentation.message).toContain('Close the other Kun GUI or TUI')
+expect(presentation.message).toContain('will not stop another client automatically')
+})
+
+it('presents a typed handoff failure with safe owner details and task continuity', () => {
     const presentation = startupFailurePresentation(runtimeHandoffError())
     const html = startupFailureHtml(presentation.message, '/tmp/logs', {
       handoff: presentation.handoff,
@@ -211,7 +230,8 @@ describe('showStartupFailureWindow', () => {
   })
 
   it('runs only an explicit recovery action from intercepted navigation', async () => {
-    showStartupFailureWindow(new Error('manager failed'), 'C:\\Kun\\logs')
+    const recoverRetry = vi.fn().mockResolvedValue(undefined)
+    showStartupFailureWindow(new Error('manager failed'), 'C:\\Kun\\logs', { recoverRetry })
     const preventDefault = vi.fn()
     const navigate = electron.webHandlers.get('will-navigate')
 
@@ -222,12 +242,14 @@ describe('showStartupFailureWindow', () => {
     expect(electron.app.quit).not.toHaveBeenCalled()
 
     navigate?.({ preventDefault }, 'kun-startup-action:retry')
-    expect(electron.app.relaunch).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(electron.app.relaunch).toHaveBeenCalledOnce())
+    expect(recoverRetry).toHaveBeenCalledOnce()
     expect(electron.app.quit).toHaveBeenCalledOnce()
   })
 
-  it('relaunches without authorizing handoff cleanup for a client-owned Runtime conflict', () => {
+  it('relaunches without authorizing handoff cleanup for a client-owned Runtime conflict', async () => {
     const recoverHandoff = vi.fn().mockResolvedValue(undefined)
+    const recoverRetry = vi.fn().mockResolvedValue(undefined)
     const error = new ClientRuntimeOwnerBusyError('tui', {
       kind: 'runtime',
       flavor: 'production',
@@ -236,7 +258,7 @@ describe('showStartupFailureWindow', () => {
       port: 18899
     })
 
-    showStartupFailureWindow(error, '/tmp/kun-logs', { recoverHandoff })
+    showStartupFailureWindow(error, '/tmp/kun-logs', { recoverHandoff, recoverRetry })
     expect(lastRenderedHtml()).toContain('Retry Kun')
     expect(lastRenderedHtml()).not.toContain('Safely stop old Kun')
 
@@ -246,8 +268,23 @@ describe('showStartupFailureWindow', () => {
     )
 
     expect(recoverHandoff).not.toHaveBeenCalled()
-    expect(electron.app.relaunch).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(electron.app.relaunch).toHaveBeenCalledOnce())
+    expect(recoverRetry).toHaveBeenCalledOnce()
     expect(electron.app.quit).toHaveBeenCalledOnce()
+  })
+
+  it('keeps recovery open when ordinary retry cleanup fails', async () => {
+    const recoverRetry = vi.fn().mockRejectedValue(new Error('cleanup failed'))
+    showStartupFailureWindow(new Error('manager failed'), '/tmp/kun-logs', { recoverRetry })
+
+    electron.webHandlers.get('will-navigate')?.(
+      { preventDefault: vi.fn() },
+      'kun-startup-action:retry'
+    )
+
+    await vi.waitFor(() => expect(lastRenderedHtml()).toContain('Retry failed: cleanup failed'))
+    expect(electron.app.relaunch).not.toHaveBeenCalled()
+    expect(electron.app.quit).not.toHaveBeenCalled()
   })
 
   it('runs handoff recovery once and relaunches only after it succeeds', async () => {

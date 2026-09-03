@@ -13,6 +13,7 @@ export function showStartupFailureWindow(
   logDir: string,
   options: {
     recoverHandoff?: () => Promise<void>
+    recoverRetry?: () => Promise<void>
     replaceWindow?: BrowserWindow | null
   } = {}
 ): BrowserWindow | null {
@@ -71,8 +72,17 @@ export function showStartupFailureWindow(
       if (action === 'retry') {
         if (recoveryInFlight) return
         if (!presentation.handoff) {
-          app.relaunch()
-          app.quit()
+          recoveryInFlight = true
+          render(message, true)
+          void (options.recoverRetry?.() ?? Promise.resolve()).then(() => {
+            app.relaunch()
+            app.quit()
+          }).catch((recoveryError) => {
+            recoveryInFlight = false
+            const detail = sanitizeStartupFailureMessage(recoveryError)
+            logWarn('startup', 'Kun startup retry cleanup failed.', { message: detail })
+            render(`${message}\n\nRetry failed: ${detail}`)
+          })
           return
         }
         if (!canRecoverHandoff || !options.recoverHandoff) return

@@ -14,6 +14,21 @@ const harness = vi.hoisted(() => {
   const ensureRunning = vi.fn(async () => undefined)
   const ensureReplacementRunning = vi.fn(async () => undefined)
   const resolveConnection = vi.fn(async () => false)
+  const resolveAvailablePort = vi.fn<(port: number) => Promise<{
+    port: number
+    changed: boolean
+    message?: string
+  }>>(async (port) => ({ port, changed: false }))
+  const updateIf = vi.fn(async (
+    predicate: (current: AppSettingsV1) => boolean,
+    mutation: (current: AppSettingsV1) => AppSettingsV1
+  ) => {
+    const current = (latest ?? settings()) as AppSettingsV1
+    const applied = predicate(current)
+    const next = applied ? mutation(current) : current
+    latest = next
+    return { settings: next, applied }
+  })
   const probeBundledBuildReplacement = vi.fn<() => Promise<
     | { state: 'matched'; ownership: 'none' | 'current' }
     | { state: 'mismatched' }
@@ -39,13 +54,17 @@ const harness = vi.hoisted(() => {
     failedPids: []
   }))
   const mainState = {
-    assertCanonicalRuntimeMigrationReady: vi.fn()
+    assertCanonicalRuntimeMigrationReady: vi.fn(),
+    settledRuntimeSettings: null as AppSettingsV1 | null,
+    store: { updateIf }
   }
   const runtimeSupervisor = {
     latestOr: <Settings>(fallback: Settings): Settings => (latest ?? fallback) as Settings,
+    noteLatest: vi.fn((settings: unknown) => { latest = settings }),
     setManagedRuntimeExpected: vi.fn(),
     restart: vi.fn(async (operation: () => Promise<void>) => operation()),
     replace: vi.fn(async (operation: () => Promise<void>) => operation()),
+    waitForIdle: vi.fn(async () => undefined),
     ensure: vi.fn(async (_fingerprint: string, operation: () => Promise<unknown>) => operation())
   }
 
@@ -54,6 +73,7 @@ const harness = vi.hoisted(() => {
     childRunning: () => childRunning,
     ensureReplacementRunning,
     ensureRunning,
+    resolveAvailablePort,
     resolveConnection,
     mainState,
     noteRuntimeHealthy,
@@ -65,6 +85,7 @@ const harness = vi.hoisted(() => {
     stopAndWait,
     stopSharedAndWait,
     stopSharedForReplacementAndWait,
+    updateIf,
     waitForHealthy,
     waitForKunStartupSettled,
     waitForRuntimeTurnsIdle
@@ -77,6 +98,7 @@ vi.mock('./runtime/kun-adapter', () => ({
     ensureReplacementRunning: harness.ensureReplacementRunning,
     isChildRunning: harness.childRunning,
     probeBundledBuildReplacement: harness.probeBundledBuildReplacement,
+    resolveAvailablePort: harness.resolveAvailablePort,
     resolveConnection: harness.resolveConnection,
     stopAndWait: harness.stopAndWait,
     stopSharedAndWait: harness.stopSharedAndWait,
@@ -111,9 +133,13 @@ vi.mock('./main-runtime-health', () => ({
 }))
 
 import {
+  ensureKunRuntime,
+  ensureManagedKunRuntimeToken,
   ensureKunServeFreshOnStartup,
+  prepareGuiRuntimeForStartupRetry,
   reconcileBundledRuntimeAfterInstall,
   replaceKunServe,
+  resolveManagedKunLaunchSettings,
   restartGuiRuntime,
   restartRuntime,
   restartAllKunServeProcesses
@@ -126,7 +152,8 @@ function settings(): AppSettingsV1 {
     agents: {
       kun: {
         ...defaultKunRuntimeSettings(),
-        autoStart: true
+        autoStart: true,
+        runtimeToken: 'existing-runtime-token'
       }
     }
   }
@@ -140,6 +167,10 @@ beforeEach(() => {
   harness.stopSharedForReplacementAndWait.mockClear()
   harness.ensureRunning.mockClear()
   harness.ensureReplacementRunning.mockClear()
+  harness.resolveAvailablePort.mockReset()
+  harness.resolveAvailablePort.mockImplementation(async (port: number) => ({ port, changed: false }))
+  harness.updateIf.mockClear()
+  harness.mainState.settledRuntimeSettings = null
   harness.resolveConnection.mockReset()
   harness.resolveConnection.mockResolvedValue(false)
   harness.probeBundledBuildReplacement.mockReset()
@@ -158,11 +189,94 @@ beforeEach(() => {
     failedPids: []
   })
   harness.mainState.assertCanonicalRuntimeMigrationReady.mockClear()
+  harness.runtimeSupervisor.noteLatest.mockClear()
   harness.runtimeSupervisor.restart.mockClear()
   harness.runtimeSupervisor.replace.mockClear()
+  harness.runtimeSupervisor.waitForIdle.mockClear()
   harness.runtimeSupervisor.ensure.mockClear()
   harness.runtimeSupervisor.ensure.mockImplementation(async (_fingerprint: string, operation: () => Promise<unknown>) => operation())
   harness.runtimeSupervisor.setManagedRuntimeExpected.mockClear()
+})
+
+describe('GUI Runtime startup preparation', () => {
+  it('atomically generates and persists a missing runtime token', async () => {
+    const current = settings()
+    current.agents.kun.runtimeToken = ''
+    harness.setLatest(current)
+
+    const result = await ensureManagedKunRuntimeToken(current, 'test')
+
+    expect(result.generated).toBe(true)
+    expect(result.settings.agents.kun.runtimeToken).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(harness.updateIf).toHaveBeenCalledOnce()
+  })
+
+  it('persists an available fallback port before launch', async () => {
+    const current = settings()
+    harness.setLatest(current)
+    harness.resolveAvailablePort.mockResolvedValueOnce({
+      port: current.agents.kun.port + 1,
+      changed: true,
+      message: `port ${current.agents.kun.port} is in use`
+    })
+
+    const result = await resolveManagedKunLaunchSettings(current, 'test')
+
+    expect(result.agents.kun.port).toBe(current.agents.kun.port + 1)
+    expect(harness.updateIf).toHaveBeenCalledOnce()
+  })
+
+  it('reselects a port only once after a bind race', async () => {
+    const current = settings()
+    harness.setLatest(current)
+    harness.ensureRunning
+      .mockRejectedValueOnce(Object.assign(new Error('address already in use'), { code: 'EADDRINUSE' }))
+      .mockResolvedValueOnce(undefined)
+    harness.resolveAvailablePort
+      .mockResolvedValueOnce({ port: current.agents.kun.port, changed: false })
+      .mockResolvedValueOnce({ port: current.agents.kun.port + 1, changed: true })
+
+    const result = await ensureKunRuntime(current)
+
+    expect(harness.ensureRunning).toHaveBeenCalledTimes(2)
+    expect(result.agents.kun.port).toBe(current.agents.kun.port + 1)
+  })
+
+  it('does not treat an ownership conflict as a port retry', async () => {
+    const current = settings()
+    harness.setLatest(current)
+    const conflict = Object.assign(new Error('Kun Runtime is already owned by tui'), {
+      code: 'client_runtime_owner_busy'
+    })
+    harness.ensureRunning.mockRejectedValueOnce(conflict)
+
+    await expect(ensureKunRuntime(current)).rejects.toBe(conflict)
+
+    expect(harness.ensureRunning).toHaveBeenCalledOnce()
+    expect(harness.runtimeSupervisor.setManagedRuntimeExpected).toHaveBeenCalledWith(false)
+    expect(harness.stopAndWait).not.toHaveBeenCalled()
+  })
+
+  it('fences the watchdog and waits for runtime operations before Retry cleanup', async () => {
+    await prepareGuiRuntimeForStartupRetry()
+
+    expect(harness.runtimeSupervisor.setManagedRuntimeExpected).toHaveBeenCalledWith(false)
+    expect(harness.runtimeSupervisor.waitForIdle).toHaveBeenCalledOnce()
+    expect(harness.stopAndWait).toHaveBeenCalledOnce()
+  })
+
+  it('stops only the controller-held child when generating a token', async () => {
+    const current = settings()
+    current.agents.kun.runtimeToken = ''
+    harness.setLatest(current)
+    harness.setChildRunning(true)
+
+    await ensureKunRuntime(current)
+
+    expect(harness.stopAndWait).toHaveBeenCalledOnce()
+    expect(harness.stopSharedAndWait).not.toHaveBeenCalled()
+    expect(harness.stopSharedForReplacementAndWait).not.toHaveBeenCalled()
+  })
 })
 
 describe('explicit Kun serve replacement', () => {
@@ -192,6 +306,7 @@ describe('explicit Kun serve replacement', () => {
     expect(harness.ensureRunning).not.toHaveBeenCalled()
     expect(harness.waitForHealthy).toHaveBeenCalledWith(current, 20_000)
     expect(harness.probeRuntimeApi).toHaveBeenCalledWith(current)
+    expect(harness.mainState.settledRuntimeSettings).toBe(current)
   })
 
   it('leaves an ownerless build mismatch for the exact client-owned election path', async () => {
