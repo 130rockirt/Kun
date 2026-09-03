@@ -394,8 +394,14 @@ async function readStagedRelease(stagingRoot: string): Promise<StagedRelease | n
 async function rollForwardTuiUpdate(transaction: TuiUpdateTransaction): Promise<void> {
   const { installRoot, stagingRoot, backupRoot } = transaction
   const nextRoot = join(stagingRoot, 'kun')
-  await rm(backupRoot, { recursive: true, force: true })
   const currentExists = await stat(installRoot).then(() => true).catch(() => false)
+  const backupExists = await stat(backupRoot).then(() => true).catch(() => false)
+  // Only clear an existing backup while the current install is healthy: when
+  // the install root is gone, the backup is the only copy of the previous
+  // release and must survive a failed activation below.
+  if (currentExists && backupExists) {
+    await rm(backupRoot, { recursive: true, force: true })
+  }
   if (currentExists) await rename(installRoot, backupRoot)
   try {
     await rename(nextRoot, installRoot)
@@ -404,6 +410,46 @@ async function rollForwardTuiUpdate(transaction: TuiUpdateTransaction): Promise<
     throw error
   }
   await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined)
+}
+
+type InstallRecovery = 'present' | 'restored' | 'gone' | 'restore-failed'
+
+/**
+ * Ensure the install root exists before a failed update is reported. The
+ * backup is only promoted back into place when the install root is missing;
+ * it is never deleted here, so a failed recovery can be retried on the next
+ * launch without losing the only copy of the previous release.
+ */
+async function restoreMissingInstall(
+  transaction: TuiUpdateTransaction,
+  canonical: string
+): Promise<InstallRecovery> {
+  const installExists = await stat(canonical).then(() => true).catch(() => false)
+  if (installExists) return 'present'
+  const backupExists = await stat(transaction.backupRoot).then(() => true).catch(() => false)
+  if (!backupExists) return 'gone'
+  try {
+    await rename(transaction.backupRoot, canonical)
+    return 'restored'
+  } catch {
+    return 'restore-failed'
+  }
+}
+
+function installRecoveryMessage(recovery: InstallRecovery): string {
+  if (recovery === 'present') {
+    return 'The previous installation was kept; run `kun update --yes` to retry.'
+  }
+  if (recovery === 'restored') {
+    return 'The previous installation was restored from its backup; run `kun update --yes` to retry.'
+  }
+  if (recovery === 'gone') {
+    return 'No usable installation remains; reinstall Kun.'
+  }
+  return (
+    'The previous installation could not be restored; its backup is still in ' +
+    'place and recovery will be retried on the next launch.'
+  )
 }
 
 /**
@@ -460,6 +506,19 @@ export async function reconcilePendingTuiUpdate(
         targetVersion: result.targetVersion
       }
     }
+    const recovery = await restoreMissingInstall(transaction, canonical)
+    if (recovery === 'restore-failed') {
+      return {
+        kind: 'failed',
+        stage: result.stage,
+        message:
+          `the staged update to Kun ${result.targetVersion} failed` +
+          `${result.stage ? ` during ${result.stage}` : ''}` +
+          `${result.error ? `: ${result.error}` : ''}. ` +
+          installRecoveryMessage(recovery) +
+          ` Details: ${tuiUpdateLogPath(canonical)}`
+      }
+    }
     await clearTuiUpdateTransaction(canonical)
     return {
       kind: 'failed',
@@ -468,8 +527,8 @@ export async function reconcilePendingTuiUpdate(
         `the staged update to Kun ${result.targetVersion} failed` +
         `${result.stage ? ` during ${result.stage}` : ''}` +
         `${result.error ? `: ${result.error}` : ''}. ` +
-        'The previous installation was kept; run `kun update --yes` to retry. ' +
-        `Details: ${tuiUpdateLogPath(canonical)}`
+        installRecoveryMessage(recovery) +
+        ` Details: ${tuiUpdateLogPath(canonical)}`
     }
   }
   // No result yet: either the replacement is still running or it died.
@@ -505,6 +564,17 @@ export async function reconcilePendingTuiUpdate(
         targetVersion: transaction.targetVersion
       }
     } catch (error) {
+      const recovery = await restoreMissingInstall(transaction, canonical)
+      if (recovery === 'restore-failed') {
+        return {
+          kind: 'failed',
+          stage: 'replace',
+          message:
+            `the staged update to Kun ${transaction.targetVersion} could not be activated ` +
+            `(${error instanceof Error ? error.message : String(error)}). ` +
+            installRecoveryMessage(recovery)
+        }
+      }
       await writeTuiUpdateResult(canonical, {
         status: 'failed',
         stage: 'replace',
@@ -519,32 +589,35 @@ export async function reconcilePendingTuiUpdate(
         message:
           `the staged update to Kun ${transaction.targetVersion} could not be activated ` +
           `(${error instanceof Error ? error.message : String(error)}). ` +
-          'The previous installation was kept; run `kun update --yes` to retry.'
+          installRecoveryMessage(recovery)
       }
     }
   }
   // Staging is gone or does not match: restore the backup when the install root
   // itself is missing, then report the failure.
-  const installExists = await stat(canonical).then(() => true).catch(() => false)
-  let restored = false
-  if (!installExists) {
-    const backupExists = await stat(transaction.backupRoot).then(() => true).catch(() => false)
-    if (backupExists) {
-      await rename(transaction.backupRoot, canonical)
-      restored = true
+  const recovery = await restoreMissingInstall(transaction, canonical)
+  if (recovery === 'restore-failed') {
+    return {
+      kind: 'failed',
+      stage: 'staging',
+      message:
+        `the staged update to Kun ${transaction.targetVersion} was interrupted before it could run. ` +
+        installRecoveryMessage(recovery)
     }
   }
   await clearTuiUpdateTransaction(canonical)
+  const stagingMessage =
+    recovery === 'restored'
+      ? 'The previous installation was restored from its backup. '
+      : recovery === 'present'
+        ? 'The current installation was left unchanged. '
+        : 'No usable installation remains; reinstall Kun. '
   return {
     kind: 'failed',
     stage: 'staging',
     message:
       `the staged update to Kun ${transaction.targetVersion} was interrupted before it could run. ` +
-      (restored
-        ? 'The previous installation was restored from its backup. '
-        : installExists
-          ? 'The current installation was left unchanged. '
-          : 'No usable installation remains; reinstall Kun. ') +
+      stagingMessage +
       'Run `kun update --yes` to retry.'
   }
 }

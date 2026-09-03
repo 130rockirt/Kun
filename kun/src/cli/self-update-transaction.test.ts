@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { join, resolve } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   acquireTuiUpdateLock,
   clearTuiUpdateTransaction,
@@ -12,16 +12,44 @@ import {
   tuiUpdateLogPath,
   tuiUpdateResultPath,
   tuiUpdateTransactionDir,
+  tuiUpdateTransactionPath,
   tuiUpdateUpdaterPath,
   writeTuiUpdateResult,
   writeTuiUpdateTransaction,
   type TuiUpdateTransaction
 } from './self-update-transaction.js'
 
+const renameFailure = vi.hoisted(() => ({
+  source: '' as string,
+  destination: '' as string
+}))
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    rename: async (
+      from: Parameters<typeof actual.rename>[0],
+      to: Parameters<typeof actual.rename>[1]
+    ): Promise<void> => {
+      const sourceMatches =
+        renameFailure.source !== '' && resolve(String(from)) === renameFailure.source
+      const destinationMatches =
+        renameFailure.destination !== '' && resolve(String(to)) === renameFailure.destination
+      if (sourceMatches || destinationMatches) {
+        throw new Error('simulated rename failure')
+      }
+      return actual.rename(from, to)
+    }
+  }
+})
+
 const roots: string[] = []
 const BUILD_ID = 'a'.repeat(64)
 
 afterEach(async () => {
+  renameFailure.source = ''
+  renameFailure.destination = ''
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
@@ -178,6 +206,94 @@ describe('pending TUI update reconciliation', () => {
     expect(report && 'message' in report && report.message).toContain('unreadable')
     expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
       .toMatchObject({ version: '1.2.3' })
+  })
+})
+
+describe('recovery preserves the only available backup', () => {
+  it('finishes a half-swapped update and keeps the preserved backup', async () => {
+    const root = await installRoot()
+    const transaction = await writeTuiUpdateTransaction(root, transactionInput(root))
+    await stagedRelease(transaction)
+    // Simulate a crash between moving the old install to backup and moving the
+    // staged release into place: install root gone, backup and staging present.
+    const { rename } = await import('node:fs/promises')
+    await rename(root, transaction.backupRoot)
+    const report = await reconcilePendingTuiUpdate(root, { processIsAlive: () => false })
+    expect(report).toEqual({ kind: 'activated', previousVersion: '1.2.3', targetVersion: '1.2.4' })
+    expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
+      .toMatchObject({ version: '1.2.4', buildId: BUILD_ID })
+    // The backup must survive activation when the install root was missing.
+    expect(JSON.parse(await readFile(`${root}.previous/release.json`, 'utf8')))
+      .toMatchObject({ version: '1.2.3' })
+  })
+
+  it('restores the backup when activating the staged release fails after a half-swap', async () => {
+    const root = await installRoot()
+    const transaction = await writeTuiUpdateTransaction(root, transactionInput(root))
+    await stagedRelease(transaction)
+    const { rename } = await import('node:fs/promises')
+    await rename(root, transaction.backupRoot)
+    renameFailure.source = resolve(join(transaction.stagingRoot, 'kun'))
+    const report = await reconcilePendingTuiUpdate(root, { processIsAlive: () => false })
+    expect(report?.kind).toBe('failed')
+    expect(report && 'message' in report && report.message).toContain('restored from its backup')
+    expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
+      .toMatchObject({ version: '1.2.3' })
+    await expect(stat(tuiUpdateTransactionPath(root))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('keeps the transaction for retry when the backup cannot be restored', async () => {
+    const root = await installRoot()
+    const transaction = await writeTuiUpdateTransaction(root, transactionInput(root))
+    await stagedRelease(transaction)
+    const { rename } = await import('node:fs/promises')
+    await rename(root, transaction.backupRoot)
+    renameFailure.destination = resolve(root)
+    const report = await reconcilePendingTuiUpdate(root, { processIsAlive: () => false })
+    expect(report?.kind).toBe('failed')
+    expect(report && 'message' in report && report.message).toContain('still in place')
+    expect(report && 'message' in report && report.message).toContain('retried on the next launch')
+    // Recovery failed, so the transaction is retained for the next launch and
+    // the backup is left intact.
+    expect(JSON.parse(await readFile(tuiUpdateTransactionPath(root), 'utf8')))
+      .toMatchObject({ previousVersion: '1.2.3' })
+    expect(JSON.parse(await readFile(`${root}.previous/release.json`, 'utf8')))
+      .toMatchObject({ version: '1.2.3' })
+  })
+
+  it('restores the backup from a recorded failure when the install root is gone', async () => {
+    const root = await installRoot()
+    const transaction = await writeTuiUpdateTransaction(root, transactionInput(root))
+    await writeTuiUpdateResult(root, {
+      status: 'failed',
+      stage: 'swap',
+      error: 'IOException: <install> is locked',
+      previousVersion: '1.2.3',
+      targetVersion: '1.2.4'
+    })
+    const { rename } = await import('node:fs/promises')
+    await rename(root, transaction.backupRoot)
+    const report = await reconcilePendingTuiUpdate(root, { processIsAlive: () => false })
+    expect(report?.kind).toBe('failed')
+    expect(report && 'message' in report && report.message).toContain('restored from its backup')
+    expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
+      .toMatchObject({ version: '1.2.3' })
+    await expect(stat(tuiUpdateTransactionPath(root))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('reports a complete loss when no backup remains and activation fails', async () => {
+    const root = await installRoot()
+    const transaction = await writeTuiUpdateTransaction(root, transactionInput(root))
+    await stagedRelease(transaction)
+    // Remove the install entirely without leaving a backup behind.
+    await rm(root, { recursive: true, force: true })
+    renameFailure.source = resolve(join(transaction.stagingRoot, 'kun'))
+    const report = await reconcilePendingTuiUpdate(root, { processIsAlive: () => false })
+    expect(report?.kind).toBe('failed')
+    expect(report && 'message' in report && report.message).toContain(
+      'No usable installation remains; reinstall Kun.'
+    )
+    await expect(stat(tuiUpdateTransactionPath(root))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })
 
