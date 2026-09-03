@@ -18,6 +18,7 @@ import {
 } from './runtime-factory-config.js'
 import { settleCleanupSteps } from './runtime-factory-cleanup.js'
 import { shutdownRuntimeExecutionForHost } from './runtime-graph-lifecycle.js'
+import { disposeProxyAgents } from '../adapters/model/proxy-fetch.js'
 import type { ServerRuntime } from './runtime-factory-dependencies.js'
 
 export function createServerRuntimeComposition(
@@ -429,7 +430,8 @@ export function createServerRuntimeComposition(
             }
           }
         },
-        async () => { await dataDirLease?.release() }
+        async () => { await dataDirLease?.release() },
+        () => { disposeProxyAgents() }
       ])
     }
   }

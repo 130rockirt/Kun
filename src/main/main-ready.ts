@@ -1,5 +1,6 @@
 import { app, type BrowserWindow } from 'electron'
 import { shouldStartHidden } from './desktop-behavior'
+import { disposeProxyAgents } from './proxy-fetch'
 import { maybePromptCliInstall } from './cli-install-service'
 import { managedKunHostCanAutoStart } from './managed-runtime-startup-policy'
 import { kunRuntimeAdapter } from './runtime/kun-adapter'
@@ -130,6 +131,7 @@ export function startMainApp(): Promise<void> {
     if (!gotSingleInstanceLock) return
     const disposeHostPowerRecovery = installHostPowerRecovery()
     app.once('before-quit', disposeHostPowerRecovery)
+    app.once('before-quit', () => disposeProxyAgents())
     if (await recoverUpdateBeforeRuntimeStart()) return
 
     const startup = await startWindowFirstStartup({

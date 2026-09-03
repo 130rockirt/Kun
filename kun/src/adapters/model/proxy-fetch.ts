@@ -3,6 +3,52 @@ import { request as httpsRequest } from 'node:https'
 import { Readable } from 'node:stream'
 import { ProxyAgent } from 'proxy-agent'
 
+const MAX_CACHED_PROXY_AGENTS = 4
+// Insertion order is used as a simple LRU: the oldest entry is evicted first
+// once the cache exceeds its bound. A single process typically uses only one
+// or two proxy URLs, so this bound keeps resources bounded without reference
+// counting. Agents are disposed on runtime shutdown (or eviction), closing
+// their pooled sockets so keep-alive connections never leak.
+const proxyAgentCache = new Map<string, ProxyAgent>()
+
+function getProxyAgent(normalizedProxyUrl: string): ProxyAgent {
+  const cached = proxyAgentCache.get(normalizedProxyUrl)
+  if (cached) {
+    // Re-insert to mark this entry as most-recently-used.
+    proxyAgentCache.delete(normalizedProxyUrl)
+    proxyAgentCache.set(normalizedProxyUrl, cached)
+    return cached
+  }
+  const agent = new ProxyAgent({
+    getProxyForUrl: () => normalizedProxyUrl,
+    keepAlive: true
+  })
+  proxyAgentCache.set(normalizedProxyUrl, agent)
+  while (proxyAgentCache.size > MAX_CACHED_PROXY_AGENTS) {
+    const oldestKey = proxyAgentCache.keys().next().value
+    if (oldestKey === undefined) break
+    const evicted = proxyAgentCache.get(oldestKey)
+    proxyAgentCache.delete(oldestKey)
+    evicted?.destroy()
+  }
+  return agent
+}
+
+export function disposeProxyAgents(): void {
+  for (const agent of proxyAgentCache.values()) {
+    try {
+      agent.destroy()
+    } catch {
+      // A partially-closed agent must never block process shutdown.
+    }
+  }
+  proxyAgentCache.clear()
+}
+
+export function cachedProxyAgentCountForTests(): number {
+  return proxyAgentCache.size
+}
+
 export function createProxyFetch(proxyUrl: string): typeof fetch | null {
   const normalizedProxyUrl = proxyUrl.trim()
   if (!normalizedProxyUrl) return null
@@ -20,16 +66,15 @@ async function fetchViaProxy(
     throw new Error(`Unsupported proxied request protocol: ${url.protocol}`)
   }
 
-  const body = requestInput.body
-    ? Buffer.from(await requestInput.arrayBuffer())
-    : null
   const headers = headersToRecord(requestInput.headers)
-  if (body && !hasHeader(headers, 'content-length')) {
-    headers['content-length'] = String(body.byteLength)
-  }
+  // Stream the body instead of materialising it with arrayBuffer(). When the
+  // caller has not set content-length, Node emits Transfer-Encoding: chunked.
+  const bodyStream = requestInput.body
+    ? Readable.fromWeb(requestInput.body)
+    : null
 
   return new Promise<Response>((resolve, reject) => {
-    const agent = new ProxyAgent({ getProxyForUrl: () => proxyUrl })
+    const agent = getProxyAgent(proxyUrl)
     const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(
       url,
       {
@@ -68,9 +113,13 @@ async function fetchViaProxy(
       reject(error)
     }
     const abort = (): void => {
+      bodyStream?.destroy()
       request.destroy(new Error('The operation was aborted.'))
     }
-    request.on('error', settleReject)
+    request.on('error', (error) => {
+      bodyStream?.destroy()
+      settleReject(error)
+    })
     request.on('close', () => signal?.removeEventListener('abort', abort))
     if (signal?.aborted) {
       abort()
@@ -78,22 +127,24 @@ async function fetchViaProxy(
       return
     }
     signal?.addEventListener('abort', abort, { once: true })
-    if (body) request.write(body)
-    request.end()
+    if (bodyStream) {
+      bodyStream.on('error', (error) => {
+        request.destroy(error)
+      })
+      bodyStream.pipe(request)
+    } else {
+      request.end()
+    }
   })
 }
 
-function headersToRecord(headers: HeadersInit | undefined): Record<string, string> {
+function headersToRecord(
+  headers: { forEach(callback: (value: string, key: string) => void): void } | undefined
+): Record<string, string> {
   const out: Record<string, string> = {}
   if (!headers) return out
-  const normalized = new Headers(headers)
-  normalized.forEach((value, key) => {
+  headers.forEach((value, key) => {
     out[key] = value
   })
   return out
-}
-
-function hasHeader(headers: Record<string, string>, name: string): boolean {
-  const normalized = name.toLowerCase()
-  return Object.keys(headers).some((key) => key.toLowerCase() === normalized)
 }
