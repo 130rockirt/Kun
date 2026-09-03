@@ -156,6 +156,8 @@ Kun 使用 [PolyForm Noncommercial License 1.0.0](./LICENSE)，仅供学习、�
 
 感谢所有提交 issue、建议、代码和文档的贡献者。
 
+Kun 的记忆架构研究参考了 [Nowledge Mem](https://mem.nowledge.co/zh/docs) 公开文档中的 Thread / Memory 分离、来源追踪与混合检索理念；Kun 的实现保持独立，并遵循自身的单运行时和本地优先架构。
+
 <a href="https://github.com/KunAgent/Kun/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=KunAgent/Kun" alt="Kun contributors">
 </a>

@@ -37,7 +37,8 @@ import {
   type ThreadRecord
 } from '../contracts/threads.js'
 import type { AgentSession } from '../domain/session.js'
-import type { MemoryAccess, MemoryStore } from '../memory/memory-store.js'
+import type { MemoryAccess, MemoryListFilter, MemoryStore } from '../memory/memory-store.js'
+import type { MemoryRetrieveRequest } from '../memory/memory-retrieval.js'
 import type {
   AppendGraphEventInput,
   AppendGraphEventResult,
@@ -517,17 +518,19 @@ export class ManagerRemoteMemoryStore implements MemoryStore {
     await this.call('purge', { id })
   }
 
-  async list(filter: { workspace?: string; includeDeleted?: boolean; all?: boolean } = {}) {
+  async list(filter: MemoryListFilter = {}) {
     return MemoryRecord.array().parse(await this.call('list', filter))
   }
 
-  async retrieve(input: { query: string; workspace?: string; limit: number }) {
+  async retrieve(input: MemoryRetrieveRequest) {
     return MemoryRecord.array().parse(await this.call('retrieve', input))
   }
 
   async diagnostics() {
     const diagnostics = MemoryDiagnostics.parse(await this.call('diagnostics', {}))
-    return { ...diagnostics, lastInjectedIds: [...this.lastInjectedIds] }
+    return diagnostics.lastInjectedIds.length > 0 || this.lastInjectedIds.length === 0
+      ? diagnostics
+      : { ...diagnostics, lastInjectedIds: [...this.lastInjectedIds] }
   }
 
   setLastInjected(ids: string[]): void {

@@ -243,14 +243,14 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
           const request = z.object({
             id: z.string().min(1),
             patch: MemoryUpdateRequest,
-            access: z.object({ workspace: z.string().optional() }).strict().optional()
+            access: z.object({ workspace: z.string().optional(), project: z.string().optional() }).strict().optional()
           }).strict().parse(body.value)
           return store.update(request.id, request.patch, request.access)
         }
         case 'delete': {
           const request = z.object({
             id: z.string().min(1),
-            access: z.object({ workspace: z.string().optional() }).strict().optional()
+            access: z.object({ workspace: z.string().optional(), project: z.string().optional() }).strict().optional()
           }).strict().parse(body.value)
           return store.delete(request.id, request.access)
         }
@@ -262,6 +262,7 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
         case 'list': {
           const filter = z.object({
             workspace: z.string().optional(),
+            project: z.string().optional(),
             includeDeleted: z.boolean().optional(),
             all: z.boolean().optional()
           }).strict().parse(body.value ?? {})
@@ -271,12 +272,14 @@ export class ManagerSharedDataStore extends ManagerSharedDataStoreCore {
           const request = z.object({
             query: z.string(),
             workspace: z.string().optional(),
-            limit: z.number().int().positive()
+            project: z.string().optional(),
+            limit: z.number().int().positive(),
+            promptCharacterBudget: z.number().int().nonnegative().optional()
           }).strict().parse(body.value)
-          return store.retrieve(request)
+          return store.retrieve({ ...request, policy: body.config })
         }
         case 'diagnostics':
-          return store.diagnostics()
+          return store.diagnostics(body.config)
       }
     })
     this.memoryQueue = run.then(() => undefined, () => undefined)

@@ -291,7 +291,7 @@ export interface AgentProvider {
     attachmentId: string,
     options?: { threadId?: string; workspace?: string }
   ): Promise<CoreAttachmentContentResponseJson>
-  listMemories?(options?: { workspace?: string; includeDeleted?: boolean; all?: boolean }): Promise<CoreMemoryRecordJson[]>
+  listMemories?(options?: { workspace?: string; project?: string; includeDeleted?: boolean; all?: boolean }): Promise<CoreMemoryRecordJson[]>
   createMemory?(input: {
     content: string
     scope?: 'user' | 'workspace' | 'project'
@@ -299,13 +299,21 @@ export interface AgentProvider {
     project?: string
     tags?: string[]
     confidence?: number
+    type?: CoreMemoryRecordJson['type']
+    importance?: number
+    observedAt?: string
+    validFrom?: string
+    validTo?: string
+    expiresAt?: string
+    disabled?: boolean
+    sources?: Array<Omit<NonNullable<CoreMemoryRecordJson['sources']>[number], 'id'> & { id?: string }>
   }): Promise<CoreMemoryRecordJson>
   updateMemory?(
     memoryId: string,
-    patch: { content?: string; tags?: string[]; confidence?: number; disabled?: boolean },
-    options?: { workspace?: string }
+    patch: { content?: string; tags?: string[]; confidence?: number; importance?: number; type?: CoreMemoryRecordJson['type']; disabled?: boolean },
+    options?: { workspace?: string; project?: string }
   ): Promise<CoreMemoryRecordJson>
-  deleteMemory?(memoryId: string, options?: { workspace?: string }): Promise<CoreMemoryRecordJson>
+  deleteMemory?(memoryId: string, options?: { workspace?: string; project?: string }): Promise<CoreMemoryRecordJson>
   getMemoryDiagnostics?(): Promise<CoreMemoryDiagnosticsJson>
   steerUserMessage?(
     threadId: string,

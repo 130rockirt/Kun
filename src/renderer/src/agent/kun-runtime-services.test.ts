@@ -387,6 +387,37 @@ describe('KunRuntimeProvider', () => {
     })
   })
 
+  it('passes portable expiry and disabled state through memory creation', async () => {
+    const runtimeRequest = vi.fn(async (_path: string, _method?: string, body?: string) => ({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({
+        memory: {
+          id: 'mem_portable',
+          ...JSON.parse(body ?? '{}'),
+          disabledAt: '2026-09-01T00:00:00.000Z',
+          createdAt: '2026-09-01T00:00:00.000Z',
+          updatedAt: '2026-09-01T00:00:00.000Z'
+        }
+      })
+    }))
+    installDsGui({ runtimeRequest })
+    const provider = new KunRuntimeProvider()
+    const input = {
+      content: 'Portable disabled memory',
+      scope: 'user' as const,
+      expiresAt: '2027-01-01T00:00:00.000Z',
+      disabled: true
+    }
+
+    await expect(provider.createMemory(input)).resolves.toMatchObject({
+      id: 'mem_portable',
+      expiresAt: input.expiresAt,
+      disabledAt: '2026-09-01T00:00:00.000Z'
+    })
+    expect(runtimeRequest).toHaveBeenCalledWith('/v1/memory', 'POST', JSON.stringify(input))
+  })
+
   it('calls Kun fork and user-input compatibility endpoints', async () => {
     const runtimeRequest = vi.fn(async (path: string) => ({
       ok: true,

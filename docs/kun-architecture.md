@@ -15,6 +15,10 @@ Work 工作区可以按线程挂载为 Code 的只读、无向量结构知识库
 与检索流程见 [`docs/knowledge-bases.md`](./knowledge-bases.md)。知识库挂载不会扩大
 普通文件工具或 sandbox 的可写根。
 
+长期记忆使用“原子 JSON 标准数据 + 可重建 SQLite FTS5 投影”。检索必须先做作用域和生命周期
+过滤，记忆只能作为动态、不可信的 `reference` 证据，不能进入稳定 system 前缀或获得指令权限。
+数据布局、迁移、降级与验证见 [`docs/memory-foundation.md`](./memory-foundation.md)。
+
 ## 客户端能力边界
 
 每个 turn 持久化发起端 `clientSurface`，取值为 `gui`、`tui`、`cli`、

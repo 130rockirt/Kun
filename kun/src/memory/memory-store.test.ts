@@ -17,6 +17,29 @@ afterEach(async () => {
 })
 
 describe('FileMemoryStore', () => {
+  it('creates portable imports with exact expiry and disabled lifecycle state', async () => {
+    const store = new FileMemoryStore({
+      rootDir: await makeTempDir(),
+      config: { enabled: true, scopes: ['user'], maxInjectedRecords: 8 },
+      idGenerator: () => 'mem_portable',
+      nowIso: () => '2026-06-21T00:00:00.000Z'
+    })
+
+    const created = await store.create({
+      content: 'Portable disabled memory',
+      scope: 'user',
+      expiresAt: '2027-01-01T00:00:00.000Z',
+      disabled: true
+    })
+
+    expect(created).toMatchObject({
+      id: 'mem_portable',
+      expiresAt: '2027-01-01T00:00:00.000Z',
+      disabledAt: '2026-06-21T00:00:00.000Z'
+    })
+    await expect(store.retrieve({ query: 'Portable', limit: 8 })).resolves.toEqual([])
+  })
+
   it('re-enables a disabled memory when updated with disabled false', async () => {
     let tick = 0
     const store = new FileMemoryStore({

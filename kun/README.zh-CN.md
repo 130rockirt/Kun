@@ -338,6 +338,7 @@ Hooks 按声明顺序链式执行：每个 hook 看到的是前面 hook 改写�
   config.json      # 可选，运行时配置
   attachments/     # 附件元数据与二进制（启用时）
   memory/          # 长期记忆记录与墓碑记录（启用时）
+  memory-index.sqlite3 # 可重建的记忆 FTS5 检索投影
   child-runs/      # 子任务运行记录（subagents 开启时）
   threads/
     index.json
@@ -351,6 +352,8 @@ Hooks 按声明顺序链式执行：每个 hook 看到的是前面 hook 改写�
 
 `index.json`、`thread.json` 与 `session.json` 使用原子写入。
 JSONL 为追加式，即使包含部分格式错误行也可通过下一次重放跳过。GUI 可通过 `index.json` 列表并重放各线程 JSONL 来重建会话。
+记忆 JSON 始终是标准数据，SQLite 只是可删除、可重建的投影；迁移、回退、诊断与验证见
+[`docs/memory-foundation.md`](../docs/memory-foundation.md)。
 
 ## HTTP API
 
@@ -379,7 +382,7 @@ HTTP 服务在 `/v1/*` 提供以下路由：
 | GET | `/v1/attachments/diagnostics` | 附件存储状态 |
 | GET | `/v1/attachments/{id}` | 获取附件元数据 |
 | GET | `/v1/attachments/{id}/content?thread_id=...&workspace=...` | 授权后返回附件字节（base64） |
-| GET | `/v1/memory?workspace=...&include_deleted=false` | 查询作用域内记忆 |
+| GET | `/v1/memory?workspace=...&project=...&include_deleted=false` | 查询作用域内记忆 |
 | POST | `/v1/memory` | 创建记忆 |
 | GET | `/v1/memory/diagnostics` | 记忆存储状态 |
 | PATCH | `/v1/memory/{id}` | 更新、禁用或重标记记忆 |

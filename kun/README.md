@@ -433,6 +433,7 @@ payloads, result fields, failure semantics, and example hook scripts.
   config.json      # Optional Kun runtime config
   attachments/     # Image metadata + content blobs when enabled
   memory/          # Long-term memory records and tombstones when enabled
+  memory-index.sqlite3 # Rebuildable FTS5 projection when memory is enabled
   child-runs/      # Delegated child run records when subagents are enabled
   threads/
     index.json
@@ -448,6 +449,9 @@ Atomic JSON writes are used for `index.json`, `thread.json`, and
 `session.json`. JSONL streams are append-only and tolerate malformed
 lines (the next replay skips them). The renderer can re-read a
 thread by listing `index.json` and replaying the per-thread JSONL.
+Memory JSON remains canonical while the SQLite index is disposable; see
+[`docs/memory-foundation.en.md`](../docs/memory-foundation.en.md) for migration,
+fallback, diagnostics, and validation details.
 
 ## HTTP API
 
@@ -476,7 +480,7 @@ The HTTP server exposes the following routes under `/v1/*`:
 | GET | `/v1/attachments/diagnostics` | attachment store status |
 | GET | `/v1/attachments/{id}` | attachment metadata |
 | GET | `/v1/attachments/{id}/content?thread_id=...&workspace=...` | authorized attachment bytes as base64 |
-| GET | `/v1/memory?workspace=...&include_deleted=false` | list memory records in scope |
+| GET | `/v1/memory?workspace=...&project=...&include_deleted=false` | list memory records in scope |
 | POST | `/v1/memory` | create a memory record |
 | GET | `/v1/memory/diagnostics` | memory store status |
 | PATCH | `/v1/memory/{id}` | update, disable, or retag a memory record |

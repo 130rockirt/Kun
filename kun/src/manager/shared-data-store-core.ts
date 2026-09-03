@@ -2,6 +2,7 @@ import { readFile, rm } from 'node:fs/promises'
 import { relative, resolve, sep } from 'node:path'
 import { z } from 'zod'
 import { HybridSessionStore } from '../adapters/hybrid/hybrid-session-store.js'
+import { HybridMemoryStore } from '../adapters/hybrid/hybrid-memory-store.js'
 import { HybridThreadStore } from '../adapters/hybrid/hybrid-thread-store.js'
 import {
   FileArtifactStore,
@@ -42,7 +43,7 @@ import {
   type FinishedTurnStatus,
   finalizeTurnItems
 } from '../domain/turn-item-finalization.js'
-import { FileMemoryStore, type MemoryStore } from '../memory/memory-store.js'
+import type { MemoryStore } from '../memory/memory-store.js'
 import { FileGraphRunStore, type GraphRunStore } from '../graph/graph-run-store.js'
 import type {
   ItemHistoryCommit,
@@ -76,7 +77,7 @@ export abstract class ManagerSharedDataStoreCore {
   protected readonly graphStore: GraphRunStore
   protected graphConfig: GraphRuntimeConfig = DEFAULT_GRAPH_RUNTIME_CONFIG
   protected graphQueue: Promise<unknown> = Promise.resolve()
-  protected readonly memoryStores = new Map<string, MemoryStore>()
+  protected memoryRepository: MemoryStore | undefined
   protected memoryQueue: Promise<unknown> = Promise.resolve()
   protected readonly seqFloors = new Map<string, number>()
   protected readonly reservedSeqs = new Map<string, Set<number>>()
@@ -172,7 +173,11 @@ export abstract class ManagerSharedDataStoreCore {
     try {
       await (this.sessionStore as HybridSessionStore).close()
     } finally {
-      await this.hybridThreadStore.shutdown()
+      try {
+        await this.memoryRepository?.shutdown?.()
+      } finally {
+        await this.hybridThreadStore.shutdown()
+      }
     }
   }
 
@@ -359,16 +364,13 @@ export abstract class ManagerSharedDataStoreCore {
   }
 
   protected memoryStore(config: z.infer<typeof MemoryCapabilityConfig>): MemoryStore {
-    const key = JSON.stringify(config)
-    let store = this.memoryStores.get(key)
-    if (!store) {
-      store = new FileMemoryStore({
-        rootDir: resolve(this.dataDir, 'memory'),
+    if (!this.memoryRepository) {
+      this.memoryRepository = new HybridMemoryStore({
+        dataDir: this.dataDir,
         config
       })
-      this.memoryStores.set(key, store)
     }
-    return store
+    return this.memoryRepository
   }
 
   protected attachmentStore(config: z.infer<typeof AttachmentsCapabilityConfig>): AttachmentStore {
