@@ -84,7 +84,7 @@
   "labAutoPlanBuildTitle": "Автоматический план и сборка",
   "labAutoPlanBuildDescription": "Экспериментальный режим Code: создаёт GUI-план и продолжает прямой или одноразовой запланированной сборкой.",
   "labAutoPlanBuildEnabled": "Включить автоматический режим",
-  "labAutoPlanBuildEnabledDesc": "Добавляет в Code режим «план + сборка».",
+  "labAutoPlanBuildEnabledDesc": "Добавляет автоматический режим в Code.",
   "labAutoPlanBuildConfirmation": "Подтверждение перед запуском",
   "labAutoPlanBuildConfirmationDesc": "Определяет, спрашивать ли настройки прямой сборки каждый раз.",
   "labAutoPlanBuildConfirmationAlways": "Всегда спрашивать",

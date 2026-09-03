@@ -84,7 +84,7 @@
   "labAutoPlanBuildTitle": "วางแผนและสร้างอัตโนมัติ",
   "labAutoPlanBuildDescription": "โหมด Code ทดลองที่สร้างแผน GUI แล้วทำการสร้างทันทีหรือตามเวลาหนึ่งครั้ง",
   "labAutoPlanBuildEnabled": "เปิดโหมดอัตโนมัติ",
-  "labAutoPlanBuildEnabledDesc": "เพิ่มโหมดอัตโนมัติ (วางแผน + สร้าง) ใน Code",
+  "labAutoPlanBuildEnabledDesc": "เพิ่มโหมดอัตโนมัติใน Code",
   "labAutoPlanBuildConfirmation": "ยืนยันก่อนเริ่ม",
   "labAutoPlanBuildConfirmationDesc": "เลือกว่าจะถามการตั้งค่าการสร้างโดยตรงทุกครั้งหรือไม่",
   "labAutoPlanBuildConfirmationAlways": "ถามทุกครั้ง",

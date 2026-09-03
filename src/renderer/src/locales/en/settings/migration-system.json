@@ -232,7 +232,7 @@
   "labAutoPlanBuildTitle": "Automatic plan and build",
   "labAutoPlanBuildDescription": "Experimental Code mode that creates a GUI plan and then continues with a Direct or one-shot scheduled build.",
   "labAutoPlanBuildEnabled": "Enable Automatic mode",
-  "labAutoPlanBuildEnabledDesc": "Adds Automatic (plan + build) to the Code composer. Kun runtime turn modes remain unchanged.",
+  "labAutoPlanBuildEnabledDesc": "Adds Automatic mode to the Code composer. Kun runtime turn modes remain unchanged.",
   "labAutoPlanBuildConfirmation": "Before starting",
   "labAutoPlanBuildConfirmationDesc": "Choose whether Direct requests ask for execution settings every time.",
   "labAutoPlanBuildConfirmationAlways": "Always ask",

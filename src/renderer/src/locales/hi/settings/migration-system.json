@@ -84,7 +84,7 @@
   "labAutoPlanBuildTitle": "स्वचालित योजना और निर्माण",
   "labAutoPlanBuildDescription": "प्रयोगात्मक Code मोड जो GUI योजना बनाकर सीधे या एक-बार निर्धारित निर्माण चलाता है।",
   "labAutoPlanBuildEnabled": "स्वचालित मोड सक्षम करें",
-  "labAutoPlanBuildEnabledDesc": "Code में स्वचालित (योजना + निर्माण) जोड़ता है।",
+  "labAutoPlanBuildEnabledDesc": "Code में स्वचालित मोड जोड़ता है।",
   "labAutoPlanBuildConfirmation": "शुरू करने से पहले",
   "labAutoPlanBuildConfirmationDesc": "चुनें कि सीधे निर्माण की सेटिंग हर बार पूछी जाए या नहीं।",
   "labAutoPlanBuildConfirmationAlways": "हमेशा पूछें",

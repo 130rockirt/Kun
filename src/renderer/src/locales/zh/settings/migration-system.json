@@ -232,7 +232,7 @@
   "labAutoPlanBuildTitle": "自动计划与构建",
   "labAutoPlanBuildDescription": "实验性 Code 模式：先生成 GUI 计划，再继续直接构建或创建一次性定时构建。",
   "labAutoPlanBuildEnabled": "启用自动模式",
-  "labAutoPlanBuildEnabledDesc": "在 Code 输入框中加入“自动模式（计划 + 构建）”；Kun 运行时的回合模式保持不变。",
+  "labAutoPlanBuildEnabledDesc": "在 Code 输入框中加入“自动模式”；Kun 运行时的回合模式保持不变。",
   "labAutoPlanBuildConfirmation": "开始前确认",
   "labAutoPlanBuildConfirmationDesc": "选择直接构建是否每次都询问执行设置。",
   "labAutoPlanBuildConfirmationAlways": "每次询问",

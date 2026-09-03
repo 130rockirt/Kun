@@ -634,7 +634,7 @@
   "knowledgeBaseOpenWrite": "ワークで開く",
   "knowledgeBaseEmpty": "ワークスペースがまだありません。",
   "knowledgeBaseAddDirectory": "ワークスペースを追加してマウント",
-  "composerMenuAutoPlanBuild": "自動モード（計画 + ビルド）",
+  "composerMenuAutoPlanBuild": "自動モード",
   "composerAutoPlanBuildPlaceholder": "要件を入力すると、Kun が計画を作成して自動的にビルドします…",
   "autoPlanBuildDialogTitle": "自動計画とビルド",
   "autoPlanBuildDialogSubtitle": "計画の完成後にこのリクエストをどうビルドするか選択します。",

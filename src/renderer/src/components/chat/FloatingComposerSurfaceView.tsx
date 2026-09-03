@@ -16,7 +16,7 @@ export function FloatingComposerSurfaceView({
     FileText, FloatingComposerAgentPicker, FloatingComposerAttachments,
     FloatingComposerContextCapacity, FloatingComposerExecutionPicker, FloatingComposerModelPicker,
     FloatingComposerTaskProfile, FloatingComposerTaskSurfacePicker,
-    Folder, GitBranchPicker, ListTodo, Loader2, Mic, Plus, Send, Share2, Sparkles,
+    Bot, Folder, GitBranchPicker, ListTodo, Loader2, Mic, Plus, Send, Share2, Sparkles,
     Square, Target, VoiceRecordingStrip, WorkspaceProjectPicker, X, activeThreadGoal,
     activeThreadId, attachmentUploadEnabled, attachmentUploadError, attachments, busy,
     canChangeModel, canCompose, canEditComposer, canOpenComposerMenu, canOptimizePrompt,
@@ -257,7 +257,7 @@ export function FloatingComposerSurfaceView({
                         title={`${t('cancel')} ${t('composerMenuAutoPlanBuild')}`}
                         aria-label={`${t('cancel')} ${t('composerMenuAutoPlanBuild')}`}
                       >
-                        <Sparkles className="h-3.5 w-3.5" strokeWidth={1.9} />
+                        <Bot className="h-3.5 w-3.5" strokeWidth={1.9} />
                         <span className="ds-composer-mode-label">{t('composerMenuAutoPlanBuild')}</span>
                         <X className="h-3 w-3" strokeWidth={2} />
                       </button>

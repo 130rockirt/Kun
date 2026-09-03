@@ -84,7 +84,7 @@
   "labAutoPlanBuildTitle": "自動計画とビルド",
   "labAutoPlanBuildDescription": "GUI 計画を作成し、直接または一回限りの予約ビルドへ進む実験的な Code モードです。",
   "labAutoPlanBuildEnabled": "自動モードを有効化",
-  "labAutoPlanBuildEnabledDesc": "Code コンポーザーに自動（計画 + ビルド）を追加します。",
+  "labAutoPlanBuildEnabledDesc": "Code コンポーザーに自動モードを追加します。",
   "labAutoPlanBuildConfirmation": "開始前の確認",
   "labAutoPlanBuildConfirmationDesc": "直接ビルドの設定を毎回確認するか選択します。",
   "labAutoPlanBuildConfirmationAlways": "常に確認",
