@@ -81,6 +81,45 @@ export function createRuntimeMaintenanceSlices(input: {
   let bytesWritten = 0
   let overshoots = 0
   let eventIndexSlices = 0
+  // Single-flight registry keyed by `<task>:<threadId>`. The slice deadline
+  // only bounds how long a slice waits, never the underlying work; a timed-out
+  // read keeps running. Scheduler retries (250ms) join the still-running read
+  // instead of stacking duplicate full-file reads and scans on one thread.
+  const flights = new Map<string, Promise<unknown>>()
+  const flightStartedAt = new Map<string, number>()
+  const SINGLE_FLIGHT_RESULT_TTL_MS = 10 * 60_000
+
+  const acquireFlight = <T>(key: string, start: () => Promise<T>): Promise<T> => {
+    const existing = flights.get(key)
+    if (existing) {
+      // TTL may only drop a settled entry: its underlying IO has finished, so
+      // restarting cannot stack concurrent work. A pending entry is never
+      // evicted, even past the TTL.
+      const startedAt = flightStartedAt.get(key) ?? 0
+      if (Date.now() - startedAt <= SINGLE_FLIGHT_RESULT_TTL_MS) return existing as Promise<T>
+      flights.delete(key)
+      flightStartedAt.delete(key)
+    }
+    const promise = start()
+    flights.set(key, promise)
+    flightStartedAt.set(key, Date.now())
+    // Rejections cannot be reused, so the entry self-evicts; the catch also
+    // suppresses unhandled rejections while no slice is joining.
+    promise.catch(() => {
+      if (flights.get(key) === promise) {
+        flights.delete(key)
+        flightStartedAt.delete(key)
+      }
+    })
+    return promise
+  }
+
+  const consumeFlight = (key: string, promise: Promise<unknown>): void => {
+    if (flights.get(key) === promise) {
+      flights.delete(key)
+      flightStartedAt.delete(key)
+    }
+  }
 
   const freshState = (): ScanState => ({
     version: 2,
@@ -170,11 +209,14 @@ export function createRuntimeMaintenanceSlices(input: {
     for (const summary of page.threads.slice(pageOffset)) {
       const remaining = MAINTENANCE_SLICE_MAX_MS - (Date.now() - loopStartedAt)
       if (processed > 0 && remaining <= 0) break
-      const result = await withDeadline(input.threads.get(summary.id), Math.max(0, remaining))
+      const readKey = `attachment-maintenance:${summary.id}`
+      const read = acquireFlight(readKey, () => input.threads.get(summary.id))
+      const result = await withDeadline(read, Math.max(0, remaining))
       if (result.timedOut) {
         overshoots += 1
         break
       }
+      consumeFlight(readKey, read)
       const thread = result.value
       let complete = true
       for (const turn of thread?.turns ?? []) {
@@ -248,11 +290,14 @@ export function createRuntimeMaintenanceSlices(input: {
     for (const summary of page.threads.slice(pageOffset)) {
       const remaining = MAINTENANCE_SLICE_MAX_MS - (Date.now() - loopStartedAt)
       if (processed > 0 && remaining <= 0) break
-      const result = await withDeadline(input.guardian.scanThread(summary.id), Math.max(0, remaining))
+      const scanKey = `session-guardian:${summary.id}`
+      const scan = acquireFlight(scanKey, () => input.guardian.scanThread(summary.id))
+      const result = await withDeadline(scan, Math.max(0, remaining))
       if (result.timedOut) {
         overshoots += 1
         break
       }
+      consumeFlight(scanKey, scan)
       const report = result.value
       await input.onGuardianReport?.(report)
       if (report.warnings.length > 0) warnings.push(`${summary.id}:${report.warnings.join(',')}`)
@@ -277,7 +322,10 @@ export function createRuntimeMaintenanceSlices(input: {
       return false
     }
     const startedAt = Date.now()
-    const complete = await input.eventIndexRebuild()
+    const rebuildKey = 'event-index-rebuild'
+    const rebuild = acquireFlight(rebuildKey, () => input.eventIndexRebuild!())
+    const complete = await rebuild
+    consumeFlight(rebuildKey, rebuild)
     slices += 1
     eventIndexSlices += 1
     maxDurationMs = Math.max(maxDurationMs, Date.now() - startedAt)

@@ -243,7 +243,7 @@ describe('runtime maintenance slices', () => {
     }
   })
 
-  it('abandons a single hung read and retries it on the next slice', async () => {
+  it('joins a timed-out read instead of restarting it, then consumes the settled result', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-maintenance-overshoot-'))
     roots.push(root)
     const ids = ['thread-0', 'thread-1']
@@ -251,10 +251,11 @@ describe('runtime maintenance slices', () => {
       threads: ids.map((id) => ({ id, status: 'idle', updatedAt: id })),
       hasMore: false
     }))
-    let getCalls = 0
+    let resolveFirst!: (value: { id: string; turns: Array<{ attachmentIds: string[] }> }) => void
     const get = vi.fn((id: string) => {
-      getCalls += 1
-      if (getCalls === 1) return new Promise(() => undefined)
+      if (get.mock.calls.length === 1) {
+        return new Promise((resolve) => { resolveFirst = resolve })
+      }
       return Promise.resolve({ id, turns: [{ attachmentIds: [`a-${id}`] }] })
     })
     const maintenance = createRuntimeMaintenanceSlices({
@@ -269,9 +270,89 @@ describe('runtime maintenance slices', () => {
     expect(maintenance.stats().overshoots).toBe(1)
     expect(maintenance.stats().processedThreads).toBe(0)
 
+    // The still-pending read must be joined, not restarted: single-flight
+    // prevents stacking a second full-file read on the same thread. The join
+    // times out against the same 50ms slice deadline under real timers.
+    await expect(maintenance.runAttachmentSlice()).resolves.toBe(false)
+    expect(get).toHaveBeenCalledTimes(1)
+    expect(maintenance.stats().overshoots).toBe(2)
+
+    resolveFirst({ id: 'thread-0', turns: [{ attachmentIds: ['a-thread-0'] }] })
     await expect(maintenance.runAttachmentSlice()).resolves.toBe(true)
     expect(maintenance.stats().processedThreads).toBe(2)
+    expect(get).toHaveBeenCalledTimes(2)
+  })
+
+  it('joins a timed-out guardian scan and consumes it once settled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-maintenance-guardian-join-'))
+    roots.push(root)
+    const threads = threadHarness(2)
+    let resolveScan!: (value: { threadId: string; warnings: string[] }) => void
+    const scanThread = vi.fn((id: string) => {
+      if (scanThread.mock.calls.length === 1) {
+        return new Promise<{ threadId: string; warnings: string[] }>((resolve) => {
+          resolveScan = resolve
+        })
+      }
+      return Promise.resolve({ threadId: id, warnings: [] })
+    })
+    const maintenance = createRuntimeMaintenanceSlices({
+      dataDir: root,
+      threads: threads.service,
+      attachments: () => ({ pruneExpiredLeases: vi.fn() }) as unknown as AttachmentStore,
+      guardian: { scanThread } as unknown as SessionGuardian,
+      nowIso: () => '2026-09-03T00:00:00.000Z'
+    })
+
+    await expect(maintenance.runGuardianSlice()).resolves.toBe(false)
+    expect(maintenance.stats().overshoots).toBe(1)
+
+    // The pending scan is joined, not restarted: the second slice times out
+    // waiting on the same underlying scanThread promise.
+    await expect(maintenance.runGuardianSlice()).resolves.toBe(false)
+    expect(scanThread).toHaveBeenCalledTimes(1)
+    expect(maintenance.stats().overshoots).toBe(2)
+
+    resolveScan({ threadId: 'thread-0', warnings: [] })
+    await expect(maintenance.runGuardianSlice()).resolves.toBe(true)
+    expect(maintenance.stats().processedThreads).toBe(2)
+    expect(scanThread).toHaveBeenCalledTimes(2)
+  })
+
+  it('evicts a rejected flight so the next slice restarts the read', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-maintenance-flight-reject-'))
+    roots.push(root)
+    const ids = ['thread-0', 'thread-1']
+    const listPage = vi.fn(async () => ({
+      threads: ids.map((id) => ({ id, status: 'idle', updatedAt: id })),
+      hasMore: false
+    }))
+    let rejectFirst!: (reason?: unknown) => void
+    const get = vi.fn((id: string) => {
+      if (get.mock.calls.length === 1) {
+        return new Promise((_resolve, reject) => { rejectFirst = reject })
+      }
+      return Promise.resolve({ id, turns: [{ attachmentIds: [`a-${id}`] }] })
+    })
+    const maintenance = createRuntimeMaintenanceSlices({
+      dataDir: root,
+      threads: { listPage, get } as unknown as ThreadService,
+      attachments: () => ({ pruneExpiredLeases: vi.fn() }) as unknown as AttachmentStore,
+      guardian: { scanThread: vi.fn() } as unknown as SessionGuardian,
+      nowIso: () => '2026-09-03T00:00:00.000Z'
+    })
+
+    await expect(maintenance.runAttachmentSlice()).resolves.toBe(false)
+    expect(maintenance.stats().overshoots).toBe(1)
+
+    rejectFirst(new Error('read failed'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // The rejected entry self-evicted, so the next slice starts a fresh read
+    // for thread-0 and proceeds to thread-1 (three get calls in total).
+    await expect(maintenance.runAttachmentSlice()).resolves.toBe(true)
     expect(get).toHaveBeenCalledTimes(3)
+    expect(maintenance.stats().processedThreads).toBe(2)
   })
 
   it('runs the event-index rebuild slice in the same low-priority lane', async () => {
@@ -302,5 +383,43 @@ describe('runtime maintenance slices', () => {
     await expect(busy.runEventIndexSlice()).resolves.toBe(false)
     expect(eventIndexRebuild).toHaveBeenCalledOnce()
     expect(busy.stats()).toMatchObject({ paused: 1 })
+  })
+
+  it('guards the event-index rebuild task against overlapping runs', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-maintenance-rebuild-single-flight-'))
+    roots.push(root)
+    const threads = threadHarness(2)
+    let finishRebuild!: (value: boolean) => void
+    const eventIndexRebuild = vi.fn(() => new Promise<boolean>((resolve) => {
+      finishRebuild = resolve
+    }))
+    const maintenance = createRuntimeMaintenanceSlices({
+      dataDir: root,
+      threads: threads.service,
+      attachments: () => ({ pruneExpiredLeases: vi.fn() }) as unknown as AttachmentStore,
+      guardian: { scanThread: vi.fn() } as unknown as SessionGuardian,
+      eventIndexRebuild,
+      nowIso: () => '2026-09-03T00:00:00.000Z'
+    })
+
+    const first = maintenance.runEventIndexSlice()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // While the first rebuild slice is still pending, a second invocation
+    // joins the same in-flight promise instead of starting a new one.
+    const second = maintenance.runEventIndexSlice()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(eventIndexRebuild).toHaveBeenCalledOnce()
+
+    finishRebuild(false)
+    await expect(first).resolves.toBe(false)
+    await expect(second).resolves.toBe(false)
+    expect(maintenance.stats().eventIndexSlices).toBe(2)
+
+    // The consumed entry is gone, so a later slice starts a fresh rebuild.
+    const third = maintenance.runEventIndexSlice()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(eventIndexRebuild).toHaveBeenCalledTimes(2)
+    finishRebuild(true)
+    await expect(third).resolves.toBe(true)
   })
 })
