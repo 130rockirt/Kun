@@ -370,8 +370,9 @@ async function installStandaloneTuiUpdate(
         })
         const transactionDir = tuiUpdateTransactionDir(currentRoot)
         const updaterStartedAt = new Date().toISOString()
+        let updater: Awaited<ReturnType<typeof scheduleWindowsReplacement>>
         try {
-          const updater = await scheduleWindowsReplacement({
+          updater = await scheduleWindowsReplacement({
             currentRoot,
             nextRoot,
             backupRoot,
@@ -386,14 +387,6 @@ async function installStandaloneTuiUpdate(
             ackPath: tuiUpdateUpdaterPath(currentRoot),
             updaterStartedAt
           })
-          await recordTuiUpdateUpdater(currentRoot, {
-            schemaVersion: 1 as const,
-            pid: updater.pid,
-            processIdentity: updater.processIdentity,
-            token: lock.token,
-            startedAt: updaterStartedAt
-          })
-          lockHandedOff = true
         } catch (error) {
           const lockTakenOver =
             error instanceof WindowsReplacementHandoffError && error.lockTakenOver
@@ -406,7 +399,29 @@ async function installStandaloneTuiUpdate(
           }
           throw error
         }
+        // The ack was verified (lock token + pid match): the detached updater now
+        // owns the lock and will finish the replacement on its own. Nothing after
+        // this point may release the lock, clear the transaction, or delete staging.
+        lockHandedOff = true
         retainStagingForWindows = true
+        try {
+          await recordTuiUpdateUpdater(currentRoot, {
+            schemaVersion: 1 as const,
+            pid: updater.pid,
+            processIdentity: updater.processIdentity,
+            token: lock.token,
+            startedAt: updaterStartedAt
+          })
+        } catch (recordError) {
+          // The updater's own acknowledgement at the same path is already a valid
+          // TuiUpdateUpdater record; this rewrite is enrichment and its failure must
+          // not roll back the completed ownership handoff.
+          io.stderr.write(
+            `kun update: warning: could not persist updater identity (` +
+            `${recordError instanceof Error ? recordError.message : String(recordError)}); ` +
+            `the updater acknowledgement remains in place\n`
+          )
+        }
         io.stdout.write(
           `Kun ${check.latest.version} is staged. It replaces the current install after ` +
           'other Kun TUI processes exit; the result is reported on next launch.\n'
