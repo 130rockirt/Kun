@@ -242,6 +242,8 @@ export class LifecycleFencedSessionStore implements SessionStore {
   readonly scheduleItemHistoryCompaction?: SessionStore['scheduleItemHistoryCompaction']
   readonly scheduleUsageEventCompaction?: SessionStore['scheduleUsageEventCompaction']
   readonly flushScheduledCompaction?: SessionStore['flushScheduledCompaction']
+  readonly runEventIndexRebuildSlice?: SessionStore['runEventIndexRebuildSlice']
+  readonly setEventIndexRebuildWake?: SessionStore['setEventIndexRebuildWake']
   readonly loadItemPage?: SessionStore['loadItemPage']
   readonly searchItemText?: SessionStore['searchItemText']
   readonly trimEventsFromSeq?: SessionStore['trimEventsFromSeq']
@@ -302,6 +304,12 @@ export class LifecycleFencedSessionStore implements SessionStore {
     if (raw.flushScheduledCompaction) {
       this.flushScheduledCompaction = (threadId) =>
         raw.flushScheduledCompaction!(threadId)
+    }
+    if (raw.runEventIndexRebuildSlice) {
+      this.runEventIndexRebuildSlice = () => raw.runEventIndexRebuildSlice!()
+    }
+    if (raw.setEventIndexRebuildWake) {
+      this.setEventIndexRebuildWake = (wake) => raw.setEventIndexRebuildWake!(wake)
     }
     if (raw.loadItemPage) {
       this.loadItemPage = (threadId, options) => raw.loadItemPage!(threadId, options)

@@ -255,6 +255,7 @@ export async function createRuntimeServices(
     threads: threadService,
     attachments: () => attachmentStore,
     guardian: sessionGuardian,
+    eventIndexRebuild: async () => (await sessionStore.runEventIndexRebuildSlice?.()) ?? true,
     nowIso,
     hasActiveTurns,
     onGuardianReport: async (report) => {
@@ -272,10 +273,12 @@ export async function createRuntimeServices(
   const backgroundMaintenance = createRuntimeBackgroundMaintenance({
     pruneAttachments: maintenanceSlices.runAttachmentSlice,
     inspectThreads: maintenanceSlices.runGuardianSlice,
+    rebuildEventIndex: maintenanceSlices.runEventIndexSlice,
     onError: (task, error) => {
       console.warn(`[kun] background ${task} failed:`, error)
     }
   })
+  sessionStore.setEventIndexRebuildWake?.(() => backgroundMaintenance.wake())
   let memoryStore = createPersistentMemoryStore(core.activeOptions, nowIso)
   const officeCliRunner = createConfiguredOfficeCliRunner({
     binaryPath: process.env.KUN_OFFICECLI_BINARY,

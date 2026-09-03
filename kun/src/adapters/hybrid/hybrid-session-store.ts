@@ -101,6 +101,14 @@ export class HybridSessionStore implements SessionStore {
     await this.delegate.flushScheduledCompaction(threadId)
   }
 
+  async runEventIndexRebuildSlice(): Promise<boolean> {
+    return this.delegate.runEventIndexRebuildSlice()
+  }
+
+  setEventIndexRebuildWake(wake: () => void): void {
+    this.delegate.setEventIndexRebuildWake(wake)
+  }
+
   async loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]> {
     return this.delegate.loadEventsSince(threadId, sinceSeq)
   }

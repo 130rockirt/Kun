@@ -199,6 +199,15 @@ export interface SessionStore {
   scheduleUsageEventCompaction?(threadId: string): void
   /** Flush pending scheduled compaction for one thread or the whole store. */
   flushScheduledCompaction?(threadId?: string): Promise<void>
+  /**
+   * Run one bounded slice of the low-priority event sparse-index rebuild.
+   * Returns `false` while work remains and `true` once the current sweep
+   * generation has visited every thread. File-backed stores implement this;
+   * manager-backed stores leave it undefined and the maintenance lane idles.
+   */
+  runEventIndexRebuildSlice?(): Promise<boolean>
+  /** Register the wake callback used to pull an idle rebuild to now. */
+  setEventIndexRebuildWake?(wake: () => void): void
   loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]>
   /** Bounded replay page used by cross-process stores and long backlogs. */
   loadEventPage?(threadId: string, options: EventHistoryPageOptions): Promise<EventHistoryPage>

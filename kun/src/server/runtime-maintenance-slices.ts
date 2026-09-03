@@ -56,6 +56,7 @@ export type RuntimeMaintenanceSliceStats = {
   processedThreads: number
   bytesWritten: number
   overshoots: number
+  eventIndexSlices: number
 }
 
 type DeadlineResult<T> = { timedOut: true } | { timedOut: false; value: T }
@@ -65,6 +66,7 @@ export function createRuntimeMaintenanceSlices(input: {
   threads: ThreadService
   attachments: () => AttachmentStore | undefined
   guardian: SessionGuardian
+  eventIndexRebuild?: () => Promise<boolean>
   nowIso: () => string
   hasActiveTurns?: () => Promise<boolean>
   onGuardianReport?: (report: ThreadHealthReport) => Promise<void> | void
@@ -78,6 +80,7 @@ export function createRuntimeMaintenanceSlices(input: {
   let processedThreads = 0
   let bytesWritten = 0
   let overshoots = 0
+  let eventIndexSlices = 0
 
   const freshState = (): ScanState => ({
     version: 2,
@@ -267,16 +270,32 @@ export function createRuntimeMaintenanceSlices(input: {
     return consumedPage && !page.hasMore
   }
 
+  const runEventIndexSlice = async (): Promise<boolean> => {
+    if (!input.eventIndexRebuild) return true
+    if (await shouldPause()) {
+      paused += 1
+      return false
+    }
+    const startedAt = Date.now()
+    const complete = await input.eventIndexRebuild()
+    slices += 1
+    eventIndexSlices += 1
+    maxDurationMs = Math.max(maxDurationMs, Date.now() - startedAt)
+    return complete
+  }
+
   return {
     runAttachmentSlice,
     runGuardianSlice,
+    runEventIndexSlice,
     stats: (): RuntimeMaintenanceSliceStats => ({
       slices,
       paused,
       maxDurationMs,
       processedThreads,
       bytesWritten,
-      overshoots
+      overshoots,
+      eventIndexSlices
     })
   }
 }

@@ -11,6 +11,10 @@ import { writeJsonlLines, type CreateJsonlWriteStream } from './jsonl-write-stre
 
 const MS_PER_DAY = 86_400_000
 const DEFAULT_ITEM_HISTORY_MAX_RECORD_BYTES = 16 * 1024 * 1024
+// A valid model tool argument may contain 1 MiB of JSON, whose escaping can
+// nearly double the persisted item event. Unresolved `__raw` strings are
+// summarized before persistence, while replay remains bounded for valid calls.
+export const DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES = 4 * 1024 * 1024
 /** Let lease/heartbeat timers run while parsing large append-only logs. */
 const YIELD_EVERY_LINES = 64
 

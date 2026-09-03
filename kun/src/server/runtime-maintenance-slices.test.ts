@@ -273,4 +273,34 @@ describe('runtime maintenance slices', () => {
     expect(maintenance.stats().processedThreads).toBe(2)
     expect(get).toHaveBeenCalledTimes(3)
   })
+
+  it('runs the event-index rebuild slice in the same low-priority lane', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-maintenance-rebuild-'))
+    roots.push(root)
+    const threads = threadHarness(2)
+    const eventIndexRebuild = vi.fn(async () => false)
+    const idle = createRuntimeMaintenanceSlices({
+      dataDir: root,
+      threads: threads.service,
+      attachments: () => ({ pruneExpiredLeases: vi.fn() }) as unknown as AttachmentStore,
+      guardian: { scanThread: vi.fn() } as unknown as SessionGuardian,
+      eventIndexRebuild,
+      nowIso: () => '2026-09-03T00:00:00.000Z'
+    })
+    await expect(idle.runEventIndexSlice()).resolves.toBe(false)
+    expect(eventIndexRebuild).toHaveBeenCalledOnce()
+
+    const busy = createRuntimeMaintenanceSlices({
+      dataDir: root,
+      threads: threads.service,
+      attachments: () => ({ pruneExpiredLeases: vi.fn() }) as unknown as AttachmentStore,
+      guardian: { scanThread: vi.fn() } as unknown as SessionGuardian,
+      eventIndexRebuild,
+      nowIso: () => '2026-09-03T00:00:00.000Z',
+      hasActiveTurns: async () => true
+    })
+    await expect(busy.runEventIndexSlice()).resolves.toBe(false)
+    expect(eventIndexRebuild).toHaveBeenCalledOnce()
+    expect(busy.stats()).toMatchObject({ paused: 1 })
+  })
 })

@@ -21,7 +21,7 @@ const EventIndexStateSchema = z.object({
   lastIndexedOffset: z.number().int().nonnegative()
 }).strict()
 
-type EventIndexState = z.infer<typeof EventIndexStateSchema>
+export type EventIndexState = z.infer<typeof EventIndexStateSchema>
 
 type IndexEntry = { seq: number; offset: number }
 
@@ -35,11 +35,16 @@ export type EventIndexStats = {
 
 export class FileSessionEventIndex {
   private readonly stateCache = new Map<string, EventIndexState>()
+  private readonly onFallback?: (threadId: string) => void
   private seeks = 0
   private fallbacks = 0
   private appendedEntries = 0
   private lastStartOffset = 0
   private repairs = 0
+
+  constructor(options: { onFallback?: (threadId: string) => void } = {}) {
+    this.onFallback = options.onFallback
+  }
 
   async recordAppend(input: {
     threadId: string
@@ -60,7 +65,7 @@ export class FileSessionEventIndex {
     if (!due) return
 
     const indexPath = eventIndexPath(input.sourcePath)
-    const entry = encodeEntry(input.seq, input.recordOffset)
+    const entry = encodeEventIndexEntry(input.seq, input.recordOffset)
     await mkdir(dirname(indexPath), { recursive: true, mode: 0o700 })
 
     // Align the binary file to the committed length before appending. A crash
@@ -138,15 +143,19 @@ export class FileSessionEventIndex {
       return candidate.offset
     } catch {
       this.fallbacks += 1
+      this.onFallback?.(threadId)
       return 0
     }
   }
 
   async invalidate(threadId: string, sourcePath: string): Promise<void> {
     this.stateCache.delete(threadId)
+    const paths = eventIndexPaths(sourcePath)
     await Promise.all([
-      rm(eventIndexPath(sourcePath), { force: true }),
-      rm(eventIndexStatePath(sourcePath), { force: true })
+      rm(paths.bin, { force: true }),
+      rm(paths.state, { force: true }),
+      rm(paths.rebuildBin, { force: true }),
+      rm(paths.rebuildState, { force: true })
     ])
   }
 
@@ -168,6 +177,7 @@ export class FileSessionEventIndex {
   private async failRebuild(threadId: string, sourcePath: string): Promise<number> {
     this.fallbacks += 1
     this.repairs += 1
+    this.onFallback?.(threadId)
     await this.invalidate(threadId, sourcePath).catch(() => undefined)
     return 0
   }
@@ -200,16 +210,9 @@ export class FileSessionEventIndex {
   private async readState(threadId: string, sourcePath: string): Promise<EventIndexState | undefined> {
     const cached = this.stateCache.get(threadId)
     if (cached) return cached
-    try {
-      const parsed = EventIndexStateSchema.safeParse(
-        JSON.parse(await readFile(eventIndexStatePath(sourcePath), 'utf8'))
-      )
-      if (!parsed.success) return undefined
-      this.stateCache.set(threadId, parsed.data)
-      return parsed.data
-    } catch {
-      return undefined
-    }
+    const state = await readEventIndexState(sourcePath)
+    if (state) this.stateCache.set(threadId, state)
+    return state
   }
 }
 
@@ -221,7 +224,54 @@ function eventIndexStatePath(sourcePath: string): string {
   return join(dirname(sourcePath), 'events-index.state.json')
 }
 
-function encodeEntry(seq: number, offset: number): Buffer {
+export function eventIndexPaths(sourcePath: string): {
+  bin: string
+  state: string
+  rebuildBin: string
+  rebuildState: string
+} {
+  return {
+    bin: eventIndexPath(sourcePath),
+    state: eventIndexStatePath(sourcePath),
+    rebuildBin: join(dirname(sourcePath), 'events-index.rebuild.bin'),
+    rebuildState: join(dirname(sourcePath), 'events-index.rebuild.state.json')
+  }
+}
+
+export async function readEventIndexState(sourcePath: string): Promise<EventIndexState | undefined> {
+  try {
+    const parsed = EventIndexStateSchema.safeParse(
+      JSON.parse(await readFile(eventIndexStatePath(sourcePath), 'utf8'))
+    )
+    return parsed.success ? parsed.data : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Cheap validity gate used by the background rebuild sweep to decide whether a
+ * thread already has a usable index and can be skipped. Foreground seeks use a
+ * stricter per-lookup validation (entry monotonicity, tail and line cross-check)
+ * and self-heal via `failRebuild`, so a false-positive skip here is still caught
+ * and repaired on the next foreground read.
+ */
+export function eventIndexIsValid(
+  state: EventIndexState | undefined,
+  source: { dev: number; ino: number; size: number },
+  binBytes: number
+): state is EventIndexState {
+  return Boolean(
+    state &&
+    state.dev === source.dev &&
+    state.ino === source.ino &&
+    state.indexedBytes <= source.size &&
+    state.entryCount > 0 &&
+    binBytes === state.entryCount * EVENT_INDEX_RECORD_BYTES
+  )
+}
+
+export function encodeEventIndexEntry(seq: number, offset: number): Buffer {
   const entry = Buffer.allocUnsafe(EVENT_INDEX_RECORD_BYTES)
   entry.writeBigUInt64LE(BigInt(seq), 0)
   entry.writeBigUInt64LE(BigInt(offset), 8)

@@ -21,7 +21,7 @@ import type { RuntimeEvent } from '../../contracts/events.js'
 import type { TurnItem } from '../../contracts/items.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
 import type { AgentSession } from '../../domain/session.js'
-import { readLatestItemsFromJsonl, warnUsageCompaction } from './file-session-jsonl.js'
+import { DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES, readLatestItemsFromJsonl, warnUsageCompaction } from './file-session-jsonl.js'
 import { ItemsCache } from './file-session-items-cache.js'
 import { atomicWriteFile } from './atomic-write.js'
 import { isPathBelowDirectory } from './path-containment.js'
@@ -39,12 +39,12 @@ import { FileSessionItemIndex } from './file-session-item-index.js'
 import { compactFileSessionItems } from './file-session-item-compaction.js'
 import { loadFileSessionHighestSeq } from './file-session-highest-seq.js'
 import { ensureEventTailReady } from './file-session-event-tail.js'
-import { FileSessionEventHistory } from './file-session-event-replay.js'
+import { FileSessionEventHistory, createFileSessionEventSubsystem, type FileSessionEventSubsystem, type FileSessionEventSubsystemHost } from './file-session-event-replay.js'
 import { FileSessionEventRetention } from './file-session-event-retention.js'
 import { UsageCompactionDebtTracker } from './file-session-usage-debt.js'
 import { loadCursorCheckpoint, persistCursorCheckpointEvent, updateHighestSeqCache } from './file-session-cursor-checkpoint.js'
 import { FileSessionRevisionCache } from './file-session-revision-cache.js'
-export { readLatestItemsFromJsonl } from './file-session-jsonl.js'
+export { DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES, readLatestItemsFromJsonl } from './file-session-jsonl.js'
 const DEFAULT_USAGE_EVENT_COMPACTION_MAX_BYTES = 5 * 1024 * 1024
 const DEFAULT_USAGE_EVENT_RETENTION_DAYS = 365
 const DEFAULT_EVENT_HISTORY_MAX_BYTES = 64 * 1024 * 1024
@@ -64,10 +64,6 @@ const DEFAULT_ITEM_TEXT_SEARCH_MAX_BYTES = 512 * 1024
 const HIGHEST_SEQ_CACHE_MAX_THREADS = 256
 const ITEM_HISTORY_REVISION_MAX_THREADS = 512
 const EVENT_HISTORY_REVISION_MAX_THREADS = 512
-// A valid model tool argument may contain 1 MiB of JSON, whose escaping can
-// nearly double the persisted item event. Unresolved `__raw` strings are
-// summarized before persistence, while replay remains bounded for valid calls.
-export const DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES = 4 * 1024 * 1024
 
 /**
  * File-backed session store for per-thread append-only JSONL logs and the
@@ -93,6 +89,7 @@ export class FileSessionStore implements SessionStore {
   private readonly liveCheckpoints: FileSessionLiveCheckpointCoordinator
   private readonly itemIndex = new FileSessionItemIndex()
   private readonly verifiedEventTails = new Set<string>()
+  private readonly eventIndexRebuild: FileSessionEventSubsystem['eventIndexRebuild']
   private readonly eventHistory: FileSessionEventHistory
   private readonly eventRetention: FileSessionEventRetention
   private readonly usageCompactionDebt: UsageCompactionDebtTracker
@@ -114,16 +111,9 @@ export class FileSessionStore implements SessionStore {
     this.dataDir = resolve(options.dataDir, 'threads')
     this.fileAccess = options.fileAccess ?? new JsonlFileAccessCoordinator()
     this.liveCheckpoints = new FileSessionLiveCheckpointCoordinator(this)
-    this.eventHistory = new FileSessionEventHistory({
-      pathFor: (threadId) => this.eventsPath(threadId),
-      maxRecordBytes: DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES,
-      fileAccess: this.fileAccess,
-      readRevision: (threadId) => this.eventHistoryRevision(threadId),
-      bumpRevision: (threadId) => this.bumpEventHistoryRevision(threadId),
-      invalidateCache: (threadId) => { this.highestSeqCache.delete(threadId) },
-      withWrite: (threadId, operation) => this.withThreadWrite(threadId, operation),
-      scheduleRetry: (threadId) => this.compactionScheduler.schedule(threadId, 'events')
-    })
+    const events = createFileSessionEventSubsystem(this as unknown as FileSessionEventSubsystemHost)
+    this.eventHistory = events.eventHistory
+    this.eventIndexRebuild = events.eventIndexRebuild
     this.usageIndex = new FileSessionUsageIndex(
       this.dataDir,
       async function* (this: FileSessionStore, threadId: string, sinceSeq: number) {
@@ -688,6 +678,15 @@ export class FileSessionStore implements SessionStore {
     if (!isSafeThreadId(threadId)) return 0
     return this.eventHistory.floor(threadId)
   }
+
+  async runEventIndexRebuildSlice(): Promise<boolean> {
+    return this.eventIndexRebuild.runSlice()
+  }
+
+  setEventIndexRebuildWake(wake: () => void): void {
+    this.eventIndexRebuild.setWake(wake)
+  }
+
   async close(): Promise<void> {
     await this.liveCheckpoints.close()
     await this.compactionScheduler.close()

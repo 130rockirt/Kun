@@ -1,10 +1,11 @@
 import type { RuntimeEvent } from '../../contracts/events.js'
 import type { EventHistoryPage, EventHistoryPageOptions } from '../../ports/session-store.js'
 import { stat } from 'node:fs/promises'
-import { firstEventSeqFromJsonl, iterateRuntimeEventsJsonl, trimEventsWithGuards } from './file-session-jsonl.js'
+import { DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES, firstEventSeqFromJsonl, iterateRuntimeEventsJsonl, trimEventsWithGuards } from './file-session-jsonl.js'
 import { loadFileSessionEventPage } from './file-session-event-page.js'
 import type { JsonlFileAccessCoordinator } from './jsonl-file-access.js'
 import { FileSessionEventIndex } from './file-session-event-index.js'
+import { FileSessionEventIndexRebuild } from './file-session-event-index-rebuild.js'
 
 export async function collectFileSessionEvents(input: {
   path: string
@@ -50,7 +51,7 @@ export function readFileSessionReplayFloor(input: {
 }
 
 export class FileSessionEventHistory {
-  private readonly eventIndex = new FileSessionEventIndex()
+  readonly eventIndex: FileSessionEventIndex
 
   constructor(private readonly options: {
     pathFor: (threadId: string) => string
@@ -61,7 +62,10 @@ export class FileSessionEventHistory {
     invalidateCache: (threadId: string) => void
     withWrite: <T>(threadId: string, operation: () => Promise<T>) => Promise<T>
     scheduleRetry: (threadId: string) => void
-  }) {}
+    eventIndex?: FileSessionEventIndex
+  }) {
+    this.eventIndex = options.eventIndex ?? new FileSessionEventIndex()
+  }
 
   load(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]> {
     return collectFileSessionEvents({
@@ -133,4 +137,54 @@ export class FileSessionEventHistory {
       ino: info.ino
     })
   }
+}
+
+export interface FileSessionEventSubsystemHost {
+  readonly dataDir: string
+  readonly fileAccess: JsonlFileAccessCoordinator
+  readonly highestSeqCache: { delete(threadId: string): void }
+  readonly compactionScheduler: { schedule(threadId: string, kind: 'events'): void }
+  eventsPath(threadId: string): string
+  eventHistoryRevision(threadId: string): number
+  bumpEventHistoryRevision(threadId: string): number
+  withThreadWrite<T>(threadId: string, operation: () => Promise<T>): Promise<T>
+}
+
+export type FileSessionEventSubsystem = {
+  eventHistory: FileSessionEventHistory
+  eventIndexRebuild: FileSessionEventIndexRebuild
+}
+
+/**
+ * Build the sparse-index + incremental-rebuild subsystem in one place. The
+ * host is the store itself (a friend interface), so construction stays out
+ * of the store's at-limit file while the store keeps ownership of the shared
+ * index used by foreground reads.
+ */
+export function createFileSessionEventSubsystem(
+  host: FileSessionEventSubsystemHost
+): FileSessionEventSubsystem {
+  let eventIndexRebuild: FileSessionEventIndexRebuild | undefined
+  const eventIndex = new FileSessionEventIndex({
+    onFallback: (threadId) => eventIndexRebuild?.request(threadId)
+  })
+  eventIndexRebuild = new FileSessionEventIndexRebuild({
+    threadsDir: host.dataDir,
+    eventsPathFor: (threadId) => host.eventsPath(threadId),
+    fileAccess: host.fileAccess,
+    index: eventIndex,
+    maxRecordBytes: DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES
+  })
+  const eventHistory = new FileSessionEventHistory({
+    pathFor: (threadId) => host.eventsPath(threadId),
+    maxRecordBytes: DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES,
+    fileAccess: host.fileAccess,
+    readRevision: (threadId) => host.eventHistoryRevision(threadId),
+    bumpRevision: (threadId) => host.bumpEventHistoryRevision(threadId),
+    invalidateCache: (threadId) => { host.highestSeqCache.delete(threadId) },
+    withWrite: (threadId, operation) => host.withThreadWrite(threadId, operation),
+    scheduleRetry: (threadId) => host.compactionScheduler.schedule(threadId, 'events'),
+    eventIndex
+  })
+  return { eventHistory, eventIndexRebuild }
 }

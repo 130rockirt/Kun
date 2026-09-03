@@ -74,4 +74,31 @@ describe('Runtime background maintenance', () => {
     expect(pruneAttachments).toHaveBeenCalledOnce()
     expect(inspectThreads).toHaveBeenCalledOnce()
   })
+
+  it('schedules the event-index rebuild as a third task and wakes it on demand', async () => {
+    vi.useFakeTimers()
+    const pruneAttachments = vi.fn(async () => undefined)
+    const inspectThreads = vi.fn(async () => undefined)
+    const rebuildEventIndex = vi.fn(async () => true)
+    const maintenance = createRuntimeBackgroundMaintenance({
+      pruneAttachments,
+      inspectThreads,
+      rebuildEventIndex,
+      onError: vi.fn(),
+      attachmentDelayMs: 10_000,
+      guardianDelayMs: 10_000,
+      eventIndexRebuildDelayMs: 100,
+      eventIndexRebuildIntervalMs: 200
+    })
+
+    maintenance.start()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(rebuildEventIndex).toHaveBeenCalledOnce()
+    expect(pruneAttachments).not.toHaveBeenCalled()
+    expect(inspectThreads).not.toHaveBeenCalled()
+
+    maintenance.wake()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(rebuildEventIndex).toHaveBeenCalledTimes(2)
+  })
 })
