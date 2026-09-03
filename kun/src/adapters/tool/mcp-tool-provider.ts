@@ -35,7 +35,7 @@ import {
   type McpSearchRuntimeDiagnostic
 } from './mcp-tool-search.js'
 import {
-  attachMcpClientLifecycle,
+  connectAndLoadCatalog,
   createMcpLocalTool,
   createMcpSearchCatalogRecord,
   defaultMcpReconnectDelay,
@@ -252,24 +252,7 @@ export async function buildMcpToolProviders(
       if (!server.enabled) {
         return { serverId, server, status: 'disabled' }
       }
-      const attempt = (async () => {
-        const client = await clientFactory(serverId, server)
-        const state: McpConnectionState = {
-          serverId,
-          server,
-          client,
-          clientFactory,
-          nowIso,
-          status: 'connected',
-          reconnectAttempts: 0,
-          reconnectBackoffMs: DEFAULT_MCP_RECONNECT_BASE_DELAY_MS,
-          toolNames: [],
-          lastConnectedAt: nowIso()
-        }
-        attachMcpClientLifecycle(state)
-        const listed = await refreshMcpConnectionCatalog(state)
-        return { state, listed }
-      })()
+      const attempt = connectAndLoadCatalog(serverId, server, clientFactory, nowIso)
       try {
         const result = await raceStartupTimeout(attempt, startupTimeoutMs, serverId)
         return { serverId, server, status: 'connected', ...result }
@@ -461,27 +444,7 @@ export async function buildMcpToolProviders(
    * runtime restart required after a successful authorization.
    */
   const connectAndRegisterServer = async (serverId: string, server: McpServerConfig): Promise<void> => {
-    const client = await clientFactory(serverId, server)
-    const state: McpConnectionState = {
-      serverId,
-      server,
-      client,
-      clientFactory,
-      nowIso,
-      status: 'connected',
-      reconnectAttempts: 0,
-      reconnectBackoffMs: DEFAULT_MCP_RECONNECT_BASE_DELAY_MS,
-      toolNames: [],
-      lastConnectedAt: nowIso()
-    }
-    attachMcpClientLifecycle(state)
-    let listed: McpToolDescriptor[]
-    try {
-      listed = await refreshMcpConnectionCatalog(state)
-    } catch (error) {
-      await client.close().catch(() => undefined)
-      throw error
-    }
+    const { state, listed } = await connectAndLoadCatalog(serverId, server, clientFactory, nowIso)
     connected.push(state)
     catalogState.records.push(...listed.map((tool) => createMcpSearchCatalogRecord(state, tool)))
     catalogState.catalogFingerprint = catalogFingerprint(catalogState.records.map((record) => record.toolId))

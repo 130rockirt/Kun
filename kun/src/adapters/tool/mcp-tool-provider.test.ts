@@ -27,12 +27,14 @@ class MockMcpClient implements McpClientLike {
   constructor(
     private readonly tools: McpToolDescriptor[],
     readonly callTool: McpClientLike['callTool'],
-    extras: Partial<Pick<McpClientLike, 'listResources' | 'readResource' | 'listResourceTemplates' | 'listPrompts' | 'getPrompt'>> = {}
+    extras: Partial<Pick<McpClientLike, 'listResources' | 'readResource' | 'listResourceTemplates' | 'listPrompts' | 'getPrompt'>> = {},
+    private readonly listToolsOverride?: () => Promise<{ tools: McpToolDescriptor[] }>
   ) {
     Object.assign(this, extras)
   }
 
   async listTools(): Promise<{ tools: McpToolDescriptor[] }> {
+    if (this.listToolsOverride) return this.listToolsOverride()
     return { tools: this.tools }
   }
 
@@ -534,5 +536,130 @@ describe('mcp tool provider reliability', () => {
     expect(unregistered).toEqual([])
     expect(built.search.active).toBe(false)
     expect(built.search.indexedToolCount).toBe(2)
+  })
+
+  it('closes the client when startup catalog loading fails', async () => {
+    const client = new MockMcpClient([], vi.fn(), {}, async () => {
+      throw new Error('list tools failed')
+    })
+    const built = await buildMcpToolProviders(config, {
+      clientFactory: vi.fn(async () => client)
+    })
+
+    expect(client.close).toHaveBeenCalledTimes(1)
+    expect(built.connectedServers).toBe(0)
+    expect(built.toolCount).toBe(0)
+    expect(built.providers.some((provider) => provider.id === 'mcp:docs')).toBe(false)
+    expect(built.diagnostics[0]).toMatchObject({
+      id: 'docs',
+      status: 'error',
+      available: false,
+      lastError: 'list tools failed'
+    })
+  })
+
+  it('closes every failed retry client during background reconnect', async () => {
+    const firstRetry = new MockMcpClient([], vi.fn(), {}, async () => {
+      throw new Error('list failed 1')
+    })
+    const secondRetry = new MockMcpClient([], vi.fn(), {}, async () => {
+      throw new Error('list failed 2')
+    })
+    const clientFactory = vi.fn()
+      .mockRejectedValueOnce(new Error('startup timeout'))
+      .mockResolvedValueOnce(firstRetry)
+      .mockResolvedValueOnce(secondRetry)
+
+    const built = await buildMcpToolProviders(config, {
+      clientFactory,
+      delay: async () => undefined,
+      backgroundReconnect: { maxAttempts: 2 }
+    })
+    await built.startBackgroundReconnect({ register: () => undefined, unregister: () => undefined })
+
+    expect(clientFactory).toHaveBeenCalledTimes(3)
+    expect(firstRetry.close).toHaveBeenCalledTimes(1)
+    expect(secondRetry.close).toHaveBeenCalledTimes(1)
+    expect(built.connectedServers).toBe(0)
+    expect(built.providers.some((provider) => provider.id === 'mcp:docs')).toBe(false)
+  })
+
+  it('closes the replacement client when runtime reconnect catalog loading fails', async () => {
+    const first = new MockMcpClient([descriptor], vi.fn(async () => ({ stale: true })))
+    const failing = new MockMcpClient([], vi.fn(), {}, async () => {
+      throw new Error('list tools failed')
+    })
+    const clientFactory = vi.fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(failing)
+
+    const built = await buildMcpToolProviders(config, { clientFactory })
+    expect(built.diagnostics[0]).toMatchObject({ status: 'connected' })
+
+    first.lifecycle.onClose?.()
+    expect(built.diagnostics[0]).toMatchObject({ status: 'error', lastError: 'MCP transport closed' })
+
+    const tool = built.providers[0]!.tools.find((item) => item.name === 'mcp_call')!
+    await expect(tool.execute({ toolId: 'mcp_docs_lookup', arguments: {} }, context)).rejects.toThrow('list tools failed')
+
+    expect(failing.close).toHaveBeenCalledTimes(1)
+    expect(first.close).toHaveBeenCalledTimes(1)
+    expect(clientFactory).toHaveBeenCalledTimes(2)
+    expect(built.diagnostics[0]).toMatchObject({
+      status: 'error',
+      available: false,
+      lastError: 'list tools failed'
+    })
+    expect(built.diagnostics[0].nextReconnectAt).toBeDefined()
+  })
+
+  it('closes the client when OAuth live connect catalog loading fails', async () => {
+    const failing = new MockMcpClient([], vi.fn(), {}, async () => {
+      throw new Error('list tools failed')
+    })
+    const clientFactory = vi.fn()
+      .mockRejectedValueOnce(new McpAuthorizationRequiredError('docs'))
+      .mockResolvedValueOnce(failing)
+    const authorize = vi.fn(async () => ({
+      serverId: 'docs',
+      status: 'authorized' as const,
+      authorized: true
+    }))
+
+    const built = await buildMcpToolProviders(searchConfig, {
+      clientFactory,
+      authorize,
+      oauthStorageDir: 'C:/tmp/oauth'
+    })
+
+    const result = await built.authorizeOAuth('docs')
+    expect(result).toMatchObject({ authorized: true })
+    expect(failing.close).toHaveBeenCalledTimes(1)
+    expect(built.connectedServers).toBe(0)
+    expect(built.toolCount).toBe(0)
+    expect(built.providers.some((provider) => provider.id === 'mcp:docs')).toBe(false)
+  })
+
+  it('closes a late-success client that loses the startup timeout race', async () => {
+    let resolveFactory: (client: MockMcpClient) => void = () => undefined
+    const gate = new Promise<MockMcpClient>((resolve) => {
+      resolveFactory = resolve
+    })
+    const lateClient = new MockMcpClient([descriptor], vi.fn(async () => ({ ok: true })))
+    const clientFactory = vi.fn(() => gate)
+
+    const built = await buildMcpToolProviders(config, {
+      clientFactory,
+      startupConnectTimeoutMs: 10
+    })
+
+    expect(built.diagnostics[0]).toMatchObject({ id: 'docs', status: 'error' })
+    expect(lateClient.close).not.toHaveBeenCalled()
+
+    resolveFactory(lateClient)
+    await vi.waitFor(() => {
+      expect(lateClient.close).toHaveBeenCalledTimes(1)
+    })
+    expect(built.connectedServers).toBe(0)
   })
 })

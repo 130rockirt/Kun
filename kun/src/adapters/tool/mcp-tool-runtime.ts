@@ -65,29 +65,25 @@ async function reconnectFailedMcpServer(
     if (params.isAborted()) return
     await params.delay(Math.min(maxDelayMs, baseDelayMs * 2 ** (attempt - 1)))
     if (params.isAborted()) return
+    let candidate: McpConnectOutcome | undefined
     try {
-      const client = await params.clientFactory(failed.serverId, failed.server)
-      const state: McpConnectionState = {
-        serverId: failed.serverId,
-        server: failed.server,
-        client,
-        clientFactory: params.clientFactory,
-        nowIso: params.nowIso,
-        status: 'connected',
-        reconnectAttempts: 0,
-        reconnectBackoffMs: DEFAULT_MCP_RECONNECT_BASE_DELAY_MS,
-        toolNames: [],
-        lastConnectedAt: params.nowIso()
-      }
-      attachMcpClientLifecycle(state)
-      const listed = await refreshMcpConnectionCatalog(state)
+      candidate = await connectAndLoadCatalog(
+        failed.serverId,
+        failed.server,
+        params.clientFactory,
+        params.nowIso
+      )
       if (params.isAborted()) {
-        await client.close().catch(() => undefined)
+        await candidate.state.client.close().catch(() => undefined)
         return
       }
-      params.onServerConnected(state, listed)
+      params.onServerConnected(candidate.state, candidate.listed)
       return
     } catch {
+      // Ownership transfers to the caller only after onServerConnected
+      // succeeds. A failed initialize, abort check, or takeover callback must
+      // not leave a stdio subprocess behind for the next retry.
+      if (candidate) await candidate.state.client.close().catch(() => undefined)
       // Leave the diagnostic as "error" and try again until attempts run out.
     }
   }
@@ -204,6 +200,63 @@ export async function refreshMcpConnectionCatalog(
   state.lastError = undefined
   syncMcpDiagnostic(state, state.status, listed.length)
   return listed
+}
+
+export type McpConnectOutcome = {
+  state: McpConnectionState
+  listed: McpToolDescriptor[]
+}
+
+/**
+ * Create an MCP client, bind its lifecycle, and load its tool catalog as one
+ * ownership unit. The client stays locally owned until this call resolves;
+ * any failure after `clientFactory()` succeeds (lifecycle setup, catalog
+ * refresh, or paginated `listTools`) closes the client — and therefore its
+ * stdio transport / child process — before rethrowing, so a failed startup
+ * attempt, background retry, or live reconnect never leaks a subprocess.
+ *
+ * When `existingState` is provided (runtime reconnect), the committed state is
+ * updated in place with the fresh client instead of building a new one; the
+ * caller's reconnect state machine (cooldown / error) is left untouched.
+ */
+export async function connectAndLoadCatalog(
+  serverId: string,
+  server: McpServerConfig,
+  clientFactory: (serverId: string, server: McpServerConfig) => Promise<McpClientLike>,
+  nowIso: () => string,
+  existingState?: McpConnectionState
+): Promise<McpConnectOutcome> {
+  const client = await clientFactory(serverId, server)
+  const state: McpConnectionState =
+    existingState ??
+    ({
+      serverId,
+      server,
+      client,
+      clientFactory,
+      nowIso,
+      status: 'connected',
+      reconnectAttempts: 0,
+      reconnectBackoffMs: DEFAULT_MCP_RECONNECT_BASE_DELAY_MS,
+      toolNames: [],
+      lastConnectedAt: nowIso()
+    } satisfies McpConnectionState)
+  try {
+    if (existingState) {
+      state.client = client
+      state.status = 'connected'
+      state.lastConnectedAt = nowIso()
+      state.lastError = undefined
+      state.nextReconnectAt = undefined
+      state.reconnectBackoffMs = DEFAULT_MCP_RECONNECT_BASE_DELAY_MS
+    }
+    attachMcpClientLifecycle(state)
+    const listed = await refreshMcpConnectionCatalog(state)
+    return { state, listed }
+  } catch (error) {
+    await client.close().catch(() => undefined)
+    throw error
+  }
 }
 
 async function callMcpToolWithReconnect(
@@ -360,17 +413,14 @@ async function reconnectMcpConnectionOnce(
   if (signal?.aborted) throw new Error('MCP reconnect aborted')
   await closeMcpClient(state)
   if (signal?.aborted) throw new Error('MCP reconnect aborted')
-  const client = await state.clientFactory(state.serverId, state.server)
-  state.client = client
-  state.status = 'connected'
-  state.lastConnectedAt = state.nowIso()
-  state.lastError = undefined
-  state.nextReconnectAt = undefined
-  state.reconnectBackoffMs = DEFAULT_MCP_RECONNECT_BASE_DELAY_MS
-  attachMcpClientLifecycle(state)
-  await refreshMcpConnectionCatalog(state)
-  syncMcpDiagnostic(state, 'connected')
-  return client
+  const result = await connectAndLoadCatalog(
+    state.serverId,
+    state.server,
+    state.clientFactory,
+    state.nowIso,
+    state
+  )
+  return result.state.client
 }
 
 async function closeMcpClient(state: McpConnectionState): Promise<void> {
