@@ -70,7 +70,9 @@ async function fetchViaProxy(
   // Stream the body instead of materialising it with arrayBuffer(). When the
   // caller has not set content-length, Node emits Transfer-Encoding: chunked.
   const bodyStream = requestInput.body
-    ? Readable.fromWeb(requestInput.body)
+    // TypeScript 5.9 can resolve the DOM and Node Web Stream declarations as
+    // distinct interfaces even though both are accepted by Node at runtime.
+    ? Readable.fromWeb(requestInput.body as Parameters<typeof Readable.fromWeb>[0])
     : null
 
   return new Promise<Response>((resolve, reject) => {
