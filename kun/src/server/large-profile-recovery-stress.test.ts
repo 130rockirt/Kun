@@ -1,11 +1,14 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AttachmentStore } from '../attachments/attachment-store.js'
 import type { SessionGuardian } from '../services/session-guardian.js'
 import type { ThreadService } from '../services/thread-service.js'
-import { createRuntimeMaintenanceSlices } from './runtime-maintenance-slices.js'
+import {
+  createRuntimeMaintenanceSlices,
+  MAINTENANCE_SLICE_MAX_MS
+} from './runtime-maintenance-slices.js'
 import { resetRuntimeLoadStateForTests } from './runtime-load-shedder.js'
 import { ThreadReadCoordinator } from './thread-read-coordinator.js'
 
@@ -58,5 +61,12 @@ describe('large profile recovery stress fixture', () => {
     expect(pruneExpiredLeases).toHaveBeenCalledOnce()
     expect(maintenance.stats()).toMatchObject({ processedThreads: 400 })
     expect(reads.stats()).toMatchObject({ started: 1, joined: 19, rejected: 0 })
+
+    // Chunked appends + compacted files keep total write volume O(N); the old
+    // cumulative whole-file rewrite grew quadratically with the thread count.
+    const compactText = await readFile(join(root, 'maintenance-attachments', 'gen-1.json'), 'utf8')
+    const compactBytes = Buffer.byteLength(compactText, 'utf8')
+    expect(maintenance.stats().bytesWritten).toBeLessThanOrEqual(12 * compactBytes)
+    expect(maintenance.stats().maxDurationMs).toBeLessThanOrEqual(MAINTENANCE_SLICE_MAX_MS + 100)
   })
 })
