@@ -94,6 +94,11 @@ export type McpToolProviderBuildResult = {
   diagnostics: McpServerDiagnostic[]
   oauth: McpOAuthDiagnostic[]
   search: McpSearchRuntimeDiagnostic
+  /**
+   * Live counts, not startup snapshots. Both are object getters that read the
+   * current diagnostics and listed catalog at read time, so capability
+   * manifests rebuilt after a reconnect/OAuth/refresh see fresh values.
+   */
   connectedServers: number
   toolCount: number
   /**
@@ -188,6 +193,16 @@ export type McpConnectionState = {
   /** Live diagnostic object — the SAME reference stored in the diagnostics array. */
   diagnostic?: McpServerDiagnostic
   intentionallyClosing?: boolean
+  /**
+   * Provider-assigned hook: fires inside `connectAndLoadCatalog` after every
+   * successful catalog load, so runtime reconnects commit like every other
+   * path. It is only assigned once a state is adopted by the provider, which
+   * keeps fresh-state connects (startup / OAuth / background reconnect) on
+   * their existing explicit commit instead of double-committing. A throw here
+   * propagates into the reconnect state machine's existing catch (close +
+   * cooldown); the hook body is a pure in-memory commit, so that is safe.
+   */
+  onCatalogChanged?: (serverId: string, listed: McpToolDescriptor[]) => void
 }
 
 export async function buildMcpToolProviders(
@@ -294,8 +309,6 @@ export async function buildMcpToolProviders(
     diagnostics.push(syncMcpDiagnostic(state, 'connected', listed.length))
   }
 
-  const connectedServers = diagnostics.filter((diagnostic) => diagnostic.status === 'connected').length
-  const toolCount = [...listedByServer.values()].reduce((total, listed) => total + listed.length, 0)
   const oauthDiagnostics = await listMcpOAuthDiagnostics(mcp, {
     storageDir: options.oauthStorageDir,
     encryptor: options.oauthEncryptor
@@ -445,6 +458,17 @@ export async function buildMcpToolProviders(
   }
 
   /**
+   * The provider-side body for the per-state `onCatalogChanged` hook. It merges
+   * one server's fresh listing into the live source of truth and re-commits the
+   * whole catalog through the single commit path, so runtime reconnects behave
+   * identically to OAuth late-connect and background reconnect.
+   */
+  const catalogChanged = (serverId: string, listed: McpToolDescriptor[]): void => {
+    listedByServer.set(serverId, listed)
+    commitCatalog(listedByServer)
+  }
+
+  /**
    * Full manual refresh: re-list every connected server first, then commit the
    * whole catalog once. If any listing fails the previous records, wrappers,
    * index, exposure, and fingerprint stay intact and only the redacted
@@ -480,6 +504,7 @@ export async function buildMcpToolProviders(
   // Commit the startup catalog before deciding direct exposure so `isSearchActive`
   // and `computeAdvertisedToolCount` see the real initial size.
   commitCatalog(listedByServer)
+  for (const state of connected) state.onCatalogChanged = catalogChanged
   if (!isSearchActive()) {
     providers.push(...directToolsByServer.values())
   }
@@ -501,6 +526,7 @@ export async function buildMcpToolProviders(
     const { state, listed } = await connectAndLoadCatalog(serverId, server, clientFactory, nowIso)
     connected.push(state)
     listedByServer.set(serverId, listed)
+    state.onCatalogChanged = catalogChanged
     commitCatalog(listedByServer)
     const diagnostic = syncMcpDiagnostic(state, 'connected', listed.length)
     const index = diagnostics.findIndex((entry) => entry.id === serverId)
@@ -547,8 +573,12 @@ export async function buildMcpToolProviders(
     diagnostics,
     oauth: oauthDiagnostics,
     search: searchDiagnostic,
-    connectedServers,
-    toolCount,
+    get connectedServers(): number {
+      return diagnostics.filter((diagnostic) => diagnostic.status === 'connected').length
+    },
+    get toolCount(): number {
+      return [...listedByServer.values()].reduce((total, listed) => total + listed.length, 0)
+    },
     startBackgroundReconnect: (hooks) => {
       liveRegister = hooks.register
       liveUnregister = hooks.unregister
@@ -567,6 +597,7 @@ export async function buildMcpToolProviders(
         onServerConnected: (state, listed) => {
           connected.push(state)
           listedByServer.set(state.serverId, listed)
+          state.onCatalogChanged = catalogChanged
           commitCatalog(listedByServer)
           const diagnostic = syncMcpDiagnostic(state, 'connected', listed.length)
           const index = diagnostics.findIndex((entry) => entry.id === state.serverId)

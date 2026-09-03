@@ -252,6 +252,11 @@ export async function connectAndLoadCatalog(
     }
     attachMcpClientLifecycle(state)
     const listed = await refreshMcpConnectionCatalog(state)
+    // A runtime reconnect (existingState) carries a provider-assigned hook; fire
+    // it here so its catalog commit happens BEFORE the reconnect's next callTool.
+    // Fresh states (startup / OAuth / background) have no hook yet and commit
+    // explicitly via their own adoption path, so this never double-commits.
+    state.onCatalogChanged?.(state.serverId, listed)
     return { state, listed }
   } catch (error) {
     await client.close().catch(() => undefined)

@@ -191,3 +191,95 @@ describe('mcp tool provider manual refresh catalog sync', () => {
     expect(built.search.lastError).toBe('refresh boom')
   })
 })
+
+describe('mcp tool provider runtime reconnect catalog commit', () => {
+  const directConfig = () =>
+    McpCapabilityConfig.parse({
+      enabled: true,
+      servers: { docs: server },
+      search: { enabled: false }
+    })
+
+  const lookup = (inputSchema: Record<string, unknown>): McpToolDescriptor => ({
+    name: 'lookup',
+    description: 'lookup',
+    inputSchema
+  })
+
+  it('commits the fresh catalog when a runtime reconnect adds/removes tools', async () => {
+    const first = new MockMcpClient([lookup({ type: 'object', properties: {} })], vi.fn(async () => ({ ok: true })))
+    const second = new MockMcpClient(
+      [
+        { name: 'lookup2', description: 'lookup2', inputSchema: { type: 'object', properties: {} } }
+      ],
+      vi.fn(async () => ({ ok: true }))
+    )
+    const clientFactory = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second)
+
+    const built = await buildMcpToolProviders(directConfig(), { clientFactory })
+
+    const replaced: Array<{ tools: readonly { name: string }[] }> = []
+    await built.startBackgroundReconnect({
+      register: () => undefined,
+      unregister: () => undefined,
+      replace: (provider) => replaced.push(provider)
+    })
+
+    first.lifecycle.onClose?.()
+    const direct = built.providers.find((provider) => provider.id === 'mcp:docs')!
+    const tool = direct.tools.find((item) => item.name === 'mcp_docs_lookup')!
+    await tool.execute({}, context)
+
+    expect(clientFactory).toHaveBeenCalledTimes(2)
+    const committed = replaced[replaced.length - 1]!
+    expect(committed.tools.map((item) => item.name)).toContain('mcp_docs_lookup2')
+    expect(committed.tools.map((item) => item.name)).not.toContain('mcp_docs_lookup')
+    expect(built.toolCount).toBe(1)
+    expect(built.diagnostics[0]?.toolNames).toEqual(['lookup2'])
+  })
+
+  it('updates the exposed direct tool schema after a runtime reconnect', async () => {
+    const oldSchema = { type: 'object', properties: {} }
+    const newSchema = { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] }
+    const first = new MockMcpClient([lookup(oldSchema)], vi.fn(async () => ({ ok: true })))
+    const second = new MockMcpClient([lookup(newSchema)], vi.fn(async () => ({ ok: true })))
+    const clientFactory = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second)
+
+    const built = await buildMcpToolProviders(directConfig(), { clientFactory })
+
+    const replaced: Array<{ tools: readonly { name: string; inputSchema: Record<string, unknown> }[] }> = []
+    await built.startBackgroundReconnect({
+      register: () => undefined,
+      unregister: () => undefined,
+      replace: (provider) => replaced.push(provider)
+    })
+
+    first.lifecycle.onClose?.()
+    const direct = built.providers.find((provider) => provider.id === 'mcp:docs')!
+    const tool = direct.tools.find((item) => item.name === 'mcp_docs_lookup')!
+    await tool.execute({}, context)
+
+    const committed = replaced[replaced.length - 1]!
+    const refreshed = committed.tools.find((item) => item.name === 'mcp_docs_lookup')
+    expect(refreshed?.inputSchema).toMatchObject({ required: ['query'] })
+  })
+
+  it('reads live connectedServers/toolCount after a background reconnect', async () => {
+    const clientFactory = vi.fn()
+      .mockRejectedValueOnce(new Error('startup timeout'))
+      .mockResolvedValueOnce(new MockMcpClient(descriptors(2, 'a'), vi.fn(async () => ({ ok: true }))))
+
+    const built = await buildMcpToolProviders(directConfig(), {
+      clientFactory,
+      delay: async () => undefined
+    })
+
+    expect(built.connectedServers).toBe(0)
+    expect(built.toolCount).toBe(0)
+
+    await built.startBackgroundReconnect({ register: () => undefined, unregister: () => undefined })
+
+    expect(built.connectedServers).toBe(1)
+    expect(built.toolCount).toBe(2)
+  })
+})
