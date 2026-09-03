@@ -23,6 +23,7 @@ import {
   updateThread
 } from './threads.js'
 import { syncThreadTodosFromPlan } from './thread-todos-sync-plan.js'
+import { threadTimelineReadKey } from './thread-timeline-read-key.js'
 import { patchThreadTodoStatus } from './project-boards.js'
 import { deleteThreadsByWorkspace } from './threads-bulk-delete.js'
 import { contentSearchThreads } from './thread-content-search.js'
@@ -133,7 +134,7 @@ export function registerThreadRoutes(
     if (forwarded) return forwarded
     const priority = request.headers.get('x-kun-request-priority') === 'background'
       ? 'background' : 'foreground'
-    const key = `${priority}:${ctx.params.id}:${new URL(request.url).search}`
+    const key = threadTimelineReadKey(ctx.params.id, new URL(request.url))
     try {
       return await timelineReads.run(key, priority, () => getThreadTimeline(
         runtime.threadService,

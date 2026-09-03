@@ -19,7 +19,6 @@ import {
   ThreadTimelineResponseSchema,
   ThreadTodosResponse,
   THREAD_TIMELINE_MAX_ITEM_BYTES,
-  THREAD_TIMELINE_MAX_ITEMS,
   THREAD_RUNTIME_STATE_BATCH_CONCURRENCY,
   THREAD_RUNTIME_STATE_SCHEMA_VERSION,
   UpdateThreadRequest,
@@ -28,6 +27,7 @@ import {
 import { jsonResponse, type JsonResponse } from '../response.js'
 import { readJsonBody } from '../read-json-body.js'
 import { threadStateLoadFailure } from './thread-state-error.js'
+import { parseThreadTimelineQuery } from './thread-timeline-read-key.js'
 import type { ForkThreadOptions, ListThreadsOptions, ThreadService } from '../../services/thread-service.js'
 import type { RuntimeError } from './runtime-error.js'
 import type { SessionStore } from '../../ports/session-store.js'
@@ -327,16 +327,7 @@ export async function getThreadTimeline(
   delegationRuntime?: DelegationRuntime
 ): Promise<JsonResponse> {
   const url = new URL(request.url)
-  const parsedQuery = z.object({
-    before: z.string().min(1).max(256).optional(),
-    limit: z.preprocess((value) => {
-      if (typeof value !== 'string' || value.trim() === '') return THREAD_TIMELINE_MAX_ITEMS
-      return Number(value)
-    }, z.number().int().positive().max(THREAD_TIMELINE_MAX_ITEMS))
-  }).safeParse({
-    before: url.searchParams.get('before') ?? undefined,
-    limit: url.searchParams.get('limit') ?? undefined
-  })
+  const parsedQuery = parseThreadTimelineQuery(url)
   if (!parsedQuery.success) {
     return validationError('invalid thread timeline query', parsedQuery.error.issues)
   }
