@@ -19,6 +19,24 @@ export const MAINTENANCE_SLICE_MAX_THREADS = 8
 export const MAINTENANCE_SLICE_MAX_MS = 50
 
 const ScanStateSchema = z.object({
+  version: z.literal(3),
+  attachments: z.object({
+    generation: z.number().int().nonnegative(),
+    cursor: z.string().optional(),
+    pageOffset: z.number().int().nonnegative().optional(),
+    partialThread: z.object({
+      threadId: z.string(),
+      turnOffset: z.number().int().nonnegative(),
+      attachmentOffset: z.number().int().nonnegative()
+    }).optional()
+  }),
+  guardian: z.object({
+    cursor: z.string().optional(),
+    pageOffset: z.number().int().nonnegative().optional()
+  })
+}).strict()
+
+const ScanStateV2Schema = z.object({
   version: z.literal(2),
   attachments: z.object({
     generation: z.number().int().nonnegative(),
@@ -47,6 +65,7 @@ const ScanStateV1Schema = z.object({
 }).strict()
 
 type ScanState = z.infer<typeof ScanStateSchema>
+type ScanStateV2 = z.infer<typeof ScanStateV2Schema>
 type ScanStateV1 = z.infer<typeof ScanStateV1Schema>
 
 export type RuntimeMaintenanceSliceStats = {
@@ -132,7 +151,7 @@ export function createRuntimeMaintenanceSlices(input: {
   }
 
   const freshState = (): ScanState => ({
-    version: 2,
+    version: 3,
     attachments: { generation: 0 },
     guardian: {}
   })
@@ -150,7 +169,7 @@ export function createRuntimeMaintenanceSlices(input: {
       )
     }
     return {
-      version: 2,
+      version: 3,
       attachments: {
         generation,
         cursor: v1.attachments.cursor,
@@ -165,8 +184,19 @@ export function createRuntimeMaintenanceSlices(input: {
       statePromise = readFile(statePath, 'utf8')
         .then(async (text) => {
           const raw: unknown = JSON.parse(text)
-          const v2 = ScanStateSchema.safeParse(raw)
-          if (v2.success) return v2.data
+          const v3 = ScanStateSchema.safeParse(raw)
+          if (v3.success) return v3.data
+          const v2 = ScanStateV2Schema.safeParse(raw)
+          if (v2.success) {
+            // v2 predates the in-thread breakpoint; carry its cursor/pageOffset
+            // forward verbatim and resume future slices from thread starts.
+            const migrated: ScanState = {
+              version: 3,
+              attachments: { ...v2.data.attachments },
+              guardian: v2.data.guardian
+            }
+            return migrated
+          }
           const v1 = ScanStateV1Schema.safeParse(raw)
           if (v1.success) return await migrateV1(v1.data)
           return freshState()
@@ -213,12 +243,21 @@ export function createRuntimeMaintenanceSlices(input: {
     // The soft deadline only budgets the per-thread work; state load and page
     // listing are bounded setup costs that must not starve the first thread.
     const loopStartedAt = Date.now()
+    const deadlineReached = (): boolean => Date.now() - loopStartedAt >= MAINTENANCE_SLICE_MAX_MS
     const sliceIds: string[] = []
     let processed = 0
+    // `advanced` flips true as soon as this slice has persisted-worthy progress
+    // (a completed thread or at least one attachment id). Every deadline stop is
+    // gated on it, so a slice always advances at least one persistable unit and
+    // can never re-scan the same prefix forever.
+    let advanced = false
+    // In-thread breakpoint. Set only when the slice stops in the middle of a
+    // thread; otherwise undefined so a thread or page boundary resumes cleanly.
+    let partialThread: NonNullable<ScanState['attachments']['partialThread']> | undefined
     const pageOffset = Math.min(state.attachments.pageOffset ?? 0, page.threads.length)
     for (const summary of page.threads.slice(pageOffset)) {
       const remaining = MAINTENANCE_SLICE_MAX_MS - (Date.now() - loopStartedAt)
-      if (processed > 0 && remaining <= 0) break
+      if (advanced && remaining <= 0) break
       const readKey = `attachment-maintenance:${summary.id}`
       const read = acquireFlight(readKey, () => input.threads.get(summary.id))
       const result = await withDeadline(read, Math.max(0, remaining))
@@ -228,17 +267,42 @@ export function createRuntimeMaintenanceSlices(input: {
       }
       consumeFlight(readKey, read)
       const thread = result.value
-      let complete = true
-      for (const turn of thread?.turns ?? []) {
-        if (Date.now() - loopStartedAt >= MAINTENANCE_SLICE_MAX_MS) {
-          complete = false
+      // Restore the in-thread breakpoint only when this page slot still holds
+      // the same thread; a reorder or deletion makes it stale, so restart from
+      // the top (safe to duplicate at compaction, never safe to skip).
+      const resume = state.attachments.partialThread
+      const resumeHere = resume !== undefined && resume.threadId === summary.id
+      const turnOffset = resumeHere ? resume!.turnOffset : 0
+      const attachmentOffset = resumeHere ? resume!.attachmentOffset : 0
+      const turns = thread?.turns ?? []
+      let stopped = false
+      for (let t = turnOffset; t < turns.length && !stopped; t += 1) {
+        const ids = turns[t]?.attachmentIds ?? []
+        const startA = t === turnOffset ? attachmentOffset : 0
+        for (let a = startA; a < ids.length; a += 1) {
+          if (advanced && deadlineReached()) {
+            partialThread = { threadId: summary.id, turnOffset: t, attachmentOffset: a }
+            stopped = true
+            break
+          }
+          sliceIds.push(ids[a])
+          advanced = true
+        }
+        if (stopped) break
+        // Turn `t` is now fully consumed — one unit of progress even when it
+        // held no attachments — so a deadline stop here always advances.
+        advanced = true
+        if (deadlineReached()) {
+          partialThread = { threadId: summary.id, turnOffset: t + 1, attachmentOffset: 0 }
+          stopped = true
           break
         }
-        for (const id of turn.attachmentIds ?? []) sliceIds.push(id)
       }
-      if (!complete) break
+      if (stopped) break
       processed += 1
+      advanced = true
     }
+    state.attachments.partialThread = partialThread
     if (sliceIds.length > 0) {
       bytesWritten += await appendReferencesChunk(input.dataDir, generation, sliceIds)
     }
@@ -246,6 +310,7 @@ export function createRuntimeMaintenanceSlices(input: {
     if (page.hasMore && consumedPage && page.nextCursor) {
       state.attachments.cursor = page.nextCursor
       state.attachments.pageOffset = 0
+      state.attachments.partialThread = undefined
       await saveState(state)
       recordSlice(startedAt, processed)
       return false

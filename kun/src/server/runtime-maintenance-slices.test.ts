@@ -134,7 +134,7 @@ describe('runtime maintenance slices', () => {
       version: number
       attachments: { references?: unknown }
     }
-    expect(persisted.version).toBe(2)
+    expect(persisted.version).toBe(3)
     expect(persisted.attachments.references).toBeUndefined()
   })
 
@@ -534,5 +534,216 @@ describe('runtime maintenance slices', () => {
     expect(eventIndexRebuild).toHaveBeenCalledTimes(2)
     finishRebuild(true)
     await expect(third).resolves.toBe(true)
+  })
+
+  it('advances the in-thread attachment cursor instead of livelocking on a huge thread', async () => {
+    vi.useFakeTimers()
+    try {
+      const root = await mkdtemp(join(tmpdir(), 'kun-maintenance-livelock-'))
+      roots.push(root)
+      const turnCount = 20
+      const ids = Array.from({ length: turnCount }, (_, index) => `a-${index}`)
+      const listPage = vi.fn(async () => ({
+        threads: [{ id: 'thread-0', status: 'idle', updatedAt: '0' }],
+        hasMore: false
+      }))
+      // Every read consumes the whole 50ms budget, so a single slice can only
+      // consume one turn before the deadline fires.
+      const get = vi.fn(async () => {
+        vi.setSystemTime(Date.now() + 60)
+        return { id: 'thread-0', turns: ids.map((id) => ({ attachmentIds: [id] })) }
+      })
+      const pruneExpiredLeases = vi.fn(async () => undefined)
+      const maintenance = createRuntimeMaintenanceSlices({
+        dataDir: root,
+        threads: { listPage, get } as unknown as ThreadService,
+        attachments: () => ({ pruneExpiredLeases }) as unknown as AttachmentStore,
+        guardian: { scanThread: vi.fn() } as unknown as SessionGuardian,
+        nowIso: () => '2026-09-03T00:00:00.000Z'
+      })
+
+      const statePath = join(root, 'maintenance-state.json')
+      const generationTurnOffsets: number[][] = []
+      for (let generation = 0; generation < 2; generation += 1) {
+        const turnOffsets: number[] = []
+        let complete = false
+        let guard = 0
+        while (!complete && guard < 100) {
+          complete = await maintenance.runAttachmentSlice()
+          guard += 1
+          const persisted = JSON.parse(await readFile(statePath, 'utf8')) as {
+            attachments: { generation: number; partialThread?: { turnOffset: number } }
+          }
+          if (
+            persisted.attachments.generation === generation &&
+            persisted.attachments.partialThread
+          ) {
+            turnOffsets.push(persisted.attachments.partialThread.turnOffset)
+          }
+        }
+        expect(guard).toBeLessThan(100)
+        generationTurnOffsets.push(turnOffsets)
+      }
+
+      // Each generation consumed exactly one turn per slice and never reset
+      // back to an earlier turn — the cursor advanced monotonically.
+      for (const turnOffsets of generationTurnOffsets) {
+        expect(turnOffsets).toHaveLength(turnCount)
+        for (let index = 1; index < turnOffsets.length; index += 1) {
+          expect(turnOffsets[index]).toBeGreaterThan(turnOffsets[index - 1])
+        }
+      }
+
+      expect(pruneExpiredLeases).toHaveBeenCalledOnce()
+      const compacted = JSON.parse(
+        await readFile(join(root, 'maintenance-attachments', 'gen-1.json'), 'utf8')
+      ) as string[]
+      expect(new Set(compacted).size).toBe(turnCount)
+      expect(compacted).toHaveLength(turnCount)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('resumes an in-thread attachment breakpoint without re-appending the consumed prefix', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-maintenance-resume-id-'))
+    roots.push(root)
+    const listPage = vi.fn(async (options?: { cursor?: string }) => {
+      if (!options?.cursor) {
+        return {
+          threads: [{ id: 'thread-0', status: 'idle', updatedAt: '0' }],
+          hasMore: true,
+          nextCursor: '1'
+        }
+      }
+      return { threads: [], hasMore: false }
+    })
+    const get = vi.fn(async () => ({
+      id: 'thread-0',
+      turns: [{ attachmentIds: ['a-0', 'a-1', 'a-2', 'a-3', 'a-4', 'a-5'] }]
+    }))
+    await mkdir(join(root, 'maintenance-attachments'), { recursive: true })
+    await writeFile(
+      join(root, 'maintenance-attachments', 'gen-0.jsonl'),
+      JSON.stringify(['a-0', 'a-1']) + '\n'
+    )
+    await writeFile(join(root, 'maintenance-state.json'), JSON.stringify({
+      version: 3,
+      attachments: {
+        generation: 0,
+        pageOffset: 0,
+        partialThread: { threadId: 'thread-0', turnOffset: 0, attachmentOffset: 2 }
+      },
+      guardian: {}
+    }))
+    const pruneExpiredLeases = vi.fn(async () => undefined)
+    const maintenance = createRuntimeMaintenanceSlices({
+      dataDir: root,
+      threads: { listPage, get } as unknown as ThreadService,
+      attachments: () => ({ pruneExpiredLeases }) as unknown as AttachmentStore,
+      guardian: { scanThread: vi.fn() } as unknown as SessionGuardian,
+      nowIso: () => '2026-09-03T00:00:00.000Z'
+    })
+
+    await expect(maintenance.runAttachmentSlice()).resolves.toBe(false)
+
+    // The pre-existing prefix line is untouched; the new append covers only the
+    // not-yet-consumed suffix and never re-adds a-0/a-1.
+    const lines = (await readFile(join(root, 'maintenance-attachments', 'gen-0.jsonl'), 'utf8'))
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+    expect(lines).toHaveLength(2)
+    const appended = JSON.parse(lines[1]!) as string[]
+    expect(appended).toEqual(['a-2', 'a-3', 'a-4', 'a-5'])
+
+    // Completing the generation dedupes into the full six-reference set.
+    let complete = false
+    while (!complete) complete = await maintenance.runAttachmentSlice()
+    const compacted = JSON.parse(
+      await readFile(join(root, 'maintenance-attachments', 'gen-0.json'), 'utf8')
+    ) as string[]
+    expect(new Set(compacted).size).toBe(6)
+    expect(compacted).toContain('a-0')
+    expect(compacted).toContain('a-5')
+  })
+
+  it('falls back to a full rescan when the saved breakpoint thread id is stale', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-maintenance-stale-bp-'))
+    roots.push(root)
+    const listPage = vi.fn(async () => ({
+      threads: [{ id: 'thread-9', status: 'idle', updatedAt: '9' }],
+      hasMore: false
+    }))
+    const get = vi.fn(async (id: string) => ({
+      id,
+      turns: [{ attachmentIds: ['x-0', 'x-1', 'x-2'] }]
+    }))
+    await writeFile(join(root, 'maintenance-state.json'), JSON.stringify({
+      version: 3,
+      attachments: {
+        generation: 0,
+        pageOffset: 0,
+        partialThread: { threadId: 'thread-stale', turnOffset: 5, attachmentOffset: 2 }
+      },
+      guardian: {}
+    }))
+    const maintenance = createRuntimeMaintenanceSlices({
+      dataDir: root,
+      threads: { listPage, get } as unknown as ThreadService,
+      attachments: () => ({ pruneExpiredLeases: vi.fn() }) as unknown as AttachmentStore,
+      guardian: { scanThread: vi.fn() } as unknown as SessionGuardian,
+      nowIso: () => '2026-09-03T00:00:00.000Z'
+    })
+
+    // The stale breakpoint must be ignored so no attachment id is skipped.
+    await expect(maintenance.runAttachmentSlice()).resolves.toBe(true)
+    const compacted = JSON.parse(
+      await readFile(join(root, 'maintenance-attachments', 'gen-0.json'), 'utf8')
+    ) as string[]
+    expect(compacted).toHaveLength(3)
+    expect(compacted).toContain('x-0')
+    expect(compacted).toContain('x-2')
+  })
+
+  it('migrates a v2 state file to v3 preserving cursor and pageOffset', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-maintenance-v2-migrate-'))
+    roots.push(root)
+    await writeFile(join(root, 'maintenance-state.json'), JSON.stringify({
+      version: 2,
+      attachments: { generation: 3, cursor: '7', pageOffset: 1 },
+      guardian: {}
+    }))
+    const listPage = vi.fn(async (options?: { cursor?: string }) => {
+      expect(options?.cursor).toBe('7')
+      return {
+        threads: ['t-7', 't-8', 't-9'].map((id) => ({ id, status: 'idle', updatedAt: id })),
+        hasMore: true,
+        nextCursor: '10'
+      }
+    })
+    const get = vi.fn(async (id: string) => ({
+      id,
+      turns: [{ attachmentIds: [`a-${id}`] }]
+    }))
+    const maintenance = createRuntimeMaintenanceSlices({
+      dataDir: root,
+      threads: { listPage, get } as unknown as ThreadService,
+      attachments: () => ({ pruneExpiredLeases: vi.fn() }) as unknown as AttachmentStore,
+      guardian: { scanThread: vi.fn() } as unknown as SessionGuardian,
+      nowIso: () => '2026-09-03T00:00:00.000Z'
+    })
+
+    await expect(maintenance.runAttachmentSlice()).resolves.toBe(false)
+    // pageOffset=1 skipped the first slot, so scanning starts at t-8.
+    expect(get).toHaveBeenNthCalledWith(1, 't-8')
+
+    const persisted = JSON.parse(await readFile(join(root, 'maintenance-state.json'), 'utf8')) as {
+      version: number
+      attachments: { generation: number; cursor?: string; pageOffset?: number; partialThread?: unknown }
+    }
+    expect(persisted.version).toBe(3)
+    expect(persisted.attachments.generation).toBe(3)
+    expect(persisted.attachments.partialThread).toBeUndefined()
   })
 })
