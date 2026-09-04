@@ -147,9 +147,11 @@ describe('pending TUI update reconciliation', () => {
     })
     const report = await reconcilePendingTuiUpdate(root)
     expect(report?.kind).toBe('failed')
-    expect(report && 'message' in report && report.message).toContain('during swap')
-    expect(report && 'message' in report && report.message).toContain('kun update --yes')
-    expect(report && 'message' in report && report.message).not.toContain('AppData')
+    const message = report && 'message' in report ? report.message : ''
+    expect(message).toContain('during swap')
+    expect(message).toContain('kun update --yes')
+    expect(message).toContain('update.log')
+    expect(message).not.toContain(root)
   })
 
   it('stays silent while a live process owns the pending update', async () => {

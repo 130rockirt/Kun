@@ -220,15 +220,15 @@ const WINDOWS_POINTER_LAUNCHER = [
   'setlocal',
   'set "KUN_STANDALONE_ROOT=%~dp0.."',
   'set "RELEASE="',
-  'if exist "%~dp0..\current" set /p RELEASE=<"%~dp0..\current"',
+  'if exist "%~dp0..\\current" set /p RELEASE=<"%~dp0..\\current"',
   'if not defined RELEASE goto fallback',
-  'if exist "%~dp0..\%RELEASE%\release.json" goto run',
+  'if exist "%~dp0..\\%RELEASE%\\release.json" goto run',
   ':fallback',
   'set "RELEASE="',
-  'for /d %%D in ("%~dp0..\releases\*") do if exist "%%D\release.json" set "RELEASE=releases\%%~nxD"',
+  'for /d %%D in ("%~dp0..\\releases\\*") do if exist "%%D\\release.json" set "RELEASE=releases\\%%~nxD"',
   ':run',
   'if not defined RELEASE (echo kun: no usable release found under "%~dp0.." 1>&2 & exit /b 1)',
-  '"%~dp0..\%RELEASE%\runtime\node.exe" "%~dp0..\%RELEASE%\app\kun\dist\cli\serve-entry.js" %*',
+  '"%~dp0..\\%RELEASE%\\runtime\\node.exe" "%~dp0..\\%RELEASE%\\app\\kun\\dist\\cli\\serve-entry.js" %*',
   ''
 ].join('\r\n')
 

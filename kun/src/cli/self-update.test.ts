@@ -21,6 +21,7 @@ import {
   standaloneTuiTarget,
   type StandaloneTuiReleaseMetadata
 } from './self-update.js'
+import { pointerLauncherScript } from './self-update-layout.js'
 import { acquireRuntimeDataDirMigrationLock } from '../server/runtime-data-dir-migration-lock.js'
 
 const roots: string[] = []
@@ -41,6 +42,14 @@ describe('standalone TUI self-update', () => {
     expect(standaloneTuiTarget('linux', 'arm64')).toBe('linux-arm64')
     expect(standaloneTuiTarget('win32', 'x64')).toBe('win32-x64')
     expect(standaloneTuiTarget('linux', 'arm')).toBeUndefined()
+  })
+
+  it('keeps literal Windows separators in the pointer launcher', () => {
+    const launcher = pointerLauncherScript('win32')
+    expect(launcher).toContain(String.raw`%~dp0..\current`)
+    expect(launcher).toContain(String.raw`%~dp0..\%RELEASE%\runtime\node.exe`)
+    expect(launcher).toContain(String.raw`%%D\release.json`)
+    expect(launcher).toContain(String.raw`RELEASE=releases\%%~nxD`)
   })
 
   it('accepts a stable manifest only when it matches the shared release contract', () => {

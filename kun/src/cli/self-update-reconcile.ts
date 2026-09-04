@@ -9,7 +9,6 @@ import {
   parseTuiUpdateTransaction,
   parseTuiUpdateUpdater,
   tuiUpdateLockPath,
-  tuiUpdateLogPath,
   tuiUpdateResultPath,
   tuiUpdateTransactionPath,
   tuiUpdateUpdaterPath,
@@ -28,6 +27,9 @@ type ReconcileOptions = {
 }
 
 type StagedRelease = { version: string; buildId: string }
+
+const UPDATE_LOG_HINT =
+  ' Details: check update.log in the hidden update directory next to the install.'
 
 async function readStagedRelease(stagingRoot: string): Promise<StagedRelease | null> {
   try {
@@ -248,7 +250,7 @@ export async function reconcilePendingTuiUpdate(
           `${result.stage ? ` during ${result.stage}` : ''}` +
           `${result.error ? `: ${result.error}` : ''}. ` +
           installRecoveryMessage(recovery) +
-          ` Details: ${tuiUpdateLogPath(canonical)}`
+          UPDATE_LOG_HINT
       }
     }
     await clearTuiUpdateTransaction(canonical)
@@ -260,7 +262,7 @@ export async function reconcilePendingTuiUpdate(
         `${result.stage ? ` during ${result.stage}` : ''}` +
         `${result.error ? `: ${result.error}` : ''}. ` +
         installRecoveryMessage(recovery) +
-        ` Details: ${tuiUpdateLogPath(canonical)}`
+        UPDATE_LOG_HINT
     }
   }
   // No result yet: either the replacement is still running or it died.

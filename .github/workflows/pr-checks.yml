@@ -349,6 +349,39 @@ jobs:
         working-directory: kun
         run: npx vitest run src/cli/self-update.test.ts src/cli/self-update-transaction.test.ts src/cli/self-update-windows.test.ts src/cli/self-update.win32.test.ts src/cli/self-update.win32-handoff.test.ts
 
+  pr-gate:
+    name: PR gate
+    runs-on: ubuntu-latest
+    needs:
+      - quality
+      - package
+      - package-linux-arm64
+      - package-macos
+      - package-windows
+      - test-windows-self-update
+    if: always()
+    steps:
+      - name: Require every PR job to succeed
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const results = [
+              ['Quality gates', '${{ needs.quality.result }}'],
+              ['Build Linux package', '${{ needs.package.result }}'],
+              ['Build Linux package and TUI (ARM64)', '${{ needs['package-linux-arm64'].result }}'],
+              ['Build ad-hoc macOS packages (PR)', '${{ needs['package-macos'].result }}'],
+              ['Build Windows NSIS installer (PR)', '${{ needs['package-windows'].result }}'],
+              ['Windows TUI self-update integration tests', '${{ needs['test-windows-self-update'].result }}']
+            ]
+            const unsuccessful = results.filter(([, result]) => result !== 'success')
+            if (unsuccessful.length > 0) {
+              core.setFailed(
+                `Required jobs did not succeed:\n${unsuccessful
+                  .map(([name, result]) => `- ${name} (${result})`)
+                  .join('\n')}`
+              )
+            }
+
   request-changes-on-failure:
     name: Request PR changes on failure
     runs-on: ubuntu-latest
