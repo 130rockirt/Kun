@@ -291,8 +291,15 @@ export function FloatingComposer({
   const dictation = useVoiceDictation({
     speechToText: speechToTextSettings,
     onText: (text, intent) => {
-      const existing = dictationInputRef.current.replace(/\s+$/, '')
-      setInput(existing ? `${existing} ${text}` : text)
+      const trimmed = text.trim()
+      if (trimmed) {
+        // 流式听写会连续多次回调:手动同步 ref,避免后一个分片读到
+        // 重渲染生效前的旧文本而丢掉刚插入的内容。
+        const existing = dictationInputRef.current.replace(/\s+$/, '')
+        const next = existing ? `${existing} ${trimmed}` : trimmed
+        dictationInputRef.current = next
+        setInput(next)
+      }
       if (intent === 'send') {
         // 等 setInput 的重渲染落地后再走正常的发送路径,
         // 这样语音直发和手动点发送行为完全一致。
