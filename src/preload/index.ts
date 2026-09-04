@@ -99,6 +99,7 @@ const api = {
     ipcRenderer.invoke('runtime:settings-sync-status:get'),
   uploadRuntimeImageAttachment: (request) =>
     ipcRenderer.invoke('runtime:attachment:upload-image', request),
+  uploadRuntimeDocumentAttachment: (request) => ipcRenderer.invoke('runtime:attachment:upload-document', request),
   captureDevPreviewRegion: (request) =>
     ipcRenderer.invoke('dev-preview:capture-region', request),
   readLocalOfficeDocument: (options) => ipcRenderer.invoke('file:read-local-office-document', options),
