@@ -650,6 +650,7 @@ export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & ProviderAuthApi & Runti
     options?: { workspaceRoot?: string; clawChannelId?: string; providerId?: string; modelHint?: string; reasoningEffort?: string; mode?: 'agent' | 'plan' }
   ) => Promise<ScheduleTaskFromTextResult>
   runDesktopCommand: (command: DesktopCommand) => Promise<void>
+  getWindowMiniMode: () => Promise<boolean>
   onWindowMiniMode: (handler: (mini: boolean) => void) => () => void
   openExternal: (url: string) => Promise<void>
   getComputerUsePermissions: () => Promise<ComputerUsePermissions>

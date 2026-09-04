@@ -1,3 +1,4 @@
+import '../styles/base-shell/mini-window.css'
 import type { ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 

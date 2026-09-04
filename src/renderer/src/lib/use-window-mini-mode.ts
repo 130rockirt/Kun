@@ -10,7 +10,20 @@ export function useWindowMiniMode(): boolean {
   useEffect(() => {
     if (typeof window === 'undefined') return
     if (typeof window.kunGui?.onWindowMiniMode !== 'function') return
-    return window.kunGui.onWindowMiniMode(setMini)
+    let active = true
+    let receivedEvent = false
+    const unsubscribe = window.kunGui.onWindowMiniMode((value) => {
+      receivedEvent = true
+      if (active) setMini(value)
+    })
+    // Subscribe first so a toggle during the initial query wins over its reply.
+    void window.kunGui.getWindowMiniMode?.().then((value) => {
+      if (active && !receivedEvent) setMini(value)
+    }).catch(() => undefined)
+    return () => {
+      active = false
+      unsubscribe()
+    }
   }, [])
 
   useEffect(() => {

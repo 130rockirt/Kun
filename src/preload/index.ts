@@ -461,6 +461,7 @@ const api = {
     }),
   runDesktopCommand: (command) =>
     ipcRenderer.invoke('desktop:command', command),
+  getWindowMiniMode: () => ipcRenderer.invoke('window:mini-mode:get'),
   onWindowMiniMode: (handler) => {
     const wrapped = (
       _: Electron.IpcRendererEvent,

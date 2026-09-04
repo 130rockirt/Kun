@@ -281,24 +281,38 @@ const MINI_WINDOW_HEIGHT = 480
 const MINI_WINDOW_MARGIN = 24
 
 // Bounds captured before entering mini mode so restoring puts the window back
-// exactly where the user left it. Keyed by window id because only the main
-// window participates today.
-const miniWindowSavedBounds = new Map<number, { bounds: Rectangle; maximized: boolean }>()
+// exactly where the user left it. Weak keys release closed windows.
+const miniWindowSavedBounds = new WeakMap<BrowserWindow, {
+  bounds: Rectangle
+  maximized: boolean
+  minimumSize: number[]
+  alwaysOnTop: boolean
+}>()
+
+export function isMiniWindowMode(mainWindow: BrowserWindow | null): boolean {
+  return !!mainWindow && !mainWindow.isDestroyed() && miniWindowSavedBounds.has(mainWindow)
+}
 
 export function toggleMiniWindowMode(mainWindow: BrowserWindow | null): boolean {
   if (!mainWindow || mainWindow.isDestroyed()) return false
-  if (miniWindowSavedBounds.has(mainWindow.id)) {
-    const saved = miniWindowSavedBounds.get(mainWindow.id)
-    miniWindowSavedBounds.delete(mainWindow.id)
-    mainWindow.setAlwaysOnTop(false)
-    mainWindow.setMinimumSize(960, 640)
+  if (miniWindowSavedBounds.has(mainWindow)) {
+    const saved = miniWindowSavedBounds.get(mainWindow)
+    miniWindowSavedBounds.delete(mainWindow)
+    mainWindow.setAlwaysOnTop(saved!.alwaysOnTop)
+    mainWindow.setMinimumSize(saved!.minimumSize[0]!, saved!.minimumSize[1]!)
+    // setBounds() is a no-op while the window is maximized, so unmaximize
+    // first: if the user maximized while in mini mode, exiting must restore
+    // the saved normal bounds instead of keeping the mini-sized normal frame.
+    if (mainWindow.isMaximized()) mainWindow.unmaximize()
     if (saved?.bounds) mainWindow.setBounds(saved.bounds)
     if (saved?.maximized) mainWindow.maximize()
     return false
   }
-  miniWindowSavedBounds.set(mainWindow.id, {
+  miniWindowSavedBounds.set(mainWindow, {
     bounds: mainWindow.getNormalBounds(),
-    maximized: mainWindow.isMaximized()
+    maximized: mainWindow.isMaximized(),
+    minimumSize: mainWindow.getMinimumSize(),
+    alwaysOnTop: mainWindow.isAlwaysOnTop()
   })
   if (mainWindow.isMaximized()) mainWindow.unmaximize()
   mainWindow.setMinimumSize(320, 240)
