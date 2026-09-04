@@ -55,8 +55,8 @@ describe('stopServiceManagerForReplacement', () => {
       {
         readDiscovery: vi.fn(async () => target),
         waitForExit: vi.fn(async () => ++waitCalls > 1),
-        processIdentity: vi.fn(),
-        listenerPids: vi.fn(),
+        processIdentity: vi.fn(async () => processIdentityFor(target)),
+        listenerPids: vi.fn(async () => [target.pid]),
         terminate: vi.fn(),
         removeDiscovery
       }
@@ -101,6 +101,54 @@ describe('stopServiceManagerForReplacement', () => {
 
     expect(terminate).toHaveBeenCalledTimes(1)
     expect(removeDiscovery).not.toHaveBeenCalled()
+  })
+
+  it('forces an exact Manager that removed discovery before its process finished exiting', async () => {
+    const target = manager()
+    let current: ManagerHandoffDiscoveryRecord | null = target
+    let alive = true
+    const terminate = vi.fn(async (_pid: number, verify: () => Promise<boolean>) => {
+      expect(await verify()).toBe(true)
+      alive = false
+      return true
+    })
+    const removeDiscovery = vi.fn(async () => true)
+
+    await expect(stopServiceManagerForReplacement(controlDir, scope, fetch, {
+      readDiscovery: vi.fn(async () => current),
+      requestShutdown: vi.fn(async () => { current = null }),
+      waitForExit: vi.fn(async () => !alive),
+      processIdentity: vi.fn(async () => processIdentityFor(target)),
+      listenerPids: vi.fn(async () => current ? [target.pid] : []),
+      terminate,
+      removeDiscovery
+    })).resolves.toEqual({ stopped: true, forced: true })
+
+    expect(terminate).toHaveBeenCalledOnce()
+    expect(removeDiscovery).not.toHaveBeenCalled()
+  })
+
+  it('refuses to signal a recycled PID after Manager discovery disappears', async () => {
+    const target = manager()
+    let current: ManagerHandoffDiscoveryRecord | null = target
+    let identityReads = 0
+    const terminate = vi.fn(async (_pid: number, verify: () => Promise<boolean>) => verify())
+
+    await expect(stopServiceManagerForReplacement(controlDir, scope, fetch, {
+      readDiscovery: vi.fn(async () => current),
+      requestShutdown: vi.fn(async () => { current = null }),
+      waitForExit: vi.fn(async () => false),
+      processIdentity: vi.fn(async () => processIdentityFor(
+        target,
+        'kun-service-manager',
+        Date.parse(target.startedAt) + (identityReads++ === 0 ? 0 : 1_000)
+      )),
+      listenerPids: vi.fn(async () => [target.pid]),
+      terminate,
+      removeDiscovery: vi.fn(async () => true)
+    })).rejects.toThrow(/could not be safely replaced/)
+
+    expect(terminate).toHaveBeenCalledOnce()
   })
 
   it.each([
