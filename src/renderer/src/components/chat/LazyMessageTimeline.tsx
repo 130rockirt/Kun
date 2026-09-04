@@ -9,7 +9,7 @@ import {
 } from 'react'
 import type { MessageTimeline } from './MessageTimeline'
 import { useChatStore } from '../../store/chat-store'
-import { prepareAssistantMarkdownRenderer } from './AssistantMarkdown'
+import { prepareAssistantMarkdownRenderer } from '../../lib/assistant-markdown-loader'
 import { ThreadHydrationGate } from './ThreadHydrationLoading'
 import { LiveAssistantStreamingProvider } from './live-assistant-streaming'
 

@@ -2,7 +2,7 @@ import type { ChatBlock, NormalizedThread, ReviewTarget } from '../agent/types'
 import type { DesignDocumentTarget, DesignTaskProfileInput } from '../agent/design-task-profile'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
-import { prepareAssistantMarkdownRenderer } from '../components/chat/AssistantMarkdown'
+import { prepareAssistantMarkdownRenderer } from '../lib/assistant-markdown-loader'
 import {
   showWorkspaceMissingDialog,
   workspaceDirectoryExists,

@@ -1,9 +1,10 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RuntimeEvent } from '../../contracts/events.js'
 import { FileSessionStore } from './file-session-store.js'
+import { scanHighestSeqFromTail } from './file-session-seq-tail-scan.js'
 
 const roots: string[] = []
 
@@ -86,5 +87,32 @@ describe('events.jsonl torn tails', () => {
     }
     expect(evidence.truncatedBytes).toBeGreaterThan(0)
     expect((await store.loadEventsSince(threadId, 0)).map((event) => event.seq)).toEqual([1, 3])
+  })
+
+  it('serves consecutive highestSeq reads from the append stat cache', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kun-highest-seq-cache-'))
+    roots.push(root)
+    const threadId = 'thread_highest_seq_cache'
+    const store = new FileSessionStore({ dataDir: root })
+    await store.appendEvent(threadId, heartbeat(threadId, 1))
+
+    await expect(store.highestSeq(threadId)).resolves.toBe(1)
+    const firstScan = vi.spyOn(
+      await import('./file-session-seq-tail-scan.js'),
+      'scanHighestSeqFromTail'
+    )
+    await expect(store.highestSeq(threadId)).resolves.toBe(1)
+    expect(firstScan).not.toHaveBeenCalled()
+    firstScan.mockRestore()
+
+    await store.appendEvent(threadId, heartbeat(threadId, 2))
+    await expect(store.highestSeq(threadId)).resolves.toBe(2)
+    const secondScan = vi.spyOn(
+      await import('./file-session-seq-tail-scan.js'),
+      'scanHighestSeqFromTail'
+    )
+    await expect(store.highestSeq(threadId)).resolves.toBe(2)
+    expect(secondScan).not.toHaveBeenCalled()
+    secondScan.mockRestore()
   })
 })

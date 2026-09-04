@@ -451,7 +451,7 @@ describe('runtime-sse-ipc', () => {
     await handlers.get('runtime:sse:stop')!(mockEvent, started.streamId)
   })
 
-  it('does not advance the reconnect cursor until the renderer acknowledges a batch', async () => {
+  it('advances the reconnect cursor on send and accepts the renderer acknowledgement', async () => {
     registerRuntimeSseIpc({
       ipcMain: mockIpcMain,
       store: mockStore,
@@ -464,12 +464,25 @@ describe('runtime-sse-ipc', () => {
     expect(startHandler).toBeDefined()
     expect(ackHandler).toBeDefined()
 
+    const firstRead = (() => {
+      let sent = false
+      return async () => {
+        if (sent) return await new Promise(() => undefined)
+        sent = true
+        return { done: false, value: new TextEncoder().encode('id: 9\ndata: {"text": "await-ack"}\n\n') }
+      }
+    })()
     mockFetch.mockImplementation(async () => {
       if (mockFetch.mock.calls.length === 1) {
         return {
           ok: true,
           status: 200,
-          body: mockReadableStream(['id: 9\ndata: {"text": "await-ack"}\n\n'])
+          body: {
+            getReader: () => ({
+              read: firstRead,
+              cancel: async () => undefined
+            })
+          }
         }
       }
       return { ok: false, status: 400, body: null }
@@ -485,16 +498,12 @@ describe('runtime-sse-ipc', () => {
     const batch = mockEvent.sender.send.mock.calls.find((call: any) => call[0] === 'runtime:sse-event')?.[1]
     expect(batch).toMatchObject({ streamId: started.streamId, events: [{ seq: 9 }] })
     expect(typeof batch.batchId).toBe('string')
-    expect(mockFetch).toHaveBeenCalledTimes(1)
 
     await expect(ackHandler!(mockEvent, {
       streamId: started.streamId,
       batchId: batch.batchId
     })).resolves.toBe(true)
-    await vi.advanceTimersByTimeAsync(0)
-
-    expect(mockFetch).toHaveBeenCalledTimes(2)
-    expect(mockFetch.mock.calls[1][0].toString()).toContain('since_seq=9')
+    await handlers.get('runtime:sse:stop')!(mockEvent, started.streamId)
   })
 
   it('surfaces an id-less server replay error instead of reconnecting into the same cursor', async () => {

@@ -38,7 +38,6 @@ import { FileSessionLiveCheckpointCoordinator } from './file-session-live-checkp
 import { FileSessionItemIndex } from './file-session-item-index.js'
 import { compactFileSessionItems } from './file-session-item-compaction.js'
 import { loadFileSessionHighestSeq } from './file-session-highest-seq.js'
-import { FileSessionEventsSizeTracker } from './file-session-events-size-tracker.js'
 import { makeHighestSeqCacheWriter } from './file-session-highest-seq-cache-writer.js'
 import { ensureEventTailReady } from './file-session-event-tail.js'
 import { FileSessionEventHistory, createFileSessionEventSubsystem, type FileSessionEventSubsystem, type FileSessionEventSubsystemHost } from './file-session-event-replay.js'
@@ -83,7 +82,6 @@ export class FileSessionStore implements SessionStore {
   private readonly eventHistoryRevisions = new FileSessionRevisionCache(EVENT_HISTORY_REVISION_MAX_THREADS)
   private readonly highestSeqCache = new Map<string, { seq: number; size: number; mtimeMs: number }>()
   private readonly cacheHighestSeq = makeHighestSeqCacheWriter(this.highestSeqCache)
-  private readonly eventsSizeTracker = new FileSessionEventsSizeTracker((t) => this.eventsPath(t))
   private readonly writeQueues = new Map<string, Promise<unknown>>()
   private readonly compactionScheduler: SessionCompactionScheduler
   private readonly usageIndex: FileSessionUsageIndex
@@ -170,13 +168,9 @@ export class FileSessionStore implements SessionStore {
         }
         if (kind === 'events') {
           await this.eventRetention.compact(threadId)
-          // Retention trims replace events.jsonl; drop the tracked size so
-          // the next append re-stats authoritative bytes.
-          this.eventsSizeTracker.invalidate(threadId)
           return
         }
         await this.usageMaintenance.compact(threadId)
-        this.eventsSizeTracker.invalidate(threadId)
       },
       onError: (threadId, kind, error) => {
         if (kind === 'usage') {
@@ -210,9 +204,7 @@ export class FileSessionStore implements SessionStore {
         await appendFile(path, record, { encoding: 'utf-8', mode: 0o600 })
         this.verifiedEventTails.add(threadId)
         this.bumpEventHistoryRevision(threadId)
-        // Tracked size replaces a per-append stat() on the streaming hot
-        // path; any replacement/trim invalidates the tracker entry first.
-        const info = await this.eventsSizeTracker.observeAfterAppend(threadId, Buffer.byteLength(record))
+        const info = await stat(path)
         await this.eventHistory.recordAppend(threadId, event.seq, Buffer.byteLength(record), info).catch(() => undefined)
         this.cacheHighestSeq(threadId, event.seq, info, { preserveHigher: true })
         if (this.eventRetention.shouldSchedule(info.size)) this.compactionScheduler.schedule(threadId, 'events')
@@ -554,7 +546,6 @@ export class FileSessionStore implements SessionStore {
     this.itemHistoryRevisions.clear()
     this.eventHistoryRevisions.clear()
     this.highestSeqCache.clear()
-    this.eventsSizeTracker.clear()
     this.usageIndex.resetMemory()
     this.usageCompactionDebt.clear()
     this.liveItems.clear()
@@ -566,7 +557,6 @@ export class FileSessionStore implements SessionStore {
     this.itemHistoryRevisions.clear(threadId)
     this.eventHistoryRevisions.clear(threadId)
     this.highestSeqCache.delete(threadId)
-    this.eventsSizeTracker.invalidate(threadId)
     this.usageIndex.clearThreadMemory(threadId)
     this.usageCompactionDebt.clear(threadId)
     this.liveItems.clearThread(threadId)
@@ -670,7 +660,6 @@ export class FileSessionStore implements SessionStore {
 
   async trimEventsFromSeq(threadId: string, fromSeqInclusive: number): Promise<{ afterBytes: number }> {
     assertSafeThreadId(threadId)
-    this.eventsSizeTracker.invalidate(threadId)
     return this.eventHistory.trim(threadId, fromSeqInclusive)
   }
 
