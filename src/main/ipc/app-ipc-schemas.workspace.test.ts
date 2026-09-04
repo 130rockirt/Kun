@@ -14,6 +14,7 @@ import {
   shellOpenExternalUrlSchema,
   sseAckPayloadSchema,
   sseStartPayloadSchema,
+  workspaceCreationTimesPayloadSchema,
   workspaceDirectoryCreatePayloadSchema,
   workspaceDirectoryTargetPayloadSchema,
   workspaceEntryDeletePayloadSchema,
@@ -283,5 +284,18 @@ describe('app-ipc-schemas workspace and system', () => {
     })).toMatchObject({
       fileName: 'architecture-a1b2c3.png'
     })
+  })
+
+  it('validates workspace creation time payloads', () => {
+    expect(workspaceCreationTimesPayloadSchema.parse({
+      workspaceRoots: ['D:/kun', '/tmp/project']
+    })).toEqual({ workspaceRoots: ['D:/kun', '/tmp/project'] })
+    expect(() =>
+      workspaceCreationTimesPayloadSchema.parse({ workspaceRoots: ['/tmp/a'], extra: true })
+    ).toThrow()
+    expect(() => workspaceCreationTimesPayloadSchema.parse({ workspaceRoots: [42] })).toThrow()
+    expect(() =>
+      workspaceCreationTimesPayloadSchema.parse({ workspaceRoots: Array.from({ length: 257 }, () => '/tmp/a') })
+    ).toThrow()
   })
 })

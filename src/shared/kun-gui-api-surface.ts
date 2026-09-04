@@ -252,6 +252,7 @@ import {
   UiPluginThemeActivateIpcResult,
   UiPluginThemeDeactivateIpcResult,
   UpstreamModelsResult,
+  WorkspaceCreationTimeEntry,
   WorkspacePickResult
 } from './kun-gui-api-contracts'
 export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & ProviderAuthApi & RuntimeRequestIpcApi & {
@@ -479,6 +480,7 @@ export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & ProviderAuthApi & Runti
   ) => Promise<KunProjectConfigFileResult>
   openKunProjectConfigDir: (workspaceRoot: string) => Promise<PathOpenResult>
   getGitBranches: (workspaceRoot: string) => Promise<GitBranchesResult>
+  getWorkspaceCreationTimes: (workspaceRoots: string[]) => Promise<WorkspaceCreationTimeEntry[]>
   switchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
   createAndSwitchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
   createGitCheckpoint: (params: {

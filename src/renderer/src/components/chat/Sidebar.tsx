@@ -25,6 +25,7 @@ import type { ClawImDialogMode, ClawInstallTarget } from './SidebarClawDialogHel
 import { ClawAddImDialog } from './SidebarClawDialog'
 import { ConnectPhoneSidebarPanel } from './ConnectPhoneView'
 import { SidebarProjectsSection } from './SidebarProjectsSection'
+import { registerSidebarDragAutoScroll } from './sidebar-drag-auto-scroll'
 import { SidebarConversationsSection } from './SidebarConversationsSection'
 import { SidebarProjectBoardsSection } from './SidebarProjectBoardsSection'
 import { useProjectBoardEnabled } from '../../project-board/use-project-board-enabled'
@@ -120,6 +121,10 @@ export function Sidebar({
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
     return () => observer.disconnect()
   }, [])
+
+  // HTML5 drag does not scroll containers; without this, dragged sidebar rows
+  // cannot reach projects above or below the visible window.
+  useEffect(() => registerSidebarDragAutoScroll(document), [])
 
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const conversationWorkspaceRoot = useChatStore((s) => s.conversationWorkspaceRoot)

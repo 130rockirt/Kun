@@ -244,7 +244,7 @@ export function SidebarProjectsContent(props: SidebarProjectsContentProps): Reac
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2 pt-0.5">
+      <div data-kun-drag-scroll className="min-h-0 flex-1 overflow-y-auto px-1 pb-2 pt-0.5">
         {displayGroups.length === 0 ? (
           threadListStatus === 'error' ? (
             <div className="mx-2 mt-2 rounded-lg px-2 py-2">
