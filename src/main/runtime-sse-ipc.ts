@@ -207,8 +207,14 @@ export function registerRuntimeSseIpc(options: {
       controller: ac,
       owner: wc,
       stoppedByClient: false,
-      ackWindow: new SseAckWindow()
+      ackWindow: undefined as unknown as SseAckWindow
     }
+    state.ackWindow = new SseAckWindow(undefined, undefined, Date.now, () => {
+      // A single unacknowledged batch is fatal even when the window is not
+      // full. Abort the subscription; the renderer's recovery path can
+      // resubscribe from its durable snapshot cursor.
+      ac.abort()
+    })
     sseControllers.set(id, state)
     const acknowledgedBatches = request.acknowledgedBatches === true
 
@@ -420,7 +426,14 @@ export function registerRuntimeSseIpc(options: {
               }
             }
           } catch (e) {
-            if (state.stoppedByClient || ac.signal.aborted) return
+            if (state.stoppedByClient) return
+            if (ac.signal.aborted) {
+              // Watchdog timeouts abort the subscription; do not convert that
+              // teardown into an immediate in-process reconnect loop. The
+              // renderer's existing SSE recovery path can resubscribe from its
+              // durable snapshot cursor.
+              return
+            }
             const msg = e instanceof Error ? e.message : String(e)
             if (isTransientSseErrorMessage(msg)) {
               await sleepWithAbort(reconnectDelayMs, ac.signal)

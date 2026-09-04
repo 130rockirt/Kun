@@ -81,6 +81,63 @@ describe('SseAckWindow', () => {
     }
   })
 
+  it('notifies the stream owner on timeout even when the window is not full', async () => {
+    vi.useFakeTimers()
+    try {
+      const onTimeout = vi.fn()
+      const window = new SseAckWindow(4, 100, Date.now, onTimeout)
+      const controller = new AbortController()
+      window.registerSentBatch({ batchId: 'single', eventCount: 1, signal: controller.signal })
+      vi.advanceTimersByTime(100)
+      expect(onTimeout).toHaveBeenCalledTimes(1)
+      expect(onTimeout).toHaveBeenCalledWith('single')
+      expect(window.getStats().timedOutBatches).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('removes the shared abort listener after acknowledgement and rejectAll', async () => {
+    const window = new SseAckWindow()
+    const controller = new AbortController()
+    const signal = controller.signal
+    const addSpy = vi.spyOn(signal, 'addEventListener')
+    const removeSpy = vi.spyOn(signal, 'removeEventListener')
+
+    window.registerSentBatch({ batchId: 'acked', eventCount: 1, signal })
+    window.registerSentBatch({ batchId: 'rejected-1', eventCount: 1, signal })
+    window.registerSentBatch({ batchId: 'rejected-2', eventCount: 1, signal })
+    expect(addSpy).toHaveBeenCalledTimes(3)
+
+    expect(window.acknowledge('acked')).toBe(true)
+    expect(removeSpy).toHaveBeenCalledTimes(1)
+    expect(removeSpy.mock.calls[0]?.[0]).toBe('abort')
+
+    window.rejectAll()
+    expect(removeSpy).toHaveBeenCalledTimes(3)
+    expect(removeSpy.mock.calls.map((call) => call[0])).toEqual(['abort', 'abort', 'abort'])
+  })
+
+  it('bounds retained metric samples across long-lived subscriptions', async () => {
+    let clock = 0
+    const window = new SseAckWindow(4, 1_000, () => clock)
+    const controller = new AbortController()
+    for (let i = 0; i < 1_200; i += 1) {
+      await window.waitForCapacity(controller.signal)
+      window.registerSentBatch({ batchId: `batch-${i}`, eventCount: 1, signal: controller.signal })
+      clock += 1
+      expect(window.acknowledge(`batch-${i}`)).toBe(true)
+    }
+    const stats = window.getStats()
+    expect(stats.sentBatches).toBe(1_200)
+    expect(stats.ackedBatches).toBe(1_200)
+    expect(stats.ackLatenciesMs).toHaveLength(1_000)
+    expect(stats.batchSizes).toHaveLength(1_000)
+    expect(stats.batchSentAtMs).toHaveLength(1_000)
+    expect(stats.ackLatenciesMs[0]).toBe(1)
+    expect(stats.batchSentAtMs.at(-1)).toBe(1_199)
+  })
+
   it('rejectAll settles every in-flight batch as unacknowledged', async () => {
     const window = new SseAckWindow()
     const controller = new AbortController()

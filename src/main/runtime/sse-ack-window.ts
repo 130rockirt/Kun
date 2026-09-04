@@ -17,6 +17,7 @@
 
 export const MAX_INFLIGHT_SSE_BATCHES = 4
 export const SSE_ACK_TIMEOUT_MS = 15_000
+const MAX_RETAINED_BATCH_SAMPLES = 1_000
 
 type InflightBatch = {
   batchId: string
@@ -24,6 +25,8 @@ type InflightBatch = {
   eventCount: number
   settled: boolean
   timer: NodeJS.Timeout
+  signal: AbortSignal
+  onAbort: () => void
   resolvers: Set<(acknowledged: boolean) => void>
 }
 
@@ -36,7 +39,7 @@ export type SseAckWindowStats = {
   ackLatenciesMs: number[]
   /** Event counts per flushed batch, in flush order. */
   batchSizes: number[]
-  /** Send timestamps (ms) per flushed batch, bounded to the last 1000. */
+  /** Send timestamps (ms) per flushed batch, bounded to recent samples. */
   batchSentAtMs: number[]
 }
 
@@ -55,7 +58,8 @@ export class SseAckWindow {
   constructor(
     private readonly maxInflight: number = MAX_INFLIGHT_SSE_BATCHES,
     private readonly ackTimeoutMs: number = SSE_ACK_TIMEOUT_MS,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly onTimeout: (batchId: string) => void = () => undefined
   ) {}
 
   get inflightCount(): number {
@@ -74,7 +78,8 @@ export class SseAckWindow {
 
   /**
    * Awaits a free window slot before the caller sends its next batch.
-   * Resolves `false` when the stream aborted so the caller stops reading.
+   * Resolves `false` when the stream aborted or a watched batch timed out so
+   * the caller stops reading.
    */
   async waitForCapacity(signal: AbortSignal): Promise<boolean> {
     while (this.inflight.size >= this.maxInflight) {
@@ -92,10 +97,9 @@ export class SseAckWindow {
 
   /**
    * Registers an already-sent batch and starts its per-batch ACK watchdog.
-   * A timeout settles the batch as unacknowledged, which resolves pending
-   * capacity waiters with `false` so the caller raises the same transient
-   * `sse renderer acknowledgement timeout` error the stop-and-wait design
-   * produced; the stream then reconnects and replays durable events.
+   * A timeout settles the batch as unacknowledged and notifies the stream
+   * owner; the owner aborts the current fetch/read so the existing transient
+   * error handling can reconnect and replay durable events.
    */
   registerSentBatch(options: {
     batchId: string
@@ -104,9 +108,8 @@ export class SseAckWindow {
   }): void {
     const { batchId, eventCount, signal } = options
     this.stats.sentBatches += 1
-    this.stats.batchSizes.push(eventCount)
-    this.stats.batchSentAtMs.push(this.now())
-    if (this.stats.batchSentAtMs.length > 1_000) this.stats.batchSentAtMs.shift()
+    this.pushBounded(this.stats.batchSizes, eventCount)
+    this.pushBounded(this.stats.batchSentAtMs, this.now())
     const batch: InflightBatch = {
       batchId,
       sentAt: this.now(),
@@ -115,10 +118,16 @@ export class SseAckWindow {
       timer: setTimeout(() => {
         this.stats.timedOutBatches += 1
         this.settle(batch, false)
+        // Timeouts are fatal for this subscription even when the window is
+        // not full; otherwise a frozen renderer would receive later events.
+        this.onTimeout(batchId)
       }, this.ackTimeoutMs),
+      signal,
+      onAbort: () => undefined,
       resolvers: new Set()
     }
-    signal.addEventListener('abort', () => this.settle(batch, false), { once: true })
+    batch.onAbort = () => this.settle(batch, false)
+    signal.addEventListener('abort', batch.onAbort, { once: true })
     this.inflight.set(batchId, batch)
   }
 
@@ -144,12 +153,21 @@ export class SseAckWindow {
     if (batch.settled) return
     batch.settled = true
     clearTimeout(batch.timer)
+    batch.signal.removeEventListener('abort', batch.onAbort)
     this.inflight.delete(batch.batchId)
     if (acknowledged) {
       this.stats.ackedBatches += 1
-      this.stats.ackLatenciesMs.push(Math.max(0, this.now() - batch.sentAt))
+      this.pushBounded(
+        this.stats.ackLatenciesMs,
+        Math.max(0, this.now() - batch.sentAt)
+      )
     }
     for (const resolve of batch.resolvers) resolve(acknowledged)
     batch.resolvers.clear()
+  }
+
+  private pushBounded<T>(values: T[], value: T): void {
+    values.push(value)
+    if (values.length > MAX_RETAINED_BATCH_SAMPLES) values.shift()
   }
 }
