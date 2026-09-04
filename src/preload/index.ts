@@ -461,6 +461,14 @@ const api = {
     }),
   runDesktopCommand: (command) =>
     ipcRenderer.invoke('desktop:command', command),
+  onWindowMiniMode: (handler) => {
+    const wrapped = (
+      _: Electron.IpcRendererEvent,
+      payload: Parameters<typeof handler>[0]
+    ) => handler(payload)
+    ipcRenderer.on('window:mini-mode', wrapped)
+    return () => ipcRenderer.removeListener('window:mini-mode', wrapped)
+  },
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
   getComputerUsePermissions: () => ipcRenderer.invoke('computer-use:permissions'),
   requestComputerUsePermission: (kind) =>

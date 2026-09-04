@@ -1,8 +1,10 @@
 import {
   app,
   dialog,
+  screen,
   type BrowserWindow,
   type IpcMainInvokeEvent,
+  type Rectangle,
   type WebContents
 } from 'electron'
 import {
@@ -274,6 +276,43 @@ export function sameProjectWorkspace(left: string, right: string): boolean {
   return normalize(left) === normalize(right)
 }
 
+const MINI_WINDOW_WIDTH = 380
+const MINI_WINDOW_HEIGHT = 480
+const MINI_WINDOW_MARGIN = 24
+
+// Bounds captured before entering mini mode so restoring puts the window back
+// exactly where the user left it. Keyed by window id because only the main
+// window participates today.
+const miniWindowSavedBounds = new Map<number, { bounds: Rectangle; maximized: boolean }>()
+
+export function toggleMiniWindowMode(mainWindow: BrowserWindow | null): boolean {
+  if (!mainWindow || mainWindow.isDestroyed()) return false
+  if (miniWindowSavedBounds.has(mainWindow.id)) {
+    const saved = miniWindowSavedBounds.get(mainWindow.id)
+    miniWindowSavedBounds.delete(mainWindow.id)
+    mainWindow.setAlwaysOnTop(false)
+    mainWindow.setMinimumSize(960, 640)
+    if (saved?.bounds) mainWindow.setBounds(saved.bounds)
+    if (saved?.maximized) mainWindow.maximize()
+    return false
+  }
+  miniWindowSavedBounds.set(mainWindow.id, {
+    bounds: mainWindow.getNormalBounds(),
+    maximized: mainWindow.isMaximized()
+  })
+  if (mainWindow.isMaximized()) mainWindow.unmaximize()
+  mainWindow.setMinimumSize(320, 240)
+  const area = screen.getDisplayMatching(mainWindow.getBounds()).workArea
+  mainWindow.setBounds({
+    width: MINI_WINDOW_WIDTH,
+    height: MINI_WINDOW_HEIGHT,
+    x: area.x + area.width - MINI_WINDOW_WIDTH - MINI_WINDOW_MARGIN,
+    y: area.y + area.height - MINI_WINDOW_HEIGHT - MINI_WINDOW_MARGIN
+  })
+  mainWindow.setAlwaysOnTop(true)
+  return true
+}
+
 export function runDesktopCommand(
   command: DesktopCommand,
   sender: WebContents,
@@ -327,6 +366,11 @@ export function runDesktopCommand(
         mainWindow.maximize()
       }
       return
+    case 'toggleMini': {
+      const mini = toggleMiniWindowMode(mainWindow)
+      if (contents && !contents.isDestroyed()) contents.send('window:mini-mode', mini)
+      return
+    }
     case 'close':
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close()
       return
