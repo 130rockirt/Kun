@@ -661,5 +661,6 @@
   "designCanvasConversationResize": "Drag to resize the panel",
   "designCanvasConversationRunning": "Conversation is running",
   "designCanvasConversationPanelLabel": "Design conversation: {{title}}",
-  "miniWindowRestore": "Restore window"
+  "miniWindowRestore": "Restore window",
+  "miniWindowDragHint": "Drag anywhere to move"
 }

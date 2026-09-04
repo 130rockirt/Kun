@@ -650,5 +650,6 @@
   "workflowEnableHint": "Когда этот поток включен, он срабатывает по своему расписанию/вебхуку/локальному API.",
   "workflowCallableShort": "AI-вызываемый",
   "workflowCallableHint": "Позвольте агенту режима кода запустить его напрямую через run_workflow.",
-  "miniWindowRestore": "Восстановить окно"
+  "miniWindowRestore": "Восстановить окно",
+  "miniWindowDragHint": "Перетащите, чтобы переместить"
 }

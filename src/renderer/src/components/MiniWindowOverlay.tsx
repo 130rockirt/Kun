@@ -15,8 +15,9 @@ function ExpandIcon(): ReactElement {
   )
 }
 
-// Hover overlay shown while the window is in mini-pane mode. Clicking it (or
-// the title-bar mini button) toggles back to the normal window size.
+// Hover overlay shown while the window is in mini-pane mode. The dimmed layer
+// itself is a window drag region so the pane can be moved freely; clicking
+// the expand badge (or the title-bar mini button) restores the normal size.
 export function MiniWindowOverlay(): ReactElement {
   const { t } = useTranslation('common')
   const restore = (): void => {
@@ -25,17 +26,20 @@ export function MiniWindowOverlay(): ReactElement {
     }
   }
   return (
-    <button
-      type="button"
-      className="ds-mini-restore ds-no-drag"
-      aria-label={t('miniWindowRestore')}
-      title={t('miniWindowRestore')}
-      onClick={restore}
-    >
-      <span className="ds-mini-restore-badge">
-        <ExpandIcon />
-        <span>{t('miniWindowRestore')}</span>
-      </span>
-    </button>
+    <div className="ds-mini-restore">
+      <div className="ds-mini-restore-controls">
+        <button
+          type="button"
+          className="ds-mini-restore-badge"
+          aria-label={t('miniWindowRestore')}
+          title={t('miniWindowRestore')}
+          onClick={restore}
+        >
+          <ExpandIcon />
+          <span>{t('miniWindowRestore')}</span>
+        </button>
+        <span className="ds-mini-restore-hint">{t('miniWindowDragHint')}</span>
+      </div>
+    </div>
   )
 }

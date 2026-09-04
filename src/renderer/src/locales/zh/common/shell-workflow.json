@@ -661,5 +661,6 @@
   "designCanvasConversationResize": "拖动调整面板大小",
   "designCanvasConversationRunning": "会话正在运行",
   "designCanvasConversationPanelLabel": "设计会话：{{title}}",
-  "miniWindowRestore": "恢复窗口"
+  "miniWindowRestore": "恢复窗口",
+  "miniWindowDragHint": "按住空白处拖动可移动位置"
 }

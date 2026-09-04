@@ -650,5 +650,6 @@
   "workflowEnableHint": "เมื่อเปิด โฟลว์นี้จะเริ่มทำงานตามกำหนดเวลา / webhook / API ภายในเครื่อง",
   "workflowCallableShort": "สามารถเรียก AI ได้",
   "workflowCallableHint": "ปล่อยให้เอเจนต์โหมดโค้ดรันโดยตรงผ่าน run_workflow",
-  "miniWindowRestore": "คืนขนาดหน้าต่าง"
+  "miniWindowRestore": "คืนขนาดหน้าต่าง",
+  "miniWindowDragHint": "ลากเพื่อย้ายตำแหน่ง"
 }
