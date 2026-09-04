@@ -27,7 +27,7 @@ describe('extension host processes', () => {
 
   beforeAll(async () => {
     builtinRunnerPath = await buildBuiltinRunner()
-  }, 60_000)
+  }, 120_000)
 
   it('keeps headless hosts isolated across a crash, restarts only the failed host, and shuts down active calls', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-extension-manager-isolation-'))

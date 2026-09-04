@@ -182,6 +182,39 @@ describe('standalone TUI self-update', () => {
     30_000
   )
 
+  it.skipIf(process.platform === 'win32')(
+    'fails closed before mutating a legacy install when a newer version reuses its build id',
+    async () => {
+      const target = standaloneTuiTarget()!
+      const currentRoot = await standaloneRoot(release({ target }))
+      const archive = await updateArchive(dirname(currentRoot), target, BUILD_ID)
+      const bytes = await readFile(archive)
+      const next = { ...latest(), buildId: BUILD_ID }
+      const selected = next.artifacts.find((artifact) => artifact.target === target)!
+      selected.size = bytes.length
+      selected.sha256 = createHash('sha256').update(bytes).digest('hex')
+      let stdout = ''
+      let stderr = ''
+
+      const code = await runSelfUpdateCommand(['--yes'], {
+        stdout: { write: (chunk) => { stdout += chunk } },
+        stderr: { write: (chunk) => { stderr += chunk } },
+        env: { KUN_STANDALONE_ROOT: currentRoot },
+        fetch: async (url) => String(url).endsWith('latest-tui.json')
+          ? Response.json(next)
+          : new Response(bytes)
+      })
+
+      expect(code).toBe(70)
+      expect(stdout).not.toContain('installed')
+      expect(stderr).toContain('reuses buildId')
+      expect(JSON.parse(await readFile(join(currentRoot, 'release.json'), 'utf8')))
+        .toMatchObject({ version: '1.2.3', buildId: BUILD_ID })
+      await expect(stat(join(currentRoot, 'current'))).rejects.toMatchObject({ code: 'ENOENT' })
+    },
+    30_000
+  )
+
   it('reports a recorded pending-update result before checking for updates', async () => {
     const root = await standaloneRoot(release())
     const transactionDir = join(dirname(root), '.kun.kun-tui-update')
@@ -396,9 +429,13 @@ async function standaloneRoot(metadata: StandaloneTuiReleaseMetadata): Promise<s
   return root
 }
 
-async function updateArchive(parent: string, target: string): Promise<string> {
+async function updateArchive(
+  parent: string,
+  target: string,
+  buildId = NEW_BUILD_ID
+): Promise<string> {
   const stage = join(parent, 'next')
-  const root = join(stage, 'kun', 'releases', NEW_BUILD_ID)
+  const root = join(stage, 'kun', 'releases', buildId)
   const node = join(root, 'runtime', 'node')
   const entry = join(root, 'app', 'kun', 'dist', 'cli', 'serve-entry.js')
   await mkdir(join(entry, '..'), { recursive: true })
@@ -417,7 +454,7 @@ async function updateArchive(parent: string, target: string): Promise<string> {
       artifactVersion: '1.2.4',
       tag: 'v1.2.4',
       target,
-      buildId: NEW_BUILD_ID,
+      buildId,
       commit: COMMIT
     }))}\n`,
     'utf8'

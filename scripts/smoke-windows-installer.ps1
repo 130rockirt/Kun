@@ -95,7 +95,11 @@ try {
     'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
     'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
   ) | ForEach-Object { Get-ChildItem $_ -ErrorAction SilentlyContinue } | Where-Object {
-    (Get-ItemPropertyValue -LiteralPath $_.PSPath -Name DisplayName -ErrorAction SilentlyContinue) -in @('Kun', 'DeepSeek GUI')
+    try {
+      (Get-ItemPropertyValue -LiteralPath $_.PSPath -Name DisplayName -ErrorAction Stop) -in @('Kun', 'DeepSeek GUI')
+    } catch {
+      $false
+    }
   })
   Assert-True ($existingKun.Count -eq 0) 'The smoke requires a clean Kun/DeepSeek GUI installation.'
 

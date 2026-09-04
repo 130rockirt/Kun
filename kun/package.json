@@ -89,7 +89,7 @@
     "@kun/extension-api": "file:../packages/extension-api",
     "@kun/provider-catalog": "file:../packages/provider-catalog",
     "@modelcontextprotocol/client": "^2.0.0",
-    "@xmldom/xmldom": "^0.9.10",
+    "@xmldom/xmldom": "^0.9.12",
     "ajv": "^8.20.0",
     "better-sqlite3": "^12.10.0",
     "create-kun-extension": "file:../packages/create-kun-extension",
@@ -119,9 +119,10 @@
   },
   "overrides": {
     "@hono/node-server": "2.0.11",
-    "fast-uri": "3.1.5",
+    "fast-uri": "3.1.6",
     "hono": "4.13.0",
     "ip-address": "10.4.0",
+    "qs": "6.16.0",
     "@connectrpc/connect-node": {
       "undici": "6.28.0"
     }

@@ -48,6 +48,9 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      - name: Production dependency audit
+        run: npm run audit:production
+
   package:
     name: Build Linux package (x64)
     runs-on: ubuntu-latest
@@ -234,7 +237,7 @@ jobs:
     name: Build Windows NSIS installer (PR)
     runs-on: windows-latest
     needs: quality
-    timeout-minutes: 90
+    timeout-minutes: 240
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:

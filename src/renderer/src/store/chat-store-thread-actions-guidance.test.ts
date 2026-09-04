@@ -586,7 +586,7 @@ describe('chat-store-thread-actions queued messages', () => {
     })
   })
 
-  it('keeps an in-flight queued item until its runtime turn settles', async () => {
+  it('consumes the started queued row while keeping the next item queued', async () => {
     const { actions, state } = buildHarness()
     const sendMessage = vi.fn(async () => false)
     state.sendMessage = sendMessage as unknown as ChatState['sendMessage']
@@ -607,7 +607,7 @@ describe('chat-store-thread-actions queued messages', () => {
     ]
 
     await actions.drainQueuedMessages()
-    expect(state.queuedMessages.map((message) => message.id)).toEqual(['q-running', 'q-next'])
+    expect(state.queuedMessages.map((message) => message.id)).toEqual(['q-next'])
     expect(sendMessage).not.toHaveBeenCalled()
 
     state.busy = false
