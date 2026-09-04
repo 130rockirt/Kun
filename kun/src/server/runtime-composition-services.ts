@@ -319,19 +319,23 @@ export async function createRuntimeServices(
 	  let imageGenProviders = buildImageGenToolProviders(core.activeOptions.capabilities?.imageGen, {
 	    attachmentStore,
 	    nowIso,
-	    resolveCredential: resolveCapabilityProviderCredential
+	    resolveCredential: resolveCapabilityProviderCredential,
+	    proxyUrl: core.activeOptions.modelProxyUrl
 	  })
 	  let speechGenProviders = buildSpeechGenToolProviders(core.activeOptions.capabilities?.speechGen, {
 	    nowIso,
-	    resolveCredential: resolveCapabilityProviderCredential
+	    resolveCredential: resolveCapabilityProviderCredential,
+	    proxyUrl: core.activeOptions.modelProxyUrl
 	  })
 	  let musicGenProviders = buildMusicGenToolProviders(core.activeOptions.capabilities?.musicGen, {
 	    nowIso,
-	    resolveCredential: resolveCapabilityProviderCredential
+	    resolveCredential: resolveCapabilityProviderCredential,
+	    proxyUrl: core.activeOptions.modelProxyUrl
 	  })
 	  let videoGenProviders = buildVideoGenToolProviders(core.activeOptions.capabilities?.videoGen, {
 	    nowIso,
-	    resolveCredential: resolveCapabilityProviderCredential
+	    resolveCredential: resolveCapabilityProviderCredential,
+	    proxyUrl: core.activeOptions.modelProxyUrl
 	  })
 	  let computerUseProviders = await buildComputerUseToolProviders(core.activeOptions.capabilities?.computerUse)
 	  let browserUseProviders = buildBrowserUseToolProviders(core.activeOptions.capabilities?.browserUse)

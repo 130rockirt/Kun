@@ -310,19 +310,19 @@ export function createRuntimeConfigController(
 	    const nextImageGenProviders = buildImageGenToolProviders(nextOptions.capabilities?.imageGen, {
 	      attachmentStore: nextAttachmentStore,
 	      nowIso,
-	      resolveCredential: resolveCapabilityProviderCredential
+	      resolveCredential: resolveCapabilityProviderCredential, proxyUrl: nextOptions.modelProxyUrl
 	    })
 	    const nextSpeechGenProviders = buildSpeechGenToolProviders(nextOptions.capabilities?.speechGen, {
 	      nowIso,
-	      resolveCredential: resolveCapabilityProviderCredential
+	      resolveCredential: resolveCapabilityProviderCredential, proxyUrl: nextOptions.modelProxyUrl
 	    })
 	    const nextMusicGenProviders = buildMusicGenToolProviders(nextOptions.capabilities?.musicGen, {
 	      nowIso,
-	      resolveCredential: resolveCapabilityProviderCredential
+	      resolveCredential: resolveCapabilityProviderCredential, proxyUrl: nextOptions.modelProxyUrl
 	    })
 	    const nextVideoGenProviders = buildVideoGenToolProviders(nextOptions.capabilities?.videoGen, {
 	      nowIso,
-	      resolveCredential: resolveCapabilityProviderCredential
+	      resolveCredential: resolveCapabilityProviderCredential, proxyUrl: nextOptions.modelProxyUrl
 	    })
 	    const nextComputerUseProviders = await buildComputerUseToolProviders(nextOptions.capabilities?.computerUse)
 	    const nextBrowserUseProviders = buildBrowserUseToolProviders(nextOptions.capabilities?.browserUse)
