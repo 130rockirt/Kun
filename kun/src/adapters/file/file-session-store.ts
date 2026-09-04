@@ -39,11 +39,12 @@ import { FileSessionItemIndex } from './file-session-item-index.js'
 import { compactFileSessionItems } from './file-session-item-compaction.js'
 import { loadFileSessionHighestSeq } from './file-session-highest-seq.js'
 import { FileSessionEventsSizeTracker } from './file-session-events-size-tracker.js'
+import { makeHighestSeqCacheWriter } from './file-session-highest-seq-cache-writer.js'
 import { ensureEventTailReady } from './file-session-event-tail.js'
 import { FileSessionEventHistory, createFileSessionEventSubsystem, type FileSessionEventSubsystem, type FileSessionEventSubsystemHost } from './file-session-event-replay.js'
 import { FileSessionEventRetention } from './file-session-event-retention.js'
 import { UsageCompactionDebtTracker } from './file-session-usage-debt.js'
-import { loadCursorCheckpoint, persistCursorCheckpointEvent, updateHighestSeqCache } from './file-session-cursor-checkpoint.js'
+import { loadCursorCheckpoint, persistCursorCheckpointEvent } from './file-session-cursor-checkpoint.js'
 import { FileSessionRevisionCache } from './file-session-revision-cache.js'
 export { DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES, readLatestItemsFromJsonl } from './file-session-jsonl.js'
 const DEFAULT_USAGE_EVENT_COMPACTION_MAX_BYTES = 5 * 1024 * 1024
@@ -62,7 +63,6 @@ const DEFAULT_ITEMS_CACHE_MAX_BYTES = 16 * 1024 * 1024
 const DEFAULT_ITEM_HISTORY_COMPACTION_MIN_BYTES = 4 * 1024 * 1024
 // Keep lock-free content-search reads well below the compaction threshold.
 const DEFAULT_ITEM_TEXT_SEARCH_MAX_BYTES = 512 * 1024
-const HIGHEST_SEQ_CACHE_MAX_THREADS = 256
 const ITEM_HISTORY_REVISION_MAX_THREADS = 512
 const EVENT_HISTORY_REVISION_MAX_THREADS = 512
 
@@ -82,9 +82,8 @@ export class FileSessionStore implements SessionStore {
   private readonly itemHistoryRevisions = new FileSessionRevisionCache(ITEM_HISTORY_REVISION_MAX_THREADS)
   private readonly eventHistoryRevisions = new FileSessionRevisionCache(EVENT_HISTORY_REVISION_MAX_THREADS)
   private readonly highestSeqCache = new Map<string, { seq: number; size: number; mtimeMs: number }>()
-  private readonly eventsSizeTracker = new FileSessionEventsSizeTracker(
-    (threadId) => this.eventsPath(threadId)
-  )
+  private readonly cacheHighestSeq = makeHighestSeqCacheWriter(this.highestSeqCache)
+  private readonly eventsSizeTracker = new FileSessionEventsSizeTracker((t) => this.eventsPath(t))
   private readonly writeQueues = new Map<string, Promise<unknown>>()
   private readonly compactionScheduler: SessionCompactionScheduler
   private readonly usageIndex: FileSessionUsageIndex
@@ -600,19 +599,6 @@ export class FileSessionStore implements SessionStore {
 
   private cacheItems(threadId: string, items: TurnItem[]): void {
     this.itemsCache.set(threadId, items)
-  }
-
-  private cacheHighestSeq(
-    threadId: string,
-    seq: number,
-    info: { size: number; mtimeMs: number },
-    options: { preserveHigher?: boolean } = {}
-  ): void {
-    updateHighestSeqCache({
-      cache: this.highestSeqCache, threadId, seq, info,
-      maxThreads: HIGHEST_SEQ_CACHE_MAX_THREADS,
-      ...(options.preserveHigher ? { preserveHigher: true } : {})
-    })
   }
 
   async archiveItems(input: SessionArchiveInput): Promise<SessionArchiveResult> {
