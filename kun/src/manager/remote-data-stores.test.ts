@@ -292,6 +292,29 @@ describe('ManagerRemoteThreadStore legacy read compatibility', () => {
     })
   })
 
+  it('preserves thread-index progress returned by manager listPage', async () => {
+    stubManagerResult({
+      threads: [],
+      hasMore: false,
+      indexStatus: {
+        status: 'running',
+        indexed: 12,
+        total: 40
+      }
+    })
+    const store = new ManagerRemoteThreadStore(managerConnection())
+
+    await expect(store.listPage()).resolves.toEqual({
+      threads: [],
+      hasMore: false,
+      indexStatus: {
+        status: 'running',
+        indexed: 12,
+        total: 40
+      }
+    })
+  })
+
   it('preserves a half-bound plan-build thread on full and metadata reads', async () => {
     const thread = legacyHalfBoundThread()
     stubManagerResult(thread)

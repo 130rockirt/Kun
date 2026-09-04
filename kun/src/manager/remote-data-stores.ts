@@ -36,6 +36,7 @@ import {
   ThreadSummarySchema,
   type ThreadRecord
 } from '../contracts/threads.js'
+import { ThreadIndexStatusInfoSchema } from '../contracts/thread-index-status.js'
 import type { AgentSession } from '../domain/session.js'
 import type { MemoryAccess, MemoryListFilter, MemoryStore } from '../memory/memory-store.js'
 import type { MemoryRetrieveRequest } from '../memory/memory-retrieval.js'
@@ -112,7 +113,8 @@ const ThreadStoreListPageSchema: z.ZodType<ThreadStoreListPage> = z.object({
   threads: z.array(ThreadSummarySchema),
   nextCursor: z.string().optional(),
   hasMore: z.boolean(),
-  total: z.number().int().nonnegative().optional()
+  total: z.number().int().nonnegative().optional(),
+  indexStatus: ThreadIndexStatusInfoSchema.optional()
 }).strict()
 const UsageRecordSchema = z.object({
   threadId: z.string(),
