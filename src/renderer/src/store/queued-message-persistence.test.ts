@@ -217,6 +217,48 @@ describe('queued-message-persistence', () => {
     expect(reconcileQueuedMessages(paused, { busy: true, turnId: 'turn-live' })).toEqual(paused)
   })
 
+  it('keeps the server turn identity for runtime-owned paused rows', () => {
+    const runtimeOwned = [{
+      id: 'q-owned',
+      text: 'admitted then interrupted',
+      deliveryState: 'paused' as const,
+      deliveryTurnId: 'turn-1',
+      deliveryUserMessageItemId: 'item-1',
+      clientRequestId: 'req-1'
+    }]
+    expect(reconcileQueuedMessages(runtimeOwned, { busy: false, turnId: null }))
+      .toEqual(runtimeOwned)
+    expect(reconcileQueuedMessages(runtimeOwned, { busy: true, turnId: 'turn-live' }))
+      .toEqual(runtimeOwned)
+
+    const localOnly = [{
+      id: 'q-local',
+      text: 'never admitted',
+      deliveryState: 'paused' as const,
+      deliveryTurnId: 'turn-stale',
+      deliveryUserMessageItemId: 'item-stale'
+    }]
+    expect(reconcileQueuedMessages(localOnly, { busy: false, turnId: null })).toEqual([{ 
+      id: 'q-local',
+      text: 'never admitted',
+      deliveryState: 'paused'
+    }])
+  })
+
+  it('pauses interrupted rows while preserving runtime ownership markers', async () => {
+    const { pauseQueuedMessagesForInterrupt } = await import('./queued-message-persistence')
+    const input = [
+      { id: 'q-admitted', text: 'one', deliveryState: 'in_flight' as const, deliveryTurnId: 'turn-1', clientRequestId: 'req-1' },
+      { id: 'q-local', text: 'two', deliveryState: 'pending' as const, deliveryTurnId: 'turn-stale' },
+      { id: 'q-failed', text: 'three', deliveryState: 'failed' as const }
+    ]
+    expect(pauseQueuedMessagesForInterrupt(input)).toEqual([
+      { id: 'q-admitted', text: 'one', deliveryState: 'paused', deliveryTurnId: 'turn-1', clientRequestId: 'req-1' },
+      { id: 'q-local', text: 'two', deliveryState: 'paused' },
+      { id: 'q-failed', text: 'three', deliveryState: 'failed' }
+    ])
+  })
+
   it('does not treat paused messages as automatically sendable', async () => {
     const { isPendingQueuedMessage } = await import('./queued-message-persistence')
     expect(isPendingQueuedMessage({ id: 'q-paused', text: 'send later', deliveryState: 'paused' })).toBe(false)

@@ -209,6 +209,8 @@ export type StoreActionContext = {
 export const threadActionSharedState = {
   drainingQueuedMessageThreadIds: new Set<string>(),
   guidingQueuedMessageIds: new Set<string>(),
+  /** Queued-message ids removed/restored mid-drain; the drain loop cancels any turn admitted for them. */
+  removedQueuedMessageIds: new Set<string>(),
   expandedHistoryThreadIds: new Set<string>(),
   checkpointGitAvailability: new GitCheckpointAvailabilityCache()
 }

@@ -123,7 +123,10 @@ function visibleQueue(messages: QueuedComposerMessage[]): QueuedComposerMessage[
     !message.deliveryState ||
     message.deliveryState === 'pending' ||
     message.deliveryState === 'paused' ||
-    message.deliveryState === 'failed'
+    message.deliveryState === 'failed' ||
+    // Admitted to the durable runtime queue: visible so the user can still
+    // edit, remove, or reorder it while it waits for the running turn.
+    message.deliveryState === 'in_flight'
   ))
 }
 
@@ -313,6 +316,7 @@ export function FloatingComposerQueuedMessages({
             const isBusy = busy?.id === message.id
             const paused = message.deliveryState === 'paused'
             const failed = message.deliveryState === 'failed'
+            const inFlight = message.deliveryState === 'in_flight'
             const recoverable = paused || failed
             const imageCount = attachmentImageCount(message)
             const imageNames = imageCount > 0 ? attachmentImageNames(message) : ''
@@ -419,6 +423,11 @@ export function FloatingComposerQueuedMessages({
                 {paused ? (
                   <span className={`${css.status} ${css.paused}`}>
                     {t('queuedMessagePaused')}
+                  </span>
+                ) : null}
+                {inFlight ? (
+                  <span className={`${css.status} ${css.queued}`}>
+                    {t('queuedMessageInFlight')}
                   </span>
                 ) : null}
                 {failed ? (

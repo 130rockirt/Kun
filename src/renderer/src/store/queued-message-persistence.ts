@@ -301,6 +301,29 @@ export function isPendingQueuedMessage(message: QueuedUserMessage): boolean {
 }
 
 /**
+ * Pause every undelivered queued message after an interrupt. Runtime-owned
+ * entries (marked by clientRequestId) keep their server-side turn identity so
+ * remove/restore can still cancel the durable queued turn; purely local rows
+ * drop their delivery markers as before.
+ */
+export function pauseQueuedMessagesForInterrupt(
+  messages: readonly QueuedUserMessage[]
+): QueuedUserMessage[] {
+  return messages.map((message) => {
+    if (message.deliveryState === 'in_flight') {
+      // Runtime-owned entry: keep its server turn identity so remove/restore
+      // can still cancel the durable queued turn behind it.
+      return { ...message, deliveryState: 'paused' as const }
+    }
+    if (message.deliveryState && message.deliveryState !== 'pending') return message
+    const paused = { ...message, deliveryState: 'paused' as const }
+    delete paused.deliveryTurnId
+    delete paused.deliveryUserMessageItemId
+    return paused
+  })
+}
+
+/**
  * Reconcile durable delivery markers against the runtime's current thread state.
  * A settled in-flight item is removed; an interrupted pre-send item is returned
  * to pending so it cannot be silently lost after an app restart.
@@ -323,6 +346,14 @@ export function reconcileQueuedMessages(
       continue
     }
     if (state === 'pending' || state === 'paused') {
+      // A runtime-owned paused entry (interrupt after enqueueIfBusy admission)
+      // keeps its server turn identity so remove/restore can cancel the
+      // durable queued turn behind it.
+      if (state === 'paused' && message.clientRequestId) {
+        const paused = { ...message, deliveryState: 'paused' as const }
+        reconciled.push(paused)
+        continue
+      }
       if (
         message.deliveryState === state &&
         !message.deliveryTurnId &&

@@ -152,6 +152,57 @@ describe('chat store queued message edit', () => {
     expect(harness.get().queuedMessages).toEqual([])
   })
 
+  it('cancels the server-side queued turn when removing a runtime-owned paused message', async () => {
+    const cancelQueuedTurn = vi.fn().mockResolvedValue(undefined)
+    registryMock.getProvider.mockReturnValue({ cancelQueuedTurn })
+
+    const harness = makeHarness([
+      {
+        id: 'q-paused',
+        text: 'paused follow-up',
+        deliveryState: 'paused' as const,
+        deliveryTurnId: 'turn-1',
+        clientRequestId: 'req-1'
+      }
+    ], { activeThreadId: 'thr-1' })
+    const actions = makeActions(harness)
+
+    await actions.removeQueuedMessage('q-paused')
+    expect(cancelQueuedTurn).toHaveBeenCalledWith('thr-1', 'turn-1')
+    expect(harness.get().queuedMessages).toEqual([])
+  })
+
+  it('cancels a just-admitted turn when the row was removed mid-drain', async () => {
+    const cancelQueuedTurn = vi.fn().mockResolvedValue(undefined)
+    registryMock.getProvider.mockReturnValue({ cancelQueuedTurn })
+
+    const harness = makeHarness(
+      [{ id: 'q-race', text: 'race row', deliveryState: 'pending' as const }],
+      { activeThreadId: 'thr-1' }
+    )
+    const actions = makeActions(harness)
+    const send = vi.fn(async () => {
+      // Mid-send the user removes the row; the submission path re-adds it
+      // with the admitted turn marker (upsert by id).
+      await actions.removeQueuedMessage('q-race')
+      harness.set({
+        queuedMessages: [{
+          id: 'q-race',
+          text: 'race row',
+          deliveryState: 'in_flight' as const,
+          deliveryTurnId: 'turn-admitted',
+          deliveryUserMessageItemId: 'item-1'
+        }]
+      })
+      return true
+    })
+    harness.get().sendMessage = send
+
+    await actions.drainQueuedMessages()
+    expect(cancelQueuedTurn).toHaveBeenCalledWith('thr-1', 'turn-admitted')
+    expect(harness.get().queuedMessages).toEqual([])
+  })
+
   it('retains a failed provisional admission instead of retrying it into deletion', async () => {
     let state = {
       busy: false,

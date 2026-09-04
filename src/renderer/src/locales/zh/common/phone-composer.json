@@ -586,6 +586,7 @@
   "queuedMessageRetry": "重试排队消息",
   "queuedMessageRetryUnavailable": "这条临时消息无法安全重试，请移除后重新提交",
   "queuedMessageFailed": "发送失败",
+  "queuedMessageInFlight": "排队中",
   "queuedMessageReorder": "拖动或使用上下方向键调整排队顺序",
   "queuedMessageReorderHandle": "移动消息 {{index}}，共 {{count}} 条：{{summary}}",
   "queuedMessageMovedToPosition": "已移动到第 {{position}} 位",

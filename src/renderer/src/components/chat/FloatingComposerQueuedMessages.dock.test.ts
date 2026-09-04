@@ -456,10 +456,15 @@ describe('FloatingComposerQueuedMessages DSH queue dock interactions', () => {
           deliveryState: 'failed', waitForRuntimeAdmission: true
         }),
         message('q-starting', 'starting', { deliveryState: 'starting' }),
-        message('q-flight', 'in flight', { deliveryState: 'in_flight' })
+        message('q-flight', 'in flight', {
+          deliveryState: 'in_flight',
+          deliveryTurnId: 'turn-q',
+          composerRestoreEligible: true
+        })
       ],
       running: false,
-      onGuide
+      onGuide,
+      onRestoreToComposer: vi.fn(() => true)
     })
     await act(async () => {
       container.querySelector<HTMLButtonElement>('[data-queued-message-header]')?.click()
@@ -472,7 +477,14 @@ describe('FloatingComposerQueuedMessages DSH queue dock interactions', () => {
       container.querySelector('[data-queued-message-id="q-admission"]')!
     ).disabled).toBe(true)
     expect(container.querySelector('[data-queued-message-id="q-starting"]')).toBeNull()
-    expect(container.querySelector('[data-queued-message-id="q-flight"]')).toBeNull()
+    // An in-flight row is admitted to the runtime queue but still managed
+    // here: visible with a queued chip so the user can edit or remove it.
+    const flight = container.querySelector('[data-queued-message-id="q-flight"]')!
+    expect(flight).not.toBeNull()
+    expect(flight.textContent).toContain('queuedMessageInFlight')
+    expect(action('edit', flight).disabled).toBe(false)
+    expect(action('remove', flight).disabled).toBe(false)
+    expect(action('guide', flight).disabled).toBe(true)
 
     const failed = container.querySelector('[data-queued-message-id="q-failed"]')!
     const retry = action('guide', failed)

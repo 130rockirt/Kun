@@ -33,7 +33,9 @@ export function canRestoreQueuedMessageToComposer(message: EditableQueuedMessage
   if (
     message.deliveryState !== undefined &&
     message.deliveryState !== 'pending' &&
-    message.deliveryState !== 'in_flight'
+    message.deliveryState !== 'in_flight' &&
+    message.deliveryState !== 'paused' &&
+    message.deliveryState !== 'failed'
   ) return false
   if (message.waitForRuntimeAdmission) return false
   if (message.agentSurface === 'write' || message.agentSurface === 'design') return false

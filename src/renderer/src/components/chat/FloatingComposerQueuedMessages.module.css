@@ -184,6 +184,10 @@
   color: color-mix(in srgb, #d97706 78%, var(--ds-text));
 }
 
+.queued {
+  color: var(--ds-text-muted);
+}
+
 .failed {
   color: var(--ds-danger);
 }

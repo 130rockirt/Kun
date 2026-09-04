@@ -173,7 +173,16 @@ export function createThreadQueueActions(
 ): Pick<ChatState, 'drainQueuedMessages' | 'removeQueuedMessage' | 'restoreQueuedMessage' | 'reorderQueuedMessage' | 'guideQueuedMessage' | 'resumeQueuedTurns'> {
   const { set, get, sseAbortRef } = context
   const cancelRuntimeQueuedTurn = async (message: QueuedUserMessage | undefined): Promise<void> => {
-    if (message?.deliveryState !== 'in_flight' || !message.deliveryTurnId) return
+    // in_flight and runtime-owned paused rows both own a durable server-side
+    // queued turn; failed rows may still carry one before settlement.
+    if (
+      !message?.deliveryTurnId ||
+      (
+        message.deliveryState !== 'in_flight' &&
+        message.deliveryState !== 'paused' &&
+        message.deliveryState !== 'failed'
+      )
+    ) return
     const threadId = get().activeThreadId
     const provider = getProvider()
     if (!threadId || typeof provider.cancelQueuedTurn !== 'function') return
@@ -192,6 +201,10 @@ export function createThreadQueueActions(
     const threadId = get().activeThreadId?.trim()
     if (!threadId || threadActionSharedState.drainingQueuedMessageThreadIds.has(threadId)) return
     threadActionSharedState.drainingQueuedMessageThreadIds.add(threadId)
+    // Tombstones only matter while a drain is mid-send. Message ids are unique
+    // per submission and this thread has no concurrent drain, so stale markers
+    // from earlier rounds can be discarded safely.
+    threadActionSharedState.removedQueuedMessageIds.clear()
     try {
       while (true) {
         let state = get()
@@ -219,6 +232,22 @@ export function createThreadQueueActions(
           continue
         }
         const started = await get().sendMessage(next.text, next.mode, { queued: next })
+        // The user may have removed/restored this row while the send was in
+        // flight; the submission path upserts by id and re-adds it. Cancel the
+        // just-admitted server turn and drop the resurrected row instead of
+        // executing a message the user already deleted.
+        if (threadActionSharedState.removedQueuedMessageIds.has(next.id)) {
+          threadActionSharedState.removedQueuedMessageIds.delete(next.id)
+          const resurrected = get().queuedMessages.find((message) => message.id === next.id)
+          if (resurrected) {
+            await cancelRuntimeQueuedTurn(resurrected)
+            set((current) => ({
+              queuedMessages: current.queuedMessages.filter((message) => message.id !== next.id)
+            }))
+            runtime.persistActiveQueuedMessages()
+          }
+          continue
+        }
         if (!started) {
           if (next.waitForRuntimeAdmission) {
             set((current) => ({
@@ -237,6 +266,8 @@ export function createThreadQueueActions(
 
   removeQueuedMessage: async (id) => {
     const removed = get().queuedMessages.find((message) => message.id === id)
+    // Tombstone before the local removal so a concurrent drain loop sees it.
+    threadActionSharedState.removedQueuedMessageIds.add(id)
     set((s) => ({
       queuedMessages: s.queuedMessages.filter((message) => message.id !== id)
     }))
@@ -253,6 +284,8 @@ export function createThreadQueueActions(
   restoreQueuedMessage: async (id) => {
     const restored = restoreQueuedMessageFromQueue(get().queuedMessages, id)
     if (!restored.restored) return null
+    // Tombstone before the local removal so a concurrent drain loop sees it.
+    threadActionSharedState.removedQueuedMessageIds.add(id)
     set({ queuedMessages: restored.messages })
     runtime.persistActiveQueuedMessages()
     // Editing an already-admitted queued turn cancels its server-side entry

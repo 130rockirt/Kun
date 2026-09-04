@@ -80,6 +80,15 @@ describe('queued-message-edit', () => {
       deliveryState: 'in_flight',
       deliveryTurnId: 'turn-1',
       deliveryUserMessageItemId: 'item-1'
+    }],
+    ['paused delivery', {
+      deliveryState: 'paused',
+      deliveryTurnId: 'turn-1',
+      clientRequestId: 'req-1'
+    }],
+    ['failed delivery', {
+      deliveryState: 'failed',
+      deliveryTurnId: 'turn-1'
     }]
   ] as const)('allows composer restore for %s', (_name, fields) => {
     const message = {
