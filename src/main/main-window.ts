@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, screen } from 'electron'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -13,6 +13,11 @@ import {
   shouldRecoverRendererProcess
 } from './main-window-renderer-recovery'
 import { logError, logInfo, logWarn } from './logger'
+import {
+  MAIN_WINDOW_MIN_HEIGHT,
+  MAIN_WINDOW_MIN_WIDTH,
+  resolveMainWindowInitialBounds
+} from './main-window-initial-bounds'
 import { appWindowTitleForFlavor } from '../shared/app-environment'
 import { resolveDesktopTitleBarMode } from '../shared/desktop-title-bar'
 import {
@@ -62,11 +67,14 @@ export function createWindow(options: {
   )
   const usesCustomDesktopTitleBar = desktopTitleBarMode === 'custom'
   const windowTitle = appWindowTitleForFlavor(appEnvironment.flavor)
+  const initialBounds = resolveMainWindowInitialBounds(screen.getPrimaryDisplay().workArea)
   const window = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    minWidth: 960,
-    minHeight: 640,
+    x: initialBounds.x,
+    y: initialBounds.y,
+    width: initialBounds.width,
+    height: initialBounds.height,
+    minWidth: MAIN_WINDOW_MIN_WIDTH,
+    minHeight: MAIN_WINDOW_MIN_HEIGHT,
     title: windowTitle,
     icon: appIcon.isEmpty() ? undefined : appIcon,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : usesCustomDesktopTitleBar ? 'hidden' : 'default',
