@@ -390,7 +390,7 @@ export function Workbench(): ReactElement {
   } = useWorkbenchRightTools({
     input, inputRef, prevThreadId, activeThreadId,
     activeThreadDesignDocumentId: lockedDesignProfile?.documentTarget.documentId,
-    activeGuiPlan, sidePanel,
+    activeGuiPlan, rightPanelMode, sidePanel,
     currentSideConversations, designWorkspaceRoot, workspaceRoot, fileTreeWorkspaceRoot,
     filePreviewTarget, codeRightTabs, openSideConversationDraft, selectSideConversation,
     setSidePanelOpen, openFileTreeSidePanel, openDesignFileTreeSidePanel, openRightPanelTab,
