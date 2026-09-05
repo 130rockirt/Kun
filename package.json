@@ -47,7 +47,7 @@
     "smoke:packaged-update-handoff": "node ./scripts/smoke-packaged-update-handoff.cjs",
     "smoke:packaged-extension-appimage": "node ./scripts/smoke-packaged-extension-appimage.cjs",
     "smoke:packaged-cli": "node ./scripts/smoke-packaged-cli.cjs",
-    "smoke:windows-installer-migration": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/smoke-windows-installer-migration.ps1",
+    "smoke:windows-installer": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/smoke-windows-installer.ps1",
     "prepare:macos-native:x64": "node ./scripts/ensure-macos-native-dependencies.cjs --arch x64",
     "prepare:macos-native:arm64": "node ./scripts/ensure-macos-native-dependencies.cjs --arch arm64",
     "verify:packaged-macos-native": "node ./scripts/verify-packaged-macos-native-architecture.cjs",

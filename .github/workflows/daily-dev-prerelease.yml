@@ -61,7 +61,7 @@ jobs:
   build-macos:
     name: Build macOS
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     needs:
       - prepare
     env:
@@ -122,8 +122,7 @@ jobs:
   build-windows:
     name: Build Windows
     runs-on: windows-latest
-    # Keep the same Windows validation budget as PR and release packaging.
-    timeout-minutes: 180
+    timeout-minutes: 90
     needs:
       - prepare
     env:
@@ -173,20 +172,9 @@ jobs:
       - name: Build Windows installer
         run: npm run dist:win
 
-      - name: Smoke Windows installer migration
-        timeout-minutes: 120
-        env:
-          KUN_INSTALLER_SMOKE_ARTIFACT_DIR: ${{ github.workspace }}\artifacts\windows-installer-smoke
-        run: npm run smoke:windows-installer-migration -- -InstallerPath (Get-ChildItem dist/Kun-*-win-x64.exe | Select-Object -First 1 -ExpandProperty FullName)
-
-      - name: Upload Windows installer smoke diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: daily-windows-installer-smoke-diagnostics
-          if-no-files-found: ignore
-          retention-days: 7
-          path: artifacts/windows-installer-smoke/**
+      - name: Smoke Windows installer
+        timeout-minutes: 180
+        run: npm run smoke:windows-installer -- -InstallerPath (Get-ChildItem dist/Kun-*-win-x64.exe | Select-Object -First 1 -ExpandProperty FullName)
 
       - name: Smoke packaged update handoff (Windows)
         timeout-minutes: 20

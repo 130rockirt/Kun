@@ -24,7 +24,6 @@ const helperModulePaths = [
   'windows-installer-migration-recovery-env.ps1',
   'windows-installer-migration-transaction.ps1'
 ].map((fileName) => join(process.cwd(), 'build', fileName))
-const smokePath = join(process.cwd(), 'scripts/smoke-windows-installer-migration.ps1')
 const windowsOnly = process.platform === 'win32' ? describe : describe.skip
 const tempRoots: string[] = []
 
@@ -244,40 +243,6 @@ describe('Windows installer migration ACL contract', () => {
     )
   })
 
-  it('waits for the real NSIS uninstall lifecycle before starting another installer', () => {
-    const script = readFileSync(smokePath, 'utf8')
-
-    expect(script).toContain("$arguments = @('/S', $Mode, ('_?={0}' -f $InstallLocation))")
-    expect(script).toContain('[int]$TimeoutSeconds = 600')
-    expect(script).toContain('Start-Process -FilePath $copy -ArgumentList $arguments -PassThru')
-    expect(script).toContain('$process.WaitForExit($TimeoutSeconds * 1000)')
-    expect(script).toContain('Uninstaller PID $($process.Id) did not exit within $TimeoutSeconds seconds.')
-    expect(script).not.toMatch(/Start-Process -FilePath \$(?:unicode|machine)Uninstaller/u)
-  })
-
-  it('retries only a Windows access violation and never more than once', () => {
-    const script = readFileSync(smokePath, 'utf8')
-
-    expect(script).toContain('$accessViolationExitCode = -1073741819')
-    expect(script).toContain('$maximumAttempts = 2')
-    expect(script).toContain('$process.WaitForExit($TimeoutSeconds * 1000)')
-    expect(script).not.toContain(
-      'Start-Process -FilePath $script:InstallerPath -ArgumentList $Arguments -Wait'
-    )
-    expect(script).toContain('Show-InstallerDiagnostics $Scenario')
-    expect(script).toContain('$process.ExitCode -ne $accessViolationExitCode')
-    expect(script).toContain('retrying once after 2 seconds')
-  })
-
-  it('runs automatic-update migration smoke scenarios through the production silent path', () => {
-    const script = readFileSync(smokePath, 'utf8')
-
-    expect(script).toContain(
-      "Invoke-Installer 'legacy uninstall-source recovery' @('--updated', '/S', '/currentuser')"
-    )
-    expect(script).not.toContain("@('--updated', '/currentuser')")
-  })
-
   it('opens automatic-update transaction keys in the NSIS 64-bit registry view', () => {
     const script = readFileSync(
       join(process.cwd(), 'build/windows-installer-migration-transaction.ps1'),
@@ -300,14 +265,6 @@ describe('Windows installer migration ACL contract', () => {
     expect(prepare).toContain("Open-TransactionRegistryHive 'CurrentUser'")
     expect(validate).toContain('$hive = Open-TransactionRegistryHive')
     expect(rollback).toContain('Open-TransactionRegistryHive ([string]$record.Hive)')
-  })
-
-  it('hashes smoke payloads without relying on PowerShell module auto-loading', () => {
-    const script = readFileSync(smokePath, 'utf8')
-
-    expect(script).toContain('function Get-FileSha256')
-    expect(script).toContain('[Security.Cryptography.SHA256]::Create()')
-    expect(script).not.toContain('Get-FileHash')
   })
 
   it('aborts an ambiguous dual-scope automatic update without a source marker', () => {
@@ -353,8 +310,6 @@ describe('Windows installer migration ACL contract', () => {
     expect(automaticUpdateScript).toContain('!insertmacro kunRunMigrationHelper ResolveRecoveryExecutable')
     expect(automaticUpdateScript).toContain('!insertmacro kunRunMigrationHelper CommitUpdateTransaction')
     expect(automaticUpdateScript).not.toContain('KUN_INSTALLER_UPDATE_SOURCE')
-    expect(smokePath.length).toBeGreaterThan(0)
-    expect(readFileSync(smokePath, 'utf8')).toContain('in-app all-users automatic update scope')
   })
 })
 

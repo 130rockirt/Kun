@@ -23,7 +23,6 @@ const helperModulePaths = [
   'windows-installer-migration-actions.ps1',
   'windows-installer-migration-recovery-env.ps1'
 ].map((fileName) => join(process.cwd(), 'build', fileName))
-const smokePath = join(process.cwd(), 'scripts/smoke-windows-installer-migration.ps1')
 const windowsOnly = process.platform === 'win32' ? describe : describe.skip
 const tempRoots: string[] = []
 

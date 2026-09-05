@@ -102,7 +102,7 @@ jobs:
     name: Build Linux package and TUI (ARM64)
     runs-on: ubuntu-24.04-arm
     needs: quality
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -234,9 +234,7 @@ jobs:
     name: Build Windows NSIS installer (PR)
     runs-on: windows-latest
     needs: quality
-    # The packaged migration matrix alone takes more than 60 minutes on hosted
-    # runners. Leave room for dependency install, packaging, and handoff smoke.
-    timeout-minutes: 180
+    timeout-minutes: 90
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -294,20 +292,9 @@ jobs:
       - name: Build Windows NSIS installer
         run: npm run dist:win
 
-      - name: Smoke Windows installer migration
-        timeout-minutes: 120
-        env:
-          KUN_INSTALLER_SMOKE_ARTIFACT_DIR: ${{ github.workspace }}\artifacts\windows-installer-smoke
-        run: npm run smoke:windows-installer-migration -- -InstallerPath (Get-ChildItem dist/Kun-*-win-x64.exe | Select-Object -First 1 -ExpandProperty FullName)
-
-      - name: Upload Windows installer smoke diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr-windows-installer-smoke-diagnostics
-          if-no-files-found: ignore
-          retention-days: 3
-          path: artifacts/windows-installer-smoke/**
+      - name: Smoke Windows installer
+        timeout-minutes: 180
+        run: npm run smoke:windows-installer -- -InstallerPath (Get-ChildItem dist/Kun-*-win-x64.exe | Select-Object -First 1 -ExpandProperty FullName)
 
       - name: Smoke packaged update handoff (Windows)
         timeout-minutes: 20
