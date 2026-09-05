@@ -22,5 +22,5 @@ writeFileSync('release-notes.md', notes + [
   `- Commit: \`${commit}\``,
   '- macOS: Developer ID signed and notarized',
   '- Platforms: macOS arm64/x64, Windows x64, Linux arm64/x64 AppImage/deb',
-  '- Standalone TUI: macOS arm64/x64, Windows x64, Linux arm64/x64', ''
+  '- Terminal commands and Kun Runtime: bundled with the desktop app', ''
 ].join('\n'))

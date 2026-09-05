@@ -103,7 +103,7 @@ jobs:
             dist/Kun-*-linux-amd64.deb
 
   package-linux-arm64:
-    name: Build Linux package and TUI (ARM64)
+    name: Build Linux package (ARM64)
     runs-on: ubuntu-24.04-arm
     needs: quality
     timeout-minutes: 180
@@ -127,45 +127,6 @@ jobs:
 
       - name: Install root dependencies
         run: npm ci
-
-      - name: Build standalone TUI (host-native ARM64)
-        run: |
-          version="$(node -p "require('./kun/package.json').version")"
-          export KUN_APP_VERSION="${version}"
-          export KUN_ARTIFACT_VERSION="${version}"
-          export KUN_UPDATE_CHANNEL=stable
-          export RELEASE_CHANNEL=stable
-          npm run build:kun
-          npm run package:tui -- \
-            --version "${version}" \
-            --artifact-version "${version}" \
-            --tag "v${version}" \
-            --channel stable \
-            --commit "${GITHUB_SHA}" \
-            --target linux-arm64 \
-            --output dist/tui-pr
-
-      - name: Smoke standalone TUI and verify assemble layout (Linux ARM64)
-        timeout-minutes: 20
-        run: |
-          version="$(node -p "require('./kun/package.json').version")"
-          artifact="dist/tui-pr/Kun-TUI-${version}-linux-arm64.tar.gz"
-          npm run smoke:standalone-tui -- --artifact "${artifact}" --version "${version}" --target linux-arm64
-          node --input-type=module -e "
-            import { readEmbeddedRelease } from './scripts/assemble-tui-release.mjs'
-            const release = await readEmbeddedRelease(process.argv[1])
-            if (release.target !== 'linux-arm64' || release.version !== process.argv[2]) {
-              throw new Error('assemble layout probe mismatch: ' + release.target + '/' + release.version)
-            }
-          " "${artifact}" "${version}"
-
-      - name: Verify 0.3.7 standalone TUI can self-update to this candidate (Linux ARM64)
-        timeout-minutes: 60
-        run: |
-          git fetch --depth 1 origin tag v0.3.7
-          version="$(node -p "require('./kun/package.json').version")"
-          node ./scripts/test-tui-self-update-from-0.3.7.mjs \
-            --candidate "dist/tui-pr/Kun-TUI-${version}-linux-arm64.tar.gz"
 
       - name: Build Linux ARM64 AppImage and deb
         run: npm run dist:linux:arm64
@@ -197,9 +158,6 @@ jobs:
             dist/Kun-*-linux-arm64.AppImage.blockmap
             dist/Kun-*-linux-arm64.deb
             dist/latest-linux-arm64.yml
-            dist/tui-pr/Kun-TUI-*-linux-arm64.tar.gz
-            dist/tui-pr/Kun-TUI-*-linux-arm64.tar.gz.sha256
-            dist/tui-pr/Kun-TUI-*-linux-arm64.tar.gz.json
 
   package-macos:
     name: Build ad-hoc macOS packages (PR)
@@ -279,48 +237,6 @@ jobs:
       - name: Install root dependencies
         run: npm ci
 
-      - name: Build standalone TUI (host-native Windows)
-        shell: pwsh
-        run: |
-          $version = node -p "require('./kun/package.json').version"
-          $env:KUN_APP_VERSION = $version
-          $env:KUN_ARTIFACT_VERSION = $version
-          $env:KUN_UPDATE_CHANNEL = 'stable'
-          $env:RELEASE_CHANNEL = 'stable'
-          npm run build:kun
-          npm run package:tui -- `
-            --version $version `
-            --artifact-version $version `
-            --tag "v$version" `
-            --channel stable `
-            --commit $env:GITHUB_SHA `
-            --target win32-x64 `
-            --output dist/tui-pr
-      - name: Smoke standalone TUI and verify assemble layout (Windows)
-        timeout-minutes: 20
-        shell: pwsh
-        run: |
-          $version = node -p "require('./kun/package.json').version"
-          $artifact = "dist/tui-pr/Kun-TUI-$version-win-x64.zip"
-          npm run smoke:standalone-tui -- --artifact $artifact --version $version --target win32-x64
-          $probe = @'
-          import { readEmbeddedRelease } from "./scripts/assemble-tui-release.mjs"
-          const release = await readEmbeddedRelease(process.argv[1])
-          if (release.target !== "win32-x64" || release.version !== process.argv[2]) {
-            throw new Error("assemble layout probe mismatch: " + release.target + "/" + release.version)
-          }
-          '@
-          node --input-type=module -e $probe $artifact $version
-
-      - name: Verify 0.3.7 standalone TUI can self-update to this candidate (Windows)
-        timeout-minutes: 60
-        shell: pwsh
-        run: |
-          git fetch --depth 1 origin tag v0.3.7
-          $version = node -p "require('./kun/package.json').version"
-          node ./scripts/test-tui-self-update-from-0.3.7.mjs `
-            --candidate "dist/tui-pr/Kun-TUI-$version-win-x64.zip"
-
       - name: Test Windows update rollback failpoints
         env:
           KUN_INSTALLER_TEST_ARTIFACT_ROOT: ${{ github.workspace }}\artifacts\windows-installer-transaction
@@ -395,36 +311,6 @@ jobs:
             !${{ env.GUI_UPGRADE_EVIDENCE }}/kun-gui-upgrade-*/**/*.exe
           if-no-files-found: warn
 
-  test-windows-self-update:
-    name: Windows TUI self-update integration tests
-    runs-on: windows-latest
-    needs: quality
-    timeout-minutes: 45
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            kun/package-lock.json
-
-      - name: Install root dependencies
-        run: npm ci
-
-      - name: Run TUI self-update tests on real Windows
-        working-directory: kun
-        run: npx vitest run src/cli/self-update.test.ts src/cli/self-update-transaction.test.ts src/cli/self-update-windows.test.ts src/cli/self-update.win32.test.ts src/cli/self-update.win32-handoff.test.ts
-
-  tui-release:
-    name: TUI release acceptance
-    needs: quality
-    uses: ./.github/workflows/tui-release-acceptance.yml
-
   pr-gate:
     name: PR gate
     runs-on: ubuntu-latest
@@ -435,8 +321,6 @@ jobs:
       - package-macos
       - package-windows
       - gui-upgrade-windows
-      - test-windows-self-update
-      - tui-release
     if: always()
     steps:
       - name: Require every PR job to succeed
@@ -445,13 +329,11 @@ jobs:
           script: |
             const results = [
               ['GUI upgrade from released 0.3.7 (Windows)', '${{ needs.gui-upgrade-windows.result }}'],
-              ['TUI release acceptance', '${{ needs.tui-release.result }}'],
               ['Quality gates', '${{ needs.quality.result }}'],
               ['Build Linux package', '${{ needs.package.result }}'],
-              ['Build Linux package and TUI (ARM64)', '${{ needs['package-linux-arm64'].result }}'],
+              ['Build Linux package (ARM64)', '${{ needs['package-linux-arm64'].result }}'],
               ['Build ad-hoc macOS packages (PR)', '${{ needs['package-macos'].result }}'],
               ['Build Windows NSIS installer (PR)', '${{ needs['package-windows'].result }}'],
-              ['Windows TUI self-update integration tests', '${{ needs['test-windows-self-update'].result }}']
             ]
             const unsuccessful = results.filter(([, result]) => result !== 'success')
             if (unsuccessful.length > 0) {
@@ -471,7 +353,6 @@ jobs:
       - package-linux-arm64
       - package-macos
       - package-windows
-      - test-windows-self-update
     if: >-
       ${{
         always() &&
@@ -491,10 +372,9 @@ jobs:
             const jobResults = [
               ['Quality gates', '${{ needs.quality.result }}'],
               ['Build Linux package', '${{ needs.package.result }}'],
-              ['Build Linux package and TUI (ARM64)', '${{ needs['package-linux-arm64'].result }}'],
+              ['Build Linux package (ARM64)', '${{ needs['package-linux-arm64'].result }}'],
               ['Build ad-hoc macOS packages (PR)', '${{ needs['package-macos'].result }}'],
               ['Build Windows NSIS installer (PR)', '${{ needs['package-windows'].result }}'],
-              ['Windows TUI self-update integration tests', '${{ needs['test-windows-self-update'].result }}']
             ]
             const failed = jobResults.filter(([, result]) => result !== 'success')
             const failedJobs = failed.map(([name, result]) => `- ${name} (${result})`).join('\n')

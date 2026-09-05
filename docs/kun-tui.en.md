@@ -7,36 +7,16 @@ alternate screen, so the transcript remains in native scrollback after exit.
 
 ## Installation and release forms
 
-Every Kun GUI package continues to include the complete TUI and runtime. A
-desktop installation does not need a second TUI download. The standalone TUI
-archive is an additional headless distribution for developer machines and
-servers without a graphical environment. It includes a pinned Node.js runtime,
-does not require a system Node.js installation, and is not published through
-npm.
+Kun desktop packages include the complete TUI and runtime. Install the desktop
+app to use `kun` / `kun tui`; no separate Node.js or TUI download is needed.
+Starting with 0.3.8, Stable and Daily no longer build or publish standalone TUI
+archives or advance the standalone update manifest. The bundled TUI updates
+with the desktop app.
 
-Each Stable or Daily release builds the GUI and TUI from the same commit. They
-share one application version, tag, runtime build ID, and release cadence;
-there is no independently versioned TUI release line. If any required GUI or
-TUI target fails, the joint release is not promoted to R2 latest and the
-GitHub Release is not made public.
-
-| Platform | Standalone TUI archive | Architecture |
-| --- | --- | --- |
-| macOS | `.tar.gz` | arm64 / x64 |
-| Windows | `.zip` | x64 |
-| Linux | `.tar.gz` | x64 |
-
-GitHub Releases and R2 receive the same archives, SHA-256 files, and
-machine-readable manifests. The website can consume R2 `latest.json` and
-`latest-tui.json` for its download flow; this repository does not ship an npm
-package or curl/PowerShell installer.
-
-A Stable standalone TUI checks for updates at most once every 24 hours on
-startup and only displays a notice. Run `/update` to review it, then
-`/update yes` to confirm; non-interactive callers can use `kun update --check`
-or `kun update --yes`. A GUI-bundled TUI must be updated with the desktop app
-and directs the user there. Daily/frontier archives are downloadable but
-self-update is disabled.
+Existing historical archives and user data are not deleted. Users of the
+0.3.7 standalone archive need the desktop app for 0.3.8 and later versions;
+the old `kun update` command does not install a GUI package. Real GUI upgrades,
+signing, artifact integrity, and public update-feed validation remain required.
 
 The GUI and TUI use the same local HTTP/SSE protocol and persisted data, but
 they no longer share one long-lived background Runtime by default. A normal

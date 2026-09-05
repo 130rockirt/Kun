@@ -107,7 +107,7 @@ Kun 不绑定单一模型。预设覆盖 ChatGPT / Codex、Claude、Gemini、Cur
 kun
 ```
 
-也可从 Release 下载独立 TUI；更多命令和配置见 [Kun TUI 文档](docs/kun-tui.md)。
+从 0.3.8 起不再单独分发 TUI 压缩包；请使用桌面应用内置的终端命令，更多配置见 [Kun TUI 文档](docs/kun-tui.md)。
 
 ## 从源码运行
 

@@ -31,15 +31,6 @@ async function fixture(options, action) {
     const name = new URL(request.url, 'http://localhost').pathname.split('/').at(-1)
     if (manifests[name]) {
       response.end(stringify({ version, files: manifests[name].map((url) => ({ url, size: bytes.length, sha512 })) }))
-    } else if (name === 'release-tui.json' || name === 'latest-tui.json') {
-      const artifacts = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'win32-x64'].map((target) => {
-        const [platform, arch] = target.split('-')
-        const os = { darwin: 'mac', linux: 'linux', win32: 'win' }[platform]
-        const fileName = `Kun-TUI-${version}-${os}-${arch}.${platform === 'win32' ? 'zip' : 'tar.gz'}`
-        return { target, fileName, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'),
-          url: `http://127.0.0.1:${server.address().port}/deepseek-gui/channels/stable/releases/v${version}/${fileName}` }
-      })
-      response.end(JSON.stringify({ version, tag: `v${version}`, commit, buildId: 'a'.repeat(64), artifacts }))
     } else if (name === 'latest.json') {
       response.end(JSON.stringify({ version }))
     } else if (name.startsWith('Kun-')) response.end(options.tamper ? 'tampered-bytes' : bytes)
@@ -74,7 +65,7 @@ test('public candidate verification hashes downloads and saves previous feeds wi
   await fixture({}, async ({ execute, root }) => {
     await execute('candidate')
     const verified = JSON.parse(await readFile(join(root, 'public-release-evidence/candidate-verified.json'), 'utf8'))
-    assert.equal(verified.verified.length, 10)
+    assert.equal(verified.verified.length, 5)
     assert.equal(verified.commit, commit)
     await readFile(join(root, 'public-release-evidence/previous-stable-latest.yml'))
     await readFile(join(root, 'public-release-evidence/previous-legacy-latest.yml'))

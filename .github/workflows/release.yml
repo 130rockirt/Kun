@@ -233,10 +233,6 @@ jobs:
           KUN_INSTALLER_TEST_ARTIFACT_ROOT: ${{ github.workspace }}\artifacts\windows-installer-transaction
         run: npx vitest run src/main/windows-installer-migration.transaction.test.ts
 
-      - name: Run TUI self-update tests on real Windows
-        working-directory: kun
-        run: npx vitest run src/cli/self-update.test.ts src/cli/self-update-transaction.test.ts src/cli/self-update-windows.test.ts src/cli/self-update.win32.test.ts src/cli/self-update.win32-handoff.test.ts
-
       - name: Upload Windows transaction diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -400,96 +396,6 @@ jobs:
             dist/Kun-*-linux-arm64.deb
             dist/latest-linux-arm64.yml
 
-  build-tui:
-    name: Build standalone TUI (${{ matrix.target }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
-    needs:
-      - prepare
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            target: darwin-arm64
-          - runner: macos-15-intel
-            target: darwin-x64
-          - runner: windows-2025
-            target: win32-x64
-          - runner: ubuntu-22.04
-            target: linux-x64
-          - runner: ubuntu-24.04-arm
-            target: linux-arm64
-    env:
-      KUN_APP_VERSION: ${{ needs.prepare.outputs.version }}
-      KUN_ARTIFACT_VERSION: ${{ needs.prepare.outputs.version }}
-      KUN_UPDATE_CHANNEL: stable
-      RELEASE_CHANNEL: stable
-      TAG_NAME: ${{ needs.prepare.outputs.tag }}
-      R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
-      R2_RELEASE_PREFIX: ${{ secrets.R2_RELEASE_PREFIX }}
-    steps:
-      - name: Check out merge commit
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
-
-      - name: Set up packaged Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.1'
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            kun/package-lock.json
-
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm --prefix kun ci
-
-      - name: Build shared Kun runtime
-        run: npm run build:kun
-
-      - name: Package standalone TUI
-        run: >-
-          npm run package:tui --
-          --version "${{ needs.prepare.outputs.version }}"
-          --artifact-version "${{ needs.prepare.outputs.version }}"
-          --tag "${{ needs.prepare.outputs.tag }}"
-          --channel stable
-          --commit "${{ github.event.pull_request.merge_commit_sha }}"
-          --target "${{ matrix.target }}"
-          --output dist
-
-      - name: Smoke standalone TUI (host-native)
-        shell: bash
-        timeout-minutes: 20
-        run: >-
-          artifact="$(ls dist/Kun-TUI-*.tar.gz 2>/dev/null || ls dist/Kun-TUI-*.zip)";
-          npm run smoke:standalone-tui -- --artifact "${artifact}"
-          --version "${{ needs.prepare.outputs.version }}" --target "${{ matrix.target }}"
-
-      - name: Verify 0.3.7 standalone TUI can self-update to this candidate
-        shell: bash
-        timeout-minutes: 60
-        run: >-
-          artifact="$(ls dist/Kun-TUI-*.tar.gz 2>/dev/null || ls dist/Kun-TUI-*.zip)";
-          node ./scripts/test-tui-self-update-from-0.3.7.mjs --candidate "${artifact}"
-
-      - name: Upload standalone TUI artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-tui-${{ matrix.target }}
-          if-no-files-found: error
-          retention-days: 7
-          path: |
-            dist/Kun-TUI-*.tar.gz
-            dist/Kun-TUI-*.zip
-            dist/Kun-TUI-*.sha256
-            dist/Kun-TUI-*.json
-
   publish:
     name: Stage draft release and immutable R2 candidate
     runs-on: ubuntu-latest
@@ -499,7 +405,6 @@ jobs:
       - build-windows
       - build-linux
       - build-linux-arm64
-      - build-tui
     env:
       GH_TOKEN: ${{ github.token }}
       TAG_NAME: ${{ needs.prepare.outputs.tag }}
@@ -539,13 +444,6 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
-      - name: Rebuild shared GUI/TUI runtime identity
-        env:
-          KUN_APP_VERSION: ${{ needs.prepare.outputs.version }}
-          KUN_ARTIFACT_VERSION: ${{ needs.prepare.outputs.version }}
-          KUN_UPDATE_CHANNEL: stable
-        run: npm run build:kun
-
       - name: Verify release artifacts
         run: |
           set -euo pipefail
@@ -563,11 +461,6 @@ jobs:
             "latest.yml"
             "latest-linux.yml"
             "latest-linux-arm64.yml"
-            "Kun-TUI-${RELEASE_VERSION}-mac-arm64.tar.gz"
-            "Kun-TUI-${RELEASE_VERSION}-mac-x64.tar.gz"
-            "Kun-TUI-${RELEASE_VERSION}-win-x64.zip"
-            "Kun-TUI-${RELEASE_VERSION}-linux-x64.tar.gz"
-            "Kun-TUI-${RELEASE_VERSION}-linux-arm64.tar.gz"
           )
 
           for pattern in "${required[@]}"; do
@@ -579,33 +472,6 @@ jobs:
           done
 
           find release-artifacts -maxdepth 2 -type f -print | sort
-
-      - name: Download previous TUI release contract
-        if: needs.prepare.outputs.previous_tag != ''
-        env:
-          PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
-        run: |
-          set -euo pipefail
-          previous_dir="${RUNNER_TEMP}/previous-tui-release"
-          mkdir -p "${previous_dir}"
-          if gh release download "${PREVIOUS_TAG}" --pattern release-tui.json --dir "${previous_dir}"; then
-            echo "PREVIOUS_TUI_RELEASE=${previous_dir}/release-tui.json" >> "${GITHUB_ENV}"
-          else
-            echo "::warning::No release-tui.json asset for ${PREVIOUS_TAG}; proceeding without a previous TUI release contract"
-          fi
-
-      - name: Assemble standalone TUI release contract
-        run: >-
-          npm run assemble:tui-release --
-          --directory release-artifacts
-          --version "${RELEASE_VERSION}"
-          --artifact-version "${RELEASE_VERSION}"
-          --tag "${TAG_NAME}"
-          --channel "${RELEASE_CHANNEL}"
-          --commit "$(git rev-parse HEAD)"
-          --expected-build-id "$(node -p "require('./kun/dist/runtime-build.json').buildId")"
-          --public-base-url "${R2_PUBLIC_BASE_URL}"
-          --release-prefix "${R2_RELEASE_PREFIX:-deepseek-gui}"
 
       - name: Generate release notes
         run: node ./scripts/prepare-ci-release-notes.cjs
@@ -649,7 +515,7 @@ jobs:
           set -euo pipefail
           mapfile -d '' assets < <(
             find release-artifacts -type f \
-              \( -name 'Kun-*' -o -name 'latest*.yml' -o -name 'release-tui.json' -o -name 'SHA256SUMS-tui.txt' \) \
+              \( -name 'Kun-*' -o -name 'latest*.yml' \) ! -name 'Kun-TUI-*' \
               -print0
           )
 
@@ -666,7 +532,6 @@ jobs:
           node ./scripts/publish-r2.mjs upload --platform mac --dist release-artifacts --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}"
           node ./scripts/publish-r2.mjs upload --platform win --dist release-artifacts --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}"
           node ./scripts/publish-r2.mjs upload --platform linux --dist release-artifacts --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}"
-          node ./scripts/publish-r2.mjs upload-tui --dist release-artifacts --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}"
 
   accept-and-publish:
     needs: [prepare, publish]

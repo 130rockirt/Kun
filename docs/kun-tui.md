@@ -6,31 +6,13 @@ Alternate Screen，因此退出后对话仍保留在终端原生 scrollback 中�
 
 ## 安装与发布形态
 
-Kun GUI 安装包继续内置完整的 TUI 和运行时；安装桌面应用后不需要再下载一份 TUI。
-独立 TUI 压缩包是额外的无图形界面发行形态，面向没有桌面环境的开发机和服务器。
-它自带固定版本的 Node.js 运行时，不依赖系统 Node.js，也不通过 npm 发布。
+Kun GUI 安装包内置完整的 TUI 和运行时，安装桌面应用后即可使用 `kun` / `kun tui`。
+从 0.3.8 起，Stable 和 Daily 不再构建或发布独立 TUI 压缩包，也不再推进独立
+TUI 更新清单。GUI 内置 TUI 随桌面应用统一更新，不需要另外下载 Node.js 或 TUI。
 
-每次 Stable 或 Daily 发布都会从同一 commit 同时构建 GUI 和 TUI。两者使用同一个
-应用版本、tag、运行时 build ID 和发布节奏，不存在可独立升级或独立打 tag 的 TUI
-版本线。任一 GUI 或 TUI 目标构建失败时，本次联合发布不会提升为 R2 的 latest，也
-不会公开 GitHub Release。
-
-独立包覆盖以下目标：
-
-| 平台 | 独立 TUI 压缩包 | 架构 |
-| --- | --- | --- |
-| macOS | `.tar.gz` | arm64 / x64 |
-| Windows | `.zip` | x64 |
-| Linux | `.tar.gz` | x64 |
-
-GitHub Release 和 R2 保存同一组压缩包、SHA-256 与机器可读 manifest。官网可读取
-R2 的 `latest.json` / `latest-tui.json` 展示下载入口；仓库不提供 npm 包或
-curl/PowerShell 安装器。
-
-Stable 独立 TUI 启动时最多每 24 小时检查一次更新，只显示提示，不会静默替换。
-运行 `/update` 查看更新，确认后运行 `/update yes`；非交互命令可使用
-`kun update --check` 或 `kun update --yes`。GUI 内置的 TUI 必须随 GUI 更新，
-执行更新命令时会提示更新桌面应用。Daily/frontier 包可以下载和试用，但禁用自更新。
+已发布的历史独立包和用户数据不会因此删除；仍使用 0.3.7 独立包的用户需要安装
+桌面应用，才能获得 0.3.8 及后续版本。旧包的 `kun update` 不会升级到 GUI 安装包。
+GUI 的跨版本升级、签名、产物完整性和公开更新源校验仍是发布门禁。
 
 TUI 和 GUI 使用相同的本机 HTTP/SSE 协议和持久化数据，但默认不再共用一个
 长期后台 Runtime。正常 GUI/TUI 各自持有自己启动的 Runtime；同一

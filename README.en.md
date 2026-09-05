@@ -107,7 +107,7 @@ The desktop app and TUI can connect to the same runtime at the same time. Run th
 kun
 ```
 
-Standalone TUI archives are also available from Releases. See the [Kun TUI guide](docs/kun-tui.en.md) for commands and configuration.
+Starting with 0.3.8, standalone TUI archives are no longer distributed; use the terminal commands bundled with the desktop app. See the [Kun TUI guide](docs/kun-tui.en.md) for commands and configuration.
 
 ## Run from source
 

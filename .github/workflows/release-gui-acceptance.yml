@@ -93,7 +93,7 @@ jobs:
       - name: Verify candidate bytes and save previous public manifests
         run: node scripts/verify-public-release.mjs candidate
       - name: Promote R2 latest
-        run: node scripts/publish-r2.mjs promote --tag "$TAG_NAME" --channel stable --platforms mac,win,linux --require-tui
+        run: node scripts/publish-r2.mjs promote --tag "$TAG_NAME" --channel stable --platforms mac,win,linux --require-all-platforms
       - name: Read back public stable feeds and download their artifacts
         run: node scripts/verify-public-release.mjs latest
       - name: Publish GitHub Release

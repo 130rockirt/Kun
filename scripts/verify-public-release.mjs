@@ -64,40 +64,22 @@ if (mode === 'candidate') {
   }
   // Persist the actual previous feeds before any stable pointer changes.
   for (const [label, previousBase] of [['stable', `${stable}latest/`], ['legacy', `${root}latest/`]]) {
-    for (const manifest of [...manifests, 'latest.json', 'latest-tui.json']) {
+    for (const manifest of [...manifests, 'latest.json']) {
       const text = await (await response(`${previousBase}${manifest}`)).text()
       await writeFile(join(evidence, `previous-${label}-${manifest}`), text)
     }
   }
 }
 
-const tuiUrl = mode === 'candidate' ? `${base}release-tui.json` : `${base}latest-tui.json`
-const tui = await (await response(tuiUrl)).json()
-assert.equal(tui.version, version)
-assert.equal(tui.tag, tag)
-assert.equal(tui.commit, process.env.CANDIDATE_COMMIT)
-assert.match(tui.buildId, /^[a-f0-9]{64}$/)
-const targets = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'win32-x64']
-assert.deepEqual(tui.artifacts.map((artifact) => artifact.target).sort(), targets)
-for (const artifact of tui.artifacts) {
-  const [platform, arch] = artifact.target.split('-')
-  const os = { darwin: 'mac', win32: 'win', linux: 'linux' }[platform]
-  const name = `Kun-TUI-${version}-${os}-${arch}.${platform === 'win32' ? 'zip' : 'tar.gz'}`
-  assert.equal(artifact.fileName, name)
-  assert.equal(artifact.url, `${stable}releases/${tag}/${name}`)
-  assert.match(artifact.sha256, /^[a-f0-9]{64}$/)
-  assert.ok(Number.isSafeInteger(artifact.size) && artifact.size > 0)
-  downloads.set(artifact.url, artifact)
-}
 const verified = []
 for (const [url, file] of downloads) {
   const result = await response(url)
-  const algorithm = file.sha256 ? 'sha256' : 'sha512'
+  const algorithm = 'sha512'
   const hash = createHash(algorithm)
   let size = 0
   for await (const chunk of result.body) { size += chunk.length; hash.update(chunk) }
   assert.equal(size, file.size, url)
-  const checksum = hash.digest(file.sha256 ? 'hex' : 'base64')
+  const checksum = hash.digest('base64')
   assert.equal(checksum, file[algorithm], url)
   verified.push({ url, size, [algorithm]: checksum })
 }
@@ -105,5 +87,5 @@ if (mode === 'latest') {
   const legacy = await (await response(`${root}latest/latest.json`)).json()
   assert.equal(legacy.version, version)
 }
-await writeFile(join(evidence, `${mode}-verified.json`), JSON.stringify({ version, tag, commit: process.env.CANDIDATE_COMMIT, verified, tui }, null, 2))
-console.log(`Verified ${mode} public GUI feeds, ${verified.length} artifact downloads, and TUI manifest for ${version}`)
+await writeFile(join(evidence, `${mode}-verified.json`), JSON.stringify({ version, tag, commit: process.env.CANDIDATE_COMMIT, verified }, null, 2))
+console.log(`Verified ${mode} public GUI feeds and ${verified.length} artifact downloads for ${version}`)

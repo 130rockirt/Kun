@@ -443,26 +443,19 @@ GUI 侧不实现 agent 逻辑，只做 HTTP client、SSE subscription 和状态�
 新增能力时优先加 Kun tool 或 HTTP endpoint，不新增 GUI 内第二个
 agent。
 
-## GUI 与独立 TUI 联合发布约束
+## 桌面应用发布约束
 
-GUI 包继续通过 `electron-builder` 内置 `kun/dist` 和平台启动器；独立 TUI 是额外的
-headless 压缩包，不替代 GUI 中的终端命令。两种形态必须从同一 commit 和同一份
-`kun/dist/runtime-build.json` 派生，并共享应用版本、tag、release channel 和 build ID。
-TUI 没有独立版本、独立 tag 或 npm 发布流程。
+从 0.3.8 起，Stable 和 Daily 只分发桌面应用，不再构建独立 TUI 压缩包或推进
+独立 TUI 更新清单。GUI 包仍通过 `electron-builder` 内置 `kun/dist` 和平台
+启动器，`kun` / `kun tui` 及共享 Runtime 保留，随 GUI 一起更新。
 
-独立 TUI 中 `/usage` 是只读 Kun 本地用量报告，展示当前会话、全部会话和
-Top Sessions；`/quota` 展示 provider 订阅额度及可用的本地今日/30 天参考价值，`/provider usage` 与
-`/provider quota` 保持相同的 provider 兼容语义，`/context` 继续展示当前
-请求上下文。这些命令只复用现有查询接口，不增加 runtime 诊断或控制入口。
+发布必须校验 macOS arm64/x64、Windows x64 和 Linux x64/arm64 的 GUI 产物与
+更新元数据。Stable 最终候选包通过真实跨版本 GUI 升级验收后，才能推进 latest；
+签名、历史数据/配置保留、运行时启动和公开下载校验都不能因停止独立 TUI 分发而跳过。
 
-Stable 和 Daily 的发布工作流都必须生成 macOS arm64/x64、Windows x64、Linux x64
-四个独立 TUI 目标，并把 GUI/TUI 同一组资产上传到 GitHub Release 与 R2。R2 的
-`latest.json` 同时描述 GUI 和 TUI，`latest-tui.json` 为独立 TUI 更新器和官网提供
-精简契约。提升 latest 前必须预检三个 GUI 平台和四个 TUI 目标；任一缺失或哈希、
-版本、tag、commit、build ID 不一致都要终止联合发布。
-
-独立 TUI 固定携带 Node.js，Stable 只做节流后的更新提示并要求显式确认；GUI 内置
-TUI 跟随桌面应用更新，Daily/frontier 独立包禁止自更新。
+历史独立 TUI 包及其旧更新清单不在本次变更中删除。旧独立客户端不会收到 0.3.8
+独立包；需要安装桌面应用才能获得后续版本。TUI 的只读用量、provider 额度和上下文
+命令继续复用已有协议，不增加 GUI Runtime 诊断或控制入口。
 
 ## 验证清单
 

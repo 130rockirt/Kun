@@ -75,67 +75,9 @@ test('stable Linux ARM64 packaging retains the proven PR timeout budget', () => 
   assert.equal(workflow.jobs['build-linux-arm64']['timeout-minutes'], 180)
 })
 
-test('stable release compares the candidate TUI build with the previous release', () => {
-  const workflow = readWorkflow('release.yml')
-  const publish = workflow.jobs.publish
-  const download = stepByName(publish, 'Download previous TUI release contract')
-  const assemble = stepByName(publish, 'Assemble standalone TUI release contract')
-
-  assert.equal(download.if, "needs.prepare.outputs.previous_tag != ''")
-  assert.match(download.run, /if gh release download "\$\{PREVIOUS_TAG\}" --pattern release-tui\.json/u)
-  assert.match(download.run, /PREVIOUS_TUI_RELEASE=/u)
-  assert.match(download.run, /::warning::No release-tui\.json asset/u)
-  assert.match(download.run, /set -euo pipefail/u)
-  assert.equal(assemble.run.includes('assemble:tui-release'), true)
-})
-
 test('Windows installer syntax checks include the smoke script by absolute path', () => {
   assert.ok(installerHelperPaths.includes(installerSmokePath))
   assert.ok(installerHelperPaths.every(isAbsolute))
-})
-
-test('TUI packaging jobs smoke the real artifact before uploading it', () => {
-  const expectations = [
-    ['release.yml', 'build-tui', 'Upload standalone TUI artifact'],
-    ['daily-dev-prerelease.yml', 'build-tui', 'Upload standalone TUI prerelease artifact']
-  ]
-  for (const [file, jobName, uploadStepName] of expectations) {
-    const job = readWorkflow(file).jobs[jobName]
-    const smoke = job.steps.find(
-      (step) => typeof step.run === 'string' && step.run.includes('smoke:standalone-tui')
-    )
-    assert.ok(smoke, `${file} ${jobName} runs the standalone TUI smoke`)
-    const uploadIndex = job.steps.findIndex((step) => step.name === uploadStepName)
-    const smokeIndex = job.steps.indexOf(smoke)
-    assert.ok(
-      smokeIndex >= 0 && uploadIndex > smokeIndex,
-      `${file} ${jobName} smokes the artifact before uploading`
-    )
-  }
-})
-
-test('PR jobs smoke and probe the assemble layout of real TUI artifacts', () => {
-  const workflow = readWorkflow('pr-checks.yml')
-  const smokeSteps = [
-    ['package-linux-arm64', 'Smoke standalone TUI and verify assemble layout (Linux ARM64)'],
-    ['package-windows', 'Smoke standalone TUI and verify assemble layout (Windows)']
-  ]
-  for (const [jobName, stepName] of smokeSteps) {
-    const step = stepByName(workflow.jobs[jobName], stepName)
-    assert.match(step.run, /smoke:standalone-tui/u, `${jobName} smoke invocation`)
-    assert.match(
-      step.run,
-      /readEmbeddedRelease/u,
-      `${jobName} probes the archive with the assemble layout reader`
-    )
-    const packageStep = workflow.jobs[jobName].steps.find(
-      (candidate) => typeof candidate.run === 'string' && candidate.run.includes('package:tui')
-    )
-    assert.ok(
-      workflow.jobs[jobName].steps.indexOf(step) > workflow.jobs[jobName].steps.indexOf(packageStep),
-      `${jobName} smoke runs after TUI packaging`
-    )
-  }
 })
 
 test('stable latest can only advance after native GUI candidate acceptance', () => {
@@ -154,14 +96,22 @@ test('stable latest can only advance after native GUI candidate acceptance', () 
   assert.ok(steps.every((step) => step['continue-on-error'] !== true))
 })
 
-test('PR gate requires actual all-target TUI assembly', () => {
+test('standalone TUI distribution is removed while GUI upgrade gates stay required', () => {
   const workflow = readWorkflow('pr-checks.yml')
-  assert.ok(workflow.jobs['pr-gate'].needs.includes('tui-release'))
-  assert.ok(workflow.jobs['pr-gate'].steps[0].with.script.includes('needs.tui-release.result'))
   assert.ok(workflow.jobs['pr-gate'].needs.includes('gui-upgrade-windows'))
   assert.ok(workflow.jobs['pr-gate'].steps[0].with.script.includes('needs.gui-upgrade-windows.result'))
-  const tui = readWorkflow('tui-release-acceptance.yml')
-  assert.equal(tui.jobs.package.strategy.matrix.include.length, 5)
-  assert.equal(tui.jobs.assemble.needs, 'package')
-  assert.ok(tui.jobs.assemble.steps.some((step) => step.run?.includes('assemble:tui-release')))
+  for (const file of ['pr-checks.yml', 'release.yml', 'daily-dev-prerelease.yml']) {
+    const current = readWorkflow(file)
+    assert.equal(current.jobs['build-tui'], undefined)
+    assert.equal(current.jobs['tui-release'], undefined)
+    assert.equal(current.jobs['test-windows-self-update'], undefined)
+    for (const job of Object.values(current.jobs)) {
+      for (const step of job.steps ?? []) {
+        assert.doesNotMatch(step.run ?? '', /package:tui|assemble:tui-release|smoke:standalone-tui|upload-tui|--require-tui/)
+      }
+    }
+  }
+  const promotion = readWorkflow('release-gui-acceptance.yml').jobs.promote.steps
+    .find((step) => step.run?.includes('publish-r2.mjs promote'))
+  assert.match(promotion.run, /--require-all-platforms/)
 })
