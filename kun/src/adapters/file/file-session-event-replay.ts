@@ -152,6 +152,7 @@ export interface FileSessionEventSubsystemHost {
   readonly dataDir: string
   readonly fileAccess: JsonlFileAccessCoordinator
   readonly highestSeqCache: { delete(threadId: string): void }
+  readonly eventsSizeTracker: { invalidate(threadId: string): void }
   readonly compactionScheduler: { schedule(threadId: string, kind: 'events'): void }
   eventsPath(threadId: string): string
   eventHistoryRevision(threadId: string): number
@@ -190,7 +191,7 @@ export function createFileSessionEventSubsystem(
     fileAccess: host.fileAccess,
     readRevision: (threadId) => host.eventHistoryRevision(threadId),
     bumpRevision: (threadId) => host.bumpEventHistoryRevision(threadId),
-    invalidateCache: (threadId) => { host.highestSeqCache.delete(threadId) },
+    invalidateCache: (threadId) => { host.highestSeqCache.delete(threadId); host.eventsSizeTracker.invalidate(threadId) },
     withWrite: (threadId, operation) => host.withThreadWrite(threadId, operation),
     scheduleRetry: (threadId) => host.compactionScheduler.schedule(threadId, 'events'),
     eventIndex

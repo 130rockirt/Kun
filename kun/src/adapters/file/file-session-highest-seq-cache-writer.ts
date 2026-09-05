@@ -12,7 +12,7 @@ export function makeHighestSeqCacheWriter(
 ): (
   threadId: string,
   seq: number,
-  info: { size: number; mtimeMs: number },
+  info: { size: number; mtimeMs: number | null },
   options?: { preserveHigher?: boolean }
 ) => void {
   return (threadId, seq, info, options = {}) =>

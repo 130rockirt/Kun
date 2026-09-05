@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { atomicWriteFile } from './atomic-write.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
 
-export type HighestSeqCacheEntry = { seq: number; size: number; mtimeMs: number }
+export type HighestSeqCacheEntry = { seq: number; size: number; mtimeMs: number | null }
 
 export async function persistCursorCheckpoint(threadDir: string, seq: number): Promise<void> {
   await mkdir(threadDir, { recursive: true, mode: 0o700 })
@@ -38,7 +38,7 @@ export function updateHighestSeqCache(input: {
   cache: Map<string, HighestSeqCacheEntry>
   threadId: string
   seq: number
-  info: { size: number; mtimeMs: number }
+  info: { size: number; mtimeMs: number | null }
   maxThreads: number
   preserveHigher?: boolean
 }): void {

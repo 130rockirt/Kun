@@ -3,7 +3,7 @@ import type { RuntimeEvent } from '../../contracts/events.js'
 import type { JsonlFileAccessCoordinator } from './jsonl-file-access.js'
 import { scanHighestSeqFromTail } from './file-session-seq-tail-scan.js'
 
-type HighestSeqCacheEntry = { seq: number; size: number; mtimeMs: number }
+type HighestSeqCacheEntry = { seq: number; size: number; mtimeMs: number | null }
 
 /** Resolve a durable event high-water without materializing the event log. */
 export async function loadFileSessionHighestSeq(input: {
@@ -11,7 +11,7 @@ export async function loadFileSessionHighestSeq(input: {
   fileAccess: JsonlFileAccessCoordinator
   cached: () => HighestSeqCacheEntry | undefined
   clearCached: () => void
-  cache: (seq: number, info: { size: number; mtimeMs: number }) => void
+  cache: (seq: number, info: { size: number; mtimeMs: number | null }) => void
   iterate: () => AsyncIterable<RuntimeEvent>
 }): Promise<number> {
   const info = await stat(input.path).catch(() => null)
@@ -20,7 +20,7 @@ export async function loadFileSessionHighestSeq(input: {
     return 0
   }
   const cached = input.cached()
-  if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) {
+  if (cached && cached.size === info.size && (cached.mtimeMs === null || cached.mtimeMs === info.mtimeMs)) {
     input.cache(cached.seq, info)
     return cached.seq
   }
