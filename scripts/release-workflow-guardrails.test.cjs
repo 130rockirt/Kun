@@ -91,3 +91,47 @@ test('Windows installer syntax checks include the smoke script by absolute path'
   assert.ok(installerHelperPaths.includes(installerSmokePath))
   assert.ok(installerHelperPaths.every(isAbsolute))
 })
+
+test('TUI packaging jobs smoke the real artifact before uploading it', () => {
+  const expectations = [
+    ['release.yml', 'build-tui', 'Upload standalone TUI artifact'],
+    ['daily-dev-prerelease.yml', 'build-tui', 'Upload standalone TUI prerelease artifact']
+  ]
+  for (const [file, jobName, uploadStepName] of expectations) {
+    const job = readWorkflow(file).jobs[jobName]
+    const smoke = job.steps.find(
+      (step) => typeof step.run === 'string' && step.run.includes('smoke:standalone-tui')
+    )
+    assert.ok(smoke, `${file} ${jobName} runs the standalone TUI smoke`)
+    const uploadIndex = job.steps.findIndex((step) => step.name === uploadStepName)
+    const smokeIndex = job.steps.indexOf(smoke)
+    assert.ok(
+      smokeIndex >= 0 && uploadIndex > smokeIndex,
+      `${file} ${jobName} smokes the artifact before uploading`
+    )
+  }
+})
+
+test('PR jobs smoke and probe the assemble layout of real TUI artifacts', () => {
+  const workflow = readWorkflow('pr-checks.yml')
+  const smokeSteps = [
+    ['package-linux-arm64', 'Smoke standalone TUI and verify assemble layout (Linux ARM64)'],
+    ['package-windows', 'Smoke standalone TUI and verify assemble layout (Windows)']
+  ]
+  for (const [jobName, stepName] of smokeSteps) {
+    const step = stepByName(workflow.jobs[jobName], stepName)
+    assert.match(step.run, /smoke:standalone-tui/u, `${jobName} smoke invocation`)
+    assert.match(
+      step.run,
+      /readEmbeddedRelease/u,
+      `${jobName} probes the archive with the assemble layout reader`
+    )
+    const packageStep = workflow.jobs[jobName].steps.find(
+      (candidate) => typeof candidate.run === 'string' && candidate.run.includes('package:tui')
+    )
+    assert.ok(
+      workflow.jobs[jobName].steps.indexOf(step) > workflow.jobs[jobName].steps.indexOf(packageStep),
+      `${jobName} smoke runs after TUI packaging`
+    )
+  }
+})

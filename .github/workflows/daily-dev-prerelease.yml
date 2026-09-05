@@ -382,6 +382,14 @@ jobs:
           --target "${{ matrix.target }}"
           --output dist
 
+      - name: Smoke standalone TUI prerelease (host-native)
+        shell: bash
+        timeout-minutes: 20
+        run: >-
+          artifact="$(ls dist/Kun-TUI-*.tar.gz 2>/dev/null || ls dist/Kun-TUI-*.zip)";
+          npm run smoke:standalone-tui -- --artifact "${artifact}"
+          --version "${{ needs.prepare.outputs.app_version }}" --target "${{ matrix.target }}"
+
       - name: Upload standalone TUI prerelease artifact
         uses: actions/upload-artifact@v4
         with:

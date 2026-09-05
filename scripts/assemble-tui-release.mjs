@@ -112,17 +112,49 @@ export async function assembleTuiRelease(input) {
   return release
 }
 
-async function readEmbeddedRelease(path) {
-  try {
-    if (path.endsWith('.zip')) {
-      return JSON.parse(await readZipEntry(path, 'kun/release.json'))
+const POINTER_MEMBER = 'kun/current'
+const LEGACY_METADATA_MEMBER = 'kun/release.json'
+
+// Standalone TUI archives since the atomic-pointer change store metadata at
+// kun/releases/<buildId>/release.json with kun/current pointing at the build.
+// Archives built before that layout keep the flat kun/release.json member.
+export async function readEmbeddedRelease(path) {
+  const attempted = [POINTER_MEMBER]
+  const pointer = await readArchiveMember(path, POINTER_MEMBER)
+  if (pointer !== null) {
+    const releasePointer = pointer.trim()
+    if (!/^releases\/[a-f0-9]{64}$/.test(releasePointer)) {
+      throw new Error(
+        `Invalid standalone TUI current pointer in ${basename(path)}: ${JSON.stringify(releasePointer)}`
+      )
     }
-    return JSON.parse(execFileSync('tar', ['-xOf', path, 'kun/release.json'], {
+    const metadataMember = `kun/${releasePointer}/release.json`
+    attempted.push(metadataMember)
+    const metadata = await readArchiveMember(path, metadataMember)
+    if (metadata !== null) return JSON.parse(metadata)
+  }
+  attempted.push(LEGACY_METADATA_MEMBER)
+  const legacy = await readArchiveMember(path, LEGACY_METADATA_MEMBER)
+  if (legacy !== null) return JSON.parse(legacy)
+  throw new Error(
+    `Cannot read standalone TUI release metadata from ${basename(path)}: ` +
+    `missing ${attempted.join(', ')}`
+  )
+}
+
+async function readArchiveMember(path, member) {
+  if (path.endsWith('.zip')) {
+    return readZipEntry(path, member)
+  }
+  try {
+    return execFileSync('tar', ['-xOf', path, member], {
       encoding: 'utf8',
       maxBuffer: 1024 * 1024
-    }))
-  } catch (error) {
-    throw new Error(`Cannot read kun/release.json from ${basename(path)}: ${error.message}`)
+    })
+  } catch {
+    // A non-zero tar exit means the member is absent. The caller tries the
+    // next candidate layout member before reporting a read failure.
+    return null
   }
 }
 
@@ -142,7 +174,13 @@ function readZipEntry(path, expectedName) {
       }
       zip.on('error', fail)
       zip.on('end', () => {
-        if (!settled) fail(new Error(`Missing ${expectedName} in ${basename(path)}`))
+        if (!settled) {
+          settled = true
+          zip.close()
+          // A missing entry is not an error; the caller falls back to other
+          // layout members before failing.
+          resolvePromise(null)
+        }
       })
       zip.on('entry', (entry) => {
         if (entry.fileName !== expectedName) {

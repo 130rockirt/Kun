@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import yazl from 'yazl'
-import { assembleTuiRelease } from './assemble-tui-release.mjs'
+import { assembleTuiRelease, readEmbeddedRelease } from './assemble-tui-release.mjs'
 
 const BUILD_ID = 'a'.repeat(64)
 const COMMIT = 'b'.repeat(40)
@@ -22,36 +22,7 @@ const DEFINITIONS = [
 test('assembles tar and zip targets into one shared GUI/TUI release contract', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'assemble-tui-release-'))
   try {
-    for (const [target, platform, os, arch, format] of DEFINITIONS) {
-      const fileName = `Kun-TUI-1.2.3-${os}-${arch}.${format}`
-      const archive = join(directory, fileName)
-      const release = {
-        schemaVersion: 1,
-        productName: 'Kun',
-        component: 'tui',
-        version: '1.2.3',
-        artifactVersion: '1.2.3',
-        tag: 'v1.2.3',
-        channel: 'stable',
-        target,
-        platform,
-        os,
-        arch,
-        format,
-        buildId: BUILD_ID,
-        commit: COMMIT,
-        nodeVersion: '22.23.1',
-        updateEnabled: true,
-        updateManifestUrl: 'https://downloads.example.test/latest-tui.json'
-      }
-      await createArchive(directory, archive, format, release)
-      const bytes = await readFile(archive)
-      await writeFile(`${archive}.json`, JSON.stringify({
-        fileName,
-        size: (await stat(archive)).size,
-        sha256: createHash('sha256').update(bytes).digest('hex')
-      }))
-    }
+    await stageTargetArtifacts(directory, { legacy: false })
 
     const release = await assembleTuiRelease({
       directory,
@@ -111,21 +82,138 @@ test('assembles tar and zip targets into one shared GUI/TUI release contract', a
   }
 })
 
-async function createArchive(directory, archive, format, release) {
+test('still assembles legacy flat-layout archives built before the pointer switch', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'assemble-tui-release-legacy-'))
+  try {
+    await stageTargetArtifacts(directory, { legacy: true })
+    const release = await assembleTuiRelease({
+      directory,
+      version: '1.2.3',
+      artifactVersion: '1.2.3',
+      tag: 'v1.2.3',
+      channel: 'stable',
+      commit: COMMIT,
+      expectedBuildId: BUILD_ID,
+      publicBaseUrl: 'https://downloads.example.test',
+      releasePrefix: 'deepseek-gui'
+    })
+    assert.equal(release.buildId, BUILD_ID)
+    assert.equal(release.artifacts.length, DEFINITIONS.length)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('rejects archives that expose neither the pointer layout nor the legacy metadata member', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'assemble-tui-release-empty-'))
+  try {
+    const stage = join(directory, 'stage-empty')
+    await mkdir(join(stage, 'kun'), { recursive: true })
+    await writeFile(join(stage, 'kun', 'README.txt'), 'no release metadata here')
+    for (const format of ['tar.gz', 'zip']) {
+      const archive = join(directory, `empty.${format}`)
+      if (format === 'zip') {
+        const zip = new yazl.ZipFile()
+        zip.addBuffer(Buffer.from('no release metadata here'), 'kun/README.txt')
+        zip.end()
+        await finished(zip, archive)
+      } else {
+        execFileSync('tar', ['-czf', archive, '-C', stage, 'kun'])
+      }
+      await assert.rejects(
+        readEmbeddedRelease(archive),
+        /Cannot read standalone TUI release metadata from empty\./
+      )
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('rejects a pointer that does not reference a release directory', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'assemble-tui-release-pointer-'))
+  try {
+    const stage = join(directory, 'stage-pointer')
+    await mkdir(join(stage, 'kun'), { recursive: true })
+    await writeFile(join(stage, 'kun', 'current'), 'shared/golden-build\n')
+    const archive = join(directory, 'pointer.tar.gz')
+    execFileSync('tar', ['-czf', archive, '-C', stage, 'kun'])
+    await assert.rejects(
+      readEmbeddedRelease(archive),
+      /Invalid standalone TUI current pointer/
+    )
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+async function stageTargetArtifacts(directory, { legacy }) {
+  for (const [target, platform, os, arch, format] of DEFINITIONS) {
+    const fileName = `Kun-TUI-1.2.3-${os}-${arch}.${format}`
+    const archive = join(directory, fileName)
+    const release = {
+      schemaVersion: 1,
+      productName: 'Kun',
+      component: 'tui',
+      version: '1.2.3',
+      artifactVersion: '1.2.3',
+      tag: 'v1.2.3',
+      channel: 'stable',
+      target,
+      platform,
+      os,
+      arch,
+      format,
+      buildId: BUILD_ID,
+      commit: COMMIT,
+      nodeVersion: '22.23.1',
+      updateEnabled: true,
+      updateManifestUrl: 'https://downloads.example.test/latest-tui.json'
+    }
+    await createArchive(directory, archive, format, release, { legacy })
+    const bytes = await readFile(archive)
+    await writeFile(`${archive}.json`, JSON.stringify({
+      fileName,
+      size: (await stat(archive)).size,
+      sha256: createHash('sha256').update(bytes).digest('hex')
+    }))
+  }
+}
+
+async function createArchive(directory, archive, format, release, { legacy }) {
   if (format === 'zip') {
     const zip = new yazl.ZipFile()
-    zip.addBuffer(Buffer.from(JSON.stringify(release)), 'kun/release.json')
+    if (legacy) {
+      zip.addBuffer(Buffer.from(JSON.stringify(release)), 'kun/release.json')
+    } else {
+      zip.addBuffer(Buffer.from(`releases/${release.buildId}\n`), 'kun/current')
+      zip.addBuffer(
+        Buffer.from(`${JSON.stringify(release, null, 2)}\n`),
+        `kun/releases/${release.buildId}/release.json`
+      )
+    }
     zip.end()
-    await new Promise((resolvePromise, reject) => {
-      zip.outputStream
-        .pipe(createWriteStream(archive))
-        .on('error', reject)
-        .on('close', resolvePromise)
-    })
+    await finished(zip, archive)
     return
   }
   const stage = join(directory, `stage-${release.target}`)
-  await mkdir(join(stage, 'kun'), { recursive: true })
-  await writeFile(join(stage, 'kun', 'release.json'), JSON.stringify(release))
+  if (legacy) {
+    await mkdir(join(stage, 'kun'), { recursive: true })
+    await writeFile(join(stage, 'kun', 'release.json'), JSON.stringify(release))
+  } else {
+    const releaseDir = join(stage, 'kun', 'releases', release.buildId)
+    await mkdir(releaseDir, { recursive: true })
+    await writeFile(join(stage, 'kun', 'current'), `releases/${release.buildId}\n`)
+    await writeFile(join(releaseDir, 'release.json'), `${JSON.stringify(release, null, 2)}\n`)
+  }
   execFileSync('tar', ['-czf', archive, '-C', stage, 'kun'])
+}
+
+function finished(zip, archive) {
+  return new Promise((resolvePromise, reject) => {
+    zip.outputStream
+      .pipe(createWriteStream(archive))
+      .on('error', reject)
+      .on('close', resolvePromise)
+  })
 }
