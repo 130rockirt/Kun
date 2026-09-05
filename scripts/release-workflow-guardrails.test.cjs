@@ -137,3 +137,31 @@ test('PR jobs smoke and probe the assemble layout of real TUI artifacts', () => 
     )
   }
 })
+
+test('stable latest can only advance after native GUI candidate acceptance', () => {
+  const release = readWorkflow('release.yml')
+  assert.deepEqual(release.jobs['accept-and-publish'].needs, ['prepare', 'publish'])
+  assert.equal(release.jobs['accept-and-publish'].uses, './.github/workflows/release-gui-acceptance.yml')
+  assert.ok(release.jobs.publish.steps.every((step) => !step.run?.includes('promote')))
+  const acceptance = readWorkflow('release-gui-acceptance.yml')
+  assert.equal(acceptance.jobs.promote.needs, 'accept')
+  const steps = acceptance.jobs.promote.steps
+  const verify = steps.findIndex((step) => step.run?.includes('verify-public-release.mjs candidate'))
+  const promote = steps.findIndex((step) => step.run?.includes('publish-r2.mjs promote'))
+  const readback = steps.findIndex((step) => step.run?.includes('verify-public-release.mjs latest'))
+  const publish = steps.findIndex((step) => step.name === 'Publish GitHub Release')
+  assert.ok(verify >= 0 && promote > verify && readback > promote && publish > readback)
+  assert.ok(steps.every((step) => step['continue-on-error'] !== true))
+})
+
+test('PR gate requires actual all-target TUI assembly', () => {
+  const workflow = readWorkflow('pr-checks.yml')
+  assert.ok(workflow.jobs['pr-gate'].needs.includes('tui-release'))
+  assert.ok(workflow.jobs['pr-gate'].steps[0].with.script.includes('needs.tui-release.result'))
+  assert.ok(workflow.jobs['pr-gate'].needs.includes('gui-upgrade-windows'))
+  assert.ok(workflow.jobs['pr-gate'].steps[0].with.script.includes('needs.gui-upgrade-windows.result'))
+  const tui = readWorkflow('tui-release-acceptance.yml')
+  assert.equal(tui.jobs.package.strategy.matrix.include.length, 5)
+  assert.equal(tui.jobs.assemble.needs, 'package')
+  assert.ok(tui.jobs.assemble.steps.some((step) => step.run?.includes('assemble:tui-release')))
+})

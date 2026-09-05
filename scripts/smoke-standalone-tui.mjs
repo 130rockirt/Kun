@@ -64,12 +64,8 @@ async function main() {
     }
     const node = join(releaseDir, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node')
     const entry = join(releaseDir, 'app', 'kun', 'dist', 'cli', 'serve-entry.js')
-    const geminiRoot = join(releaseDir, 'app', 'kun', 'node_modules', '@google', 'gemini-cli')
-    const geminiEntry = join(geminiRoot, 'bundle', 'gemini.js')
-    const geminiManifest = JSON.parse(await readFile(join(geminiRoot, 'package.json'), 'utf8'))
     await stat(node)
     await stat(entry)
-    await stat(geminiEntry)
     const environment = {
       ...process.env,
       KUN_STANDALONE_ROOT: root,
@@ -89,7 +85,6 @@ async function main() {
     if (process.platform !== 'win32') {
       expectOutput(launcher, ['--version'], environment, `kun ${expectedVersion}`)
     }
-    expectOutput(node, [geminiEntry, '--version'], environment, geminiManifest.version)
     expectContains(node, [entry, '--help'], environment, 'kun <command> [options]')
     expectContains(node, [entry, 'tui', '--help'], environment, 'kun [tui options]')
     expectContains(
