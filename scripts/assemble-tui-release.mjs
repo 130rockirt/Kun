@@ -114,32 +114,40 @@ export async function assembleTuiRelease(input) {
 
 const POINTER_MEMBER = 'kun/current'
 const LEGACY_METADATA_MEMBER = 'kun/release.json'
+const POINTER_PATTERN = /^releases\/([a-f0-9]{64})$/
 
 // Standalone TUI archives since the atomic-pointer change store metadata at
 // kun/releases/<buildId>/release.json with kun/current pointing at the build.
 // Archives built before that layout keep the flat kun/release.json member.
+// A present pointer is authoritative: never fall back to the legacy member.
 export async function readEmbeddedRelease(path) {
-  const attempted = [POINTER_MEMBER]
   const pointer = await readArchiveMember(path, POINTER_MEMBER)
   if (pointer !== null) {
     const releasePointer = pointer.trim()
-    if (!/^releases\/[a-f0-9]{64}$/.test(releasePointer)) {
+    const match = releasePointer.match(POINTER_PATTERN)
+    if (!match) {
       throw new Error(
         `Invalid standalone TUI current pointer in ${basename(path)}: ${JSON.stringify(releasePointer)}`
       )
     }
-    const metadataMember = `kun/${releasePointer}/release.json`
-    attempted.push(metadataMember)
+    const buildId = match[1]
+    const metadataMember = `kun/releases/${buildId}/release.json`
     const metadata = await readArchiveMember(path, metadataMember)
-    if (metadata !== null) return JSON.parse(metadata)
+    if (metadata === null) {
+      throw new Error(`Cannot read ${metadataMember} from ${basename(path)}`)
+    }
+    const embedded = JSON.parse(metadata)
+    if (embedded?.buildId !== buildId) {
+      throw new Error(
+        `Embedded TUI build id does not match current pointer in ${basename(path)}: ` +
+        `${String(embedded?.buildId)} != ${buildId}`
+      )
+    }
+    return embedded
   }
-  attempted.push(LEGACY_METADATA_MEMBER)
   const legacy = await readArchiveMember(path, LEGACY_METADATA_MEMBER)
   if (legacy !== null) return JSON.parse(legacy)
-  throw new Error(
-    `Cannot read standalone TUI release metadata from ${basename(path)}: ` +
-    `missing ${attempted.join(', ')}`
-  )
+  throw new Error(`Cannot read ${LEGACY_METADATA_MEMBER} from ${basename(path)}`)
 }
 
 async function readArchiveMember(path, member) {
@@ -183,7 +191,7 @@ function readZipEntry(path, expectedName) {
         }
       })
       zip.on('entry', (entry) => {
-        if (entry.fileName !== expectedName) {
+        if (normalizeArchiveMemberName(entry.fileName) !== expectedName) {
           zip.readEntry()
           return
         }
@@ -214,6 +222,10 @@ function readZipEntry(path, expectedName) {
       zip.readEntry()
     })
   })
+}
+
+function normalizeArchiveMemberName(name) {
+  return String(name).replaceAll('\\', '/').replace(/^\.\//, '')
 }
 
 function validateEmbeddedRelease(value, expected) {

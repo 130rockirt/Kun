@@ -44,6 +44,9 @@ test('assembles tar and zip targets into one shared GUI/TUI release contract', a
       await readFile(join(directory, 'SHA256SUMS-tui.txt'), 'utf8'),
       /Kun-TUI-1\.2\.3-win-x64\.zip/
     )
+    const contract = JSON.parse(await readFile(join(directory, 'release-tui.json'), 'utf8'))
+    assert.equal(contract.buildId, BUILD_ID)
+    assert.equal(contract.artifacts.length, DEFINITIONS.length)
 
     const previousRelease = join(directory, 'previous-release-tui.json')
     await writeFile(previousRelease, JSON.stringify({ version: '1.2.2', buildId: BUILD_ID }))
@@ -122,7 +125,7 @@ test('rejects archives that expose neither the pointer layout nor the legacy met
       }
       await assert.rejects(
         readEmbeddedRelease(archive),
-        /Cannot read standalone TUI release metadata from empty\./
+        /Cannot read kun\/release\.json from empty\./
       )
     }
   } finally {
@@ -147,29 +150,99 @@ test('rejects a pointer that does not reference a release directory', async () =
   }
 })
 
+test('does not fall back to kun/release.json when a pointer is present but invalid', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'assemble-tui-release-no-fallback-'))
+  try {
+    const stage = join(directory, 'stage-no-fallback')
+    await mkdir(join(stage, 'kun'), { recursive: true })
+    await writeFile(join(stage, 'kun', 'current'), '../escape\n')
+    await writeFile(join(stage, 'kun', 'release.json'), JSON.stringify(sampleRelease()))
+    const archive = join(directory, 'no-fallback.tar.gz')
+    execFileSync('tar', ['-czf', archive, '-C', stage, 'kun'])
+    await assert.rejects(
+      readEmbeddedRelease(archive),
+      /Invalid standalone TUI current pointer/
+    )
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('rejects a pointer whose release.json is missing', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'assemble-tui-release-missing-meta-'))
+  try {
+    const stage = join(directory, 'stage-missing-meta')
+    await mkdir(join(stage, 'kun'), { recursive: true })
+    await writeFile(join(stage, 'kun', 'current'), `releases/${BUILD_ID}\n`)
+    await writeFile(join(stage, 'kun', 'release.json'), JSON.stringify(sampleRelease()))
+    const archive = join(directory, 'missing-meta.tar.gz')
+    execFileSync('tar', ['-czf', archive, '-C', stage, 'kun'])
+    await assert.rejects(
+      readEmbeddedRelease(archive),
+      new RegExp(`Cannot read kun/releases/${BUILD_ID}/release\\.json`)
+    )
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('rejects a pointer that does not match the embedded build id', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'assemble-tui-release-mismatch-'))
+  try {
+    const otherBuildId = 'c'.repeat(64)
+    const stage = join(directory, 'stage-mismatch')
+    const releaseDir = join(stage, 'kun', 'releases', BUILD_ID)
+    await mkdir(releaseDir, { recursive: true })
+    await writeFile(join(stage, 'kun', 'current'), `releases/${BUILD_ID}\n`)
+    await writeFile(
+      join(releaseDir, 'release.json'),
+      JSON.stringify(sampleRelease({ buildId: otherBuildId }))
+    )
+    const archive = join(directory, 'mismatch.tar.gz')
+    execFileSync('tar', ['-czf', archive, '-C', stage, 'kun'])
+    await assert.rejects(
+      readEmbeddedRelease(archive),
+      /Embedded TUI build id does not match current pointer/
+    )
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+function sampleRelease(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    productName: 'Kun',
+    component: 'tui',
+    version: '1.2.3',
+    artifactVersion: '1.2.3',
+    tag: 'v1.2.3',
+    channel: 'stable',
+    target: 'linux-x64',
+    platform: 'linux',
+    os: 'linux',
+    arch: 'x64',
+    format: 'tar.gz',
+    buildId: BUILD_ID,
+    commit: COMMIT,
+    nodeVersion: '22.23.1',
+    updateEnabled: true,
+    updateManifestUrl: 'https://downloads.example.test/latest-tui.json',
+    ...overrides
+  }
+}
+
 async function stageTargetArtifacts(directory, { legacy }) {
   for (const [target, platform, os, arch, format] of DEFINITIONS) {
     const fileName = `Kun-TUI-1.2.3-${os}-${arch}.${format}`
     const archive = join(directory, fileName)
-    const release = {
-      schemaVersion: 1,
-      productName: 'Kun',
-      component: 'tui',
-      version: '1.2.3',
-      artifactVersion: '1.2.3',
-      tag: 'v1.2.3',
-      channel: 'stable',
+    const release = sampleRelease({
       target,
       platform,
       os,
       arch,
-      format,
-      buildId: BUILD_ID,
-      commit: COMMIT,
-      nodeVersion: '22.23.1',
-      updateEnabled: true,
-      updateManifestUrl: 'https://downloads.example.test/latest-tui.json'
-    }
+      format
+    })
     await createArchive(directory, archive, format, release, { legacy })
     const bytes = await readFile(archive)
     await writeFile(`${archive}.json`, JSON.stringify({
