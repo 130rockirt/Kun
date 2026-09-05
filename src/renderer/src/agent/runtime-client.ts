@@ -4,7 +4,8 @@ import type {
   RuntimeRequestResult,
   SseEndPayload,
   SseErrorPayload,
-  SseEventPayload
+  SseEventPayload,
+  SseOpenPayload
 } from '@shared/kun-gui-api'
 
 class RendererRuntimeClient {
@@ -107,6 +108,10 @@ class RendererRuntimeClient {
 
   onSseEvent(handler: (payload: SseEventPayload) => void): () => void {
     return window.kunGui.onSseEvent(handler)
+  }
+
+  onSseOpen(handler: (payload: SseOpenPayload) => void): () => void {
+    return window.kunGui.onSseOpen(handler)
   }
 
   onSseEnd(handler: (payload: SseEndPayload) => void): () => void {

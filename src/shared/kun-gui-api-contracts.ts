@@ -632,7 +632,7 @@ export type LegacySessionImportResult =
   | ({ ok: true } & LegacySessionImportSummary)
   | { ok: false; message: string }
 
-export type { SseEventPayload, SseEndPayload, SseErrorPayload } from './kun-gui-sse-contracts'
+export type { SseEventPayload, SseOpenPayload, SseEndPayload, SseErrorPayload, KunGuiSseSurface } from './kun-gui-sse-contracts'
 
 export type TrayActionPayload =
   | { type: 'new-chat' }

@@ -69,6 +69,7 @@ function installDsGui(overrides: Partial<Window['kunGui']>): void {
       })),
       stopSse: vi.fn(async () => true),
       ackSse: vi.fn(async () => true),
+      onSseOpen: vi.fn(() => () => undefined),
       onSseEvent: vi.fn(() => () => undefined),
       onSseEnd: vi.fn(() => () => undefined),
       onSseError: vi.fn(() => () => undefined),

@@ -134,6 +134,7 @@ describe('rendererRuntimeClient', () => {
         restartRuntime: vi.fn(),
         startSse: vi.fn(),
         stopSse: vi.fn(),
+        onSseOpen: vi.fn(),
         onSseEvent: vi.fn(),
         onSseEnd: vi.fn(),
         onSseError: vi.fn()
@@ -159,6 +160,7 @@ describe('rendererRuntimeClient', () => {
         restartRuntime: vi.fn(),
         startSse: vi.fn(),
         stopSse: vi.fn(),
+        onSseOpen: vi.fn(),
         onSseEvent: vi.fn(),
         onSseEnd: vi.fn(),
         onSseError: vi.fn()
@@ -193,6 +195,7 @@ describe('rendererRuntimeClient', () => {
         restartRuntime: vi.fn(),
         startSse: vi.fn(),
         stopSse: vi.fn(),
+        onSseOpen: vi.fn(),
         onSseEvent: vi.fn(),
         onSseEnd: vi.fn(),
         onSseError: vi.fn()
@@ -217,6 +220,7 @@ describe('rendererRuntimeClient', () => {
         restartRuntime,
         startSse: vi.fn(),
         stopSse: vi.fn(),
+        onSseOpen: vi.fn(),
         onSseEvent: vi.fn(),
         onSseEnd: vi.fn(),
         onSseError: vi.fn()

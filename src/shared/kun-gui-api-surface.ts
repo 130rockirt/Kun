@@ -240,9 +240,7 @@ import {
   SkillListResult,
   SkillRootListResult,
   SkillSaveResult,
-  SseEndPayload,
-  SseErrorPayload,
-  SseEventPayload,
+  KunGuiSseSurface,
   SystemNotificationResult,
   TrayActionPayload,
   TurnCompleteNotificationPayload,
@@ -255,7 +253,7 @@ import {
   WorkspaceCreationTimeEntry,
   WorkspacePickResult
 } from './kun-gui-api-contracts'
-export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & ProviderAuthApi & RuntimeRequestIpcApi & {
+export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & ProviderAuthApi & RuntimeRequestIpcApi & KunGuiSseSurface & {
   platform: string
   /** Immutable mode selected before the BrowserWindow and renderer are created. */
   desktopTitleBarMode: DesktopTitleBarMode
@@ -625,17 +623,6 @@ export type KunGuiApi = ExtensionIpcApi & RemoteSshApi & ProviderAuthApi & Runti
   copyWriteDocumentAsRichText: (
     payload: WriteRichClipboardPayload
   ) => Promise<WriteRichClipboardResult>
-  startSse: (
-    threadId: string,
-    sinceSeq: number,
-    streamId?: string,
-    options?: { acknowledgedBatches?: boolean }
-  ) => Promise<{ streamId: string }>
-  stopSse: (streamId: string) => Promise<boolean>
-  ackSse: (streamId: string, batchId: string) => Promise<boolean>
-  onSseEvent: (handler: (payload: SseEventPayload) => void) => () => void
-  onSseEnd: (handler: (payload: SseEndPayload) => void) => () => void
-  onSseError: (handler: (payload: SseErrorPayload) => void) => () => void
   onClawChannelActivity: (handler: (payload: ClawChannelActivityPayload) => void) => () => void
   onTrayAction: (handler: (payload: TrayActionPayload) => void) => () => void
   onRuntimeStatus: (handler: (payload: KunRuntimeStatusPayload) => void) => () => void

@@ -488,6 +488,7 @@ export class KunRuntimeProviderServices {
         offData()
         offEnd()
         offErr()
+        offOpen()
         signal.removeEventListener('abort', onAbort)
         void dispatchTail.finally(() => resolve())
       }
@@ -623,6 +624,10 @@ export class KunRuntimeProviderServices {
         if (sid !== streamId) return
         finish()
       })
+      const offOpen = rendererRuntimeClient.onSseOpen(({ streamId: sid }) => {
+        if (sid !== streamId || settled || signal.aborted) return
+        sink.onConnected?.()
+      })
       const onAbort = (): void => {
         void rendererRuntimeClient.stopSse(streamId)
         finish()
@@ -634,7 +639,6 @@ export class KunRuntimeProviderServices {
       signal.addEventListener('abort', onAbort, { once: true })
       try {
         await rendererRuntimeClient.startSse(threadId, sinceSeq, streamId, { acknowledgedBatches: true })
-        if (!settled && !signal.aborted) sink.onConnected?.()
       } catch (error) {
         sink.onError(error instanceof Error ? error : new Error(String(error)))
         finish()

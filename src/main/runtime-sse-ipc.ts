@@ -276,6 +276,11 @@ export function registerRuntimeSseIpc(options: {
             reconnectDelayMs = SSE_RECONNECT_BASE_MS
             notFoundRetries = 0
             const reader = res.body.getReader()
+            if (!sendSseMessage(wc, 'runtime:sse-open', { streamId: id })) {
+              state.stoppedByClient = true
+              ac.abort()
+              return
+            }
             const dec = new TextDecoder()
             let buffer = ''
 

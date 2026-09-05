@@ -371,6 +371,14 @@ const api = {
     ipcRenderer.invoke('runtime:sse:start', { threadId, sinceSeq, streamId, ...options }),
   stopSse: (streamId) => ipcRenderer.invoke('runtime:sse:stop', streamId),
   ackSse: (streamId, batchId) => ipcRenderer.invoke('runtime:sse:ack', { streamId, batchId }),
+  onSseOpen: (handler) => {
+    const wrapped = (
+      _: Electron.IpcRendererEvent,
+      payload: Parameters<typeof handler>[0]
+    ) => handler(payload)
+    ipcRenderer.on('runtime:sse-open', wrapped)
+    return () => ipcRenderer.removeListener('runtime:sse-open', wrapped)
+  },
   onSseEvent: (handler) => {
     const wrapped = (
       _: Electron.IpcRendererEvent,

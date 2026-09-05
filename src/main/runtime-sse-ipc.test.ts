@@ -184,6 +184,46 @@ describe('runtime-sse-ipc', () => {
     expect(allEvents[1].text).toBe('world')
     expect(allEvents[2].seq).toBe(3)
     expect(allEvents[2].text).toBe('bye')
+
+    // Both successful streams above reconnect from the reader path, so each
+    // reconnect emits an open before its first event.
+    const openMessages = sendCalls.filter((call: any) => call[0] === 'runtime:sse-open')
+    expect(openMessages.length).toBe(2)
+    expect(openMessages[0][1]).toEqual({ streamId })
+  })
+
+  it('emits runtime:sse-open before the first event once the reader is ready', async () => {
+    registerRuntimeSseIpc({
+      ipcMain: mockIpcMain,
+      store: mockStore,
+      ensureRuntime: mockEnsureRuntime,
+      assertRendererRuntimeReady: () => undefined,
+      logError: mockLogError
+    })
+    const startHandler = handlers.get('runtime:sse:start')
+    expect(startHandler).toBeDefined()
+    mockFetch.mockImplementation(async () => {
+      if (mockFetch.mock.calls.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          body: mockReadableStream(['id: 1\ndata: {"text":"hello"}\n\n'])
+        }
+      }
+      return { ok: false, status: 400, body: null }
+    })
+
+    const started = await startHandler!(mockEvent, { threadId: 'thread-open', sinceSeq: 0 })
+    await vi.advanceTimersByTimeAsync(0)
+
+    const calls = mockEvent.sender.send.mock.calls
+    const openIndex = calls.findIndex((call: any) => call[0] === 'runtime:sse-open')
+    const eventIndex = calls.findIndex((call: any) => call[0] === 'runtime:sse-event')
+    expect(openIndex).toBeGreaterThanOrEqual(0)
+    expect(eventIndex).toBeGreaterThanOrEqual(0)
+    expect(openIndex).toBeLessThan(eventIndex)
+    expect(calls[openIndex][1]).toEqual({ streamId: started.streamId })
+    await handlers.get('runtime:sse:stop')!(mockEvent, started.streamId)
   })
 
   it('uses the replay synchronization cursor when reconnecting after an id-less marker', async () => {
@@ -328,6 +368,10 @@ describe('runtime-sse-ipc', () => {
     expect(mockEvent.sender.send).toHaveBeenCalledWith(
       'runtime:sse-error',
       expect.objectContaining({ streamId: started.streamId, status: 404, threadMissing: true })
+    )
+    expect(mockEvent.sender.send).not.toHaveBeenCalledWith(
+      'runtime:sse-open',
+      expect.anything()
     )
     expect(mockLogError).toHaveBeenCalledWith(
       'sse',
