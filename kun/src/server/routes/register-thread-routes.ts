@@ -22,6 +22,7 @@ import {
   setThreadTodos,
   updateThread
 } from './threads.js'
+import { getQueuedTurns } from './thread-queued-turns.js'
 import { syncThreadTodosFromPlan } from './thread-todos-sync-plan.js'
 import { threadTimelineReadKey } from './thread-timeline-read-key.js'
 import { patchThreadTodoStatus } from './project-boards.js'
@@ -285,6 +286,12 @@ export function registerThreadRoutes(
     return resumeQueuedTurns(runtime.turnService, ctx.params.id, (threadId, turnId) => {
       runtime.runTurn(threadId, turnId)
     })
+  })
+  router.add('GET', '/v1/threads/:id/queued-turns', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    const forwarded = await runtime.forwardThreadControl?.(request, ctx.params.id)
+    if (forwarded) return forwarded
+    return getQueuedTurns(runtime.threadService, ctx.params.id)
   })
   router.add('POST', '/v1/threads/:id/review', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

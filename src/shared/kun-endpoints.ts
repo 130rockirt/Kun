@@ -361,6 +361,11 @@ export function kunThreadQueueResumePath(threadId: string): string {
   return `/v1/threads/${encodeURIComponent(threadId)}/queue/resume`
 }
 
+export const KUN_THREAD_QUEUED_TURNS_TEMPLATE = '/v1/threads/{id}/queued-turns'
+export function kunThreadQueuedTurnsPath(threadId: string): string {
+  return `/v1/threads/${encodeURIComponent(threadId)}/queued-turns`
+}
+
 export function kunThreadSteerPath(threadId: string, turnId: string): string {
   return `${kunThreadTurnPath(threadId, turnId)}/steer`
 }

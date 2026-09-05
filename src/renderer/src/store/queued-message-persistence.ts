@@ -237,15 +237,16 @@ export function readQueuedMessageRegistry(
 export function saveQueuedMessageRegistry(
   registry: QueuedMessageRegistry,
   storage: BrowserStorageLike | null = browserStorage()
-): void {
-  if (!storage) return
+): boolean {
+  if (!storage) return true
   try {
     storage.setItem(
       QUEUED_MESSAGE_REGISTRY_KEY,
       JSON.stringify(normalizeQueuedMessageRegistry(registry))
     )
+    return true
   } catch {
-    /* Ignore storage failures; the live in-memory queue remains intact. */
+    return false
   }
 }
 
@@ -262,9 +263,10 @@ export function saveQueuedMessagesForThread(
   threadId: string,
   messages: readonly QueuedUserMessage[],
   storage: BrowserStorageLike | null = browserStorage()
-): void {
+): boolean {
   const id = normalizedString(threadId)
-  if (!id || !storage) return
+  if (!id) return true
+  if (!storage) return true
   const registry = readQueuedMessageRegistry(storage)
   const threads = { ...registry.threads }
   const normalizedMessages = messages.flatMap((message) => {
@@ -280,7 +282,7 @@ export function saveQueuedMessagesForThread(
       updatedAt: new Date().toISOString()
     }
   }
-  saveQueuedMessageRegistry({ version: 1, threads }, storage)
+  return saveQueuedMessageRegistry({ version: 1, threads }, storage)
 }
 
 export function forgetQueuedMessagesForThread(
@@ -389,10 +391,18 @@ export function consumeQueuedMessagesStartedByRuntime(
  */
 export function reconcileQueuedMessages(
   messages: readonly QueuedUserMessage[],
-  runtime: { busy: boolean; turnId?: string | null; blocks?: readonly ChatBlock[] }
+  runtime: { busy: boolean; turnId?: string | null; blocks?: readonly ChatBlock[] },
+  runtimeQueuedTurns?: readonly RuntimeQueuedTurnRef[]
 ): QueuedUserMessage[] {
   const activeTurnId = normalizedString(runtime.turnId)
   const liveUserItemIds = userMessageItemIdsFromBlocks(runtime.blocks)
+  const queuedTurnByClientRequestId = new Map<string, string>()
+  const queuedTurnIds = new Set<string>()
+  for (const turn of runtimeQueuedTurns ?? []) {
+    queuedTurnIds.add(turn.turnId)
+    const requestId = normalizedString(turn.clientRequestId)
+    if (requestId) queuedTurnByClientRequestId.set(requestId, turn.turnId)
+  }
   const reconciled: QueuedUserMessage[] = []
   for (const message of messages) {
     const state = message.deliveryState ?? 'pending'
@@ -411,6 +421,25 @@ export function reconcileQueuedMessages(
       reconciled.push({
         ...message,
         deliveryState: 'failed'
+      })
+      continue
+    }
+    // Runtime-queue ownership is authoritative: when the runtime still holds a
+    // queued turn for this row's idempotency key (or its admitted turn id), keep
+    // it in_flight with the server turn identity so cancel/reorder keeps working
+    // even when the local busy projection is stale after a crash. Paused rows
+    // keep their explicit interrupt state and are intentionally not matched.
+    const rowClientRequestId = normalizedString(message.clientRequestId)
+    const runtimeTurnId =
+      (rowClientRequestId && queuedTurnByClientRequestId.get(rowClientRequestId)) ||
+      (message.deliveryTurnId && queuedTurnIds.has(message.deliveryTurnId)
+        ? message.deliveryTurnId
+        : undefined)
+    if (state !== 'paused' && runtimeTurnId) {
+      reconciled.push({
+        ...message,
+        deliveryState: 'in_flight',
+        deliveryTurnId: runtimeTurnId
       })
       continue
     }
@@ -501,4 +530,34 @@ export function reconcileQueuedMessages(
     })
   }
   return reconciled
+}
+
+/**
+ * A lightweight reference to one durable queued turn, as returned by the
+ * runtime's `GET /v1/threads/:id/queued-turns` endpoint.
+ */
+export type RuntimeQueuedTurnRef = {
+  turnId: string
+  clientRequestId?: string
+  position?: number
+}
+
+/**
+ * Best-effort fetch of the runtime queue for a thread. Returns `undefined` when
+ * the provider does not support queue lookup or the call fails, so callers can
+ * fall back to evidence-based reconciliation without blocking thread loading.
+ */
+export async function fetchRuntimeQueuedTurnsBestEffort(
+  provider: {
+    getQueuedTurns?: (threadId: string) => Promise<{ queuedTurns: readonly RuntimeQueuedTurnRef[] }>
+  },
+  threadId: string
+): Promise<readonly RuntimeQueuedTurnRef[] | undefined> {
+  if (typeof provider.getQueuedTurns !== 'function') return undefined
+  try {
+    const response = await provider.getQueuedTurns(threadId)
+    return response.queuedTurns
+  } catch {
+    return undefined
+  }
 }

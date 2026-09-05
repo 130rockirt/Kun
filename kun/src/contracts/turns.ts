@@ -633,3 +633,21 @@ export const RewindThreadResponse = z.object({
   remainingTurns: z.number().int().nonnegative()
 })
 export type RewindThreadResponse = z.infer<typeof RewindThreadResponse>
+
+/**
+ * A lightweight summary of one durable turn still waiting in a thread's queue.
+ * Used by the renderer to reconcile locally-persisted rows against the runtime
+ * after a crash between admission and local persistence.
+ */
+export const QueuedTurnSummarySchema = z.object({
+  turnId: z.string().min(1),
+  clientRequestId: z.string().trim().min(1).max(256).optional(),
+  position: z.number().int().nonnegative(),
+  createdAt: z.string()
+}).strict()
+export type QueuedTurnSummary = z.infer<typeof QueuedTurnSummarySchema>
+
+export const QueuedTurnsResponseSchema = z.object({
+  queuedTurns: z.array(QueuedTurnSummarySchema)
+}).strict()
+export type QueuedTurnsResponse = z.infer<typeof QueuedTurnsResponseSchema>

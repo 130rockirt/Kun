@@ -1,5 +1,6 @@
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 import { saveQueuedMessagesForThread } from './queued-message-persistence'
+import i18n from '../i18n'
 import { createThreadCreationActions } from './chat-store-thread-creation-actions'
 import { createThreadSelectionActions } from './chat-store-thread-selection-actions'
 import { createThreadQueueActions } from './chat-store-thread-queue-actions'
@@ -24,7 +25,9 @@ export function createThreadActions(
     persistActiveQueuedMessages: () => {
       const state = context.get()
       if (state.activeThreadId) {
-        saveQueuedMessagesForThread(state.activeThreadId, state.queuedMessages)
+        if (!saveQueuedMessagesForThread(state.activeThreadId, state.queuedMessages)) {
+          context.set({ error: i18n.t('common:queuedMessagesPersistenceFailed') })
+        }
       }
     }
   }

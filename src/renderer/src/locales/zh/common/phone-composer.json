@@ -692,5 +692,6 @@
   "autoPlanBuildDirectHint": "计划完成后立即开始构建",
   "autoPlanBuildUseWorktree": "使用 Agent 管理的 Worktree",
   "autoPlanBuildUseOnce": "仅本次使用",
-  "autoPlanBuildSaveDefault": "设为默认并继续"
+  "autoPlanBuildSaveDefault": "设为默认并继续",
+  "queuedMessagesPersistenceFailed": "无法保存排队消息。消息仍保留在内存中，但重启后可能丢失。"
 }

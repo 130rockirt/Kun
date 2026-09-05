@@ -25,6 +25,20 @@ class MemoryStorage implements BrowserStorageLike {
   }
 }
 
+class ThrowingStorage implements BrowserStorageLike {
+  getItem(_key: string): string | null {
+    return null
+  }
+
+  setItem(_key: string, _value: string): void {
+    throw new Error('quota exceeded')
+  }
+
+  removeItem(_key: string): void {
+    throw new Error('quota exceeded')
+  }
+}
+
 describe('queued-message-persistence', () => {
   it('keeps valid queued execution settings and drops unknown policy values', () => {
     const storage = new MemoryStorage()
@@ -336,5 +350,49 @@ describe('queued-message-persistence', () => {
       }
     }))
     expect(readQueuedMessageRegistry(storage)).toEqual(emptyQueuedMessageRegistry())
+  })
+
+  it('returns false when persistence fails instead of silently dropping the write', () => {
+    const storage = new ThrowingStorage()
+    expect(saveQueuedMessagesForThread('thread-a', [
+      { id: 'q-1', text: 'pending', deliveryState: 'pending' }
+    ], storage)).toBe(false)
+  })
+
+  it('reconciles a starting row to in_flight when the runtime still holds its turn', () => {
+    expect(reconcileQueuedMessages([{
+      id: 'q-crash',
+      text: 'admitted before crash',
+      deliveryState: 'starting',
+      clientRequestId: 'req-1'
+    }], {
+      busy: true,
+      turnId: 'turn-other'
+    }, [
+      { turnId: 'turn-queued', clientRequestId: 'req-1', position: 0 }
+    ])).toEqual([{
+      id: 'q-crash',
+      text: 'admitted before crash',
+      deliveryState: 'in_flight',
+      clientRequestId: 'req-1',
+      deliveryTurnId: 'turn-queued'
+    }])
+  })
+
+  it('falls back to pending when the runtime queue does not hold the starting row', () => {
+    expect(reconcileQueuedMessages([{
+      id: 'q-crash',
+      text: 'never reached runtime',
+      deliveryState: 'starting',
+      clientRequestId: 'req-1'
+    }], {
+      busy: false,
+      turnId: null
+    }, [])).toEqual([{
+      id: 'q-crash',
+      text: 'never reached runtime',
+      deliveryState: 'pending',
+      clientRequestId: 'req-1'
+    }])
   })
 })

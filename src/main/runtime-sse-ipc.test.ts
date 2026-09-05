@@ -550,6 +550,75 @@ describe('runtime-sse-ipc', () => {
     await handlers.get('runtime:sse:stop')!(mockEvent, started.streamId)
   })
 
+  it('sends a renderer_ack_timeout error and no end when the renderer never acknowledges', async () => {
+    registerRuntimeSseIpc({
+      ipcMain: mockIpcMain,
+      store: mockStore,
+      ensureRuntime: mockEnsureRuntime,
+      assertRendererRuntimeReady: () => undefined,
+      logError: mockLogError
+    })
+    const startHandler = handlers.get('runtime:sse:start')
+    const ackHandler = handlers.get('runtime:sse:ack')
+    expect(startHandler).toBeDefined()
+    expect(ackHandler).toBeDefined()
+
+    // Emit one event then hang: the renderer never sends runtime:sse:ack.
+    const firstRead = (() => {
+      let sent = false
+      return async () => {
+        if (sent) return await new Promise(() => undefined)
+        sent = true
+        return { done: false, value: new TextEncoder().encode('id: 9\ndata: {"text": "await-ack"}\n\n') }
+      }
+    })()
+    mockFetch.mockImplementation(async () => {
+      if (mockFetch.mock.calls.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: firstRead,
+              cancel: async () => undefined
+            })
+          }
+        }
+      }
+      return { ok: false, status: 400, body: null }
+    })
+
+    const started = await startHandler!(mockEvent, {
+      threadId: 'thread-ack-timeout',
+      sinceSeq: 0,
+      acknowledgedBatches: true
+    })
+    await vi.advanceTimersByTimeAsync(0)
+
+    const batch = mockEvent.sender.send.mock.calls.find((call: any) => call[0] === 'runtime:sse-event')?.[1]
+    expect(batch).toMatchObject({ streamId: started.streamId, events: [{ seq: 9 }] })
+    expect(typeof batch.batchId).toBe('string')
+
+    // The ACK watchdog is 15s; advancing past it must surface a terminal error
+    // instead of silently aborting the stream and leaking the renderer's
+    // subscription promise and IPC listeners.
+    await vi.advanceTimersByTimeAsync(15_000)
+
+    expect(mockEvent.sender.send).toHaveBeenCalledWith('runtime:sse-error', {
+      streamId: started.streamId,
+      code: 'renderer_ack_timeout',
+      threadId: 'thread-ack-timeout',
+      batchId: batch.batchId
+    })
+    expect(mockEvent.sender.send).not.toHaveBeenCalledWith('runtime:sse-end', expect.anything())
+
+    // The timed-out batch is settled, so a late ACK cannot resurrect it.
+    await expect(ackHandler!(mockEvent, {
+      streamId: started.streamId,
+      batchId: batch.batchId
+    })).resolves.toBe(false)
+  })
+
   it('surfaces an id-less server replay error instead of reconnecting into the same cursor', async () => {
     registerRuntimeSseIpc({
       ipcMain: mockIpcMain,

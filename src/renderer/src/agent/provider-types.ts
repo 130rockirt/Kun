@@ -5,6 +5,7 @@ import type {
   CoreMemoryDiagnosticsJson,
   CoreMemoryRecordJson,
   CoreMcpOAuthDiagnosticJson,
+  CoreQueuedTurnsResponseJson,
   CoreResumeSessionMetadataJson,
   CoreRuntimeInfoJson,
   CoreRuntimeSkillJson,
@@ -409,6 +410,7 @@ export interface AgentProvider {
     }
   ): Promise<NormalizedThread>
   getResumeSessionMetadata?(sessionId: string): Promise<CoreResumeSessionMetadataJson>
+  getQueuedTurns?(threadId: string): Promise<CoreQueuedTurnsResponseJson>
   resumeSession?(
     sessionId: string,
     options?: {

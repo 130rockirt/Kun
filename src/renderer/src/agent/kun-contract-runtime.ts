@@ -644,3 +644,14 @@ export type RuntimeErrorJson = {
   details?: unknown
   severity?: 'info' | 'warning' | 'error'
 }
+
+export type CoreQueuedTurnJson = {
+  turnId: string
+  clientRequestId?: string
+  position: number
+  createdAt: string
+}
+
+export type CoreQueuedTurnsResponseJson = {
+  queuedTurns: CoreQueuedTurnJson[]
+}

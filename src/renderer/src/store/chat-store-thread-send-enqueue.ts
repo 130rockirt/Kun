@@ -69,6 +69,7 @@ export async function submitToRuntimeQueue(input: RuntimeQueueSendInput): Promis
     designImagePlacementTarget, attachmentIds, attachments, fileReferences, composerContexts,
     queued, overrides, set, get
   } = input
+  const queuedId = queued?.id ?? `q-${clientRequestId}`
   try {
     const channel = get().route === 'claw' ? activeClawChannel(get()) : null
     await ensureRuntimeProviderForSend({
@@ -120,21 +121,9 @@ export async function submitToRuntimeQueue(input: RuntimeQueueSendInput): Promis
       ...(composerContexts.length ? { composerContexts } : {})
     }
     let accepted: Awaited<ReturnType<typeof p.sendUserMessage>>
-    try {
-      accepted = await p.sendUserMessage(activeThreadId, runtimeText, {
-        ...sendOptions,
-        enqueueIfBusy: true
-      })
-    } catch (busyError) {
-      const busyCode = getRuntimeErrorCode(busyError)
-      if (busyCode !== 'thread_busy' && busyCode !== 'turn_in_progress') throw busyError
-      // The turn settled between the busy check and admission; submit as a
-      // regular turn instead of queueing behind nothing.
-      accepted = await p.sendUserMessage(activeThreadId, runtimeText, sendOptions)
-    }
-    const acceptedMessage = pendingQueuedMessage({
+    const queuedRow = pendingQueuedMessage({
       ...queued,
-      id: queued?.id ?? `q-${clientRequestId}`,
+      id: queuedId,
       text: trimmedText,
       clientRequestId,
       ...(composerContexts.length ? { composerContexts } : {}),
@@ -152,24 +141,57 @@ export async function submitToRuntimeQueue(input: RuntimeQueueSendInput): Promis
       ...(composerModel ? { model: composerModel } : {}),
       ...(userModelChip ? { modelLabel: userModelChip } : {})
     })
-    // pendingQueuedMessage strips delivery markers; restore them for the
-    // runtime-admitted entry.
-    acceptedMessage.deliveryState = 'in_flight'
-    acceptedMessage.deliveryTurnId = accepted.turnId
-    acceptedMessage.deliveryUserMessageItemId =
-      accepted.userMessageItemId ?? acceptedMessage.id
+    // Persist a `starting` row before admission so a crash between the runtime
+    // accepting the turn and the local state update cannot silently drop a
+    // queued turn. The idempotent clientRequestId keeps any later retry safe.
+    const startingRow = { ...queuedRow, deliveryState: 'starting' as const }
     set((s) => {
-      // upsertQueuedSubmission always resets to pending; the accepted entry
-      // is already admitted to the runtime queue, so merge it manually to
-      // keep its in_flight delivery state.
       const existingIndex = s.queuedMessages.findIndex((message) =>
-        message.id === acceptedMessage.id ||
-        Boolean(acceptedMessage.clientRequestId && message.clientRequestId === acceptedMessage.clientRequestId)
+        message.id === startingRow.id ||
+        Boolean(startingRow.clientRequestId && message.clientRequestId === startingRow.clientRequestId)
       )
       const queuedMessages = existingIndex < 0
-        ? [...s.queuedMessages, acceptedMessage]
+        ? [...s.queuedMessages, startingRow]
         : s.queuedMessages.map((message, index) => index === existingIndex
-            ? { ...message, ...acceptedMessage, id: message.id }
+            ? { ...message, ...startingRow, id: message.id }
+            : message)
+      return {
+        queuedMessages,
+        extensionComposerContexts: withoutConsumedComposerContexts(s, composerContexts),
+        error: null
+      }
+    })
+    input.persistActiveQueuedMessages()
+
+    try {
+      accepted = await p.sendUserMessage(activeThreadId, runtimeText, {
+        ...sendOptions,
+        enqueueIfBusy: true
+      })
+    } catch (busyError) {
+      const busyCode = getRuntimeErrorCode(busyError)
+      if (busyCode !== 'thread_busy' && busyCode !== 'turn_in_progress') throw busyError
+      // The turn settled between the busy check and admission; submit as a
+      // regular turn instead of queueing behind nothing.
+      accepted = await p.sendUserMessage(activeThreadId, runtimeText, sendOptions)
+    }
+    // Update the already-persisted starting row to in_flight with the
+    // runtime-admitted turn identity.
+    set((s) => {
+      const existingIndex = s.queuedMessages.findIndex((message) =>
+        message.id === queuedRow.id ||
+        Boolean(queuedRow.clientRequestId && message.clientRequestId === queuedRow.clientRequestId)
+      )
+      const admittedRow = {
+        ...queuedRow,
+        deliveryState: 'in_flight' as const,
+        deliveryTurnId: accepted.turnId,
+        deliveryUserMessageItemId: accepted.userMessageItemId ?? queuedRow.id
+      }
+      const queuedMessages = existingIndex < 0
+        ? [...s.queuedMessages, admittedRow]
+        : s.queuedMessages.map((message, index) => index === existingIndex
+            ? { ...message, ...admittedRow, id: message.id }
             : message)
       return {
         queuedMessages,
@@ -188,7 +210,7 @@ export async function submitToRuntimeQueue(input: RuntimeQueueSendInput): Promis
       if (mirrored.ok) {
         rememberPendingClawFeishuMirror(accepted.turnId, {
           threadId: activeThreadId,
-          userBlockId: accepted.userMessageItemId ?? acceptedMessage.id,
+          userBlockId: accepted.userMessageItemId ?? queuedRow.id,
           userText: trimmedText
         })
       }
@@ -200,7 +222,16 @@ export async function submitToRuntimeQueue(input: RuntimeQueueSendInput): Promis
     // safe, so only bail out on errors that cannot have created server state.
     if (!turnAdmissionOutcomeMayBeUnknown(error)) {
       const view = describeRuntimeError(error)
-      set({ error: view.message })
+      // A deterministic rejection never created server state; drop the
+      // starting row persisted before admission and surface the error.
+      set((s) => ({
+        queuedMessages: s.queuedMessages.filter((message) =>
+          message.id !== queuedId &&
+          !(clientRequestId && message.clientRequestId === clientRequestId)
+        ),
+        error: view.message
+      }))
+      input.persistActiveQueuedMessages()
       return false
     }
     return null

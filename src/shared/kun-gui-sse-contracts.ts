@@ -5,13 +5,16 @@ export type SseOpenPayload = { streamId: string }
 
 export type SseEndPayload = { streamId: string }
 
+export type SseErrorCode = 'replay_reset_required' | 'renderer_ack_timeout'
+
 export type SseErrorPayload = {
   streamId: string
   status?: number
   message?: string
-  code?: 'replay_reset_required'
+  code?: SseErrorCode
   threadId?: string
   floorSeq?: number
+  batchId?: string
 }
 
 /**

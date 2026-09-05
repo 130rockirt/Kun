@@ -197,6 +197,20 @@ export function registerRuntimeSseIpc(options: {
     let connectionSettings = ensuredSettings ?? loadedSettings
     const requestedId = request.streamId?.trim() ?? ''
     const id = requestedId || randomUUID()
+    // Exactly-once terminal signal. Every exit path must send either a
+    // runtime:sse-error or runtime:sse-end so a subscribed renderer always
+    // receives a terminal and can clean up its IPC listeners. `stoppedByClient`
+    // (renderer-initiated stop, destroyed owner, or same-id resubscribe) is the
+    // only case where no terminal is required.
+    let terminalSent = false
+    const sendTerminal = (
+      channel: 'runtime:sse-error' | 'runtime:sse-end',
+      payload: Record<string, unknown>
+    ): boolean => {
+      if (terminalSent) return true
+      terminalSent = true
+      return sendSseMessage(wc, channel, payload)
+    }
     const existing = sseControllers.get(id)
     if (existing) {
       stopSseState(existing)
@@ -209,10 +223,18 @@ export function registerRuntimeSseIpc(options: {
       stoppedByClient: false,
       ackWindow: undefined as unknown as SseAckWindow
     }
-    state.ackWindow = new SseAckWindow(undefined, undefined, Date.now, () => {
+    state.ackWindow = new SseAckWindow(undefined, undefined, Date.now, (batchId) => {
       // A single unacknowledged batch is fatal even when the window is not
-      // full. Abort the subscription; the renderer's recovery path can
-      // resubscribe from its durable snapshot cursor.
+      // full. Send an explicit terminal error before aborting so the renderer
+      // can finish its subscription and clean up its IPC listeners, then tear
+      // the stream down. Its recovery path can resubscribe from its durable
+      // snapshot cursor.
+      sendTerminal('runtime:sse-error', {
+        streamId: id,
+        code: 'renderer_ack_timeout',
+        threadId: request.threadId,
+        batchId
+      })
       ac.abort()
     })
     sseControllers.set(id, state)
@@ -258,7 +280,7 @@ export function registerRuntimeSseIpc(options: {
                   await sleepWithAbort(delayMs, ac.signal)
                   continue
                 }
-                if (!sendSseMessage(wc, 'runtime:sse-error', { streamId: id, status: res.status, ...(res.status === 404 ? { threadMissing: true } : {}) })) {
+                if (!sendTerminal('runtime:sse-error', { streamId: id, status: res.status, ...(res.status === 404 ? { threadMissing: true } : {}) })) {
                   state.stoppedByClient = true
                   ac.abort()
                   return
@@ -360,7 +382,7 @@ export function registerRuntimeSseIpc(options: {
                 ) {
                   throw new Error('SSE server returned an invalid replay reset')
                 }
-                sendSseMessage(wc, 'runtime:sse-error', {
+                sendTerminal('runtime:sse-error', {
                   streamId: id,
                   code: 'replay_reset_required',
                   threadId: request.threadId,
@@ -445,7 +467,7 @@ export function registerRuntimeSseIpc(options: {
               reconnectDelayMs = Math.min(reconnectDelayMs * 2, SSE_RECONNECT_MAX_MS)
               continue
             }
-            if (!sendSseMessage(wc, 'runtime:sse-error', { streamId: id, message: msg })) {
+            if (!sendTerminal('runtime:sse-error', { streamId: id, message: msg })) {
               state.stoppedByClient = true
               ac.abort()
               return
@@ -456,15 +478,19 @@ export function registerRuntimeSseIpc(options: {
         }
       } finally {
         state.ackWindow.rejectAll()
-        if (!state.stoppedByClient && !ac.signal.aborted) {
-          sendSseMessage(wc, 'runtime:sse-end', { streamId: id })
+        if (!terminalSent && !state.stoppedByClient && !ac.signal.aborted) {
+          sendTerminal('runtime:sse-end', { streamId: id })
         }
         if (sseControllers.get(id) === state) sseControllers.delete(id)
       }
     })().catch((error) => {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!state.stoppedByClient) {
+        sendTerminal('runtime:sse-error', { streamId: id, message })
+      }
       if (sseControllers.get(id) === state) sseControllers.delete(id)
       logError('sse', `SSE worker crashed for thread ${request.threadId}`, {
-        message: error instanceof Error ? error.message : String(error),
+        message,
         streamId: id
       })
     })

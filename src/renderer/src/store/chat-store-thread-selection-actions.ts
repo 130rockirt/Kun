@@ -51,6 +51,7 @@ import { queuedMessageGuidancePayload } from './queued-message-guidance'
 import { threadIdBelongsToRemovedCodeProject } from './chat-store-navigation-workspace-removal'
 import { currentTurnStartGeneration } from './turn-start-fence'
 import {
+  fetchRuntimeQueuedTurnsBestEffort,
   isPendingQueuedMessage,
   queuedMessagesForThread,
   reconcileQueuedMessages,
@@ -241,7 +242,9 @@ export function createThreadSelectionActions(
         busy: cached.busy,
         turnId: cached.currentTurnId ?? undefined,
         blocks: cached.blocks
-      })
+      }, durableQueuedMessages.length > 0
+        ? await fetchRuntimeQueuedTurnsBestEffort(p, id)
+        : undefined)
       const remembersCodeThread = targetThread != null &&
         targetThread.archived !== true &&
         isCodeSidebarThread(
@@ -408,7 +411,7 @@ export function createThreadSelectionActions(
         busy,
         turnId: latestTurnId,
         blocks
-      })
+      }, await fetchRuntimeQueuedTurnsBestEffort(p, id))
       if (refreshingActiveThread) {
         sseAbortRef.current?.abort()
         sseAbortRef.current = null

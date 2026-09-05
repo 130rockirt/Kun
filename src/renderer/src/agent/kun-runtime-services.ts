@@ -29,6 +29,7 @@ import {
   kunThreadInterruptPath,
   kunThreadToolCancelPath,
   kunThreadPath,
+  kunThreadQueuedTurnsPath,
   kunThreadStatePath,
   kunThreadTimelinePath,
   kunThreadSteerPath,
@@ -60,6 +61,7 @@ import type {
   CoreMcpOAuthAuthorizeResponseJson,
   CoreMcpOAuthDiagnosticJson,
   CoreMcpOAuthDiagnosticsResponseJson,
+  CoreQueuedTurnsResponseJson,
   CoreResumeSessionMetadataJson,
   CoreResumeSessionResponseJson,
   CoreRuntimeInfoJson,
@@ -99,7 +101,7 @@ export class KunSseSubscriptionError extends Error {
   constructor(
     message: string,
     readonly status?: number,
-    readonly code?: 'replay_reset_required',
+    readonly code?: 'replay_reset_required' | 'renderer_ack_timeout',
     readonly threadId?: string,
     readonly floorSeq?: number
   ) {
@@ -461,6 +463,20 @@ export class KunRuntimeProviderServices {
     return readRuntimeJson<CoreResumeSessionMetadataJson>(
       response.body,
       'runtime returned invalid resume session metadata'
+    )
+  }
+
+  async getQueuedTurns(threadId: string): Promise<CoreQueuedTurnsResponseJson> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      kunThreadQueuedTurnsPath(threadId),
+      'GET'
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'read queued turns failed'))
+    }
+    return readRuntimeJson<CoreQueuedTurnsResponseJson>(
+      response.body,
+      'runtime returned invalid queued turns'
     )
   }
 
