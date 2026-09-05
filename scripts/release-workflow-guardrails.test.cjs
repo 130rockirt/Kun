@@ -82,8 +82,10 @@ test('stable release compares the candidate TUI build with the previous release'
   const assemble = stepByName(publish, 'Assemble standalone TUI release contract')
 
   assert.equal(download.if, "needs.prepare.outputs.previous_tag != ''")
-  assert.match(download.run, /gh release download "\$\{PREVIOUS_TAG\}" --pattern release-tui\.json/u)
+  assert.match(download.run, /if gh release download "\$\{PREVIOUS_TAG\}" --pattern release-tui\.json/u)
   assert.match(download.run, /PREVIOUS_TUI_RELEASE=/u)
+  assert.match(download.run, /::warning::No release-tui\.json asset/u)
+  assert.match(download.run, /set -euo pipefail/u)
   assert.equal(assemble.run.includes('assemble:tui-release'), true)
 })
 

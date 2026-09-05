@@ -580,8 +580,11 @@ jobs:
           set -euo pipefail
           previous_dir="${RUNNER_TEMP}/previous-tui-release"
           mkdir -p "${previous_dir}"
-          gh release download "${PREVIOUS_TAG}" --pattern release-tui.json --dir "${previous_dir}"
-          echo "PREVIOUS_TUI_RELEASE=${previous_dir}/release-tui.json" >> "${GITHUB_ENV}"
+          if gh release download "${PREVIOUS_TAG}" --pattern release-tui.json --dir "${previous_dir}"; then
+            echo "PREVIOUS_TUI_RELEASE=${previous_dir}/release-tui.json" >> "${GITHUB_ENV}"
+          else
+            echo "::warning::No release-tui.json asset for ${PREVIOUS_TAG}; proceeding without a previous TUI release contract"
+          fi
 
       - name: Assemble standalone TUI release contract
         run: >-
