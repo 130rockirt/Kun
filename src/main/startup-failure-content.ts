@@ -55,8 +55,12 @@ export function startupFailurePresentation(error: unknown): StartupFailurePresen
     }
   }
   const owner = error.owner
+  const unverifiable = error.code === 'identity_unverifiable'
   const detail = [
     error.message,
+    ...(unverifiable
+      ? ['Kun failed closed and left the process, active work, and saved data untouched. Close the other Kun process or retry once the system process-inspection (WMI/CIM) is available.']
+      : []),
     `Phase: ${error.phase}`,
     ...(owner?.kind ? [`Owner: ${owner.kind}${owner.flavor ? `/${owner.flavor}` : ''}`] : []),
     ...(owner?.pid ? [`PID: ${owner.pid}`] : []),

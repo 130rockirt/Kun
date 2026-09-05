@@ -45,6 +45,7 @@ export type KunHandoffPhase =
 export type KunHandoffErrorCode =
   | 'unsafe_scope'
   | 'probe_failed'
+  | 'identity_unverifiable'
   | 'target_build_id_missing'
   | 'runtime_stop_failed'
   | 'manager_stop_failed'
@@ -57,6 +58,7 @@ export type KunHandoffProbeClassification =
   | 'manager-discovery-compatible'
   | 'manager-status-compatible'
   | 'manager-status-unavailable'
+  | 'identity-unverifiable'
 
 export type KunHandoffOwnerReport = {
   kind: 'runtime' | 'manager'
@@ -150,6 +152,9 @@ export async function probeInstalledBuildHandoff(
   const deps = { ...defaultDependencies, ...overrides }
   const discovered = await discoverHandoffOwnersSafely(input, deps)
   assertReplacementHasNoClientOwner(input, discovered)
+  if (discovered.unknownManager || discovered.unknownRuntimes.length > 0) {
+    throw identityUnverifiableError(input, discovered)
+  }
   if (!input.targetBuildId) return 'unknown'
   if (discovered.staleManager || discovered.staleRuntimes.length > 0) return 'mismatched'
   const targetBuildId = input.targetBuildId
@@ -236,6 +241,9 @@ export async function drainKunOwnersForHandoffWithLock(
   }
   discovered = await settleAndRediscoverStaleOwners(input, discovered, deps)
   assertReplacementHasNoClientOwner(input, discovered)
+  if (discovered.unknownManager || discovered.unknownRuntimes.length > 0) {
+    throw identityUnverifiableError(input, discovered)
+  }
   for (const probeClassification of discovered.probeClassifications) {
     emit(input, startedAt, deps, { phase: 'discover', probeClassification })
   }
@@ -396,6 +404,9 @@ export async function drainKunOwnersForHandoffWithLock(
 
   let remaining = await discoverHandoffOwnersSafely(input, deps)
   remaining = await settleAndRediscoverStaleOwners(input, remaining, deps)
+  if (remaining.unknownManager || remaining.unknownRuntimes.length > 0) {
+    throw identityUnverifiableError(input, remaining)
+  }
   if (remaining.manager || remaining.runtimes.length > 0) {
     const owner = remaining.manager
       ? managerOwnerReport(remaining.manager)
@@ -510,6 +521,25 @@ function ownerLabel(owner: Omit<KunHandoffOwnerReport, 'result'>): string {
   return owner.kind === 'runtime'
     ? `${owner.flavor ?? 'unknown'} Runtime${owner.pid ? ` ${owner.pid}` : ''}`
     : `Service Manager${owner.pid ? ` ${owner.pid}` : ''}`
+}
+
+function identityUnverifiableError(
+  input: KunInstalledBuildHandoffInput,
+  discovered: DiscoveredHandoffOwners
+): KunHandoffError {
+  const owner = discovered.unknownManager
+    ? managerOwnerReport(discovered.unknownManager)
+    : discovered.unknownRuntimes.length > 0
+      ? runtimeOwnerReport(discovered.unknownRuntimes[0]!)
+      : undefined
+  return new KunHandoffError(
+    'identity_unverifiable',
+    'discover',
+    input.reason,
+    true,
+    owner,
+    'Kun could not verify the identity of the previous local owner, so it left the process, active work, and saved data untouched.'
+  )
 }
 
 function emit(

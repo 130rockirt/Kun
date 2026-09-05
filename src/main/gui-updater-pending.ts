@@ -72,6 +72,8 @@ export type PendingUpdateResult = {
   rollbackOutcome?: 'not_started' | 'succeeded' | 'failed' | ''
   recoveryEnvironment?: InstallerRecoveryEnvironment
   recoveryAttempts?: number
+  handoffFailureAttempts?: number
+  handoffBlocked?: { at: string; message: string }
 }
 
 /** On-disk shape of the installer-owned `<guid>-update.json` transaction. */
@@ -102,6 +104,8 @@ export type GuiUpdateRecovery = {
   backupDir?: string
   backupExpiresAt: string
   lastError?: string
+  handoffFailureAttempts?: number
+  handoffBlocked?: { at: string; message: string }
 }
 
 export function pendingUpdatePath(userDataPath = app.getPath('userData')): string {
@@ -150,7 +154,9 @@ function isPendingUpdateResult(value: unknown): value is PendingUpdateResult {
     typeof record.code === 'string' &&
     typeof record.message === 'string' &&
     typeof record.at === 'string' &&
-    (record.recoveryEnvironment === undefined || isInstallerRecoveryEnvironment(record.recoveryEnvironment))
+    (record.recoveryEnvironment === undefined || isInstallerRecoveryEnvironment(record.recoveryEnvironment)) &&
+    (record.handoffFailureAttempts === undefined || typeof record.handoffFailureAttempts === 'number') &&
+    (record.handoffBlocked === undefined || isHandoffBlockedMarker(record.handoffBlocked))
 }
 
 function isGuiUpdateRecovery(value: unknown): value is GuiUpdateRecovery {
@@ -159,7 +165,15 @@ function isGuiUpdateRecovery(value: unknown): value is GuiUpdateRecovery {
   return (record.schemaVersion === 1 || record.schemaVersion === 2) && typeof record.installedVersion === 'string' &&
     (record.channel === 'stable' || record.channel === 'frontier') &&
     typeof record.verifiedAt === 'string' && typeof record.healthAttempts === 'number' &&
-    typeof record.backupExpiresAt === 'string'
+    typeof record.backupExpiresAt === 'string' &&
+    (record.handoffFailureAttempts === undefined || typeof record.handoffFailureAttempts === 'number') &&
+    (record.handoffBlocked === undefined || isHandoffBlockedMarker(record.handoffBlocked))
+}
+
+function isHandoffBlockedMarker(value: unknown): value is { at: string; message: string } {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return typeof record.at === 'string' && typeof record.message === 'string'
 }
 
 async function readJson(path: string): Promise<unknown | null> {

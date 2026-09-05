@@ -246,7 +246,7 @@ describe('installed build handoff coordinator', () => {
     }).catch((error: unknown) => error)
 
     expect(failure).toBeInstanceOf(KunHandoffError)
-    expect(failure).toMatchObject({ code: 'probe_failed', phase: 'discover', retryable: true })
+    expect(failure).toMatchObject({ code: 'identity_unverifiable', phase: 'discover', retryable: true })
     expect(removeRuntime).not.toHaveBeenCalled()
   })
 

@@ -35,9 +35,9 @@ import {
 import { processIdentity } from '../kun-process-ports'
 import { recordVerifiedForcedRuntimeOwner } from '../../../kun/src/manager/forced-runtime-recovery.js'
 import {
-  identityMatchesExpectedManager,
-  identityMatchesExpectedRuntime
-} from '../kun-process-identity'
+  verifyManagerOwner,
+  verifyRuntimeOwner
+} from './kun-handoff-owner-verification'
 
 export type RuntimeOwner = {
   dataDir: string
@@ -67,6 +67,8 @@ export type HandoffDependencies = {
     fetch?: typeof fetch
   }) => Promise<boolean>
   recordForcedOwner: typeof recordVerifiedForcedRuntimeOwner
+  backupCleanupRecord?: (record: unknown, instanceId: string) => Promise<string>
+  appendCleanupAudit?: (entry: import('./kun-handoff-cleanup').HandoffCleanupAuditEntry) => Promise<void>
   now: () => number
 }
 
@@ -75,6 +77,8 @@ export type DiscoveredHandoffOwners = {
   runtimes: RuntimeOwner[]
   staleManager: ManagerHandoffDiscoveryRecord | null
   staleRuntimes: StaleRuntimeOwner[]
+  unknownManager: ManagerHandoffDiscoveryRecord | null
+  unknownRuntimes: RuntimeOwner[]
   probeClassifications: KunHandoffProbeClassification[]
 }
 
@@ -139,12 +143,14 @@ async function discoverHandoffOwners(
     : 'dead'
   const manager = managerState === 'live' ? managerRecord : null
   const staleManager = managerState === 'stale' ? managerRecord : null
+  const unknownManager = managerState === 'unknown' ? managerRecord : null
   const dataDirs = canonicalDataDirs([
     ...input.dataDirs,
     ...(managerRecord ? [managerRecord.dataDir] : [])
   ])
   const runtimes: RuntimeOwner[] = []
   const staleRuntimes: StaleRuntimeOwner[] = []
+  const unknownRuntimes: RuntimeOwner[] = []
   for (const dataDir of dataDirs) {
     const record = await deps.readRuntime(dataDir, 'production')
     if (!record) continue
@@ -152,6 +158,8 @@ async function discoverHandoffOwners(
     if (state === 'live') runtimes.push(runtimeOwner(dataDir, 'production', record))
     else if (state === 'stale') {
       staleRuntimes.push({ ...runtimeOwner(dataDir, 'production', record), source: 'discovery' })
+    } else if (state === 'unknown') {
+      unknownRuntimes.push(runtimeOwner(dataDir, 'production', record))
     }
   }
   const developmentDir = managerRecord?.dataDir ?? dataDirs[0]
@@ -171,6 +179,8 @@ async function discoverHandoffOwners(
           ...runtimeOwner(developmentDir, 'development', record),
           source: 'discovery'
         })
+      } else if (state === 'unknown') {
+        unknownRuntimes.push(runtimeOwner(developmentDir, 'development', record))
       }
     }
   }
@@ -188,21 +198,28 @@ async function discoverHandoffOwners(
           ...runtimeOwner(manager.dataDir, slot.flavor, slot),
           source: 'manager-slot'
         })
+      } else if (state === 'unknown') {
+        unknownRuntimes.push(runtimeOwner(manager.dataDir, slot.flavor, slot))
       }
     }
   }
   if (staleManager || staleRuntimes.length > 0) probeClassifications.push('stale-owner')
+  if (unknownManager || unknownRuntimes.length > 0) {
+    probeClassifications.push('identity-unverifiable')
+  }
   if (probeClassifications.length === 0) probeClassifications.push('no-live-owner')
   return {
     manager,
     runtimes: deduplicateRuntimeOwners(runtimes),
     staleManager,
     staleRuntimes,
+    unknownManager,
+    unknownRuntimes: deduplicateRuntimeOwners(unknownRuntimes),
     probeClassifications
   }
 }
 
-type ProcessOwnerState = 'dead' | 'live' | 'stale'
+type ProcessOwnerState = 'dead' | 'live' | 'stale' | 'unknown'
 
 async function runtimeProcessState(
   dataDir: string,
@@ -212,20 +229,13 @@ async function runtimeProcessState(
   deps: HandoffDependencies
 ): Promise<ProcessOwnerState> {
   if (!deps.processAlive(record.pid)) return 'dead'
-  const identity = await deps.processIdentity(record.pid).catch(() => null)
-  if (!identity || identity.startedAtMs === null ||
-    (process.platform === 'win32' && !identity.executablePath)) {
-    const owner = runtimeOwnerReport(runtimeOwner(dataDir, flavor, record))
-    throw new KunHandoffError(
-      'probe_failed',
-      'discover',
-      input.reason,
-      true,
-      owner,
-      `Kun could not verify the process identity for ${ownerLabel(owner)}`
-    )
-  }
-  return identityMatchesExpectedRuntime(identity, record, dataDir, flavor) ? 'live' : 'stale'
+  const verification = await verifyRuntimeOwner(record, dataDir, flavor, {
+    processIdentity: deps.processIdentity,
+    fetch: input.fetch ?? fetch
+  })
+  if (verification === 'verified_owner') return 'live'
+  if (verification === 'verified_mismatch') return 'stale'
+  return 'unknown'
 }
 
 async function managerProcessState(
@@ -234,20 +244,13 @@ async function managerProcessState(
   deps: HandoffDependencies
 ): Promise<ProcessOwnerState> {
   if (!deps.processAlive(record.pid)) return 'dead'
-  const identity = await deps.processIdentity(record.pid).catch(() => null)
-  if (!identity || identity.startedAtMs === null ||
-    (process.platform === 'win32' && !identity.executablePath)) {
-    const owner = managerOwnerReport(record)
-    throw new KunHandoffError(
-      'probe_failed',
-      'discover',
-      input.reason,
-      true,
-      owner,
-      `Kun could not verify the process identity for ${ownerLabel(owner)}`
-    )
-  }
-  return identityMatchesExpectedManager(identity, record) ? 'live' : 'stale'
+  const verification = await verifyManagerOwner(record, {
+    processIdentity: deps.processIdentity,
+    fetch: input.fetch ?? fetch
+  })
+  if (verification === 'verified_owner') return 'live'
+  if (verification === 'verified_mismatch') return 'stale'
+  return 'unknown'
 }
 
 export async function settleStaleHandoffOwners(
@@ -273,6 +276,7 @@ export async function settleStaleHandoffOwners(
   try {
     for (const runtime of discovered.staleRuntimes) {
       const record = runtime.inspection.discovery
+      await backupAndAuditRuntimeCleanup(input, runtime, deps)
       if (runtime.source === 'manager-slot' && discovered.manager) {
         const removed = await deps.unregisterRuntime({
           manager: discovered.manager,
@@ -296,6 +300,18 @@ export async function settleStaleHandoffOwners(
       else await remove()
     }
     if (discovered.staleManager) {
+      await deps.backupCleanupRecord?.(discovered.staleManager, discovered.staleManager.instanceId)
+      await deps.appendCleanupAudit?.({
+        at: new Date(deps.now()).toISOString(),
+        action: 'cleanup',
+        reason: input.reason,
+        classification: 'verified_mismatch',
+        kind: 'manager',
+        instanceId: discovered.staleManager.instanceId,
+        pid: discovered.staleManager.pid,
+        identityEvidence: 'os-identity-mismatch',
+        outcome: 'removed'
+      })
       await deps.removeManager(controlDir, discovered.staleManager.instanceId)
     }
   } catch (error) {
@@ -310,6 +326,26 @@ export async function settleStaleHandoffOwners(
       { cause: error }
     )
   }
+}
+
+async function backupAndAuditRuntimeCleanup(
+  input: KunInstalledBuildHandoffInput,
+  runtime: StaleRuntimeOwner,
+  deps: HandoffDependencies
+): Promise<void> {
+  const record = runtime.inspection.discovery
+  await deps.backupCleanupRecord?.(record, record.instanceId)
+  await deps.appendCleanupAudit?.({
+    at: new Date(deps.now()).toISOString(),
+    action: 'cleanup',
+    reason: input.reason,
+    classification: 'verified_mismatch',
+    kind: 'runtime',
+    instanceId: record.instanceId,
+    pid: record.pid,
+    identityEvidence: 'os-identity-mismatch',
+    outcome: 'removed'
+  })
 }
 
 async function proveManagerSlotConverged(

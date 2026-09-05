@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { win32 as win32Path } from 'node:path'
 import type { GuiUpdateChannel, GuiUpdateInfo, GuiUpdateInstallResult, GuiUpdateState } from '../shared/gui-update'
 import { setWindowsInstallerUpdateSource } from './gui-updater-support'
+import { handoffFailureKind } from './runtime/kun-handoff-failure'
 import {
   finalizeUpdateTransactionAndCleanup,
   runUpdateTransactionHelper,
@@ -59,6 +60,7 @@ export class GuiUpdateInstaller {
   private installerPath = ''
   private installerSha512 = ''
   private blockedForMissingRollbackRecord = false
+  private handoffFailureAttempts = 0
 
   constructor(private readonly deps: GuiUpdateInstallerDeps) {}
 
@@ -444,6 +446,7 @@ export class GuiUpdateInstaller {
       return { ok: true }
     } catch (error) {
       const deferred = (error as { code?: unknown })?.code === 'install_deferred'
+      this.recordHandoffFailure(error)
       restoreEnvironment()
       this.reset()
       if (quittingMarked) {
@@ -463,6 +466,19 @@ export class GuiUpdateInstaller {
     this.handoffPending = false
     this.handoffStarted = false
     this.launchError = null
+  }
+
+  private recordHandoffFailure(error: unknown): void {
+    const kind = handoffFailureKind(error)
+    if (!kind) return
+    this.handoffFailureAttempts += 1
+    if (this.handoffFailureAttempts < GUI_UPDATE_MAX_HEALTH_ATTEMPTS) return
+    this.deps.emit({
+      status: 'error',
+      info: this.deps.stateInfo(),
+      code: 'install_failed',
+      message: `Kun could not verify the previous owner before updating (${kind}); stopping automatic retries.`
+    })
   }
 
   private scheduleRecovery(): void {
