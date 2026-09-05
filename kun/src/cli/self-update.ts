@@ -32,6 +32,7 @@ import {
   garbageCollectReleases,
   listReleaseBuildIds,
   pointerLauncherScript,
+  readPointerBuildId,
   resolveStandaloneTuiLayout,
   TUI_RELEASE_METADATA_FILENAME,
   tuiPointerPath,
@@ -374,6 +375,12 @@ async function installStandaloneTuiUpdate(
         : basename(layout?.releaseDir ?? base)
       const fromReleaseDir = tuiReleaseDirForBuildId(base, fromBuildId)
       const toReleaseDir = tuiReleaseDirForBuildId(base, newBuildId)
+      if (resolve(fromReleaseDir) === resolve(toReleaseDir)) {
+        throw new Error(
+          `Release ${check.latest.version} reuses buildId ${newBuildId} ` +
+          `from installed version ${installed?.metadata.version ?? check.current.version}`
+        )
+      }
 
       // A legacy install needs the stable pointer launcher before any move, so
       // the base directory (and therefore the PATH entry) never disappears.
@@ -405,17 +412,18 @@ async function installStandaloneTuiUpdate(
       await writeStandaloneReleasePointer(base, newBuildId)
       checkTuiUpdateKillPoint('after-pointer-swap')
 
+      if (layout?.kind === 'legacy') {
+        await moveLegacyScatteredEntries(base, fromReleaseDir)
+        checkTuiUpdateKillPoint('after-legacy-move')
+      }
+      await verifyActivatedRelease(base, check)
+
       await writeTuiUpdateResult(base, {
         status: 'succeeded',
         previousVersion: check.current.version,
         targetVersion: check.latest.version
       })
       await clearTuiUpdateTransaction(base)
-
-      if (layout?.kind === 'legacy') {
-        await moveLegacyScatteredEntries(base, fromReleaseDir)
-        checkTuiUpdateKillPoint('after-legacy-move')
-      }
 
       const keep = [newBuildId, fromBuildId]
       if (process.platform === 'win32') {
@@ -457,8 +465,28 @@ async function moveLegacyScatteredEntries(base: string, fromReleaseDir: string):
   const reserved = new Set(['bin', 'current', 'releases'])
   for (const entry of await readdir(base, { withFileTypes: true })) {
     if (reserved.has(entry.name)) continue
-    await rename(join(base, entry.name), join(fromReleaseDir, entry.name)).catch(() => undefined)
+    await rename(join(base, entry.name), join(fromReleaseDir, entry.name))
   }
+}
+
+async function verifyActivatedRelease(base: string, check: TuiUpdateCheck): Promise<void> {
+  const activeBuildId = await readPointerBuildId(base)
+  if (activeBuildId !== check.latest.buildId) {
+    throw new Error('activated standalone TUI pointer does not match the target build')
+  }
+  const activeReleaseDir = tuiReleaseDirForBuildId(base, activeBuildId)
+  const active = parseStandaloneRelease(
+    JSON.parse(await readFile(join(activeReleaseDir, TUI_RELEASE_METADATA_FILENAME), 'utf8')) as unknown
+  )
+  if (
+    active.version !== check.latest.version ||
+    active.artifactVersion !== check.latest.version ||
+    active.buildId !== check.latest.buildId ||
+    active.target !== check.current.target
+  ) {
+    throw new Error('activated standalone TUI metadata does not match the target release')
+  }
+  await smokeNewRelease(activeReleaseDir, check.latest.version)
 }
 
 async function obsoleteReleaseDirs(base: string, keep: readonly string[]): Promise<string[]> {
@@ -602,4 +630,3 @@ function isHttpsUrl(value: string): boolean {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
-

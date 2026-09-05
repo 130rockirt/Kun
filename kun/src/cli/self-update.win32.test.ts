@@ -9,6 +9,7 @@ import { tuiUpdateResultPath } from './self-update-transaction.js'
 import type { StandaloneTuiReleaseMetadata } from './self-update.js'
 
 const BUILD_ID = 'a'.repeat(64)
+const NEW_BUILD_ID = 'c'.repeat(64)
 const COMMIT = 'b'.repeat(40)
 
 const roots: string[] = []
@@ -34,7 +35,7 @@ function release(overrides: Partial<StandaloneTuiReleaseMetadata> = {}): Standal
   }
 }
 
-function latest() {
+function latest(buildId = NEW_BUILD_ID) {
   const fileName = 'Kun-TUI-1.2.4-win-x64.zip'
   return {
     schemaVersion: 1,
@@ -42,7 +43,7 @@ function latest() {
     version: '1.2.4',
     tag: 'v1.2.4',
     channel: 'stable',
-    buildId: BUILD_ID,
+    buildId,
     artifacts: [
       { target: 'darwin-arm64', fileName: 'Kun-TUI-1.2.4-mac-arm64.tar.gz', size: 123, sha256: 'c'.repeat(64), url: 'https://downloads.example.test/a' },
       { target: 'darwin-x64', fileName: 'Kun-TUI-1.2.4-mac-x64.tar.gz', size: 123, sha256: 'c'.repeat(64), url: 'https://downloads.example.test/b' },
@@ -62,9 +63,12 @@ async function installFixture(): Promise<{ parent: string; root: string }> {
   return { parent, root }
 }
 
-async function updateArchive(parent: string): Promise<{ archive: string; bytes: Buffer }> {
+async function updateArchive(
+  parent: string,
+  buildId = NEW_BUILD_ID
+): Promise<{ archive: string; bytes: Buffer }> {
   const stage = join(parent, 'next')
-  const releaseDir = join(stage, 'kun', 'releases', BUILD_ID)
+  const releaseDir = join(stage, 'kun', 'releases', buildId)
   const entry = join(releaseDir, 'app', 'kun', 'dist', 'cli')
   await mkdir(entry, { recursive: true })
   await mkdir(join(releaseDir, 'runtime'), { recursive: true })
@@ -76,7 +80,9 @@ async function updateArchive(parent: string): Promise<{ archive: string; bytes: 
   )
   await writeFile(
     join(releaseDir, 'release.json'),
-    `${JSON.stringify(release({ version: '1.2.4', artifactVersion: '1.2.4', tag: 'v1.2.4' }))}\n`,
+    `${JSON.stringify(release({
+      version: '1.2.4', artifactVersion: '1.2.4', tag: 'v1.2.4', buildId
+    }))}\n`,
     'utf8'
   )
   const archive = join(parent, 'Kun-TUI-1.2.4-win-x64.zip')
@@ -109,11 +115,38 @@ describe.runIf(process.platform === 'win32')('Windows standalone TUI update', ()
     expect(stdout).toContain('1.2.4 installed')
     expect(stderr).toBe('')
     // The pointer is switched in-process; no second launch is required.
-    expect((await readFile(join(root, 'current'), 'utf8')).trim()).toBe(`releases/${BUILD_ID}`)
-    expect(JSON.parse(await readFile(join(root, 'releases', BUILD_ID, 'release.json'), 'utf8')))
+    expect((await readFile(join(root, 'current'), 'utf8')).trim()).toBe(`releases/${NEW_BUILD_ID}`)
+    expect(JSON.parse(await readFile(join(root, 'releases', NEW_BUILD_ID, 'release.json'), 'utf8')))
       .toMatchObject({ version: '1.2.4' })
     // The update result is written and cleared in-process (no detached swap).
     await expect(stat(tuiUpdateResultPath(root))).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 180_000)
+
+  it('fails closed when a newer version reuses the installed build id', async () => {
+    const { parent, root } = await installFixture()
+    const { bytes } = await updateArchive(parent, BUILD_ID)
+    const manifest = latest(BUILD_ID)
+    const artifact = manifest.artifacts.find((candidate) => candidate.target === 'win32-x64')!
+    artifact.size = bytes.length
+    artifact.sha256 = createHash('sha256').update(bytes).digest('hex')
+
+    let stdout = ''
+    let stderr = ''
+    const code = await runSelfUpdateCommand(['--yes'], {
+      stdout: { write: (chunk) => { stdout += chunk } },
+      stderr: { write: (chunk) => { stderr += chunk } },
+      env: { KUN_STANDALONE_ROOT: root },
+      fetch: async (url) => String(url).endsWith('latest-tui.json')
+        ? Response.json(manifest)
+        : new Response(new Uint8Array(bytes))
+    })
+
+    expect(code).toBe(70)
+    expect(stdout).not.toContain('installed')
+    expect(stderr).toContain('reuses buildId')
+    expect(JSON.parse(await readFile(join(root, 'release.json'), 'utf8')))
+      .toMatchObject({ version: '1.2.3', buildId: BUILD_ID })
+    await expect(stat(join(root, 'current'))).rejects.toMatchObject({ code: 'ENOENT' })
   }, 180_000)
 })
 

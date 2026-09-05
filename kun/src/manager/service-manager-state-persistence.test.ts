@@ -152,12 +152,17 @@ describe('Service Manager renewal flush coalescing', () => {
         ownerFlavor: 'production',
         ownerInstanceId: 'runtime-1'
       })
-      await sleep(50)
       const file = join(test.controlDir, 'manager-state.json')
-      const before = JSON.parse(await readFile(file, 'utf8')) as {
+      const readSnapshot = async () => JSON.parse(await readFile(file, 'utf8')) as {
         slots: { lastHeartbeatAt: string }[]
         leases: { expiresAt: string }[]
       }
+      const before = await vi.waitFor(async () => {
+        const snapshot = await readSnapshot()
+        expect(snapshot.slots).toHaveLength(1)
+        expect(snapshot.leases).toHaveLength(1)
+        return snapshot
+      }, { timeout: 2_000, interval: 10 })
       await sleep(1)
       state.heartbeat('production', 'runtime-1')
       state.renewLease({
@@ -176,12 +181,13 @@ describe('Service Manager renewal flush coalescing', () => {
         ownerInstanceId: 'runtime-1',
         fencingToken: lease.fencingToken
       })
-      await sleep(100)
-      const after = JSON.parse(await readFile(file, 'utf8')) as typeof before
-      expect(Date.parse(after.leases[0]!.expiresAt))
-        .toBeGreaterThan(Date.parse(before.leases[0]!.expiresAt))
-      expect(Date.parse(after.slots[0]!.lastHeartbeatAt))
-        .toBeGreaterThan(Date.parse(before.slots[0]!.lastHeartbeatAt))
+      await vi.waitFor(async () => {
+        const after = await readSnapshot()
+        expect(Date.parse(after.leases[0]!.expiresAt))
+          .toBeGreaterThan(Date.parse(before.leases[0]!.expiresAt))
+        expect(Date.parse(after.slots[0]!.lastHeartbeatAt))
+          .toBeGreaterThan(Date.parse(before.slots[0]!.lastHeartbeatAt))
+      }, { timeout: 2_000, interval: 10 })
     } finally {
       await manager.close().catch(() => undefined)
     }

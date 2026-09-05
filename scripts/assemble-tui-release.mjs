@@ -68,6 +68,22 @@ export async function assembleTuiRelease(input) {
       `Standalone TUI build id ${buildId} does not match the shared GUI runtime ${input.expectedBuildId}`
     )
   }
+  if (input.previousRelease) {
+    const previous = JSON.parse(await readFile(resolve(input.previousRelease), 'utf8'))
+    if (
+      typeof previous.version !== 'string' ||
+      typeof previous.buildId !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(previous.buildId)
+    ) {
+      throw new Error('Previous release-tui.json has an invalid version or build id')
+    }
+    if (previous.version !== input.version && previous.buildId === buildId) {
+      throw new Error(
+        `Standalone TUI version changed from ${previous.version} to ${input.version} ` +
+        `but reused build id ${buildId}`
+      )
+    }
+  }
   const release = {
     schemaVersion: 1,
     productName: 'Kun',
@@ -241,6 +257,7 @@ function parseArgs(argv) {
       'expected-build-id',
       process.env.KUN_RUNTIME_BUILD_ID
     ),
+    previousRelease: flags.get('previous-release') || process.env.PREVIOUS_TUI_RELEASE || '',
     releaseDate: required('release-date', new Date().toISOString()),
     publicBaseUrl: required(
       'public-base-url',

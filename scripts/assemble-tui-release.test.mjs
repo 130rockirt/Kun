@@ -74,6 +74,24 @@ test('assembles tar and zip targets into one shared GUI/TUI release contract', a
       /Kun-TUI-1\.2\.3-win-x64\.zip/
     )
 
+    const previousRelease = join(directory, 'previous-release-tui.json')
+    await writeFile(previousRelease, JSON.stringify({ version: '1.2.2', buildId: BUILD_ID }))
+    await assert.rejects(
+      assembleTuiRelease({
+        directory,
+        version: '1.2.3',
+        artifactVersion: '1.2.3',
+        tag: 'v1.2.3',
+        channel: 'stable',
+        commit: COMMIT,
+        expectedBuildId: BUILD_ID,
+        previousRelease,
+        publicBaseUrl: 'https://downloads.example.test',
+        releasePrefix: 'deepseek-gui'
+      }),
+      /version changed from 1\.2\.2 to 1\.2\.3 but reused build id/
+    )
+
     await assert.rejects(
       assembleTuiRelease({
         directory,

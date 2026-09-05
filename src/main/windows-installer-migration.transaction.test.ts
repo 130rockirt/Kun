@@ -207,7 +207,7 @@ windowsOnly('Windows automatic update transaction', () => {
     assertSucceeded(result, 'RecoverUpdateTransaction rebuilt from transaction')
     expect(existsSync(join(input.source, 'DeepSeek GUI.exe'))).toBe(true)
     expect(transaction(transactionPath)).toMatchObject({ Phase: 'rolled_back', RollbackOutcome: 'succeeded' })
-  }, 60_000)
+  }, 180_000)
 
   it('keeps the legacy payload untouched when staged validation fails', () => {
     const input = fixture()

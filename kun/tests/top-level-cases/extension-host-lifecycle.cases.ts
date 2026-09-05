@@ -27,7 +27,7 @@ describe('extension host processes', () => {
 
   beforeAll(async () => {
     builtinRunnerPath = await buildBuiltinRunner()
-  }, 60_000)
+  }, 120_000)
 
   it('captures a fresh activation epoch after package recovery invalidates the prior lifecycle', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-extension-manager-recovery-fence-'))

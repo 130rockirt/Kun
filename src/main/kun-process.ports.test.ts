@@ -41,7 +41,10 @@ vi.mock('electron', () => ({
     getPath: () => '/tmp/deepseek-gui-test-user-data'
   }
 }))
-
+vi.mock('../../kun/src/manager/manager-discovery.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../kun/src/manager/manager-discovery.js')>()),
+  defaultKunControlDir: () => join(tempRoot ?? tmpdir(), 'manager-control')
+}))
 let tempRoot: string | null = null
 let testKunPort = 18899
 
@@ -58,7 +61,7 @@ function createSettings(binaryPath: string): AppSettingsV1 {
       kun: {
         ...defaultKunRuntimeSettings(testKunPort),
         binaryPath,
-        autoStart: true
+        autoStart: true, dataDir: join(tempRoot ?? tmpdir(), 'runtime-data')
       }
     },
     workspaceRoot: '/tmp/workspace',

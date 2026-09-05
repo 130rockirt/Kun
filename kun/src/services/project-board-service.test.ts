@@ -176,14 +176,24 @@ describe('ProjectBoardService', () => {
   it('coalesces concurrent snapshot and summary membership scans', async () => {
     const { workspace, threads, service } = await harness()
     const originalList = threads.list.bind(threads)
+    let releaseList: (() => void) | undefined
+    const listGate = new Promise<void>((resolve) => {
+      releaseList = resolve
+    })
     const list = vi.spyOn(threads, 'list').mockImplementation(async (options) => {
-      await new Promise((resolve) => setTimeout(resolve, 5))
+      await listGate
       return originalList(options)
     })
-    await Promise.all([
-      service.snapshot({ workspace }),
-      service.summaries([workspace])
-    ])
+    const membershipScans = vi.spyOn(
+      service as unknown as { boardThreadMemberships: () => Promise<unknown> },
+      'boardThreadMemberships'
+    )
+    const snapshot = service.snapshot({ workspace })
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(1))
+    const summaries = service.summaries([workspace])
+    await vi.waitFor(() => expect(membershipScans).toHaveBeenCalledTimes(2))
+    releaseList?.()
+    await Promise.all([snapshot, summaries])
     expect(list).toHaveBeenCalledTimes(1)
   })
 
