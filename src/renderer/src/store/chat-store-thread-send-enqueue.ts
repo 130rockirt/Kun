@@ -1,4 +1,5 @@
 import type { AgentProvider } from '../agent/types'
+import type { AttachmentReference } from '../agent/types'
 import type { ChatState, ChatStoreGet, ChatStoreSet, QueuedUserMessage, SendMessageOverrides } from './chat-store-types'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import { describeRuntimeError, getRuntimeErrorCode } from '../lib/format-runtime-error'
@@ -43,6 +44,7 @@ export type RuntimeQueueSendInput = {
   designDocumentTarget: SendMessageOverrides['designDocumentTarget']
   designImagePlacementTarget: SendMessageOverrides['designImagePlacementTarget']
   attachmentIds: readonly string[] | undefined
+  attachments: readonly AttachmentReference[] | undefined
   fileReferences: SendMessageOverrides['fileReferences']
   composerContexts: ComposerContextAttachment[]
   queued: QueuedUserMessage | undefined
@@ -64,7 +66,7 @@ export async function submitToRuntimeQueue(input: RuntimeQueueSendInput): Promis
     requestedAgentSurface, writeContext, composerModel, composerProviderId,
     composerAccountId, userModelChip, displayText, reasoningEffort, serviceTier,
     subagentResume, messageSource, persona, designProfile, designDocumentTarget,
-    designImagePlacementTarget, attachmentIds, fileReferences, composerContexts,
+    designImagePlacementTarget, attachmentIds, attachments, fileReferences, composerContexts,
     queued, overrides, set, get
   } = input
   try {
@@ -138,6 +140,7 @@ export async function submitToRuntimeQueue(input: RuntimeQueueSendInput): Promis
       ...(composerContexts.length ? { composerContexts } : {}),
       ...(fileReferences?.length ? { fileReferences } : {}),
       ...(attachmentIds?.length ? { attachmentIds: [...attachmentIds] } : {}),
+      ...(attachments?.length ? { attachments: [...attachments] } : {}),
       ...(designProfile ? { designProfile } : {}),
       ...(designDocumentTarget ? { designDocumentTarget } : {}),
       ...(designImagePlacementTarget ? { designImagePlacementTarget } : {}),

@@ -26,7 +26,7 @@ import type { TurnCompleteNotificationSource } from '@shared/kun-gui-api'
 import { isBackgroundShellNoticeUserMessage } from '@shared/background-shell-notice'
 import type { ChatState } from './chat-store-types'
 import { drainBackgroundQueuedMessage } from './chat-store-background-queue'
-import { isPendingQueuedMessage } from './queued-message-persistence'
+import { isPendingQueuedMessage, saveQueuedMessagesForThread } from './queued-message-persistence'
 import {
   clearThreadAwaitingUserInput,
   markThreadAwaitingUserInput,
@@ -408,6 +408,8 @@ export function buildThreadEventSink(
         payload: event,
         ...(typeof seq === 'number' ? { seq } : {})
       }))
+      const threadId = boundThreadId || get().activeThreadId
+      if (threadId) saveQueuedMessagesForThread(threadId, get().queuedMessages)
     },
     onDeltas: (rawDeltas) => {
       if (!isCurrentStream()) return

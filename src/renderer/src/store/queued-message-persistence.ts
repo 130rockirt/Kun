@@ -324,18 +324,87 @@ export function pauseQueuedMessagesForInterrupt(
 }
 
 /**
+ * Collect the item ids of user blocks currently in the timeline. These are the
+ * durable identities a queued item is matched against once its turn starts.
+ */
+export function userMessageItemIdsFromBlocks(
+  blocks: readonly ChatBlock[] | undefined
+): ReadonlySet<string> {
+  const ids = new Set<string>()
+  for (const block of blocks ?? []) {
+    if (block.kind === 'user') ids.add(block.id)
+  }
+  return ids
+}
+
+/**
+ * A `starting`/`in_flight` queue item has left the waiting queue once the
+ * runtime is actually executing its turn: its delivery turn id equals the live
+ * turn, or its delivery user-message item id already appears in the timeline.
+ * Later turns stay queued because their delivery turn id differs from the live
+ * turn and their user item has not been emitted yet.
+ */
+export function queuedMessageStartedByRuntime(
+  message: QueuedUserMessage,
+  runtime: { turnId?: string | null; userMessageItemIds?: ReadonlySet<string> }
+): boolean {
+  const state = message.deliveryState
+  if (state !== 'starting' && state !== 'in_flight') return false
+  const liveTurnId = normalizedString(runtime.turnId)
+  const deliveryTurnId = normalizedString(message.deliveryTurnId)
+  if (liveTurnId && deliveryTurnId && deliveryTurnId === liveTurnId) return true
+  const deliveryUserMessageItemId = normalizedString(message.deliveryUserMessageItemId)
+  if (deliveryUserMessageItemId && runtime.userMessageItemIds?.has(deliveryUserMessageItemId)) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Drop queue items the runtime has already started, preserving the original
+ * array reference when nothing changes so callers can cheaply detect a no-op.
+ */
+export function consumeQueuedMessagesStartedByRuntime(
+  messages: readonly QueuedUserMessage[] | undefined,
+  runtime: { turnId?: string | null; userMessageItemIds?: ReadonlySet<string> }
+): QueuedUserMessage[] | undefined {
+  if (!messages) return undefined
+  let changed = false
+  const kept: QueuedUserMessage[] = []
+  for (const message of messages) {
+    if (queuedMessageStartedByRuntime(message, runtime)) {
+      changed = true
+    } else {
+      kept.push(message)
+    }
+  }
+  return changed ? kept : (messages as QueuedUserMessage[])
+}
+
+/**
  * Reconcile durable delivery markers against the runtime's current thread state.
- * A settled in-flight item is removed; an interrupted pre-send item is returned
- * to pending so it cannot be silently lost after an app restart.
+ * A runtime-started in-flight item is removed; a settled in-flight item is
+ * removed; an interrupted pre-send item is returned to pending so it cannot be
+ * silently lost after an app restart.
  */
 export function reconcileQueuedMessages(
   messages: readonly QueuedUserMessage[],
   runtime: { busy: boolean; turnId?: string | null; blocks?: readonly ChatBlock[] }
 ): QueuedUserMessage[] {
   const activeTurnId = normalizedString(runtime.turnId)
+  const liveUserItemIds = userMessageItemIdsFromBlocks(runtime.blocks)
   const reconciled: QueuedUserMessage[] = []
   for (const message of messages) {
     const state = message.deliveryState ?? 'pending'
+    // A runtime-started item no longer waits in the local queue: its user
+    // message is already rendered in the timeline, so keeping it would show a
+    // duplicate and expose edit/remove on an in-flight turn.
+    if (queuedMessageStartedByRuntime(message, {
+      turnId: activeTurnId || null,
+      userMessageItemIds: liveUserItemIds
+    })) {
+      continue
+    }
     // A terminal failure stays failed across reconciliation; only an explicit
     // user retry or removal moves it.
     if (state === 'failed') {

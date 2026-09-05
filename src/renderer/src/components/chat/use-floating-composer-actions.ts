@@ -10,6 +10,29 @@ import type { SlashCommand, SlashCommandId } from './floating-composer-commands'
 import type { ComposerFileDropOptions } from './composer-file-drop'
 import type { FloatingComposerRenderContext } from './floating-composer-view-context'
 
+/**
+ * True when a keydown should open the attachment picker: `Ctrl+U` on
+ * Windows/Linux or `Cmd+U` on macOS. IME composition, Alt/Shift modifiers, or
+ * an unavailable attachment capability suppress the shortcut so it cannot
+ * collide with input-method text or other accelerators.
+ */
+export function shouldOpenAttachmentPickerOnKeyDown(
+  event: {
+    key: string
+    ctrlKey: boolean
+    metaKey: boolean
+    altKey: boolean
+    shiftKey: boolean
+  },
+  options: { composing: boolean; canPickAttachment: boolean }
+): boolean {
+  if (options.composing) return false
+  if (!options.canPickAttachment) return false
+  if (event.key !== 'u' && event.key !== 'U') return false
+  if (event.altKey || event.shiftKey) return false
+  return event.ctrlKey || event.metaKey
+}
+
 export function useFloatingComposerActions(
   context: FloatingComposerRenderContext
 ): FloatingComposerRenderContext {
@@ -375,6 +398,12 @@ export function useFloatingComposerActions(
     if (slashCommandMenu.handleKeyDown(event, composing)) return
 
     if (inputHistory.handleKeyDown(event, { input, setInput, composing })) return
+
+    if (shouldOpenAttachmentPickerOnKeyDown(event, { composing, canPickAttachment })) {
+      event.preventDefault()
+      fileInputRef.current?.click()
+      return
+    }
 
     // Esc cancels a pending ask-user request. (Option picking is click-only:
     // a bare-digit accelerator would hijack the first character of a

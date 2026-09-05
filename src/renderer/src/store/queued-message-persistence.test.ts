@@ -154,7 +154,7 @@ describe('queued-message-persistence', () => {
     expect(queuedMessagesForThread('thread-a', storage)).toEqual([])
   })
 
-  it('keeps in-flight work while running and removes it only after the turn settles', () => {
+  it('consumes an in-flight row once its turn starts running', () => {
     const inFlight = [{
       id: 'q-running',
       text: 'complete the queued task',
@@ -166,7 +166,39 @@ describe('queued-message-persistence', () => {
     expect(reconcileQueuedMessages(inFlight, {
       busy: true,
       turnId: 'turn-2'
-    })).toEqual(inFlight)
+    })).toEqual([])
+    expect(reconcileQueuedMessages(inFlight, {
+      busy: true,
+      turnId: 'turn-2',
+      blocks: [{ id: 'user-2', kind: 'user', text: 'complete the queued task' }]
+    })).toEqual([])
+  })
+
+  it('keeps a later queued row while an earlier turn is still running', () => {
+    const laterQueued = [{
+      id: 'q-later',
+      text: 'second queued task',
+      deliveryState: 'in_flight' as const,
+      deliveryTurnId: 'turn-3',
+      deliveryUserMessageItemId: 'user-3'
+    }]
+
+    expect(reconcileQueuedMessages(laterQueued, {
+      busy: true,
+      turnId: 'turn-2',
+      blocks: [{ id: 'user-2', kind: 'user', text: 'earlier task' }]
+    })).toEqual(laterQueued)
+  })
+
+  it('removes a settled in-flight row once its user block is present in idle history', () => {
+    const inFlight = [{
+      id: 'q-running',
+      text: 'complete the queued task',
+      deliveryState: 'in_flight' as const,
+      deliveryTurnId: 'turn-2',
+      deliveryUserMessageItemId: 'user-2'
+    }]
+
     expect(reconcileQueuedMessages(inFlight, {
       busy: false,
       turnId: null,

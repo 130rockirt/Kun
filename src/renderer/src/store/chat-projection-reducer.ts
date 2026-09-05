@@ -16,6 +16,10 @@ import {
   reconcileOptimisticUserBlock,
   upsertUserBlock
 } from './chat-store-runtime-helpers'
+import {
+  consumeQueuedMessagesStartedByRuntime,
+  userMessageItemIdsFromBlocks
+} from './queued-message-persistence'
 
 export type ChatProjectionReducerContext = {
   now: number
@@ -146,9 +150,14 @@ export function reduceChatProjection(
               : thread
           )
         : statusThreads
+      const blocks = upsertUserBlock(reconciledBlocks, event)
+      const queuedMessages = consumeQueuedMessagesStartedByRuntime(state.queuedMessages, {
+        turnId: event.turnId ?? state.currentTurnId,
+        userMessageItemIds: userMessageItemIdsFromBlocks(blocks)
+      })
       return {
         ...flushed,
-        blocks: upsertUserBlock(reconciledBlocks, event),
+        blocks,
         busy: true,
         // A live user_message event is direct runtime evidence; any pending
         // unconfirmed flag from hydration is now resolved.
@@ -166,6 +175,9 @@ export function reduceChatProjection(
               [event.itemId]: state.turnStartedAtByUserId[event.itemId] ?? startedAt
             },
         ...(threads !== state.threads ? { threads } : {}),
+        ...(queuedMessages !== state.queuedMessages && queuedMessages !== undefined
+          ? { queuedMessages }
+          : {}),
         error: context.clearRecoveringError(state.error)
       }
     }

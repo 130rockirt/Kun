@@ -446,6 +446,7 @@ export async function sendThreadMessage(
           designDocumentTarget,
           designImagePlacementTarget,
           attachmentIds,
+          attachments,
           fileReferences,
           composerContexts,
           queued,

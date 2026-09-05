@@ -603,4 +603,43 @@ describe('chat projection reducer', () => {
     expect(projected.currentTurnUserId).toBe('item_original_user')
   })
 
+  it('consumes only the queued row matching the arriving turn user message', () => {
+    const queuedStarted = {
+      id: 'q-started',
+      text: 'run the queued task',
+      deliveryState: 'in_flight' as const,
+      deliveryTurnId: 'turn_queued',
+      deliveryUserMessageItemId: 'item_queued'
+    }
+    const queuedLater = {
+      id: 'q-later',
+      text: 'second queued task',
+      deliveryState: 'in_flight' as const,
+      deliveryTurnId: 'turn_later',
+      deliveryUserMessageItemId: 'item_later'
+    }
+    const queuedPending = {
+      id: 'q-pending',
+      text: 'still waiting',
+      deliveryState: 'pending' as const
+    }
+    const initial = {
+      ...state(),
+      turnStartedAtByUserId: {},
+      queuedMessages: [queuedStarted, queuedLater, queuedPending]
+    }
+
+    const projected = project(initial, [{
+      type: 'user_message_received',
+      payload: {
+        itemId: 'item_queued',
+        turnId: 'turn_queued',
+        createdAt: '2026-07-11T00:00:00.000Z',
+        text: 'run the queued task'
+      }
+    }])
+
+    expect(projected.queuedMessages).toEqual([queuedLater, queuedPending])
+  })
+
 })

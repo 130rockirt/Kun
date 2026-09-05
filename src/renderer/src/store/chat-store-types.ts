@@ -53,7 +53,7 @@ export type QueuedUserMessage = {
   clientRequestId?: string
   /** First Design document remains provisional until Kun accepts this queued turn. */
   waitForRuntimeAdmission?: boolean
-  /** Pending/paused items are visible; starting/in-flight items remain durable until the turn settles; failed items are terminal until retried or deleted. */
+  /** Pending/paused items are visible and waiting; starting/in-flight items stay durable while they wait in the server queue and are removed once their turn starts executing (the runtime timeline takes over); failed items are terminal until retried or deleted. */
   deliveryState?: 'pending' | 'paused' | 'starting' | 'in_flight' | 'failed'
   deliveryTurnId?: string
   deliveryUserMessageItemId?: string
