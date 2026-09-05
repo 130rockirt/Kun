@@ -2,7 +2,7 @@
 
 // End-to-end acceptance for the transitional 0.3.x flat TUI archive layout.
 //
-// This harness builds the real v0.3.7 standalone TUI (the frozen updater users
+// This harness downloads the published v0.3.7 standalone TUI (the frozen updater users
 // still have installed), installs it, and runs `kun update --yes` against a
 // locally served candidate 0.3.8 flat archive. It proves that the three
 // hard-coded v0.3.7 paths — kun/release.json, kun/runtime/node(.exe), and
@@ -13,7 +13,8 @@
 // harness serves both over a local HTTPS server and trusts it through a
 // committed test-only CA via NODE_EXTRA_CA_CERTS.
 
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
+import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -24,12 +25,10 @@ import { fileURLToPath } from 'node:url'
 import yauzl from 'yauzl'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
-const REPO_ROOT = resolve(SCRIPT_DIR, '..', '..')
 const CA_DIR = join(SCRIPT_DIR, 'fixtures', 'tui-self-update-ca')
 const CA_CERT = join(CA_DIR, 'cert.pem')
 const CA_KEY = join(CA_DIR, 'key.pem')
 const V037_TAG = 'v0.3.7'
-const V037_COMMIT = 'f466d2e242930f238da54d60e5effb8f78ebdd8f'
 const DEFAULT_PREFIX = 'deepseek-gui'
 
 const TARGETS = {
@@ -43,8 +42,9 @@ const TARGETS = {
 async function main() {
   const flags = readFlags(process.argv.slice(2))
   const candidate = resolve(required(flags, 'candidate'))
-  const workDir = resolve(flags.get('work-dir') || (await mkdtemp(join(tmpdir(), 'kun-tui-037-update-'))))
-  const repoRoot = resolve(flags.get('repo-root') || REPO_ROOT)
+  const parent = resolve(flags.get('work-dir') || tmpdir())
+  await mkdir(parent, { recursive: true })
+  const workDir = await mkdtemp(join(parent, 'kun-tui-037-update-'))
   const keep = flags.has('keep')
   const caCert = resolve(flags.get('ca-cert') || CA_CERT)
   const caKey = resolve(flags.get('ca-key') || CA_KEY)
@@ -53,6 +53,7 @@ async function main() {
   const installRoot = join(workDir, 'install')
   const homeDir = join(workDir, 'home')
   let server
+  let passed = false
 
   try {
     const release = await readEmbeddedRelease(candidate)
@@ -71,28 +72,34 @@ async function main() {
     )
     const baseUrl = `https://127.0.0.1:${server.port}`
 
-    const baselineArchive = await buildV037Baseline({
-      repoRoot,
-      workDir,
-      target: release.target,
-      publicBaseUrl: baseUrl
-    })
+    const baselineArchive = await downloadV037Baseline(workDir, release.target)
 
     await installBaseline(baselineArchive, installRoot)
+    const baselineMetadataPath = join(installRoot, 'kun', 'release.json')
+    const baselineMetadata = JSON.parse(await readFile(baselineMetadataPath, 'utf8'))
+    if (baselineMetadata.version !== '0.3.7' || baselineMetadata.target !== release.target) {
+      throw new Error('Published baseline metadata does not match 0.3.7 and the host target')
+    }
+    baselineMetadata.updateManifestUrl = `${baseUrl}/${DEFAULT_PREFIX}/channels/stable/latest/latest-tui.json`
+    await writeFile(baselineMetadataPath, JSON.stringify(baselineMetadata))
     await seedUserData(homeDir)
 
     await runV037Updater({ installRoot, homeDir, caCert })
 
     const manifestUrl = `https://127.0.0.1:${server.port}/${DEFAULT_PREFIX}/channels/stable/latest/latest-tui.json`
     await assertUpgraded({ installRoot, homeDir, caCert, version: release.version, manifestUrl })
+    await assertNextUpdate({ candidate, release, workDir, installRoot, homeDir, caCert, manifestUrl, server })
 
     process.stdout.write(
-      `TUI 0.3.7 -> ${release.version} self-update acceptance passed (${release.target}).\n`
+      `TUI 0.3.7 -> ${release.version} -> simulated next release acceptance passed (${release.target}).\n`
     )
+    passed = true
   } finally {
-    server?.close?.()
-    if (!keep) {
+    await server?.close()
+    if (!keep && passed) {
       await rm(workDir, { recursive: true, force: true }).catch(() => undefined)
+    } else {
+      process.stderr.write(`TUI upgrade evidence retained at ${workDir}\n`)
     }
   }
 }
@@ -103,6 +110,9 @@ function validateCandidate(artifactPath, release) {
   }
   if (!TARGETS[release.target]) {
     throw new Error(`candidate ${basename(artifactPath)} has unsupported target ${release.target}`)
+  }
+  if (release.target !== `${process.platform}-${process.arch}`) {
+    throw new Error('Candidate must match the native host target')
   }
 }
 
@@ -208,7 +218,7 @@ function readZipMember(artifactPath, member) {
   })
 }
 
-async function startHttpsServer(tls, release, hostArtifact) {
+export async function startHttpsServer(tls, release, hostArtifact) {
   const [key, cert] = await Promise.all([readFile(tls.key), readFile(tls.cert)])
   let manifestBody = ''
 
@@ -238,7 +248,62 @@ async function startHttpsServer(tls, release, hostArtifact) {
   })
   const port = httpServer.address().port
   manifestBody = `${JSON.stringify(buildManifest(release, { ...hostArtifact, port }))}\n`
-  return { server: httpServer, port }
+  return {
+    port,
+    setRelease(nextRelease, nextArtifact) {
+      hostArtifact = nextArtifact
+      manifestBody = `${JSON.stringify(buildManifest(nextRelease, { ...nextArtifact, port }))}\n`
+    },
+    close: () => new Promise((resolvePromise, reject) => {
+      httpServer.close((error) => error ? reject(error) : resolvePromise())
+      httpServer.closeAllConnections()
+    })
+  }
+}
+
+async function assertNextUpdate({ candidate, release, workDir, installRoot, homeDir, caCert, manifestUrl, server }) {
+  // Change only the *download fixture's* identity, never the installed updater.
+  // This exercises the real candidate updater's flat -> immutable migration and
+  // pointer activation without pretending an unreleased 0.3.9 binary exists.
+  const parts = release.version.split('.').map(Number)
+  const version = `${parts[0]}.${parts[1]}.${parts[2] + 1}`
+  const buildId = createHash('sha256').update(`upgrade-fixture:${release.buildId}:${version}`).digest('hex')
+  const futureRoot = join(workDir, 'next-fixture')
+  await installBaseline(candidate, futureRoot)
+  const nextRelease = { ...release, version, artifactVersion: version, tag: `v${version}`, buildId,
+    updateManifestUrl: manifestUrl }
+  await writeFile(join(futureRoot, 'kun', 'release.json'), JSON.stringify(nextRelease))
+  const runtimeManifestPath = join(futureRoot, 'kun', 'app', 'kun', 'dist', 'runtime-build.json')
+  const runtimeManifest = JSON.parse(await readFile(runtimeManifestPath, 'utf8'))
+  await writeFile(runtimeManifestPath, JSON.stringify({ ...runtimeManifest, buildId,
+    serviceVersion: version, artifactVersion: version }))
+  const fileName = tuiFileName(version, release.target)
+  const artifact = join(workDir, fileName)
+  await runCapture('tar', process.platform === 'win32'
+    ? ['-a', '-cf', artifact, 'kun'] : ['-czf', artifact, 'kun'], { cwd: futureRoot })
+  server.setRelease(nextRelease, { candidate: artifact, fileName, size: (await stat(artifact)).size,
+    sha256: await sha256File(artifact) })
+  const base = join(installRoot, 'kun')
+  const launcher = join(base, 'bin', process.platform === 'win32' ? 'kun.cmd' : 'kun')
+  const env = { ...process.env, HOME: homeDir, USERPROFILE: homeDir, NODE_EXTRA_CA_CERTS: caCert }
+  const output = await runLauncher(launcher, ['update', '--yes'], env)
+  if (!output.includes(`Kun ${version} installed`)) throw new Error(`Next update failed: ${output}`)
+  if ((await readFile(join(base, 'current'), 'utf8')).trim() !== `releases/${buildId}`) {
+    throw new Error('Next update did not activate the immutable release pointer')
+  }
+  const previous = JSON.parse(await readFile(join(base, 'releases', release.buildId, 'release.json'), 'utf8'))
+  if (previous.version !== release.version) throw new Error('Next update lost the rollback release')
+  if ((await runLauncher(launcher, ['--version'], env)).trim() !== `kun ${version}`) {
+    throw new Error('The stable PATH launcher did not start the simulated next release')
+  }
+  if (!(await runLauncher(launcher, ['update'], env)).includes('up to date')) {
+    throw new Error('The pointer-layout installation cannot check subsequent updates')
+  }
+  for (const [file, marker] of [['settings.json', 'settings-kept'], ['threads.json', 'threads-kept']]) {
+    if (!(await readFile(join(homeDir, '.kun', file), 'utf8')).includes(marker)) {
+      throw new Error(`Next update lost ${file}`)
+    }
+  }
 }
 
 function buildManifest(release, hostArtifact) {
@@ -271,38 +336,16 @@ function buildManifest(release, hostArtifact) {
   }
 }
 
-async function buildV037Baseline({ repoRoot, workDir, target, publicBaseUrl }) {
-  const v037Dir = join(workDir, 'v037')
-  const outputDir = join(workDir, 'v037-out')
-  run('git', ['-C', repoRoot, 'worktree', 'add', '--detach', v037Dir, V037_TAG])
-  try {
-    const env = {
-      ...process.env,
-      KUN_APP_VERSION: '0.3.7',
-      KUN_ARTIFACT_VERSION: '0.3.7',
-      RELEASE_CHANNEL: 'stable'
-    }
-    run('npm', ['ci'], { cwd: v037Dir, env })
-    run('npm', ['--prefix', 'kun', 'ci'], { cwd: v037Dir, env })
-    run('npm', ['run', 'build:kun'], { cwd: v037Dir, env })
-    run('npm', ['run', 'package:tui', '--',
-      '--version', '0.3.7',
-      '--artifact-version', '0.3.7',
-      '--tag', V037_TAG,
-      '--channel', 'stable',
-      '--commit', V037_COMMIT,
-      '--target', target,
-      '--output', outputDir,
-      '--public-base-url', publicBaseUrl
-    ], { cwd: v037Dir, env })
-  } finally {
-    try {
-      run('git', ['-C', repoRoot, 'worktree', 'remove', '--force', v037Dir])
-    } catch {
-      // Best-effort cleanup; the caller removes the scratch directory.
-    }
+async function downloadV037Baseline(workDir, target) {
+  const fileName = tuiFileName('0.3.7', target)
+  await runCapture('gh', ['release', 'download', V037_TAG, '--repo', 'KunAgent/Kun',
+    '--pattern', fileName, '--pattern', `${fileName}.sha256`, '--dir', workDir])
+  const archive = join(workDir, fileName)
+  const expected = (await readFile(`${archive}.sha256`, 'utf8')).trim().split(/\s+/)[0]
+  if (!/^[a-f0-9]{64}$/.test(expected) || await sha256File(archive) !== expected) {
+    throw new Error('Published 0.3.7 TUI archive checksum mismatch')
   }
-  return join(outputDir, tuiFileName('0.3.7', target))
+  return archive
 }
 
 async function installBaseline(archive, installRoot) {
@@ -312,7 +355,7 @@ async function installBaseline(archive, installRoot) {
     await extractZip(archive, { dir: installRoot })
     return
   }
-  run('tar', ['-xzf', archive, '-C', installRoot])
+  await runCapture('tar', ['-xzf', archive, '-C', installRoot])
 }
 
 async function seedUserData(homeDir) {
@@ -333,14 +376,14 @@ async function runV037Updater({ installRoot, homeDir, caCert }) {
   if (process.platform === 'win32') {
     // The v0.3.7 Windows updater stages the rename in a detached PowerShell
     // process that activates only after this process exits; poll until it runs.
-    const result = runCapture('cmd.exe', ['/c', launcher, 'update', '--yes'], { env })
+    const result = await runLauncher(launcher, ['update', '--yes'], env)
     if (!result.includes('staged and will activate')) {
       throw new Error(`v0.3.7 Windows updater did not stage: ${result}`)
     }
     await waitForWindowsActivation(installRoot)
     return
   }
-  const output = runCapture(launcher, ['update', '--yes'], { env })
+  const output = await runLauncher(launcher, ['update', '--yes'], env)
   if (!output.includes('installed')) {
     throw new Error(`v0.3.7 updater did not report installation: ${output}`)
   }
@@ -378,15 +421,13 @@ async function assertUpgraded({ installRoot, homeDir, caCert, version, manifestU
   }
   await stat(`${kunRoot}.previous`)
 
-  const runKun = (args) => process.platform === 'win32'
-    ? runCapture('cmd.exe', ['/c', launcher, ...args], { env })
-    : runCapture(launcher, args, { env })
+  const runKun = (args) => runLauncher(launcher, args, env)
 
-  const versionOutput = runKun(['--version']).trim()
+  const versionOutput = (await runKun(['--version'])).trim()
   if (versionOutput !== `kun ${version}`) {
     throw new Error(`kun --version returned ${JSON.stringify(versionOutput)}`)
   }
-  const helpOutput = runKun(['--help'])
+  const helpOutput = await runKun(['--help'])
   if (!helpOutput.includes('kun <command> [options]')) {
     throw new Error('kun --help did not report the expected usage')
   }
@@ -404,22 +445,25 @@ async function assertUpgraded({ installRoot, homeDir, caCert, version, manifestU
 
   // The installed updater (now 0.3.8) must parse its own flat layout and report
   // up to date against the same manifest.
-  const updateOutput = runKun(['update'])
+  const updateOutput = await runKun(['update'])
   if (!updateOutput.includes('up to date')) {
     throw new Error(`kun update did not report up to date: ${updateOutput}`)
   }
 }
 
-function run(command, args, options = {}) {
-  execFileSync(command, args, {
-    ...options,
-    shell: process.platform === 'win32',
-    stdio: 'inherit'
-  })
+function runLauncher(launcher, args, env) {
+  return process.platform === 'win32'
+    ? runCapture('cmd.exe', ['/d', '/s', '/c', `""${launcher}" ${args.join(' ')}"`], {
+      env, windowsVerbatimArguments: true
+    })
+    : runCapture(launcher, args, { env })
 }
 
-function runCapture(command, args, options = {}) {
-  return execFileSync(command, args, { ...options, encoding: 'utf8' }).toString()
+export async function runCapture(command, args, options = {}) {
+  const result = await promisify(execFile)(command, args, {
+    timeout: 10 * 60_000, maxBuffer: 8 * 1024 * 1024, ...options, encoding: 'utf8'
+  })
+  return result.stdout
 }
 
 async function sha256File(path) {
