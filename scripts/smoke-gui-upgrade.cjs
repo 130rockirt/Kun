@@ -4,8 +4,8 @@
 const assert = require('node:assert/strict')
 const { execFile } = require('node:child_process')
 const { promisify } = require('node:util')
-const { mkdir, mkdtemp, readFile, writeFile, copyFile, appendFile } = require('node:fs/promises')
-const { tmpdir } = require('node:os')
+const { mkdir, mkdtemp, readFile, writeFile, copyFile, appendFile, rename } = require('node:fs/promises')
+const { tmpdir, homedir } = require('node:os')
 const { join, resolve } = require('node:path')
 const { _electron: electron } = require('playwright-core')
 const { parse } = require('yaml')
@@ -14,7 +14,7 @@ const {
   buildSmokeSettings, startModelFixture, MODEL_NAME, poll, processIsAlive
 } = require('./smoke-packaged-update-handoff-support.cjs')
 const {
-  createIsolatedEnvironment, desktopUserDataCandidates
+  createIsolatedEnvironment
 } = require('./smoke-packaged-extension-desktop-runtime.cjs')
 
 const run = promisify(execFile)
@@ -61,9 +61,16 @@ async function request(page, path, method = 'GET', body) {
   }, { path, method, body })
 }
 
-async function startGui(executable, env, userData) {
-  const app = await electron.launch({ executablePath: executable, env,
-    args: [`--user-data-dir=${userData}`], timeout: TIMEOUT })
+async function startGui(executable, env, userData, launch = electron.launch.bind(electron)) {
+  const app = await launch({ executablePath: executable, env,
+    args: [], timeout: TIMEOUT })
+  try {
+    assert.equal(resolve(await app.evaluate(({ app }) => app.getPath('userData'))), resolve(userData),
+      'GUI must use the same default profile as the installer relaunch')
+  } catch (error) {
+    await app.close()
+    throw error
+  }
   const page = await poll(async () => {
     for (const candidate of app.windows()) {
       if (await candidate.evaluate(() => Boolean(window.kunGui?.getAppVersion)).catch(() => false)) return candidate
@@ -98,19 +105,28 @@ async function scenario(input, name) {
   // disposable account's AppData for the installer's restricted fault injection.
   const temporaryParent = process.platform === 'win32' ? process.env.APPDATA : tmpdir()
   const root = await mkdtemp(join(temporaryParent, `kun-gui-upgrade-${name}-`))
-  const home = join(root, 'home')
-  const appData = join(home, 'AppData', 'Roaming')
-  const userData = process.platform === 'darwin'
-    ? join(home, 'Library', 'Application Support', 'Kun') : join(appData, 'Kun')
+  // The real updater relaunches without custom CLI arguments. Use the clean
+  // CI account's default profile, never a --user-data-dir-only test profile.
+  const home = homedir()
+  const appData = process.platform === 'win32' ? process.env.APPDATA : join(home, 'Library', 'Application Support')
+  const userData = join(appData, 'Kun')
   const workspace = join(root, 'workspace')
-  const dataDir = join(home, '.kun', 'data')
+  const dataDir = join(root, 'runtime-data')
+  const controlDir = join(home, '.kun', 'control')
   const installParent = join(root, 'installed')
   const bundle = join(installParent, 'Kun.app')
   const executable = process.platform === 'win32'
     ? join(installParent, 'Kun', 'Kun.exe') : join(bundle, 'Contents', 'MacOS', 'Kun')
+  // Exclusive mkdir fails closed if this account already has any Kun profile.
+  // The owned directory is moved into evidence after testing, not deleted.
+  await mkdir(userData)
+  await writeFile(join(userData, '.upgrade-acceptance-owner'), root)
+  await mkdir(join(home, '.kun'), { recursive: true })
+  await mkdir(controlDir)
+  await writeFile(join(controlDir, '.upgrade-acceptance-owner'), root)
   const model = await startModelFixture()
   const environment = createIsolatedEnvironment(process.env, {
-    home, appData, localAppData: join(home, 'AppData', 'Local'), temporaryDirectory: root
+    home, appData, localAppData: process.env.LOCALAPPDATA || join(root, 'cache'), temporaryDirectory: root
   })
   delete environment.KUN_PACKAGED_EXTENSION_DESKTOP_SMOKE
   Object.assign(environment, {
@@ -118,15 +134,12 @@ async function scenario(input, name) {
     KUN_INSTALLER_DIAGNOSTIC_PATH: join(root, 'installer.log')
   })
   if (process.platform === 'win32') Object.assign(environment, { TEMP: temporaryParent, TMP: temporaryParent })
-  await Promise.all([root, home, appData, userData, workspace, dataDir, installParent].map((path) => mkdir(path, { recursive: true })))
+  await Promise.all([workspace, dataDir, controlDir, installParent].map((path) => mkdir(path, { recursive: true })))
   const settings = buildSmokeSettings({ dataDir, port: 18899, runtimeToken: 'upgrade-fixture-token',
     workspaceRoot: workspace, baseUrl: model.baseUrl, autoStart: true })
   settings.locale = 'en'
   settings.guiUpdate = { channel: 'stable' }
-  for (const path of desktopUserDataCandidates({ platform: process.platform, home, appData, explicitUserData: userData })) {
-    await mkdir(path, { recursive: true })
-    await writeFile(join(path, 'kun-settings.json'), JSON.stringify(settings))
-  }
+  await writeFile(join(userData, 'kun-settings.json'), JSON.stringify(settings))
   let gui
   let baselineTeam
   try {
@@ -241,12 +254,16 @@ async function scenario(input, name) {
   } finally {
     await gui?.app.close().catch(() => undefined)
     await stopInstalledGui(executable).catch(() => undefined)
-    const managerPath = join(home, '.kun', 'control', 'manager.json')
+    const managerPath = join(controlDir, 'manager.json')
     const manager = await readFile(managerPath, 'utf8').then(JSON.parse).catch(() => null)
-    if (manager) await fetch(`${manager.baseUrl}/v1/manager/shutdown`, {
-      method: 'POST', headers: { authorization: `Bearer ${manager.managerToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ instanceId: manager.instanceId }), signal: AbortSignal.timeout(10_000)
-    }).catch(() => undefined)
+    if (manager) {
+      assert.equal(resolve(manager.dataDir), resolve(dataDir), 'Manager must belong to this scenario')
+      await fetch(`${manager.baseUrl}/v1/manager/shutdown`, {
+        method: 'POST', headers: { authorization: `Bearer ${manager.managerToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ instanceId: manager.instanceId }), signal: AbortSignal.timeout(10_000)
+      }).catch(() => undefined)
+      await poll(() => !processIsAlive(manager.pid), TIMEOUT, 'isolated manager shutdown')
+    }
     if (process.platform === 'win32') {
       const uninstaller = join(installParent, 'Kun', 'Uninstall Kun.exe')
       const copy = join(root, 'uninstall.exe')
@@ -260,6 +277,12 @@ async function scenario(input, name) {
       }
     }
     await model.close()
+    assert.equal(await readFile(join(userData, '.upgrade-acceptance-owner'), 'utf8'), root,
+      'Refusing to move a profile not owned by this acceptance scenario')
+    await rename(userData, join(root, 'desktop-profile'))
+    assert.equal(await readFile(join(controlDir, '.upgrade-acceptance-owner'), 'utf8'), root,
+      'Refusing to move a manager directory not owned by this acceptance scenario')
+    await rename(controlDir, join(root, 'control'))
     // Keep the isolated profile and installer diagnostics for CI artifact collection.
     process.stdout.write(`GUI upgrade evidence: ${root}\n`)
   }
@@ -309,3 +332,5 @@ async function main() {
 }
 
 if (require.main === module) main().catch((error) => { console.error(error); process.exitCode = 1 })
+
+module.exports = { startGui }
