@@ -54,8 +54,7 @@ async function main() {
   try {
     await extractArchive(artifact, temporary)
     const root = join(temporary, 'kun')
-    const pointer = (await readFile(join(root, 'current'), 'utf8')).trim()
-    const releaseDir = join(root, pointer)
+    const releaseDir = root
     const release = JSON.parse(await readFile(join(releaseDir, 'release.json'), 'utf8'))
     if (release.version !== expectedVersion || release.target !== expectedTarget) {
       throw new Error(

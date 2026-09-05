@@ -402,7 +402,7 @@ jobs:
   build-tui:
     name: Build standalone TUI (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     needs:
       - prepare
     strategy:
@@ -469,6 +469,13 @@ jobs:
           artifact="$(ls dist/Kun-TUI-*.tar.gz 2>/dev/null || ls dist/Kun-TUI-*.zip)";
           npm run smoke:standalone-tui -- --artifact "${artifact}"
           --version "${{ needs.prepare.outputs.version }}" --target "${{ matrix.target }}"
+
+      - name: Verify 0.3.7 standalone TUI can self-update to this candidate
+        shell: bash
+        timeout-minutes: 60
+        run: >-
+          artifact="$(ls dist/Kun-TUI-*.tar.gz 2>/dev/null || ls dist/Kun-TUI-*.zip)";
+          node ./scripts/test-tui-self-update-from-0.3.7.mjs --candidate "${artifact}"
 
       - name: Upload standalone TUI artifact
         uses: actions/upload-artifact@v4

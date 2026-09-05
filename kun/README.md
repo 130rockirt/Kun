@@ -154,21 +154,46 @@ kun exec --data-dir ~/.kun/data --workspace "$PWD" read --args '{"path":"README.
 
 ### Standalone archive layout and self-update
 
-The packaged standalone archive installs to a stable base directory that is
-never moved by an update. Add `<base>/bin` to your `PATH`, then run `kun`:
+The 0.3.x standalone TUI archive is published in the **flat** layout so the
+frozen v0.3.7 updater (already installed on user machines) can consume it. It
+installs to a stable base directory and reads three hard-coded paths:
 
 ```text
 kun/
-  bin/kun          # stable launcher: reads the `current` pointer, never moved
+  bin/kun          # launcher: execs runtime/node + app/kun/dist/cli/serve-entry.js
+  release.json     # release metadata (version, buildId, target, ...)
+  runtime/node     # bundled Node runtime (node.exe on Windows)
+  app/kun/...      # the Kun CLI + bundled dependencies
+```
+
+Add `<base>/bin` to your `PATH`, then run `kun`. `kun update --yes` replaces
+the whole base directory with the downloaded flat archive (POSIX renames the
+base; Windows stages the rename in a detached process), so the `<base>/bin`
+PATH entry keeps working after the swap. User data lives under
+`HOME`/`USERPROFILE`, outside the archive, and is never touched.
+
+On the **next** update after a flat install, the runtime normalizes the flat
+archive into the immutable pointer layout and migrates the existing install in
+place:
+
+```text
+kun/
+  bin/kun          # stable pointer-following launcher, never moved
   current          # pointer file: releases/<buildId>
   releases/
     <buildId>/     # immutable version directory (runtime, app, release.json)
 ```
 
-`kun update --yes` moves a new release into `releases/<buildId>` and switches
-the `current` pointer with a single atomic rename. A crash or power loss at any
-point cannot remove the install path, so the next `kun` invocation always
-starts; the previous version is kept until a later update garbage-collects it.
+Switching versions is then a single atomic rename of the `current` pointer, so
+a crash or power loss at any point cannot remove the install path.
+
+> **Transitional strategy:** the flat archive layout must be published for the
+> entire 0.3.x line so any 0.3.7 install can jump straight to the latest 0.3.x
+> release. Switching the *archive* back to the pointer layout is deferred to
+> 0.4.0 at the earliest; when that happens, `scripts/assemble-tui-release.mjs`
+> and `scripts/smoke-standalone-tui.mjs` must read
+> `kun/releases/*/release.json` instead of `kun/release.json`. The runtime
+> updater (`kun/src/cli/self-update.ts`) already accepts both archive shapes.
 
 ## Environment variables
 

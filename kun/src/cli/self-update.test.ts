@@ -215,6 +215,101 @@ describe('standalone TUI self-update', () => {
     30_000
   )
 
+  it.skipIf(process.platform === 'win32')(
+    'installs a flat archive into a legacy install and migrates it to the pointer layout',
+    async () => {
+      const target = standaloneTuiTarget()!
+      const currentRoot = await standaloneRoot(release({ target }))
+      const archive = await updateFlatArchive(dirname(currentRoot), target)
+      const bytes = await readFile(archive)
+      const next = latest()
+      const selected = next.artifacts.find((artifact) => artifact.target === target)!
+      selected.size = bytes.length
+      selected.sha256 = createHash('sha256').update(bytes).digest('hex')
+      let output = ''
+      const code = await runSelfUpdateCommand(['--yes'], {
+        stdout: { write: (chunk) => { output += chunk } },
+        stderr: { write: () => undefined },
+        env: { KUN_STANDALONE_ROOT: currentRoot },
+        fetch: async (url) => String(url).endsWith('latest-tui.json')
+          ? Response.json(next)
+          : new Response(bytes)
+      })
+      expect(code).toBe(0)
+      expect(output).toContain('1.2.4 installed')
+      expect((await readFile(join(currentRoot, 'current'), 'utf8')).trim()).toBe(`releases/${NEW_BUILD_ID}`)
+      expect(JSON.parse(await readFile(join(currentRoot, 'releases', NEW_BUILD_ID, 'release.json'), 'utf8')))
+        .toMatchObject({ version: '1.2.4', target })
+      expect(JSON.parse(await readFile(join(currentRoot, 'releases', BUILD_ID, 'release.json'), 'utf8')))
+        .toMatchObject({ version: '1.2.3', target })
+    },
+    30_000
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'installs a flat archive over a pointer install by switching the pointer only',
+    async () => {
+      const target = standaloneTuiTarget()!
+      const parent = await mkdtemp(join(tmpdir(), 'kun-self-update-flat-pointer-'))
+      roots.push(parent)
+      const currentRoot = await pointerRoot(parent, release({ target }))
+      const archive = await updateFlatArchive(parent, target)
+      const bytes = await readFile(archive)
+      const next = latest()
+      const selected = next.artifacts.find((artifact) => artifact.target === target)!
+      selected.size = bytes.length
+      selected.sha256 = createHash('sha256').update(bytes).digest('hex')
+      let output = ''
+      const code = await runSelfUpdateCommand(['--yes'], {
+        stdout: { write: (chunk) => { output += chunk } },
+        stderr: { write: () => undefined },
+        env: { KUN_STANDALONE_ROOT: currentRoot },
+        fetch: async (url) => String(url).endsWith('latest-tui.json')
+          ? Response.json(next)
+          : new Response(bytes)
+      })
+      expect(code).toBe(0)
+      expect(output).toContain('1.2.4 installed')
+      expect((await readFile(join(currentRoot, 'current'), 'utf8')).trim()).toBe(`releases/${NEW_BUILD_ID}`)
+      expect(JSON.parse(await readFile(join(currentRoot, 'releases', NEW_BUILD_ID, 'release.json'), 'utf8')))
+        .toMatchObject({ version: '1.2.4', target })
+      expect(JSON.parse(await readFile(join(currentRoot, 'releases', BUILD_ID, 'release.json'), 'utf8')))
+        .toMatchObject({ version: '1.2.3', target })
+    },
+    30_000
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'fails closed before mutating a legacy install when a flat archive mismatches the manifest',
+    async () => {
+      const target = standaloneTuiTarget()!
+      const currentRoot = await standaloneRoot(release({ target }))
+      const archive = await updateFlatArchive(dirname(currentRoot), target, 'd'.repeat(64))
+      const bytes = await readFile(archive)
+      const next = latest()
+      const selected = next.artifacts.find((artifact) => artifact.target === target)!
+      selected.size = bytes.length
+      selected.sha256 = createHash('sha256').update(bytes).digest('hex')
+      let stdout = ''
+      let stderr = ''
+      const code = await runSelfUpdateCommand(['--yes'], {
+        stdout: { write: (chunk) => { stdout += chunk } },
+        stderr: { write: (chunk) => { stderr += chunk } },
+        env: { KUN_STANDALONE_ROOT: currentRoot },
+        fetch: async (url) => String(url).endsWith('latest-tui.json')
+          ? Response.json(next)
+          : new Response(bytes)
+      })
+      expect(code).toBe(70)
+      expect(stdout).not.toContain('installed')
+      expect(stderr).toContain('does not match latest-tui.json')
+      expect(JSON.parse(await readFile(join(currentRoot, 'release.json'), 'utf8')))
+        .toMatchObject({ version: '1.2.3', buildId: BUILD_ID })
+      await expect(stat(join(currentRoot, 'current'))).rejects.toMatchObject({ code: 'ENOENT' })
+    },
+    30_000
+  )
+
   it('reports a recorded pending-update result before checking for updates', async () => {
     const root = await standaloneRoot(release())
     const transactionDir = join(dirname(root), '.kun.kun-tui-update')
@@ -442,6 +537,60 @@ async function updateArchive(
   await mkdir(join(root, 'runtime'), { recursive: true })
   await copyFile(process.execPath, node)
   await chmod(node, 0o755)
+  await writeFile(
+    entry,
+    "if (process.argv.includes('--version')) process.stdout.write('kun 1.2.4\\n')\n",
+    'utf8'
+  )
+  await writeFile(
+    join(root, 'release.json'),
+    `${JSON.stringify(release({
+      version: '1.2.4',
+      artifactVersion: '1.2.4',
+      tag: 'v1.2.4',
+      target,
+      buildId,
+      commit: COMMIT
+    }))}\n`,
+    'utf8'
+  )
+  const archive = join(parent, `Kun-TUI-1.2.4-${targetName(target)}`)
+  execFileSync('tar', ['-czf', archive, '-C', stage, 'kun'])
+  return archive
+}
+
+async function pointerRoot(parent: string, metadata: StandaloneTuiReleaseMetadata): Promise<string> {
+  const base = join(parent, 'kun')
+  const dir = join(base, 'releases', metadata.buildId)
+  await mkdir(join(dir, 'runtime'), { recursive: true })
+  await mkdir(join(dir, 'app', 'kun', 'dist', 'cli'), { recursive: true })
+  await copyFile(process.execPath, join(dir, 'runtime', 'node'))
+  await chmod(join(dir, 'runtime', 'node'), 0o755)
+  await writeFile(
+    join(dir, 'app', 'kun', 'dist', 'cli', 'serve-entry.js'),
+    "if (process.argv.includes('--version')) process.stdout.write('kun 1.2.3\\n')\n",
+    'utf8'
+  )
+  await writeFile(join(dir, 'release.json'), `${JSON.stringify(metadata)}\n`, 'utf8')
+  await writeFile(join(base, 'current'), `releases/${metadata.buildId}\n`, 'utf8')
+  return base
+}
+
+async function updateFlatArchive(
+  parent: string,
+  target: string,
+  buildId = NEW_BUILD_ID
+): Promise<string> {
+  const stage = join(parent, 'next-flat')
+  const root = join(stage, 'kun')
+  const node = join(root, 'runtime', 'node')
+  const entry = join(root, 'app', 'kun', 'dist', 'cli', 'serve-entry.js')
+  await mkdir(join(root, 'bin'), { recursive: true })
+  await mkdir(join(entry, '..'), { recursive: true })
+  await mkdir(join(root, 'runtime'), { recursive: true })
+  await copyFile(process.execPath, node)
+  await chmod(node, 0o755)
+  await writeFile(join(root, 'bin', 'kun'), '#!/bin/sh\necho flat launcher\n', 'utf8')
   await writeFile(
     entry,
     "if (process.argv.includes('--version')) process.stdout.write('kun 1.2.4\\n')\n",

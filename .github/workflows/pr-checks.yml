@@ -158,6 +158,14 @@ jobs:
             }
           " "${artifact}" "${version}"
 
+      - name: Verify 0.3.7 standalone TUI can self-update to this candidate (Linux ARM64)
+        timeout-minutes: 60
+        run: |
+          git fetch --depth 1 origin tag v0.3.7
+          version="$(node -p "require('./kun/package.json').version")"
+          node ./scripts/test-tui-self-update-from-0.3.7.mjs \
+            --candidate "dist/tui-pr/Kun-TUI-${version}-linux-arm64.tar.gz"
+
       - name: Build Linux ARM64 AppImage and deb
         run: npm run dist:linux:arm64
 
@@ -302,6 +310,15 @@ jobs:
           }
           '@
           node --input-type=module -e $probe $artifact $version
+
+      - name: Verify 0.3.7 standalone TUI can self-update to this candidate (Windows)
+        timeout-minutes: 60
+        shell: pwsh
+        run: |
+          git fetch --depth 1 origin tag v0.3.7
+          $version = node -p "require('./kun/package.json').version"
+          node ./scripts/test-tui-self-update-from-0.3.7.mjs `
+            --candidate "dist/tui-pr/Kun-TUI-$version-win-x64.zip"
 
       - name: Test Windows update rollback failpoints
         env:

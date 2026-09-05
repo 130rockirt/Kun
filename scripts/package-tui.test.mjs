@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   TUI_NODE_VERSION,
   createTuiReleaseMetadata,
+  flatLauncherScript,
   resolveNpmCliInvocation,
   resolveTuiTarget,
   tuiArtifactName
@@ -101,4 +102,18 @@ test('rejects an independently versioned TUI tag', () => {
     commit: COMMIT,
     updateManifestUrl: 'https://downloads.example.test/latest-tui.json'
   }), /must identify one joint release/)
+})
+
+test('flat launcher execs the runtime and entry point directly under the base', () => {
+  const posix = flatLauncherScript('darwin')
+  assert.ok(posix.includes('export KUN_STANDALONE_ROOT="$root"'))
+  assert.ok(posix.includes('exec "$root/runtime/node" "$root/app/kun/dist/cli/serve-entry.js" "$@"'))
+  assert.ok(!posix.includes('releases/'))
+  assert.ok(!posix.includes('current'))
+
+  const windows = flatLauncherScript('win32')
+  assert.ok(windows.includes('set "KUN_STANDALONE_ROOT=%~dp0.."'))
+  assert.ok(windows.includes('"%~dp0..\\runtime\\node.exe" "%~dp0..\\app\\kun\\dist\\cli\\serve-entry.js" %*'))
+  assert.ok(!windows.includes('current'))
+  assert.ok(!windows.includes('releases\\'))
 })

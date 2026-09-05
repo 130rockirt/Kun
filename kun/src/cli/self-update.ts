@@ -35,6 +35,7 @@ import {
   readPointerBuildId,
   resolveStandaloneTuiLayout,
   TUI_RELEASE_METADATA_FILENAME,
+  TUI_RELEASES_DIR,
   tuiPointerPath,
   tuiReleaseDirForBuildId,
   tuiReleasesDir,
@@ -344,6 +345,7 @@ async function installStandaloneTuiUpdate(
     validateArchiveEntries(archivePath)
     execFileSync('tar', ['-xf', archivePath, '-C', stagingRoot], { stdio: 'ignore' })
     const nextBase = join(stagingRoot, 'kun')
+    await normalizeFlatStagingArchive(nextBase, check.latest.buildId)
     const nextReleaseDir = join(nextBase, 'releases', check.latest.buildId)
     const nextRelease = parseStandaloneRelease(
       JSON.parse(await readFile(join(nextReleaseDir, TUI_RELEASE_METADATA_FILENAME), 'utf8')) as unknown
@@ -445,6 +447,28 @@ async function installStandaloneTuiUpdate(
   } finally {
     await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined)
   }
+}
+
+/**
+ * Normalize a legacy flat archive (release.json, runtime/, app/ directly under
+ * kun/) into the immutable pointer shape so the shared install path handles it.
+ * The incoming `bin` launcher is discarded: a legacy base receives the stable
+ * pointer launcher from migrateLegacyLauncher, and a pointer base keeps its
+ * existing launcher. Returns true when the archive was normalized.
+ */
+async function normalizeFlatStagingArchive(nextBase: string, buildId: string): Promise<boolean> {
+  const releaseDir = tuiReleaseDirForBuildId(nextBase, buildId)
+  if (await stat(releaseDir).then(() => true).catch(() => false)) return false
+  if (!(await stat(join(nextBase, TUI_RELEASE_METADATA_FILENAME)).then(() => true).catch(() => false))) {
+    return false
+  }
+  await mkdir(releaseDir, { recursive: true })
+  const reserved = new Set(['bin', TUI_RELEASES_DIR])
+  for (const entry of await readdir(nextBase, { withFileTypes: true })) {
+    if (reserved.has(entry.name)) continue
+    await rename(join(nextBase, entry.name), join(releaseDir, entry.name))
+  }
+  return true
 }
 
 /** Replace a legacy-layout launcher with the stable pointer-following launcher. */
