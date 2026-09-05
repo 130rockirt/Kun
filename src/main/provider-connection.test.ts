@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettingsV1 } from '../shared/app-settings'
-import { CHATGPT_SUBSCRIPTION_MODEL_IDS, GROK_SUBSCRIPTION_MODEL_IDS } from '../shared/app-settings'
+import { GROK_SUBSCRIPTION_MODEL_IDS } from '../shared/app-settings'
 import {
   describeProviderProbeError,
   parseModelIds,
@@ -131,8 +131,11 @@ describe('provider probe network transport', () => {
 })
 
 describe('probeModelProvider', () => {
-  it('validates ChatGPT subscription OAuth locally and returns its shared catalog', async () => {
-    const fetchMock = vi.fn()
+  it('fetches the live ChatGPT subscription catalog including new model slugs', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ models: [
+      { slug: 'gpt-6-astra', visibility: 'list', context_window: 272000 },
+      { slug: 'gpt-reserve', visibility: 'hide' }
+    ] })))
     vi.stubGlobal('fetch', fetchMock)
     const result = await probeModelProvider({
       providerId: 'test-provider',
@@ -148,8 +151,13 @@ describe('probeModelProvider', () => {
       endpointFormat: 'responses'
     })
 
-    expect(result).toEqual({ ok: true, latencyMs: 0, modelIds: [...CHATGPT_SUBSCRIPTION_MODEL_IDS] })
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ ok: true, modelIds: ['gpt-6-astra'] })
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^https:\/\/chatgpt.com\/backend-api\/codex\/models\?client_version=/),
+      expect.objectContaining({ headers: expect.objectContaining({
+        Authorization: 'Bearer access', 'ChatGPT-Account-Id': 'account', originator: 'codex_cli_rs'
+      }) })
+    )
   })
 
   it('validates Grok subscription OAuth locally and returns its shared catalog', async () => {

@@ -395,7 +395,7 @@ export type ModelProviderProbeRequest = {
 }
 
 export type ModelProviderProbeResult =
-  | { ok: true; latencyMs: number; modelIds: string[] }
+  | { ok: true; latencyMs: number; modelIds: string[]; modelProfiles?: Record<string, ModelProviderModelProfileV1> }
   | { ok: false; message: string; suggestedProxyUrl?: string }
 
 export type ProviderModelCatalogSource = 'provider-api' | 'models-dev'

@@ -414,6 +414,7 @@ export function useProviderProbeOperations(scope: Record<string, any>): Record<s
         target,
         fingerprint,
         providerModelIds: result.ok ? [...result.modelIds] : [],
+        discoveredModelProfiles: result.ok ? result.modelProfiles : undefined,
         catalogResult,
         providerError: result.ok
           ? (result.modelIds.length === 0 ? t('providerModelImportProviderReturnedEmpty') : undefined)
