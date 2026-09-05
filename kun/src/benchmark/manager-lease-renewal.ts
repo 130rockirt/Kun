@@ -1,7 +1,10 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readPersistedManagerState } from '../manager/service-manager-state-persistence.js'
+import {
+  readPersistedManagerState,
+  writePersistedManagerState
+} from '../manager/service-manager-state-persistence.js'
 import { ManagerStateWriteQueue } from '../manager/service-manager-state-write-queue.js'
 import type { ServiceManagerState } from '../manager/service-manager-state.js'
 
@@ -50,18 +53,16 @@ async function benchmarkTurnCount(activeTurns: number): Promise<ManagerLeaseRene
     const state = await readPersistedManagerState(statePath)
     // Runtime slots are one-per-flavor; a single runtime owns all active turns.
     state.register(registration('runtime-0'))
-    const queue = new ManagerStateWriteQueue(statePath)
     const writeDurations: number[] = []
     let durableWriteBytes = 0
-    const writeSnapshot = queue['write'].bind(queue) as (
-      snapshot: Parameters<ManagerStateWriteQueue['enqueue']>[0]
-    ) => Promise<void>
-    queue['write'] = async (snapshot) => {
-      const startedAt = performance.now()
-      durableWriteBytes += JSON.stringify(snapshot).length
-      await writeSnapshot(snapshot)
-      writeDurations.push(performance.now() - startedAt)
-    }
+    const queue = new ManagerStateWriteQueue(statePath, {
+      writer: async (path, snapshot) => {
+        const startedAt = performance.now()
+        durableWriteBytes += JSON.stringify(snapshot).length
+        await writePersistedManagerState(path, snapshot)
+        writeDurations.push(performance.now() - startedAt)
+      }
+    })
     state.onMutation(() => {
       queue.enqueue(state.durableSnapshot())
     })

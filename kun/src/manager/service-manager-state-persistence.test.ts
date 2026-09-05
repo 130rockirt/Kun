@@ -244,4 +244,128 @@ describe('Service Manager renewal flush coalescing', () => {
       await manager.close().catch(() => undefined)
     }
   })
+
+  it('does not advance durable tracking on a slow renewal write inside the safe window', async () => {
+    const test = await managerFixture()
+    const state = new ServiceManagerState()
+    const manager = await startServiceManager({
+      controlDir: test.controlDir,
+      managerToken: 'manager-token',
+      instanceId: 'manager-instance',
+      startedAt: '2026-08-05T00:00:00.000Z',
+      dataDir: test.dataDir,
+      settingsPath: test.settingsPath,
+      state,
+      stateWriter: async (path, snapshot) => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 60))
+        await writePersistedManagerState(path, snapshot)
+      }
+    })
+    const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+    try {
+      const headers = {
+        'content-type': 'application/json',
+        authorization: `Bearer manager-token`
+      }
+      const base = manager.discovery.baseUrl
+      const registerResponse = await fetch(`${base}/v1/runtimes/production/register`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(registration('runtime-1'))
+      })
+      expect(registerResponse.status).toBe(200)
+      const acquireResponse = await fetch(`${base}/v1/leases/threads/thread-1/acquire`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          turnId: 'turn-1',
+          ownerFlavor: 'production',
+          ownerInstanceId: 'runtime-1'
+        })
+      })
+      expect(acquireResponse.status).toBe(200)
+      const durableFlushAtBeforeHeartbeat = manager.statePersistence().stats.lastDurableFlushAt
+
+      const startedAt = performance.now()
+      const heartbeatResponse = await fetch(`${base}/v1/runtimes/production/heartbeat`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ instanceId: 'runtime-1' })
+      })
+      expect(heartbeatResponse.status).toBe(200)
+      expect(performance.now() - startedAt).toBeLessThan(2_000)
+
+      const atResponse = manager.statePersistence()
+      expect(atResponse.durableLag).toBe(1)
+      expect(atResponse.stats.lastDurableFlushAt).toBe(durableFlushAtBeforeHeartbeat)
+
+      await sleep(120)
+      const settled = manager.statePersistence()
+      expect(settled.durableLag).toBe(0)
+      expect(settled.stats.lastDurableFlushAt).toBeGreaterThan(durableFlushAtBeforeHeartbeat)
+    } finally {
+      await manager.close().catch(() => undefined)
+    }
+  })
+
+  it('degrades persistence and rejects mutations before controlled shutdown', async () => {
+    const test = await managerFixture()
+    const state = new ServiceManagerState()
+    const manager = await startServiceManager({
+      controlDir: test.controlDir,
+      managerToken: 'manager-token',
+      instanceId: 'manager-instance',
+      startedAt: '2026-08-05T00:00:00.000Z',
+      dataDir: test.dataDir,
+      settingsPath: test.settingsPath,
+      state,
+      stateWriter: async () => {
+        throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
+      },
+      stateWriteRetry: { attempts: 3, baseDelayMs: 1 }
+    })
+    try {
+      const headers = {
+        'content-type': 'application/json',
+        authorization: `Bearer manager-token`
+      }
+      const base = manager.discovery.baseUrl
+      const registerResponse = await fetch(`${base}/v1/runtimes/production/register`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(registration('runtime-1'))
+      })
+      expect(registerResponse.status).toBe(500)
+      expect(manager.statePersistence().degraded).toBe(true)
+
+      const health = await (await fetch(`${base}/health`)).json() as {
+        status: string
+        persistence: { state: string; durableLag: number }
+      }
+      expect(health.status).toBe('ok')
+      expect(health.persistence.state).toBe('degraded')
+
+      const heartbeatResponse = await fetch(`${base}/v1/runtimes/production/heartbeat`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ instanceId: 'runtime-1' })
+      })
+      expect(heartbeatResponse.status).toBe(503)
+
+      const acquireResponse = await fetch(`${base}/v1/leases/threads/thread-1/acquire`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          turnId: 'turn-1',
+          ownerFlavor: 'production',
+          ownerInstanceId: 'runtime-1'
+        })
+      })
+      expect(acquireResponse.status).toBe(503)
+
+      await manager.shutdownRequested
+    } finally {
+      await manager.close().catch(() => undefined)
+    }
+  })
 })

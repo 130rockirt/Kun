@@ -22,3 +22,8 @@ export type {
 export {
   buildServiceManagerRouter
 } from './service-manager-router.js'
+export type {
+  ManagerStateWriter,
+  ManagerStateWriteQueueOptions,
+  ManagerStateWriteQueueStats
+} from './service-manager-state-write-queue.js'

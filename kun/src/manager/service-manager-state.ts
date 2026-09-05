@@ -50,6 +50,7 @@ import {
   ServiceManagerStateSnapshotSchema,
   type ServiceManagerStateSnapshot
 } from './service-manager-state-snapshot.js'
+import type { ManagerStateWriteQueueStats } from './service-manager-state-write-queue.js'
 import {
   extendHostLivenessDeadlines,
   ManagerHostLivenessState
@@ -579,6 +580,11 @@ export type ServiceManagerHandle = NodeHttpServerHandle & {
   discovery: ManagerDiscoveryRecord
   state: ServiceManagerState
   shutdownRequested: Promise<void>
+  statePersistence: () => {
+    degraded: boolean
+    durableLag: number
+    stats: ManagerStateWriteQueueStats
+  }
 }
 
 export async function reconcileVerifiedForcedRuntimeRecovery(input: {

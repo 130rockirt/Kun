@@ -7,6 +7,10 @@ import { jsonResponse } from '../server/response.js'
 import type { Router } from '../server/router.js'
 import { reconcileExpiredThreadLeases } from './expired-thread-lease-reconciliation.js'
 import { authorizedAsync, validation } from './service-manager-router-auth.js'
+import {
+  isManagerPersistenceDegraded,
+  managerPersistenceDegradedResponse
+} from './service-manager-router-persistence.js'
 import type { ManagerSharedDataStore } from './shared-data-store.js'
 import {
   RuntimeSlotBusyError,
@@ -24,12 +28,14 @@ export function addRuntimeRegistrationRoute(
     state: ServiceManagerState
     sharedData?: ManagerSharedDataStore
     flushState?: () => Promise<void>
+    statePersistence?: () => { degraded: boolean }
   }
 ): void {
   router.add('PUT', '/v1/runtimes/:flavor/register', (request, context) => authorizedAsync(
     request,
     input.managerToken,
     async () => {
+      if (isManagerPersistenceDegraded(input.statePersistence)) return managerPersistenceDegradedResponse()
       const flavor = RuntimeFlavorSchema.safeParse(context.params.flavor)
       if (!flavor.success) return validation('invalid runtime flavor')
       const body = await readJsonBody(request)

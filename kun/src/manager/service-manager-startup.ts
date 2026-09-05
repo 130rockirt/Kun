@@ -18,7 +18,10 @@ import {
 import {
   readPersistedManagerState
 } from './service-manager-state-persistence.js'
-import { ManagerStateWriteQueue } from './service-manager-state-write-queue.js'
+import {
+  ManagerStateWriteQueue,
+  type ManagerStateWriter
+} from './service-manager-state-write-queue.js'
 import { ManagerSharedDataStore } from './shared-data-store.js'
 
 export const MANAGER_STATE_DEFERRED_FLUSH_SAFE_MS = 2_000
@@ -37,6 +40,10 @@ export async function startServiceManager(input: {
   sharedData?: ManagerSharedDataStore
   settingsPath: string
   documents?: RevisionedDocumentStore
+  /** Test seam: override the durable writer backing the state queue. */
+  stateWriter?: ManagerStateWriter
+  /** Test seam: tune the write-failure retry budget. */
+  stateWriteRetry?: { attempts: number; baseDelayMs: number }
 }): Promise<ServiceManagerHandle> {
   const dataDirLease = await acquireRuntimeDataDirLease(input.dataDir)
   const managerStatePath = join(input.controlDir, 'manager-state.json')
@@ -51,15 +58,24 @@ export async function startServiceManager(input: {
     await dataDirLease.release().catch(() => undefined)
     throw error
   }
-  const stateQueue = new ManagerStateWriteQueue(managerStatePath)
+  let requestShutdown!: () => void
+  const shutdownRequested = new Promise<void>((resolve) => { requestShutdown = resolve })
+  let shutdownTimer: ReturnType<typeof setTimeout> | undefined
+  const deferShutdown = () => {
+    if (shutdownTimer) return
+    shutdownTimer = setTimeout(requestShutdown, 25)
+    shutdownTimer.unref?.()
+  }
+  const stateQueue = new ManagerStateWriteQueue(managerStatePath, {
+    ...(input.stateWriter ? { writer: input.stateWriter } : {}),
+    ...(input.stateWriteRetry ? { retry: input.stateWriteRetry } : {}),
+    onPermanentFailure: () => deferShutdown()
+  })
   state.onMutation(() => {
-    if (stateQueue.failed !== undefined) return
     stateQueue.enqueue(state.durableSnapshot())
   })
-  let lastDurableFlushAt = Date.now()
   const flushState = async () => {
     await stateQueue.flush()
-    lastDurableFlushAt = Date.now()
   }
   // Lease renewals (runtime heartbeat, thread lease, resource lease/commit)
   // only extend a deadline inside its safe TTL window. They must not queue
@@ -68,16 +84,22 @@ export async function startServiceManager(input: {
   // snapshot write; only the *response* stops waiting for it within the safe
   // window.
   const flushStateForRenewal = async (ttlMs: number) => {
-    if (Date.now() - lastDurableFlushAt >= Math.max(0, ttlMs - MANAGER_STATE_DEFERRED_FLUSH_SAFE_MS)) {
+    const safeWindow = Math.max(0, ttlMs - MANAGER_STATE_DEFERRED_FLUSH_SAFE_MS)
+    if (Date.now() - stateQueue.lastDurableFlushAt >= safeWindow) {
       await flushState()
       return
     }
     // Wait only for already-completed durability; an in-flight snapshot write
-    // must not block the renewal response inside the safe window.
+    // must not block the renewal response inside the safe window. Durability
+    // is reported solely by the queue (durable revision / timestamp) once the
+    // write actually completes; the timeout path records nothing.
     await Promise.race([stateQueue.flush(), new Promise<void>((resolve) => {
       setTimeout(resolve, 25).unref?.()
     })])
-    lastDurableFlushAt = Date.now()
+  }
+  const statePersistence = () => {
+    const stats = stateQueue.stats()
+    return { degraded: stats.degraded, durableLag: stats.durableLag, stats }
   }
   let sharedData: ManagerSharedDataStore
   try {
@@ -104,14 +126,6 @@ export async function startServiceManager(input: {
       await dataDirLease.release().catch(() => undefined)
       throw error
     }
-  }
-  let requestShutdown!: () => void
-  const shutdownRequested = new Promise<void>((resolve) => { requestShutdown = resolve })
-  let shutdownTimer: ReturnType<typeof setTimeout> | undefined
-  const deferShutdown = () => {
-    if (shutdownTimer) return
-    shutdownTimer = setTimeout(requestShutdown, 25)
-    shutdownTimer.unref?.()
   }
   let reconciliationTimer: ReturnType<typeof setInterval> | undefined
   let reconciliationWork = Promise.resolve()
@@ -154,7 +168,8 @@ export async function startServiceManager(input: {
       documents,
       requestShutdown: deferShutdown,
       flushState,
-      flushStateForRenewal
+      flushStateForRenewal,
+      statePersistence
     })
     server = await startNodeHttpServer({
       router,
@@ -191,6 +206,7 @@ export async function startServiceManager(input: {
     discovery,
     state,
     shutdownRequested,
+    statePersistence,
     close: async () => {
       if (closed) return
       closed = true
