@@ -200,11 +200,14 @@ function Invoke-Prepare {
     }
 
     if ((Test-PathEqual $source $secondarySource) -and
+        (-not (Test-PathEqual $source $primarySource)) -and
         (-not (Test-RecoverableApplicationSource $source) -or
          -not (Test-PackagedApplicationPayload $source))) {
       # A leftover current-user installation that can no longer be verified as
       # a packaged Kun payload must not block the update. Retire its stale
-      # registration and shortcuts, but leave its files untouched.
+      # registration and shortcuts, but leave its files untouched. When the
+      # primary and secondary registrations share one directory, keep the
+      # stricter primary-source checks instead of skipping the only source.
       Write-InstallerDiagnostic "Retiring the unverifiable current-user installation registration without modifying its files: $source"
       $staleSourceMask = $staleSourceMask -bor 2
       continue
