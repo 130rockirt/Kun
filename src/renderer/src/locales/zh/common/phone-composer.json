@@ -373,6 +373,7 @@
   "composerDismissError": "关闭错误提示",
   "composerImageUnavailable": "当前运行时暂不可用图片输入。",
   "composerAttachmentUnavailable": "当前暂不可上传附件。",
+  "composerAttachmentKeptAsLocalReference": "无法处理这个附件：{{message}}，已改为本地工具引用。",
   "composerDropFilesHere": "松开以添加文件到当前对话",
   "composerAttachmentModelUnsupported": "当前选择的模型不能读取图片，请切换到识图模型或移除图片附件。",
   "composerPdfAttachmentUnavailable": "当前无法读取这个 PDF。",
@@ -586,6 +587,7 @@
   "queuedMessageRetry": "重试排队消息",
   "queuedMessageRetryUnavailable": "这条临时消息无法安全重试，请移除后重新提交",
   "queuedMessageFailed": "发送失败",
+  "queuedMessageInFlight": "排队中",
   "queuedMessageReorder": "拖动或使用上下方向键调整排队顺序",
   "queuedMessageReorderHandle": "移动消息 {{index}}，共 {{count}} 条：{{summary}}",
   "queuedMessageMovedToPosition": "已移动到第 {{position}} 位",
@@ -684,12 +686,13 @@
   "knowledgeBaseStatus_stale": "待更新",
   "knowledgeBaseStatus_unavailable": "不可用",
   "knowledgeBaseStatus_error": "错误",
-  "composerMenuAutoPlanBuild": "自动模式（计划 + 构建）",
+  "composerMenuAutoPlanBuild": "自动模式",
   "composerAutoPlanBuildPlaceholder": "描述需求，Kun 会先生成计划，再按设置自动构建…（Shift+Enter 换行）",
   "autoPlanBuildDialogTitle": "自动计划与构建",
   "autoPlanBuildDialogSubtitle": "选择计划生成后如何构建本次需求。",
   "autoPlanBuildDirectHint": "计划完成后立即开始构建",
   "autoPlanBuildUseWorktree": "使用 Agent 管理的 Worktree",
   "autoPlanBuildUseOnce": "仅本次使用",
-  "autoPlanBuildSaveDefault": "设为默认并继续"
+  "autoPlanBuildSaveDefault": "设为默认并继续",
+  "queuedMessagesPersistenceFailed": "无法保存排队消息。消息仍保留在内存中，但重启后可能丢失。"
 }
