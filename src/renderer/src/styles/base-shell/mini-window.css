@@ -1,0 +1,71 @@
+/* Keep mini mode interactive. Only this toolbar is a drag region; sidebar
+   wrappers and dividers collapse without changing the saved workbench layout. */
+[data-kun-mini='on'] [data-workbench-left-sidebar],
+[data-kun-mini='on'] [data-workbench-right-panel],
+[data-kun-mini='on'] .ds-workbench-divider,
+[data-kun-mini='on'] aside,
+[data-kun-mini='on'] nav.ds-windows-menu {
+  display: none !important;
+}
+
+/* While the mini window is active, only the toolbar owns the window drag
+   region; otherwise the chat-stage drag area swallows dropped files. */
+[data-kun-mini='on'] .ds-chat-stage,
+[data-kun-mini='on'] .ds-drag {
+  -webkit-app-region: no-drag !important;
+}
+
+.ds-mini-restore {
+  position: relative;
+  z-index: 1200;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--ds-border-muted);
+  color: var(--ds-text-muted);
+  background: var(--ds-bg-main);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.ds-mini-restore-controls {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ds-mini-restore-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--ds-border-muted);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--ds-text);
+  background: var(--ds-surface-card);
+  -webkit-app-region: no-drag;
+}
+
+.ds-mini-restore-badge:hover {
+  background: var(--ds-surface-hover);
+}
+
+.ds-mini-restore-badge:focus-visible {
+  outline: 2px solid var(--ds-accent);
+  outline-offset: 2px;
+}
+
+.ds-mini-restore-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  pointer-events: none;
+}
